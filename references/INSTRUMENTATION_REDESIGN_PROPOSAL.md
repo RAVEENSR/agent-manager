@@ -185,7 +185,7 @@ sequenceDiagram
 
 ### BYO instrumentation mode
 
-When the customer needs an instrumentation library AMP doesn't manage today (anything other than OpenLLMetry), they switch the agent to **BYO** in Console. AMP stops injecting an SDK and only sets the two env vars; the customer brings the library and initializes it in their own code. The example below uses OpenInference for LangChain.
+When the customer needs an instrumentation library AMP doesn't manage today (anything other than OpenLLMetry), they switch the agent to **BYO** in Console. AMP stops injecting an SDK and only sets the two env vars; the customer brings the library and initializes it in their own code. The example below uses OpenInference for LangChain. BYO applies to both platform-hosted and externally-hosted agents and the customer's wiring is identical; only who sets the env vars differs (AMP injects them for platform-hosted; the customer exports them for externally-hosted).
 
 ```mermaid
 flowchart TB
