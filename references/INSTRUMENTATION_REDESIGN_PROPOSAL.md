@@ -35,7 +35,7 @@ This affects every Python agent customer on the platform. The version-pin pain i
 
 Three things, scoped to one milestone before GA:
 
-**1. The observer renders any span that follows the published contract.** `process.go` already reads both OTel GenAI semconv keys and the OpenLLMetry extensions our managed instrumentation emits, so the manual and auto paths produce identically-shaped spans. The manual contract is *layered*: OTel GenAI semconv is the primary set (it covers `llm` / `embedding` / `tool` / `agent` / `retriever` spans and all their model, vendor, token, status, system-prompt and tool data), plus the OpenLLMetry extension keys for the few decisions OTel has no key for yet (the `chain` kind, `rerank`, tool-call arguments/result). M1's observer work is small: confirm a span carrying only `gen_ai.*` keys yields a complete `AmpAttributes` for the OTel-covered kinds, optionally also read `gen_ai.input/output.messages` on tool spans, and publish the contract. No new attribute namespace, no per-vendor adapters; the CrewAI special case stays as-is.
+**1. The observer renders any span that follows the published contract.** `process.go` already reads both OTel GenAI semconv keys and the OpenLLMetry extensions our managed instrumentation emits, so the manual and auto paths produce identically-shaped spans. The manual contract is *layered*: OTel GenAI semconv is the primary set (it covers `llm` / `embedding` / `tool` / `agent` / `retriever` spans and all their model, vendor, token, status, system-prompt and tool data), plus the OpenLLMetry extension keys for the few decisions OTel has no key for yet (the `chain` kind, `rerank`, tool-call arguments/result). Milestone 1's observer work is small: confirm a span carrying only `gen_ai.*` keys yields a complete `AmpAttributes` for the OTel-covered kinds, optionally also read `gen_ai.input/output.messages` on tool spans, and publish the contract. No new attribute namespace, no per-vendor adapters; the CrewAI special case stays as-is.
 
 **2. Pre-built, version-pinned images; customer picks the version in Console.** We keep today's init-container pattern unchanged: pre-installed SDK plus `sitecustomize.py` copied into a shared volume. We do **not** run `pip install` at deployment time (more on why below). The change is that AMP maintains one pre-built image per **AMP instrumentation version**, each with a *specific* (not ranged) OpenLLMetry version pinned inside. The customer selects an AMP instrumentation version in the Console; AMP plumbs that to the right image. A new OpenLLMetry release means a new AMP instrumentation version and a new image; existing agents stay where they were.
 
@@ -130,7 +130,7 @@ flowchart LR
     OS[("OpenSearch<br/>raw OTel spans, as-is")]
     OTC --> OS
 
-    subgraph read["Read path (M1 lands here)"]
+    subgraph read["Read path (Milestone 1 lands here)"]
         direction LR
         OCObs["OpenChoreo<br/>observer"]
         TOS["traces-observer-service<br/>process.go<br/>★ OTel-GenAI extraction"]
@@ -160,7 +160,7 @@ flowchart LR
     AMP --> UIX[Console + Evaluators]
 ```
 
-Today the second box reads OTel GenAI semconv keys, with OpenLLMetry extensions serving as both fallbacks and gap-fillers. M1 confirms a span carrying only `gen_ai.*` keys produces a complete `AmpAttributes` for the kinds OTel covers (`llm`, `embedding`, `tool`, `agent`, `retriever`); the OpenLLMetry extension keys remain the documented way to get the things OTel has no key for (`chain` / `rerank` kinds, tool-call arguments/result). The auto path is unchanged: OpenLLMetry spans carry both standard and extension keys, and the extensions just add detail. Spans matching neither still appear in Console as plain spans (no rich UI), the same graceful degradation as today. The `AmpAttributes` shape itself doesn't change; Console and evaluators consume it identically.
+Today the second box reads OTel GenAI semconv keys, with OpenLLMetry extensions serving as both fallbacks and gap-fillers. Milestone 1 confirms a span carrying only `gen_ai.*` keys produces a complete `AmpAttributes` for the kinds OTel covers (`llm`, `embedding`, `tool`, `agent`, `retriever`); the OpenLLMetry extension keys remain the documented way to get the things OTel has no key for (`chain` / `rerank` kinds, tool-call arguments/result). The auto path is unchanged: OpenLLMetry spans carry both standard and extension keys, and the extensions just add detail. Spans matching neither still appear in Console as plain spans (no rich UI), the same graceful degradation as today. The `AmpAttributes` shape itself doesn't change; Console and evaluators consume it identically.
 
 ### Per-agent config flow
 
@@ -192,7 +192,7 @@ When a customer turns off auto-instrumentation (typically because they run a cus
 
 **Span attributes.** The contract is *layered*. The primary set is a fixed, enumerated subset of the OpenTelemetry GenAI semantic conventions (`gen_ai.*`, plus `db.*` for retriever spans); it covers the great majority of decisions. For the handful of decisions OTel GenAI semconv has no key for yet (the `chain` and `rerank` span kinds, tool-call arguments/result), the observer reads the corresponding OpenLLMetry/Traceloop extension key — these are real, documented conventions, and they're what our managed instrumentation already emits, so the manual and auto paths produce identically-shaped spans. When OTel standardizes those areas, the observer will read the new standard key too and the row moves from "OpenLLMetry ext" to "OTel GenAI" in the table below.
 
-The full set of keys the observer reads is enumerated below (the manual instrumentation guide, an M1 deliverable, publishes this as the canonical "supported attributes" reference). Anything not on the list is ignored; a span missing a key marked **required** still appears in Console, just without the part of the rich `AmpAttributes` view that key feeds. "Required" is per span kind — it applies only when emitting that kind of span.
+The full set of keys the observer reads is enumerated below (the manual instrumentation guide, a Milestone 1 deliverable, publishes this as the canonical "supported attributes" reference). Anything not on the list is ignored; a span missing a key marked **required** still appears in Console, just without the part of the rich `AmpAttributes` view that key feeds. "Required" is per span kind — it applies only when emitting that kind of span.
 
 | Span kind | Attribute key | Source | Required | What it enables |
 |---|---|---|---|---|
@@ -209,11 +209,11 @@ The full set of keys the observer reads is enumerated below (the manual instrume
 | llm | `gen_ai.input.tools` (JSON) — *or* legacy `gen_ai.request.functions.{i}.name` / `.description` / `.parameters` | OTel GenAI / OpenLLMetry ext | no | tools accordion |
 | embedding | `gen_ai.request.model` (and `gen_ai.response.model`, preferred when present) | OTel GenAI | yes | model chip |
 | embedding | `gen_ai.usage.input_tokens` | OTel GenAI | no | token chip |
-| embedding | `gen_ai.prompt.{i}.content` (indexed) | OTel GenAI | no | `AmpAttributes.input` (the embedded text). *Embedding-input key is unsettled in OTel; M1 confirms it.* |
+| embedding | `gen_ai.prompt.{i}.content` (indexed) | OTel GenAI | no | `AmpAttributes.input` (the embedded text). *Embedding-input key is unsettled in OTel; Milestone 1 confirms it.* |
 | tool | `gen_ai.tool.name` | OTel GenAI | yes | tool name header; contributes to `kind = tool` |
 | tool | `gen_ai.tool.description` | OTel GenAI | no | tool description |
 | tool | `gen_ai.tool.call.id` | OTel GenAI | no | tool call id |
-| tool | `traceloop.entity.input` / `traceloop.entity.output` (JSON) | OpenLLMetry ext | no | tool-call arguments / result. *OTel has no stable key here; M1 also reads `gen_ai.input/output.messages` on tool spans as a fallback.* |
+| tool | `traceloop.entity.input` / `traceloop.entity.output` (JSON) | OpenLLMetry ext | no | tool-call arguments / result. *OTel has no stable key here; Milestone 1 also reads `gen_ai.input/output.messages` on tool spans as a fallback.* |
 | agent | `gen_ai.agent.name` | OTel GenAI | yes | agent name; `kind = agent` |
 | agent | `gen_ai.agent.description` | OTel GenAI | no | agent description |
 | agent | `gen_ai.agent.tools` (JSON) | OTel GenAI | no | tools accordion |
@@ -225,7 +225,7 @@ The full set of keys the observer reads is enumerated below (the manual instrume
 | agent | `gen_ai.input.messages` / `gen_ai.output.messages` (or the indexed form) | OTel GenAI | recommended | `AmpAttributes.input` / `output`; agent-level evaluators need it |
 | retriever | `db.system.name` — `pinecone`, `chroma`, `qdrant`, `weaviate`, `milvus`, `pgvector`, … | OTel DB semconv | yes | `kind = retriever`; vectorDB chip |
 | retriever | `db.collection.name` | OTel DB semconv | no | collection |
-| retriever | top-k (`db.vector.query.top_k` or its successor) | OTel DB semconv | no | Top-K chip. *Exact key locked in M1.* |
+| retriever | top-k (`db.vector.query.top_k` or its successor) | OTel DB semconv | no | Top-K chip. *Exact key locked in Milestone 1.* |
 | chain / workflow | `traceloop.span.kind` = `workflow` or `task` | OpenLLMetry ext | no | `kind = chain` (the chain icon). *OTel has no signal for this; without it the span renders as a plain span.* |
 | chain / workflow | `traceloop.entity.input` / `traceloop.entity.output` (JSON) | OpenLLMetry ext | no | chain I/O |
 | rerank | any of: `traceloop.span.kind` = `rerank`; `gen_ai.operation.name` = `rerank` / `reranking`; `rerank.model`; a `gen_ai.request.model` like `rerank-english-*` / `rerank-multilingual-*`; or a span named `rerank` / `reranker` | OpenLLMetry ext / de-facto convention (not standard OTel) | no | `kind = rerank` → the rerank icon, nothing more (see note below) |
@@ -237,7 +237,7 @@ A couple of these kinds are only partially supported in the initial version:
 
 **What conformance buys:** spans that follow the contract render with full `AmpAttributes` and are usable by evaluators; spans that don't still appear, just without the rich UI.
 
-A customer can satisfy the contract three ways: (a) an off-the-shelf library that already emits these keys (OpenLIT, the vanilla `opentelemetry-instrumentation-*` packages, OpenLLMetry itself), (b) a library that doesn't, plus a translation step, or (c) hand-rolled instrumentation for a custom framework. AMP doesn't endorse or test any particular library on the manual path; the enumerated contract above is the only thing we commit to. The **manual instrumentation guide** (an M1 deliverable) publishes this table as the canonical, versioned "supported attributes" reference; this proposal's table is the working spec it's derived from.
+A customer can satisfy the contract three ways: (a) an off-the-shelf library that already emits these keys (OpenLIT, the vanilla `opentelemetry-instrumentation-*` packages, OpenLLMetry itself), (b) a library that doesn't, plus a translation step, or (c) hand-rolled instrumentation for a custom framework. AMP doesn't endorse or test any particular library on the manual path; the enumerated contract above is the only thing we commit to. The **manual instrumentation guide** (a Milestone 1 deliverable) publishes this table as the canonical, versioned "supported attributes" reference; this proposal's table is the working spec it's derived from.
 
 We ship a small helper in `amp-instrumentation` so the customer doesn't have to hand-write the OpenTelemetry exporter setup:
 
@@ -325,7 +325,7 @@ Prompt capture stays enabled by default. A customer who needs to suppress prompt
 
 ## Open Questions
 
-1. **Lock the contract and its layering during M1.** The primary set (OTel GenAI semconv: operation name, system, model, token usage, chat/text-completion messages, agent metadata, the `db.*` retriever keys) is enumerated in the table above and stable enough to commit to now. The layer-2 gap-fillers (`traceloop.span.kind` for `chain` / `rerank`, `traceloop.entity.input`/`output` for tool/chain I/O) are documented because OTel has no key there yet. The open part: which OTel keys land for the unsettled corners (embedding-input text, tool I/O, retriever top-k, rerank) so those rows can move from "OpenLLMetry ext" / "OTel-ish" to "OTel GenAI" when the spec catches up. M1 confirms the concrete keys and the guide freezes the table. The observer accepts both the structured (`gen_ai.input.messages`) and legacy indexed (`gen_ai.prompt.{i}.*`) message forms; the guide documents both.
+1. **Lock the contract and its layering during Milestone 1.** The primary set (OTel GenAI semconv: operation name, system, model, token usage, chat/text-completion messages, agent metadata, the `db.*` retriever keys) is enumerated in the table above and stable enough to commit to now. The layer-2 gap-fillers (`traceloop.span.kind` for `chain` / `rerank`, `traceloop.entity.input`/`output` for tool/chain I/O) are documented because OTel has no key there yet. The open part: which OTel keys land for the unsettled corners (embedding-input text, tool I/O, retriever top-k, rerank) so those rows can move from "OpenLLMetry ext" / "OTel-ish" to "OTel GenAI" when the spec catches up. Milestone 1 confirms the concrete keys and the guide freezes the table. The observer accepts both the structured (`gen_ai.input.messages`) and legacy indexed (`gen_ai.prompt.{i}.*`) message forms; the guide documents both.
 2. **AMP instrumentation versioning scheme and cadence, not yet decided.** Open: what the customer-facing identifier is (an `amp-instrumentation` semver, a date stamp, something tied to the AMP release number), how it relates to the AMP release train, and whether we cut a new version for every OpenLLMetry release or only validated ones. The mapping table in the proposal is illustrative until this lands.
 3. **Image-catalog scope.** How many `(AMP instrumentation version × Python version)` images do we keep pullable, and for how long? Agents pinned to old versions need their images to stay available.
 4. **Enterprise reachability.** Which registry hosts the pre-built images, and what do customers need to allowlist?
@@ -336,7 +336,7 @@ Prompt capture stays enabled by default. A customer who needs to suppress prompt
 
 This proposal covers a single milestone before GA. Further iterations (e.g. evaluating a second managed instrumentation library, per-agent migration UX) get their own proposals.
 
-**M1: instrumentation versioning + OTel-GenAI-complete observer + documented paths.**
+**Milestone 1: instrumentation versioning + OTel-GenAI-complete observer + documented paths.**
 
 | Workstream | Scope |
 |---|---|
@@ -345,4 +345,4 @@ This proposal covers a single milestone before GA. Further iterations (e.g. eval
 | Versioning (externally-hosted) | Pin `traceloop-sdk` to a specific version in `amp-instrumentation`; publish the version-mapping table; keep the `amp-instrument` CLI. |
 | Manual path | Publish the contract (endpoint, `x-amp-api-key` header, the OTel-GenAI attribute profile above); ship the `init_otel` helper in `amp-instrumentation`; document both paths and the `TRACELOOP_TRACE_CONTENT` env var. |
 
-**Release plan.** Releases run roughly weekly: 14 (this week), 15, 16, 17, 18. Release 18 lands ~mid-June and is the GA target for M1, with a code freeze ~mid-June. The init-container delivery plumbing (image copy, `sitecustomize.py`, env injection) already exists; M1 changes the version it points at, adds the Console selector, completes the observer extraction, and publishes the contract.
+**Release plan.** Releases run roughly weekly: 14 (this week), 15, 16, 17, 18. Release 18 lands ~mid-June and is the GA target for Milestone 1, with a code freeze ~mid-June. The init-container delivery plumbing (image copy, `sitecustomize.py`, env injection) already exists; Milestone 1 changes the version it points at, adds the Console selector, completes the observer extraction, and publishes the contract.
