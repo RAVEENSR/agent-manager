@@ -1,4 +1,4 @@
-# [Design Proposal] Auto-Instrumentation Redesign
+# [Design Proposal] Instrumentation Versioning and the Manual Instrumentation
 
 ## Problem
 
