@@ -190,23 +190,26 @@ When a customer turns off auto-instrumentation (typically because they run a cus
 - POST OTLP/HTTP to `AMP_OTEL_ENDPOINT` (`/v1/traces`).
 - Header: `x-amp-api-key: <AMP_AGENT_API_KEY>`. (For platform-hosted agents AMP injects both env vars via the existing env-injection trait; externally-hosted agents set them themselves, as they do today.)
 
-**Span attributes.** The contract is *layered*. The primary set is a fixed, enumerated subset of the OpenTelemetry GenAI semantic conventions (`gen_ai.*`, plus `db.*` for retriever spans); it covers the great majority of decisions. For the handful of decisions OTel GenAI semconv has no key for yet (the `chain` and `rerank` span kinds, tool-call arguments/result), the observer reads the corresponding OpenLLMetry/Traceloop extension key — these are real, documented conventions, and they're what our managed instrumentation already emits, so the manual and auto paths produce identically-shaped spans. When OTel standardizes those areas, the observer will read the new standard key too and the row moves from "OpenLLMetry ext" to "OTel GenAI" in the table below.
+**Span attributes.** The contract is *layered*. The primary set is a fixed, enumerated subset of the OpenTelemetry GenAI semantic conventions (`gen_ai.*`, plus `db.*` for retriever spans); it covers the great majority of decisions. For the handful of decisions OTel GenAI semconv has no key for yet (the `chain` and `rerank` span kinds, tool-call arguments/result), the observer reads the corresponding OpenLLMetry/Traceloop extension key; these are real, documented conventions, and they're what our managed instrumentation already emits, so the manual and auto paths produce identically-shaped spans. When OTel standardizes those areas, the observer will read the new standard key too and the row moves from "OpenLLMetry ext" to "OTel GenAI" in the table below.
 
-The full set of keys the observer reads is enumerated below (the manual instrumentation guide, a Milestone 1 deliverable, publishes this as the canonical "supported attributes" reference). Anything not on the list is ignored; a span missing a key marked **required** still appears in Console, just without the part of the rich `AmpAttributes` view that key feeds. "Required" is per span kind — it applies only when emitting that kind of span.
+The full set of keys the observer reads is enumerated below (the manual instrumentation guide, a Milestone 1 deliverable, publishes this as the canonical "supported attributes" reference). Anything not on the list is ignored; a span missing a key marked **required** still appears in Console, just without the part of the rich `AmpAttributes` view that key feeds. "Required" is per span kind; it applies only when emitting that kind of span.
+
+<details>
+<summary><b>Supported attributes</b> (full table, click to expand)</summary>
 
 | Span kind | Attribute key | Source | Required | What it enables |
 |---|---|---|---|---|
-| any GenAI span | `gen_ai.operation.name` — one of `chat`, `text_completion`, `embeddings`, `execute_tool`, `invoke_agent`, `create_agent` | OTel GenAI | yes | `AmpAttributes.kind` — span icon, which card renders, which evaluators apply |
-| any GenAI span | `gen_ai.system` — provider id, e.g. `openai`, `anthropic`, `aws.bedrock`, `azure.ai.openai`, `cohere` | OTel GenAI | yes | vendor / framework chip |
+| any GenAI span | `gen_ai.operation.name` (one of `chat`, `text_completion`, `embeddings`, `execute_tool`, `invoke_agent`, `create_agent`) | OTel GenAI | yes | `AmpAttributes.kind` (span icon, which card renders, which evaluators apply) |
+| any GenAI span | `gen_ai.system` (provider id, e.g. `openai`, `anthropic`, `aws.bedrock`, `azure.ai.openai`, `cohere`) | OTel GenAI | yes | vendor / framework chip |
 | any span | span `Status` set to `Error` (plus message), or `error.type` attribute | OTel (span status) | recommended | error badge on the span; error count in the trace list |
 | any span | W3C baggage `task_id`, `trial_id` | OTel baggage | no | joins the trace to the evaluation trial that produced it |
 | llm | `gen_ai.request.model` | OTel GenAI | yes | model chip; evaluator context |
 | llm | `gen_ai.response.model` | OTel GenAI | no | model chip (used over `request.model` when present) |
-| llm | `gen_ai.input.messages` (JSON array) — *or* indexed `gen_ai.prompt.{i}.role` / `gen_ai.prompt.{i}.content` | OTel GenAI | yes (one form) | `AmpAttributes.input`; **LLM evaluators fail without it** |
-| llm | `gen_ai.output.messages` (JSON array) — *or* indexed `gen_ai.completion.{i}.role` / `gen_ai.completion.{i}.content` | OTel GenAI | yes (one form) | `AmpAttributes.output`; **LLM evaluators fail without it** |
+| llm | `gen_ai.input.messages` (JSON array), *or* indexed `gen_ai.prompt.{i}.role` / `gen_ai.prompt.{i}.content` | OTel GenAI | yes (one form) | `AmpAttributes.input`; **LLM evaluators fail without it** |
+| llm | `gen_ai.output.messages` (JSON array), *or* indexed `gen_ai.completion.{i}.role` / `gen_ai.completion.{i}.content` | OTel GenAI | yes (one form) | `AmpAttributes.output`; **LLM evaluators fail without it** |
 | llm | `gen_ai.request.temperature` | OTel GenAI | no | temperature chip |
 | llm | `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` (legacy `prompt_tokens` / `completion_tokens` also read) | OTel GenAI | no | token chip; trace-list token total |
-| llm | `gen_ai.input.tools` (JSON) — *or* legacy `gen_ai.request.functions.{i}.name` / `.description` / `.parameters` | OTel GenAI / OpenLLMetry ext | no | tools accordion |
+| llm | `gen_ai.input.tools` (JSON), *or* legacy `gen_ai.request.functions.{i}.name` / `.description` / `.parameters` | OTel GenAI / OpenLLMetry ext | no | tools accordion |
 | embedding | `gen_ai.request.model` (and `gen_ai.response.model`, preferred when present) | OTel GenAI | yes | model chip |
 | embedding | `gen_ai.usage.input_tokens` | OTel GenAI | no | token chip |
 | embedding | `gen_ai.prompt.{i}.content` (indexed) | OTel GenAI | no | `AmpAttributes.input` (the embedded text). *Embedding-input key is unsettled in OTel; Milestone 1 confirms it.* |
@@ -223,17 +226,19 @@ The full set of keys the observer reads is enumerated below (the manual instrume
 | agent | `gen_ai.conversation.id` | OTel GenAI | no | conversation grouping |
 | agent | `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` | OTel GenAI | no | token chip; trace-list total |
 | agent | `gen_ai.input.messages` / `gen_ai.output.messages` (or the indexed form) | OTel GenAI | recommended | `AmpAttributes.input` / `output`; agent-level evaluators need it |
-| retriever | `db.system.name` — `pinecone`, `chroma`, `qdrant`, `weaviate`, `milvus`, `pgvector`, … | OTel DB semconv | yes | `kind = retriever`; vectorDB chip |
+| retriever | `db.system.name` (`pinecone`, `chroma`, `qdrant`, `weaviate`, `milvus`, `pgvector`, …) | OTel DB semconv | yes | `kind = retriever`; vectorDB chip |
 | retriever | `db.collection.name` | OTel DB semconv | no | collection |
 | retriever | top-k (`db.vector.query.top_k` or its successor) | OTel DB semconv | no | Top-K chip. *Exact key locked in Milestone 1.* |
 | chain / workflow | `traceloop.span.kind` = `workflow` or `task` | OpenLLMetry ext | no | `kind = chain` (the chain icon). *OTel has no signal for this; without it the span renders as a plain span.* |
 | chain / workflow | `traceloop.entity.input` / `traceloop.entity.output` (JSON) | OpenLLMetry ext | no | chain I/O |
-| rerank | any of: `traceloop.span.kind` = `rerank`; `gen_ai.operation.name` = `rerank` / `reranking`; `rerank.model`; a `gen_ai.request.model` like `rerank-english-*` / `rerank-multilingual-*`; or a span named `rerank` / `reranker` | OpenLLMetry ext / de-facto convention (not standard OTel) | no | `kind = rerank` → the rerank icon, nothing more (see note below) |
+| rerank | any of: `traceloop.span.kind` = `rerank`; `gen_ai.operation.name` = `rerank` / `reranking`; `rerank.model`; a `gen_ai.request.model` like `rerank-english-*` / `rerank-multilingual-*`; or a span named `rerank` / `reranker` | OpenLLMetry ext / de-facto convention (not standard OTel) | no | `kind = rerank` (the rerank icon, nothing more; see note below) |
+
+</details>
 
 A couple of these kinds are only partially supported in the initial version:
 
 - **Rerank** is recognized only as a *kind*: a rerank span gets the rerank icon but no data card. There is no `RerankData` payload today and no per-kind extraction runs for rerank, so a rerank span comes out as `kind: rerank` with no model/token/query/results data. Adding a proper rerank payload is a separate enhancement, out of scope here. Note also that `rerank` is **not** a value the OTel GenAI spec enumerates for `gen_ai.operation.name` (it lists `chat`, `text_completion`, `embeddings`, `generate_content`, `create_agent`, `invoke_agent`, `execute_tool`); we read it because Cohere's OTel instrumentation and OpenLLMetry emit it. If OTel standardizes a rerank operation, we'll align and move this row up to the OTel layer.
-- **Retriever documents** — the retrieved documents on a retriever span are not extracted in the initial version (they aren't extracted for any instrumentation source today). A retriever span renders with the vectorDB and Top-K chips but no document list.
+- **Retriever documents.** The retrieved documents on a retriever span are not extracted in the initial version (they aren't extracted for any instrumentation source today). A retriever span renders with the vectorDB and Top-K chips but no document list.
 
 **What conformance buys:** spans that follow the contract render with full `AmpAttributes` and are usable by evaluators; spans that don't still appear, just without the rich UI.
 
