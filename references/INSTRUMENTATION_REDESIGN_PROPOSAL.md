@@ -228,9 +228,12 @@ The full set of keys the observer reads is enumerated below (the manual instrume
 | retriever | top-k (`db.vector.query.top_k` or its successor) | OTel DB semconv | no | Top-K chip. *Exact key locked in M1.* |
 | chain / workflow | `traceloop.span.kind` = `workflow` or `task` | OpenLLMetry ext | no | `kind = chain` (the chain icon). *OTel has no signal for this; without it the span renders as a plain span.* |
 | chain / workflow | `traceloop.entity.input` / `traceloop.entity.output` (JSON) | OpenLLMetry ext | no | chain I/O |
-| rerank | `gen_ai.operation.name` = `rerank` (plus a model attribute), or `rerank.model` | OTel-ish / OpenLLMetry ext | no | `kind = rerank`. *Not stable semconv; M1 confirms what we read.* |
+| rerank | any of: `traceloop.span.kind` = `rerank`; `gen_ai.operation.name` = `rerank` / `reranking`; `rerank.model`; a `gen_ai.request.model` like `rerank-english-*` / `rerank-multilingual-*`; or a span named `rerank` / `reranker` | OpenLLMetry ext / de-facto convention (not standard OTel) | no | `kind = rerank` → the rerank icon, nothing more (see note below) |
 
-Retrieved documents on a retriever span are not extracted in the initial version (they aren't extracted for any instrumentation source today); a retriever span renders with the vectorDB and Top-K chips but no document list.
+A couple of these kinds are only partially supported in the initial version:
+
+- **Rerank** is recognized only as a *kind*: a rerank span gets the rerank icon but no data card. There is no `RerankData` payload today and no per-kind extraction runs for rerank, so a rerank span comes out as `kind: rerank` with no model/token/query/results data. Adding a proper rerank payload is a separate enhancement, out of scope here. Note also that `rerank` is **not** a value the OTel GenAI spec enumerates for `gen_ai.operation.name` (it lists `chat`, `text_completion`, `embeddings`, `generate_content`, `create_agent`, `invoke_agent`, `execute_tool`); we read it because Cohere's OTel instrumentation and OpenLLMetry emit it. If OTel standardizes a rerank operation, we'll align and move this row up to the OTel layer.
+- **Retriever documents** — the retrieved documents on a retriever span are not extracted in the initial version (they aren't extracted for any instrumentation source today). A retriever span renders with the vectorDB and Top-K chips but no document list.
 
 **What conformance buys:** spans that follow the contract render with full `AmpAttributes` and are usable by evaluators; spans that don't still appear, just without the rich UI.
 
