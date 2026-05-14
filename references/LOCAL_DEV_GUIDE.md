@@ -373,6 +373,26 @@ kubectl exec -n openchoreo-data-plane deploy/obs-gateway-gateway-gateway-runtime
 
 Then send a chat message from the console and confirm the `Failed to export span batch code: 401` errors stop in the agent's pod logs.
 
+### 11. `make port-forward` says "k3d cluster is not running" but the containers are up
+
+Symptom: `docker ps` shows both `k3d-openchoreo-local-setup-server-0` and `…-serverlb` as `Up`, `k3d cluster list` reports `1/1` servers, but `make port-forward` (and `kubectl cluster-info --context k3d-openchoreo-local-setup`) fails with:
+
+```
+Unable to connect to the server: net/http: TLS handshake timeout
+```
+
+TCP connects to `127.0.0.1:6550` (and 8080, 8443, 19080, …) succeed, but the TLS handshake hangs — every Colima-forwarded port behaves the same way. From inside the cluster everything is healthy (`curl https://k3d-openchoreo-local-setup-server-0:6443/healthz` from the LB container returns a normal `401 Unauthorized`).
+
+Cause: Lima's host-agent port forwarder (`limactl hostagent`) — the process Colima uses to forward macOS host ports into the VM — has gone stale after long VM uptime. It still accepts TCP, but no longer pipes data through. `k3d cluster stop/start` will not fix it, because k3d only restarts the containers inside the VM, not the host-side forwarder.
+
+Fix — restart Colima itself:
+
+```bash
+colima restart -p dev
+```
+
+This reboots the VM (~30 s), restarts the Lima host-agent with fresh port forwards, and brings the k3d containers back automatically. Cluster state on the Colima disk is preserved. After it's up, `kubectl cluster-info` returns immediately and `make port-forward` passes the cluster check.
+
 ---
 
 ## When Something Is Broken
