@@ -35,6 +35,7 @@ const sidebars: SidebarsConfig = {
           items: [
             'getting-started/on-k3d',
             'getting-started/on-your-environment',
+            'getting-started/on-a-vm',
           ],
         },
         "getting-started/create-your-first-agent",

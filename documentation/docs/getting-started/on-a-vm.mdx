@@ -1,0 +1,99 @@
+---
+sidebar_position: 4
+---
+# Run Agent Manager on a VM with Docker
+
+Install Agent Manager on a remote VM where Docker is the only host dependency. The
+installer runs from your laptop, connects to the VM over SSH, and exposes the
+platform over HTTPS using [sslip.io](https://sslip.io) hostnames derived from the
+VM's public IP — no domain registration and no client `/etc/hosts` edits.
+
+## Prerequisites
+
+**On your laptop:** `ssh`, `rsync`, and `nc` (netcat).
+
+**On the VM:**
+- A Linux VM with a **public IP** and SSH access (sudo).
+- **Inbound `80/tcp` and `443/tcp` open** in the cloud security group / firewall.
+  Let's Encrypt validates over these ports; if they are closed, certificate
+  issuance fails. (Use `--tls http` to skip TLS entirely.)
+- Docker is installed automatically if missing.
+
+## Install
+
+```bash
+git clone https://github.com/wso2/agent-manager.git
+cd agent-manager/deployments/quick-start/vm
+
+./install-vm.sh \
+  --host <VM_PUBLIC_IP> \
+  --ssh-key ~/.ssh/your_key \
+  --email you@example.com
+```
+
+The installer runs in three phases — bootstrap (Docker + firewall), a preflight
+reachability check for `:80`/`:443`, then the platform install and Caddy startup.
+Allow 8–15 minutes.
+
+### Options
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--host` | _(required)_ | VM public IP |
+| `--ssh-key` | _(required)_ | SSH private key path |
+| `--ssh-user` | `root` | SSH user (must have sudo) |
+| `--email` | _(none)_ | ACME contact for expiry notices |
+| `--tls` | `letsencrypt` | `letsencrypt` (trusted HTTPS) or `http` (no certs) |
+| `--no-external-gateways` | off | Drop the gateway control-plane endpoint if you won't connect external gateways |
+
+## What gets exposed
+
+Only `:80` and `:443` face the internet; all other service ports are bound to the
+VM's loopback and reached only by the Caddy reverse proxy.
+
+| URL | Purpose |
+|---|---|
+| `https://console.amp.<IP>.sslip.io` | Console UI |
+| `https://api.amp.<IP>.sslip.io` | Agent Manager API (used by `amctl`) |
+| `https://thunder.amp.<IP>.sslip.io` | Thunder OAuth (login) |
+| `https://observer.amp.<IP>.sslip.io` | Traces Observer |
+| `https://gateway.amp.<IP>.sslip.io/<context>` | OTel ingest (`/otel`) and all deployed-agent endpoints (path-routed) |
+| `https://cp.amp.<IP>.sslip.io` | Gateway control plane — connect external gateways here (on by default) |
+
+## TLS
+
+With `--tls letsencrypt` (default), Caddy obtains and auto-renews trusted Let's
+Encrypt certificates on first start — no manual certificate steps. Certificates and
+the ACME account persist in the `amp-caddy-data` Docker volume, so restarts do not
+re-request them. With `--tls http`, the same hostnames are served over plain HTTP.
+
+## Persistence and teardown
+
+Application data (PostgreSQL), issued certificates, and the k3d cluster persist
+across Docker/host restarts via named volumes. To tear down, use the existing
+`uninstall.sh` in `deployments/quick-start/` and `docker rm -f amp-caddy`.
+
+## Connect an external gateway
+
+Agent Manager can drive external WSO2 AI gateways. The control-plane endpoint
+`https://cp.amp.<IP>.sslip.io` is exposed by default for this. In the console, open
+**Infrastructure → Gateways**, generate a registration token, and follow the
+generated commands — they point the gateway at `cp.amp.<IP>.sslip.io:443`, where it
+opens a control WebSocket and pulls its configuration. External gateways require
+`--tls letsencrypt` (the generated Kubernetes command connects on port 443). If you
+do not need external gateways, install with `--no-external-gateways` to drop this
+endpoint.
+
+**Security:** the registration token grants a gateway your LLM-provider API keys and
+proxy credentials. Treat it as a secret, revoke/regenerate it from the Gateways page
+when a gateway is decommissioned, and optionally restrict `cp.amp...` to known
+gateway source IPs at the firewall.
+
+## Troubleshooting
+
+- **Preflight fails on :80/:443** — open both ports inbound in your cloud security
+  group, or rerun with `--tls http`.
+- **Certificate not issued** — check `docker logs amp-caddy`. Let's Encrypt rate
+  limits on sslip.io are high but not infinite; if hit, retry shortly.
+- **Login redirect mismatch** — confirm you reached the console via its
+  `console.amp.<IP>.sslip.io` URL, not the raw IP.
