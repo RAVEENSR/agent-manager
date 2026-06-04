@@ -614,12 +614,13 @@ The "explanation" field MUST be formatted as valid Markdown. Use headings, bulle
         return prompt
 
     @staticmethod
-    def _gateway_kwargs() -> dict:
+    def _gateway_kwargs(model: str) -> dict:
         """Build per-call routing kwargs when a gateway is configured.
 
         When ``llm_judge.api_base`` is set, every completion is routed through
-        that gateway and the configured key is injected as the ``api-key``
-        header on the underlying provider client. With no gateway configured
+        that gateway, authenticated with the gateway ``api-key`` header. The
+        mechanism for attaching that header differs by provider SDK, so this
+        dispatches on the model's provider prefix. With no gateway configured
         the providers are called directly (auth via their own env vars).
         """
         try:
@@ -632,18 +633,40 @@ The "explanation" field MUST be formatted as valid Markdown. Use headings, bulle
         if not cfg.api_base:
             return {}
 
-        kwargs: dict = {"api_base": cfg.api_base}
-        if cfg.api_key:
-            # The gateway authenticates via the api-key header, but the provider
-            # SDK still requires a non-empty api_key to construct its client. Pass
-            # a placeholder bearer token (the gateway ignores it) and send the real
-            # key only in the api-key header.
-            kwargs["api_key"] = "gateway"
-            kwargs["client_args"] = {"default_headers": {"api-key": cfg.api_key}}
-        # When api_base is set without a gateway key, auth is intentionally left
-        # to the provider's own env vars — no placeholder is forced, so an
-        # env-based provider key is not overridden.
-        return kwargs
+        # No gateway key: auth is intentionally left to the provider's own env
+        # vars — don't force a placeholder that would override an env-based key.
+        if not cfg.api_key:
+            return {"api_base": cfg.api_base}
+
+        provider = model.replace(":", "/").split("/", 1)[0].lower()
+        header = {"api-key": cfg.api_key}
+
+        # Azure SDKs send their api_key in the "api-key" header natively, which
+        # is exactly the gateway's auth header — pass the real key straight
+        # through (a placeholder would be sent as the gateway credential).
+        if provider in ("azureopenai", "azure"):
+            return {"api_base": cfg.api_base, "api_key": cfg.api_key}
+
+        # Other providers authenticate elsewhere (bearer / x-api-key / query
+        # param), so the gateway api-key must be injected as an explicit request
+        # header. The SDK still needs a non-empty api_key to construct its
+        # client, so pass a placeholder; the header carries the real key.
+        if provider == "gemini":
+            # google-genai takes custom headers via http_options, not default_headers.
+            client_args: dict = {"http_options": {"headers": header}}
+        elif provider == "mistral":
+            # The Mistral SDK only accepts headers through a custom http client.
+            import httpx
+
+            client_args = {"async_client": httpx.AsyncClient(headers=header)}
+        elif provider == "groq":
+            # any-llm's Groq provider ignores api_base; route via base_url instead.
+            return {"api_key": "gateway", "client_args": {"base_url": cfg.api_base, "default_headers": header}}
+        else:
+            # openai, anthropic, and other OpenAI-style clients accept default_headers.
+            client_args = {"default_headers": header}
+
+        return {"api_base": cfg.api_base, "api_key": "gateway", "client_args": client_args}
 
     def _call_llm_with_retry(self, prompt: str) -> EvalResult:
         """Call the LLM client, validate with Pydantic, retry on failure."""
@@ -654,7 +677,7 @@ The "explanation" field MUST be formatted as valid Markdown. Use headings, bulle
                 "The any-llm SDK is required for LLM-as-judge evaluators. Install with: pip install 'any-llm-sdk'"
             )
 
-        gateway_kwargs = self._gateway_kwargs()
+        gateway_kwargs = self._gateway_kwargs(self.model)
 
         last_error = None
         for attempt in range(self.max_retries + 1):

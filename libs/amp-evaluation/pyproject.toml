@@ -24,7 +24,11 @@ dependencies = [
 
 [project.optional-dependencies]
 deepeval = ["deepeval>=3.8.4"]
-any-llm = ["any-llm-sdk[openai,anthropic,gemini,groq,mistral,bedrock,azureopenai,azure]==1.16.0"]
+any-llm = [
+  "any-llm-sdk[openai,anthropic,gemini,groq,mistral,bedrock,azureopenai,azure]==1.16.0",
+  # any-llm's azure (Azure AI Foundry) provider makes async calls but does not pull an async HTTP backend.
+  "aiohttp>=3.9",
+]
 dev = [
   "pytest>=7.0",
   "pytest-cov>=4.0",
@@ -32,6 +36,7 @@ dev = [
   "ruff>=0.1.0",
   "deepeval>=3.8.4",
   "any-llm-sdk[openai,anthropic,gemini,groq,mistral,bedrock,azureopenai,azure]==1.16.0",
+  "aiohttp>=3.9",
 ]
 
 [project.urls]
