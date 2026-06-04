@@ -662,6 +662,29 @@ The "explanation" field MUST be formatted as valid Markdown. Use headings, bulle
         elif provider == "groq":
             # any-llm's Groq provider ignores api_base; route via base_url instead.
             return {"api_key": "gateway", "client_args": {"base_url": cfg.api_base, "default_headers": header}}
+        elif provider == "bedrock":
+            # boto3 has no default_headers hook. Build a client pointed at the
+            # gateway with dummy credentials (the gateway ignores the SigV4
+            # signature and authenticates via the api-key header) and inject that
+            # header through a botocore before-send handler.
+            import os
+
+            import boto3
+
+            key = cfg.api_key
+            bedrock_client = boto3.client(
+                "bedrock-runtime",
+                endpoint_url=cfg.api_base,
+                region_name=os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1",
+                aws_access_key_id="gateway",
+                aws_secret_access_key="gateway",
+            )
+
+            def _inject_gateway_header(request, **_):
+                request.headers["api-key"] = key
+
+            bedrock_client.meta.events.register("before-send.bedrock-runtime", _inject_gateway_header)
+            return {"client_args": {"client": bedrock_client}}
         else:
             # openai, anthropic, and other OpenAI-style clients accept default_headers.
             client_args = {"default_headers": header}

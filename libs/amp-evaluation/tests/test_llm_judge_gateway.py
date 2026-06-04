@@ -187,6 +187,22 @@ def test_gateway_kwargs_azure_foundry_passes_real_key_as_apikey():
     assert kw == {"api_base": "https://gw.example/v1", "api_key": "secret-key"}
 
 
+def test_gateway_kwargs_bedrock_injects_header_via_boto3_client():
+    boto3 = pytest.importorskip("boto3")  # noqa: F841 -- skip when bedrock extra absent
+    _set_gateway()
+    kw = LLMAsJudgeEvaluator._gateway_kwargs("bedrock/anthropic.claude-3-5-sonnet")
+    client = kw["client_args"]["client"]
+    assert client.meta.endpoint_url == "https://gw.example/v1"
+
+    # The before-send handler injects the gateway api-key header.
+    class _Req:
+        headers: dict = {}
+
+    req = _Req()
+    client.meta.events.emit("before-send.bedrock-runtime", request=req)
+    assert req.headers["api-key"] == "secret-key"
+
+
 def test_gateway_kwargs_supports_colon_separator():
     _set_gateway()
     kw = LLMAsJudgeEvaluator._gateway_kwargs("gemini:gemini-2.5-flash")
