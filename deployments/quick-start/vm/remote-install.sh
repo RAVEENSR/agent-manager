@@ -25,6 +25,32 @@ ensure_docker() {
   systemctl enable --now docker
 }
 
+# install.sh only *verifies* k3d/kubectl/helm/lsof (it targets a pre-provisioned
+# dev container). On a bare VM we must install them. Each step is idempotent.
+ensure_prerequisites() {
+  ensure_docker
+  local arch; arch="$(dpkg --print-architecture)"   # amd64 | arm64
+
+  if ! command -v lsof >/dev/null 2>&1; then
+    log "Installing lsof"
+    apt-get update -qq && apt-get install -y -qq lsof
+  fi
+  if ! command -v k3d >/dev/null 2>&1; then
+    log "Installing k3d"
+    curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+  fi
+  if ! command -v kubectl >/dev/null 2>&1; then
+    log "Installing kubectl (${arch})"
+    local kver; kver="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
+    curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${kver}/bin/linux/${arch}/kubectl"
+    chmod +x /usr/local/bin/kubectl
+  fi
+  if ! command -v helm >/dev/null 2>&1; then
+    log "Installing helm"
+    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  fi
+}
+
 ensure_firewall() {
   # Open only 80/443 publicly; k3d ports are loopback-bound. SSH stays as-is.
   if command -v ufw >/dev/null 2>&1; then
@@ -42,7 +68,7 @@ ensure_firewall() {
 }
 
 phase_bootstrap() {
-  ensure_docker
+  ensure_prerequisites
   ensure_firewall
   log "Bootstrap complete"
 }
