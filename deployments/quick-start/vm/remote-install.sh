@@ -2,7 +2,7 @@
 # remote-install.sh — executes on the target VM. Invoked by install-vm.sh over SSH.
 # Usage: <phase> where phase is one of: bootstrap | preflight | install
 # Config via env: VM_IP, TLS_MODE(letsencrypt|http), EXTERNAL_GATEWAYS(true|false),
-#                 ACME_EMAIL, VERSION.
+#                 NO_PORT80(true|false), ACME_EMAIL, VERSION.
 set -euo pipefail
 
 PHASE="${1:?usage: remote-install.sh <bootstrap|preflight|install>}"
@@ -14,6 +14,7 @@ source "${VM_DIR}/lib-vm.sh"
 : "${VM_IP:?VM_IP is required}"
 : "${TLS_MODE:=letsencrypt}"
 : "${EXTERNAL_GATEWAYS:=true}"
+: "${NO_PORT80:=false}"
 : "${ACME_EMAIL:=}"
 
 log() { printf '\033[0;34m[vm:%s]\033[0m %s\n' "$PHASE" "$*"; }
@@ -118,7 +119,7 @@ phase_install() {
 start_caddy() {
   local scheme="$1"
   mkdir -p /opt/amp
-  render_caddyfile "$VM_IP" "$scheme" "$ACME_EMAIL" "$EXTERNAL_GATEWAYS" >/opt/amp/Caddyfile
+  render_caddyfile "$VM_IP" "$scheme" "$ACME_EMAIL" "$EXTERNAL_GATEWAYS" "$NO_PORT80" >/opt/amp/Caddyfile
   log "Wrote /opt/amp/Caddyfile"
 
   docker rm -f amp-caddy >/dev/null 2>&1 || true

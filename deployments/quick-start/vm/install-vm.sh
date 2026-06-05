@@ -3,10 +3,13 @@
 # Usage:
 #   ./install-vm.sh --host <IP> --ssh-key <path> [--email <addr>]
 #                   [--tls letsencrypt|http] [--ssh-user <user>]
-#                   [--no-external-gateways]
+#                   [--no-external-gateways] [--no-port80]
+#
+# --no-port80: issue Let's Encrypt certs via the TLS-ALPN-01 challenge over :443
+#   only (no inbound port 80 required). Requires --tls letsencrypt.
 set -euo pipefail
 
-HOST="" SSH_KEY="" SSH_USER="root" TLS_MODE="letsencrypt" ACME_EMAIL="" EXTERNAL_GATEWAYS="true"
+HOST="" SSH_KEY="" SSH_USER="root" TLS_MODE="letsencrypt" ACME_EMAIL="" EXTERNAL_GATEWAYS="true" NO_PORT80="false"
 VM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 QS_DIR="$(cd "${VM_DIR}/.." && pwd)"
 # shellcheck source=lib-vm.sh
@@ -23,6 +26,7 @@ while [[ $# -gt 0 ]]; do
     --email) ACME_EMAIL="$2"; shift 2 ;;
     --tls) TLS_MODE="$2"; shift 2 ;;
     --no-external-gateways) EXTERNAL_GATEWAYS="false"; shift ;;
+    --no-port80) NO_PORT80="true"; shift ;;
     -h|--help) grep '^#' "$0" | grep -v '^#!' | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown flag: $1" ;;
   esac
@@ -32,6 +36,9 @@ done
 [[ -n "$SSH_KEY" ]] || die "--ssh-key <path> is required"
 [[ -f "$SSH_KEY" ]] || die "ssh key not found: $SSH_KEY"
 vm_scheme "$TLS_MODE" >/dev/null || die "--tls must be letsencrypt or http"
+# --no-port80 only applies to Let's Encrypt (http mode serves on :80 by definition).
+[[ "$NO_PORT80" == "true" && "$TLS_MODE" != "letsencrypt" ]] && \
+  die "--no-port80 requires --tls letsencrypt (http mode serves on port 80)"
 # External gateways register on :443 (the console's K8s command hardcodes the port),
 # so they only line up under letsencrypt. Warn instead of failing.
 if [[ "$EXTERNAL_GATEWAYS" == "true" && "$TLS_MODE" == "http" ]]; then
@@ -47,7 +54,7 @@ remote_run() {
   # Runs remote-install.sh with the install config in the remote env.
   local phase="$1"; shift || true
   remote "sudo VM_IP='${HOST}' TLS_MODE='${TLS_MODE}' EXTERNAL_GATEWAYS='${EXTERNAL_GATEWAYS}' \
-    ACME_EMAIL='${ACME_EMAIL}' VERSION='${VERSION:-0.0.0-dev}' \
+    NO_PORT80='${NO_PORT80}' ACME_EMAIL='${ACME_EMAIL}' VERSION='${VERSION:-0.0.0-dev}' \
     bash \"${REMOTE_DIR}/vm/remote-install.sh\" \"${phase}\" \"$*\""
 }
 
@@ -60,8 +67,11 @@ log "Phase 1/3: bootstrap (Docker + firewall)"
 remote_run bootstrap
 
 if [[ "$TLS_MODE" == "letsencrypt" ]]; then
-  log "Phase 2/3: preflight — verifying :80/:443 reachable from the internet"
-  for port in 80 443; do
+  # In --no-port80 mode only :443 must be reachable (TLS-ALPN-01); otherwise :80 too.
+  preflight_ports=(80 443)
+  [[ "$NO_PORT80" == "true" ]] && preflight_ports=(443)
+  log "Phase 2/3: preflight — verifying ${preflight_ports[*]} reachable from the internet"
+  for port in "${preflight_ports[@]}"; do
     remote_run preflight "$port" &
     sleep 3
     if ! nc -z -w 5 "$HOST" "$port"; then

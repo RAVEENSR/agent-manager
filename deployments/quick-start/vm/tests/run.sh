@@ -155,5 +155,19 @@ cf_cp="$(render_caddyfile 203.0.113.10 https "" true)"
 assert_eq "caddy cp site" "cp.amp.203.0.113.10.sslip.io {" "$(grep -F 'cp.amp' <<<"$cf_cp" | head -1)"
 assert_eq "caddy cp tls skip verify" "			tls_insecure_skip_verify" "$(grep -F 'tls_insecure_skip_verify' <<<"$cf_cp")"
 
+# --- no-port-80 (TLS-ALPN-01) mode: global disable_redirects + per-site disable_http_challenge ---
+has() { grep -qF "$2" <<<"$1" && echo yes || echo no; }
+cf_np80="$(render_caddyfile 203.0.113.10 https "ops@example.com" true true)"
+assert_eq "np80 global disable_redirects"   "yes" "$(has "$cf_np80" 'auto_https disable_redirects')"
+assert_eq "np80 issuer acme"                "yes" "$(has "$cf_np80" 'issuer acme')"
+assert_eq "np80 disable_http_challenge"     "yes" "$(has "$cf_np80" 'disable_http_challenge')"
+assert_eq "np80 keeps email"                "yes" "$(has "$cf_np80" 'email ops@example.com')"
+# per-site tls block appears on each public host incl. cp (one per site = 6)
+assert_eq "np80 tls block per site (6)"     "6"   "$(grep -cF 'issuer acme' <<<"$cf_np80")"
+# default (no_port80 omitted) must NOT add either directive
+cf_def="$(render_caddyfile 203.0.113.10 https "ops@example.com" true)"
+assert_eq "default no disable_redirects"    "no"  "$(has "$cf_def" 'auto_https disable_redirects')"
+assert_eq "default no http-challenge block" "no"  "$(has "$cf_def" 'disable_http_challenge')"
+
 if [[ "$FAILED" -ne 0 ]]; then echo "TESTS FAILED"; exit 1; fi
 echo "ALL TESTS PASSED"

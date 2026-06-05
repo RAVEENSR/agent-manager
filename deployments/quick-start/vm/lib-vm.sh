@@ -81,36 +81,50 @@ render_k3d_vm_config() {
   sed -E 's/^([[:space:]]*- port: )([0-9]+:[0-9]+)/\1127.0.0.1:\2/'
 }
 
-# render_caddyfile <ip> <scheme> <acme_email> <external_gateways:true|false (default true)>
+# render_caddyfile <ip> <scheme> <acme_email> <external_gateways:true|false (default true)> \
+#                  <no_port80:true|false (default false)>
+# no_port80 (https only): use the TLS-ALPN-01 ACME challenge over :443 and drop the
+# :80 redirect, so certificates issue with only inbound 443 open.
 # Prints a complete Caddyfile to stdout.
 render_caddyfile() {
-  local ip="$1" scheme="$2" email="$3" external_gateways="${4:-true}"
+  local ip="$1" scheme="$2" email="$3" external_gateways="${4:-true}" no_port80="${5:-false}"
   local prefix=""              # https: bare host (Caddy auto-HTTPS)
   [[ "$scheme" == "http" ]] && prefix="http://"
+
+  # Per-site tls block injected only in no-port-80 mode: force the TLS-ALPN-01
+  # ACME challenge (over :443) so issuance never depends on inbound port 80.
+  local tls_block=""
+  [[ "$no_port80" == "true" && "$scheme" == "https" ]] && \
+    tls_block=$'\ttls {\n\t\tissuer acme {\n\t\t\tdisable_http_challenge\n\t\t}\n\t}\n'
 
   # Global options block.
   if [[ "$scheme" == "http" ]]; then
     printf '{\n\tauto_https off\n}\n\n'
-  elif [[ -n "$email" ]]; then
-    printf '{\n\temail %s\n}\n\n' "$email"
+  else
+    # https: assemble global options from email + optional no-port-80 setting.
+    local gopts=""
+    [[ -n "$email" ]] && gopts+=$'\temail '"$email"$'\n'
+    # disable_redirects stops Caddy serving the HTTP->HTTPS redirect on :80.
+    [[ "$no_port80" == "true" ]] && gopts+=$'\tauto_https disable_redirects\n'
+    [[ -n "$gopts" ]] && printf '{\n%s}\n\n' "$gopts"
+    # https + no email + port 80 available: no global block; Caddy uses its default ACME contact.
   fi
-  # https + no email: intentionally no global block; Caddy uses its own default ACME contact.
 
-  _caddy_site() {   # _caddy_site <prefix> <ip> <subdomain> <upstream_port>
-    printf '%s%s {\n\treverse_proxy 127.0.0.1:%s\n}\n\n' "$1" "$(vm_host "$3" "$2")" "$4"
+  _caddy_site() {   # _caddy_site <prefix> <ip> <subdomain> <upstream_port> <tls_block>
+    printf '%s%s {\n%s\treverse_proxy 127.0.0.1:%s\n}\n\n' "$1" "$(vm_host "$3" "$2")" "$5" "$4"
   }
 
-  _caddy_site "$prefix" "$ip" console  3000   # console UI
-  _caddy_site "$prefix" "$ip" api      9000   # agent-manager REST API
-  _caddy_site "$prefix" "$ip" thunder  8080   # Thunder OAuth (OC kgateway, host-routed)
-  _caddy_site "$prefix" "$ip" observer 9098   # traces observer
-  _caddy_site "$prefix" "$ip" gateway  22893  # api-platform gateway: OTel + agent endpoints
+  _caddy_site "$prefix" "$ip" console  3000   "$tls_block"  # console UI
+  _caddy_site "$prefix" "$ip" api      9000   "$tls_block"  # agent-manager REST API
+  _caddy_site "$prefix" "$ip" thunder  8080   "$tls_block"  # Thunder OAuth (OC kgateway, host-routed)
+  _caddy_site "$prefix" "$ip" observer 9098   "$tls_block"  # traces observer
+  _caddy_site "$prefix" "$ip" gateway  22893  "$tls_block"  # api-platform gateway: OTel + agent endpoints
 
   if [[ "$external_gateways" == "true" ]]; then
     # 9243 is HTTPS with a self-signed cert -> proxy over TLS, skip verification.
     # reverse_proxy upgrades the gateway control WebSocket transparently.
-    printf '%s%s {\n\treverse_proxy 127.0.0.1:9243 {\n\t\ttransport http {\n\t\t\ttls\n\t\t\ttls_insecure_skip_verify\n\t\t}\n\t}\n}\n\n' \
-      "$prefix" "$(vm_host cp "$ip")"
+    printf '%s%s {\n%s\treverse_proxy 127.0.0.1:9243 {\n\t\ttransport http {\n\t\t\ttls\n\t\t\ttls_insecure_skip_verify\n\t\t}\n\t}\n}\n\n' \
+      "$prefix" "$(vm_host cp "$ip")" "$tls_block"
   fi
 
   unset -f _caddy_site
