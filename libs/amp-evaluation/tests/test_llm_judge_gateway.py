@@ -172,18 +172,39 @@ def test_gateway_kwargs_groq_routes_via_base_url():
     assert kw["client_args"]["default_headers"] == {"api-key": "secret-key"}
 
 
-def test_gateway_kwargs_azureopenai_passes_real_key_as_apikey():
+def test_gateway_kwargs_azureopenai_passes_real_key_and_pinned_api_version():
     # Azure OpenAI sends api_key in the api-key header natively, so the real
-    # gateway key is passed through directly (no placeholder, no client_args).
+    # gateway key is passed through directly. The api-version is pinned (the
+    # SDK default "preview" 404s against the deployment-path URL).
     _set_gateway()
     kw = LLMAsJudgeEvaluator._gateway_kwargs("azureopenai/gpt-4o-mini")
-    assert kw == {"api_base": "https://gw.example/v1", "api_key": "secret-key"}
+    assert kw == {
+        "api_base": "https://gw.example/v1",
+        "api_key": "secret-key",
+        "client_args": {"api_version": "2024-10-21"},
+    }
 
 
-def test_gateway_kwargs_azure_foundry_passes_real_key_as_apikey():
+def test_gateway_kwargs_azure_foundry_passes_real_key_and_pinned_api_version():
     _set_gateway()
     kw = LLMAsJudgeEvaluator._gateway_kwargs("azure/some-model")
-    assert kw == {"api_base": "https://gw.example/v1", "api_key": "secret-key"}
+    assert kw == {
+        "api_base": "https://gw.example/v1",
+        "api_key": "secret-key",
+        "client_args": {"api_version": "2024-10-21"},
+    }
+
+
+def test_gateway_kwargs_azure_api_version_is_configurable():
+    _set_gateway()
+    os.environ["AMP_LLM_JUDGE_AZURE_API_VERSION"] = "2025-01-01-preview"
+    reload_config()
+    try:
+        kw = LLMAsJudgeEvaluator._gateway_kwargs("azureopenai/gpt-4o-mini")
+        assert kw["client_args"] == {"api_version": "2025-01-01-preview"}
+    finally:
+        os.environ.pop("AMP_LLM_JUDGE_AZURE_API_VERSION", None)
+        reload_config()
 
 
 def test_gateway_kwargs_bedrock_injects_header_via_boto3_client():
