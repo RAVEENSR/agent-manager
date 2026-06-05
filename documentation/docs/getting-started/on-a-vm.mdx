@@ -14,10 +14,14 @@ VM's public IP — no domain registration and no client `/etc/hosts` edits.
 
 **On the VM:**
 - A Linux VM with a **public IP** and SSH access (sudo).
-- **Inbound `80/tcp` and `443/tcp` open** in the cloud security group / firewall.
-  Let's Encrypt validates over these ports; if they are closed, certificate
-  issuance fails. (Use `--tls http` to skip TLS entirely.)
-- Docker is installed automatically if missing.
+- **Inbound `443/tcp` open** in the cloud security group / firewall. Inbound
+  `80/tcp` is also needed by default (Let's Encrypt's HTTP-01 challenge + the
+  http→https redirect) — but if your policy forbids opening port 80, use
+  **`--no-port80`**: certificates are then issued via the TLS-ALPN-01 challenge
+  over 443 only. The `:443` exposure must be **TCP passthrough** (not a
+  TLS-terminating load balancer) for this to work. (Or use `--tls http` to skip
+  TLS entirely.)
+- Docker, k3d, kubectl, helm, and lsof are installed automatically if missing.
 
 ## Install
 
@@ -45,6 +49,7 @@ Allow 8–15 minutes.
 | `--email` | _(none)_ | ACME contact for expiry notices |
 | `--tls` | `letsencrypt` | `letsencrypt` (trusted HTTPS) or `http` (no certs) |
 | `--no-external-gateways` | off | Drop the gateway control-plane endpoint if you won't connect external gateways |
+| `--no-port80` | off | Issue certs via TLS-ALPN-01 over 443 only (no inbound port 80). Requires `--tls letsencrypt` and TCP-passthrough on 443 |
 
 ## What gets exposed
 
@@ -66,6 +71,11 @@ With `--tls letsencrypt` (default), Caddy obtains and auto-renews trusted Let's
 Encrypt certificates on first start — no manual certificate steps. Certificates and
 the ACME account persist in the `amp-caddy-data` Docker volume, so restarts do not
 re-request them. With `--tls http`, the same hostnames are served over plain HTTP.
+
+**Locked-down networks (port 80 blocked):** add `--no-port80`. Caddy then uses the
+TLS-ALPN-01 ACME challenge, which runs inside the TLS handshake on 443, so only
+inbound 443 is required. This needs the public `:443` to reach Caddy as raw TCP
+(no TLS-terminating proxy in front), and you lose the automatic http→https redirect.
 
 ## Persistence and teardown
 
