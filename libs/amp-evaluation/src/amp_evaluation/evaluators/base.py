@@ -643,9 +643,15 @@ The "explanation" field MUST be formatted as valid Markdown. Use headings, bulle
 
         # Azure SDKs send their api_key in the "api-key" header natively, which
         # is exactly the gateway's auth header — pass the real key straight
-        # through (a placeholder would be sent as the gateway credential).
+        # through (a placeholder would be sent as the gateway credential). The
+        # api-version is pinned because the SDK's default ("preview") is
+        # incompatible with the deployment-path URL and 404s.
         if provider in ("azureopenai", "azure"):
-            return {"api_base": cfg.api_base, "api_key": cfg.api_key}
+            return {
+                "api_base": cfg.api_base,
+                "api_key": cfg.api_key,
+                "client_args": {"api_version": cfg.azure_api_version},
+            }
 
         # Other providers authenticate elsewhere (bearer / x-api-key / query
         # param), so the gateway api-key must be injected as an explicit request
