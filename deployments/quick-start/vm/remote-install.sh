@@ -70,18 +70,27 @@ ensure_prerequisites() {
 }
 
 ensure_firewall() {
-  # Open only 80/443 publicly; k3d ports are loopback-bound. SSH stays as-is.
-  if command -v ufw >/dev/null 2>&1; then
-    ufw allow 80/tcp || true
-    ufw allow 443/tcp || true
-    log "ufw: opened 80,443"
-  elif command -v firewall-cmd >/dev/null 2>&1; then
-    firewall-cmd --permanent --add-port=80/tcp || true
-    firewall-cmd --permanent --add-port=443/tcp || true
-    firewall-cmd --reload || true
-    log "firewalld: opened 80,443"
+  # Open only the ports the selected frontend mode needs (k3d ports are loopback-
+  # bound; SSH stays as-is). http serves on :80; --no-port80 needs only :443;
+  # default letsencrypt needs both (80 for HTTP-01 + redirect).
+  local ports
+  if [[ "$TLS_MODE" == "http" ]]; then
+    ports=(80)
+  elif [[ "$NO_PORT80" == "true" ]]; then
+    ports=(443)
   else
-    log "No ufw/firewalld found; assuming host firewall is open for 80,443"
+    ports=(80 443)
+  fi
+  local port
+  if command -v ufw >/dev/null 2>&1; then
+    for port in "${ports[@]}"; do ufw allow "${port}/tcp" || true; done
+    log "ufw: opened ${ports[*]}"
+  elif command -v firewall-cmd >/dev/null 2>&1; then
+    for port in "${ports[@]}"; do firewall-cmd --permanent --add-port="${port}/tcp" || true; done
+    firewall-cmd --reload || true
+    log "firewalld: opened ${ports[*]}"
+  else
+    log "No ufw/firewalld found; assuming host firewall is open for ${ports[*]}"
   fi
 }
 
@@ -92,18 +101,26 @@ phase_bootstrap() {
 }
 
 # Opens a temporary listener on the given port so the laptop can verify the
-# cloud security group permits inbound. Blocks for 8s; the caller
-# (install-vm.sh) runs this in the background over SSH while it probes.
+# cloud security group permits inbound. Blocks for 15s; the caller
+# (install-vm.sh) runs this in the background over SSH while it retries probes.
 phase_preflight() {
   local port="${1:?preflight needs a port}"
-  log "Opening temporary listener on :${port} for 8s"
-  timeout 8 python3 - "$port" <<'PY' || true
+  log "Opening temporary listener on :${port} for 15s"
+  local rc=0
+  timeout 15 python3 - "$port" <<'PY' || rc=$?
 import socket, sys, time
 p = int(sys.argv[1])
 s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind(("0.0.0.0", p)); s.listen(1)
-time.sleep(8)
+time.sleep(15)
 PY
+  # 0 = exited cleanly, 124 = timeout (both expected). Anything else (e.g. the
+  # bind failed because the port is already in use) is a real error — surface it
+  # so the laptop probe can't pass against some other listener.
+  case "$rc" in
+    0|124) ;;
+    *) die "Could not open temporary listener on :${port} (already in use?)" ;;
+  esac
 }
 
 phase_install() {

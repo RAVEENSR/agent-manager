@@ -84,8 +84,14 @@ if [[ "$TLS_MODE" == "letsencrypt" ]]; then
   log "Phase 2/3: preflight — verifying ${preflight_ports[*]} reachable from the internet"
   for port in "${preflight_ports[@]}"; do
     remote_run preflight "$port" &
-    sleep 3
-    if ! nc -z -w 5 "$HOST" "$port"; then
+    # Retry within the remote listener's window instead of a single check after a
+    # fixed sleep — a slow VM/SSH path may not have bound the socket yet.
+    reachable="false"
+    for _ in $(seq 1 12); do
+      if nc -z -w 1 "$HOST" "$port"; then reachable="true"; break; fi
+      sleep 1
+    done
+    if [[ "$reachable" != "true" ]]; then
       wait || true
       die "Port ${port} is NOT reachable from this machine.
   Open inbound ${port}/tcp in your cloud security group / NACL,
