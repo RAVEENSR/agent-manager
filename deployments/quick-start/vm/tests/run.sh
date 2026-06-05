@@ -16,6 +16,8 @@ assert_eq() {
     FAILED=1
   fi
 }
+# has <haystack> <needle> -> "yes" if needle present, else "no"
+has() { grep -qF "$2" <<<"$1" && echo yes || echo no; }
 
 # --- vm_scheme ---
 assert_eq "vm_scheme letsencrypt" "https" "$(vm_scheme letsencrypt)"
@@ -156,7 +158,6 @@ assert_eq "caddy cp site" "cp.amp.203.0.113.10.sslip.io {" "$(grep -F 'cp.amp' <
 assert_eq "caddy cp tls skip verify" "			tls_insecure_skip_verify" "$(grep -F 'tls_insecure_skip_verify' <<<"$cf_cp")"
 
 # --- no-port-80 (TLS-ALPN-01) mode: global disable_redirects + per-site disable_http_challenge ---
-has() { grep -qF "$2" <<<"$1" && echo yes || echo no; }
 cf_np80="$(render_caddyfile 203.0.113.10 https "ops@example.com" true true)"
 assert_eq "np80 global disable_redirects"   "yes" "$(has "$cf_np80" 'auto_https disable_redirects')"
 assert_eq "np80 issuer acme"                "yes" "$(has "$cf_np80" 'issuer acme')"

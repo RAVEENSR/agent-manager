@@ -18,24 +18,41 @@ source "${VM_DIR}/lib-vm.sh"
 : "${ACME_EMAIL:=}"
 
 log() { printf '\033[0;34m[vm:%s]\033[0m %s\n' "$PHASE" "$*"; }
+die() { printf '\033[0;31m[vm:%s] ERROR:\033[0m %s\n' "$PHASE" "$*" >&2; exit 1; }
 
 ensure_docker() {
-  if command -v docker >/dev/null 2>&1; then log "Docker present"; return; fi
-  log "Installing Docker via get.docker.com"
-  curl -fsSL https://get.docker.com | sh
+  if ! command -v docker >/dev/null 2>&1; then
+    log "Installing Docker via get.docker.com"
+    curl -fsSL https://get.docker.com | sh
+  else
+    log "Docker CLI present"
+  fi
+  # command -v docker does not imply the daemon is running; bring it up either way.
   systemctl enable --now docker
+  # Wait for the daemon to answer before anything else uses it.
+  local _
+  for _ in $(seq 1 15); do docker info >/dev/null 2>&1 && return; sleep 2; done
+  die "Docker daemon did not become ready"
 }
 
 # install.sh only *verifies* k3d/kubectl/helm/lsof (it targets a pre-provisioned
 # dev container). On a bare VM we must install them. Each step is idempotent.
 ensure_prerequisites() {
-  ensure_docker
   local arch; arch="$(dpkg --print-architecture)"   # amd64 | arm64
 
-  if ! command -v lsof >/dev/null 2>&1; then
-    log "Installing lsof"
-    apt-get update -qq && apt-get install -y -qq lsof
+  # Tools later phases assume exist on a minimal image: curl (downloads),
+  # python3 (preflight listener), lsof (install.sh port check).
+  local pkgs=()
+  command -v curl    >/dev/null 2>&1 || pkgs+=(curl)
+  command -v python3 >/dev/null 2>&1 || pkgs+=(python3)
+  command -v lsof    >/dev/null 2>&1 || pkgs+=(lsof)
+  if (( ${#pkgs[@]} )); then
+    log "Installing base packages: ${pkgs[*]}"
+    apt-get update -qq && apt-get install -y -qq "${pkgs[@]}"
   fi
+
+  ensure_docker
+
   if ! command -v k3d >/dev/null 2>&1; then
     log "Installing k3d"
     curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
@@ -99,7 +116,10 @@ phase_install() {
   mapfile -t THUNDER_HELM_ARGS < <(build_thunder_helm_args "$VM_IP" "$scheme")
   # shellcheck disable=SC2034
   mapfile -t GATEWAY_HELM_ARGS < <(build_gateway_helm_args "$VM_IP" "$scheme")
-  export VERSION="${VERSION:-0.0.0-dev}"
+  # No safe default: install.sh builds chart refs + raw manifest URLs from amp/v${VERSION},
+  # so a placeholder like 0.0.0-dev 404s. Require a real release.
+  : "${VERSION:?VERSION is required (an existing amp/v* release, e.g. 0.15.0)}"
+  export VERSION
 
   # Loopback-bound k3d config.
   render_k3d_vm_config <"${QS_DIR}/k3d-config.yaml" >/tmp/k3d-config-vm.yaml

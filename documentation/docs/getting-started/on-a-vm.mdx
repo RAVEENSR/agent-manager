@@ -32,8 +32,12 @@ cd agent-manager/deployments/quick-start/vm
 ./install-vm.sh \
   --host <VM_PUBLIC_IP> \
   --ssh-key ~/.ssh/your_key \
+  --version <amp-release> \
   --email you@example.com
 ```
+
+Set `--version` to the Agent Manager release you want (an existing `amp/v*`
+[tag](https://github.com/wso2/agent-manager/tags), e.g. `0.15.0`).
 
 The installer runs in three phases — bootstrap (Docker + firewall), a preflight
 reachability check for `:80`/`:443`, then the platform install and Caddy startup.
@@ -43,8 +47,9 @@ Allow 8–15 minutes.
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--host` | _(required)_ | VM public IP |
+| `--host` | _(required)_ | VM public IPv4 address |
 | `--ssh-key` | _(required)_ | SSH private key path |
+| `--version` | _(required)_ | Agent Manager release to install (an `amp/v*` tag, e.g. `0.15.0`) |
 | `--ssh-user` | `root` | SSH user (must have sudo) |
 | `--email` | _(none)_ | ACME contact for expiry notices |
 | `--tls` | `letsencrypt` | `letsencrypt` (trusted HTTPS) or `http` (no certs) |
@@ -101,8 +106,10 @@ gateway source IPs at the firewall.
 
 ## Troubleshooting
 
-- **Preflight fails on :80/:443** — open both ports inbound in your cloud security
-  group, or rerun with `--tls http`.
+- **Preflight fails on :80/:443** — open inbound `:443` (and `:80` for the default
+  mode) in your cloud security group. If port 80 cannot be opened, rerun with
+  `--no-port80` (keeps trusted HTTPS via TLS-ALPN-01 over 443); use `--tls http`
+  only when you intentionally want non-TLS access.
 - **Certificate not issued** — check `docker logs amp-caddy`. Let's Encrypt rate
   limits on sslip.io are high but not infinite; if hit, retry shortly.
 - **Login redirect mismatch** — confirm you reached the console via its
