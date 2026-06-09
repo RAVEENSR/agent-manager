@@ -77,6 +77,13 @@ Encrypt certificates on first start — no manual certificate steps. Certificate
 the ACME account persist in the `amp-caddy-data` Docker volume, so restarts do not
 re-request them. With `--tls http`, the same hostnames are served over plain HTTP.
 
+**What port 80 is used for (default mode).** When `:80` is open, Caddy serves
+**only** the ACME HTTP-01 challenge (`/.well-known/acme-challenge/...`) on it and
+**301-redirects every other path to HTTPS** — no application traffic is ever served
+over plain HTTP. (A network security group filters by port, not URL path, so this
+path-level restriction is enforced by Caddy, not the firewall; opening `:80` only
+exposes the challenge + redirect.)
+
 **Locked-down networks (port 80 blocked):** add `--no-port80`. Caddy then uses the
 TLS-ALPN-01 ACME challenge, which runs inside the TLS handshake on 443, so only
 inbound 443 is required. This needs the public `:443` to reach Caddy as raw TCP
