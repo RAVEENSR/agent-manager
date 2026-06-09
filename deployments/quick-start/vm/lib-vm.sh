@@ -29,10 +29,19 @@ build_amp_helm_args() {
   observer="$(vm_host observer "$ip")"
   gateway="$(vm_host gateway "$ip")"
 
+  # The service config lives under different top-level keys across chart versions:
+  # `agentManager` (<=main) was renamed to `agentManagerService` (>=0.15.0). Emit
+  # both; helm silently ignores whichever key the installed chart doesn't define,
+  # so the right one always wins regardless of the --version pulled.
+  local k
+  for k in agentManager agentManagerService; do
+    printf '%s\n' \
+      "--set" "${k}.config.serverPublicURL=${scheme}://${api}" \
+      "--set" "${k}.config.oauthAuthorizationServers=${scheme}://${thunder}" \
+      "--set" "${k}.config.keyManager.issuer=${scheme}://${thunder}"
+  done
+
   printf '%s\n' \
-    "--set" "agentManager.config.serverPublicURL=${scheme}://${api}" \
-    "--set" "agentManager.config.oauthAuthorizationServers=${scheme}://${thunder}" \
-    "--set" "agentManager.config.keyManager.issuer=${scheme}://${thunder}" \
     "--set" "console.config.auth.baseUrl=${scheme}://${thunder}" \
     "--set" "console.config.auth.signInRedirectURL=${scheme}://${console_h}/login" \
     "--set" "console.config.auth.signOutRedirectURL=${scheme}://${console_h}/login" \

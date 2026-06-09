@@ -30,15 +30,19 @@ assert_eq "vm_host thunder" "thunder.amp.203.0.113.10.sslip.io" "$(vm_host thund
 
 # --- build_amp_helm_args (https, external gateways on by default) ---
 amp_https="$(build_amp_helm_args 203.0.113.10 https true)"
-assert_eq "amp serverPublicURL" \
+# Service settings are emitted under BOTH chart keys (agentManager + agentManagerService).
+assert_eq "amp serverPublicURL (service key)" \
+  "agentManagerService.config.serverPublicURL=https://api.amp.203.0.113.10.sslip.io" \
+  "$(grep -F 'agentManagerService.config.serverPublicURL' <<<"$amp_https")"
+assert_eq "amp serverPublicURL (legacy key)" \
   "agentManager.config.serverPublicURL=https://api.amp.203.0.113.10.sslip.io" \
-  "$(grep -F 'serverPublicURL' <<<"$amp_https")"
-assert_eq "amp oauthAuthorizationServers" \
-  "agentManager.config.oauthAuthorizationServers=https://thunder.amp.203.0.113.10.sslip.io" \
-  "$(grep -F 'oauthAuthorizationServers' <<<"$amp_https")"
-assert_eq "amp keyManager.issuer" \
-  "agentManager.config.keyManager.issuer=https://thunder.amp.203.0.113.10.sslip.io" \
-  "$(grep -F 'keyManager.issuer' <<<"$amp_https")"
+  "$(grep -F 'agentManager.config.serverPublicURL' <<<"$amp_https")"
+assert_eq "amp oauthAuthorizationServers (service key)" \
+  "agentManagerService.config.oauthAuthorizationServers=https://thunder.amp.203.0.113.10.sslip.io" \
+  "$(grep -F 'agentManagerService.config.oauthAuthorizationServers' <<<"$amp_https")"
+assert_eq "amp keyManager.issuer (service key)" \
+  "agentManagerService.config.keyManager.issuer=https://thunder.amp.203.0.113.10.sslip.io" \
+  "$(grep -F 'agentManagerService.config.keyManager.issuer' <<<"$amp_https")"
 assert_eq "amp console apiBaseUrl" \
   "console.config.apiBaseUrl=https://api.amp.203.0.113.10.sslip.io" \
   "$(grep -F 'config.apiBaseUrl' <<<"$amp_https")"
@@ -63,8 +67,8 @@ assert_eq "amp no cp when disabled" "" "$(grep -F 'gatewayControlPlaneUrl' <<<"$
 # --- http mode flips scheme ---
 amp_http="$(build_amp_helm_args 203.0.113.10 http true)"
 assert_eq "amp http scheme" \
-  "agentManager.config.serverPublicURL=http://api.amp.203.0.113.10.sslip.io" \
-  "$(grep -F 'serverPublicURL' <<<"$amp_http")"
+  "agentManagerService.config.serverPublicURL=http://api.amp.203.0.113.10.sslip.io" \
+  "$(grep -F 'agentManagerService.config.serverPublicURL' <<<"$amp_http")"
 
 # --- build_gateway_helm_args sets the published vhost ---
 gw="$(build_gateway_helm_args 203.0.113.10 https)"
