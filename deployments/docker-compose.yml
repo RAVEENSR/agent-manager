@@ -39,7 +39,10 @@ services:
       - SERVER_PORT=8080
       - SERVER_PUBLIC_URL=http://localhost:9000
       - OAUTH_AUTHORIZATION_SERVERS=http://thunder.amp.localhost:8080
-      - RBAC_ENABLED=true
+      # Defaults to on for local dev; overridable via the environment so the
+      # instrumentation-matrix CI dev-stack can disable it (the amp-api-client
+      # M2M token doesn't yet carry the RBAC scopes the heavy tier needs).
+      - RBAC_ENABLED=${RBAC_ENABLED:-true}
       # Kubernetes Configuration
       - KUBECONFIG=/app/.kube/config
       - IS_LOCAL_DEV_ENV=true

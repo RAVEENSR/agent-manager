@@ -42,6 +42,13 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        # STOP-GAP: disable RBAC scope enforcement for the matrix dev-stack. With
+        # RBAC_ENABLED=true the heavy tier 403s on the first API call because the
+        # amp-api-client M2M client_credentials token doesn't carry the required
+        # scopes (e.g. project:create). docker-compose.yml reads this via
+        # ${RBAC_ENABLED:-true}, so local dev keeps RBAC on. Remove this once the
+        # Thunder bootstrap grants the amp-api-client token its admin scopes.
+        export RBAC_ENABLED=false
         # k3d cluster + prerequisites (Gateway API, cert-manager, …)
         make setup-k3d
         # OpenChoreo + builds & loads traces-observer + instrumentation images
