@@ -64,8 +64,13 @@ remote() { "${SSH[@]}" "$@"; }
 remote_run() {
   # Runs remote-install.sh with the install config in the remote env.
   local phase="$1"; shift || true
+  # VERSION is only needed by the install phase. Crucially, do NOT export it during
+  # bootstrap: get.docker.com (and other piped installers) read $VERSION as the
+  # Docker version to install and fail on the AMP release string.
+  local ver_env=""
+  [[ "$phase" == "install" ]] && ver_env="VERSION='${AMP_VERSION}'"
   remote "sudo VM_IP='${HOST}' TLS_MODE='${TLS_MODE}' EXTERNAL_GATEWAYS='${EXTERNAL_GATEWAYS}' \
-    NO_PORT80='${NO_PORT80}' ACME_EMAIL='${ACME_EMAIL}' VERSION='${AMP_VERSION}' \
+    NO_PORT80='${NO_PORT80}' ACME_EMAIL='${ACME_EMAIL}' ${ver_env} \
     bash \"${REMOTE_DIR}/vm/remote-install.sh\" \"${phase}\" \"$*\""
 }
 
