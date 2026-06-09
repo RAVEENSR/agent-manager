@@ -63,6 +63,21 @@ build_gateway_helm_args() {
   printf '%s\n' "--set" "gateway.vhost=${scheme}://$(vm_host gateway "$ip")"
 }
 
+# build_cp_helm_args <ip> <scheme>
+# Prints CP_HELM_ARGS tokens for the OpenChoreo control-plane install. Thunder's
+# issuer is moved to the public sslip.io URL, so the OpenChoreo CP OIDC config
+# (which validates the issuer string statically) must accept that same issuer —
+# otherwise amp-api -> OpenChoreo calls fail with "INVALID_CLAIMS". jwksUrl /
+# wellKnownEndpoint stay on the internal service (they still resolve in-cluster).
+build_cp_helm_args() {
+  local ip="$1" scheme="$2" thunder
+  thunder="$(vm_host thunder "$ip")"
+  printf '%s\n' \
+    "--set" "security.oidc.issuer=${scheme}://${thunder}" \
+    "--set" "security.oidc.authorizationUrl=${scheme}://${thunder}/oauth2/authorize" \
+    "--set" "security.oidc.tokenUrl=${scheme}://${thunder}/oauth2/token"
+}
+
 # build_thunder_helm_args <ip> <scheme>
 # Prints helm args, one token per line.
 build_thunder_helm_args() {

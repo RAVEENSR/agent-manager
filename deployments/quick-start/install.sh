@@ -862,7 +862,8 @@ helm_install_idempotent \
     "openchoreo-control-plane" \
     "${TIMEOUT_CONTROL_PLANE}" \
     --version "${OPENCHOREO_VERSION}" \
-    --values "https://raw.githubusercontent.com/wso2/agent-manager/amp/v${VERSION}/deployments/single-cluster/values-cp.yaml"
+    --values "https://raw.githubusercontent.com/wso2/agent-manager/amp/v${VERSION}/deployments/single-cluster/values-cp.yaml" \
+    "${CP_HELM_ARGS[@]}"
 
 wait_for_pods "openchoreo-control-plane" "${TIMEOUT_CONTROL_PLANE}"
 

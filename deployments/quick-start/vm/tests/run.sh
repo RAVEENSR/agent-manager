@@ -76,6 +76,18 @@ assert_eq "gateway vhost" \
   "gateway.vhost=https://gateway.amp.203.0.113.10.sslip.io" \
   "$(grep -F 'gateway.vhost' <<<"$gw")"
 
+# --- build_cp_helm_args points OpenChoreo CP OIDC issuer at the public Thunder URL ---
+cp_args="$(build_cp_helm_args 203.0.113.10 https)"
+assert_eq "cp oidc issuer" \
+  "security.oidc.issuer=https://thunder.amp.203.0.113.10.sslip.io" \
+  "$(grep -F 'security.oidc.issuer' <<<"$cp_args")"
+assert_eq "cp oidc tokenUrl" \
+  "security.oidc.tokenUrl=https://thunder.amp.203.0.113.10.sslip.io/oauth2/token" \
+  "$(grep -F 'security.oidc.tokenUrl' <<<"$cp_args")"
+assert_eq "cp http scheme" \
+  "security.oidc.issuer=http://thunder.amp.203.0.113.10.sslip.io" \
+  "$(grep -F 'security.oidc.issuer' <<<"$(build_cp_helm_args 203.0.113.10 http)")"
+
 # --- build_thunder_helm_args (https) ---
 th="$(build_thunder_helm_args 203.0.113.10 https)"
 assert_eq "thunder ocIngress.hostname" \

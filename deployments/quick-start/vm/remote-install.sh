@@ -133,6 +133,8 @@ phase_install() {
   mapfile -t THUNDER_HELM_ARGS < <(build_thunder_helm_args "$VM_IP" "$scheme")
   # shellcheck disable=SC2034
   mapfile -t GATEWAY_HELM_ARGS < <(build_gateway_helm_args "$VM_IP" "$scheme")
+  # shellcheck disable=SC2034
+  mapfile -t CP_HELM_ARGS < <(build_cp_helm_args "$VM_IP" "$scheme")
   # No safe default: install.sh builds chart refs + raw manifest URLs from amp/v${VERSION},
   # so a placeholder like 0.0.0-dev 404s. Require a real release.
   : "${VERSION:?VERSION is required (an existing amp/v* release, e.g. 0.15.0)}"

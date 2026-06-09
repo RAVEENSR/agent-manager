@@ -50,6 +50,9 @@ fi
 if [[ -z "${GATEWAY_HELM_ARGS+x}" ]]; then
     GATEWAY_HELM_ARGS=()
 fi
+if [[ -z "${CP_HELM_ARGS+x}" ]]; then
+    CP_HELM_ARGS=()
+fi
 
 # Timeouts (in seconds)
 TIMEOUT_AMP_INSTALL=1800
