@@ -70,9 +70,11 @@ remote_run() {
 }
 
 log "Copying installer to ${SSH_USER}@${HOST}:${REMOTE_DIR}"
-remote "sudo mkdir -p '${REMOTE_DIR}' && sudo chown -R '${SSH_USER}' '${REMOTE_DIR}'"
-rsync -az -e "ssh -i '${SSH_KEY}' -o StrictHostKeyChecking=accept-new" \
-  "${QS_DIR}/" "${SSH_USER}@${HOST}:${REMOTE_DIR}/"
+# tar-over-ssh rather than rsync: tar is universally present, whereas rsync must
+# be installed on BOTH ends and minimal VM images often lack it (and we can't
+# install it via bootstrap, which runs after this copy).
+remote "sudo mkdir -p '${REMOTE_DIR}'"
+tar -C "${QS_DIR}" -czf - . | remote "sudo tar -C '${REMOTE_DIR}' -xzf -"
 
 log "Phase 1/3: bootstrap (Docker + firewall)"
 remote_run bootstrap
