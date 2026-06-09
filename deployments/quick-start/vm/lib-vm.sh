@@ -94,8 +94,16 @@ build_thunder_helm_args() {
     "--set" "thunder.configuration.gateClient.hostname=${thunder}" \
     "--set" "thunder.configuration.gateClient.scheme=${scheme}" \
     "--set" "thunder.configuration.gateClient.port=${port}" \
-    "--set" "thunder.configuration.cors.allowedOrigins[0]=${scheme}://${console_h}" \
-    "--set" "thunder.setup.ampConsoleClient.redirectUris[0]=${scheme}://${console_h}/login"
+    "--set" "thunder.configuration.cors.allowedOrigins[0]=${scheme}://${console_h}"
+
+  # The console client's registered redirect URI lives under `setup` (<=main) and
+  # was renamed to `bootstrap` (>=0.15.0, which is what the registration template
+  # actually reads). Emit both; helm ignores the inert one. Must match the
+  # console's signInRedirectURL or Thunder rejects login with "Invalid redirect URI".
+  local k
+  for k in setup bootstrap; do
+    printf '%s\n' "--set" "thunder.${k}.ampConsoleClient.redirectUris[0]=${scheme}://${console_h}/login"
+  done
 }
 
 # render_k3d_vm_config  (reads k3d config on stdin, writes loopback-bound config on stdout)

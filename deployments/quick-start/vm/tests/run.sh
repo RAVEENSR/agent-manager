@@ -111,9 +111,13 @@ assert_eq "thunder gateClient.port" \
 assert_eq "thunder cors origin" \
   "thunder.configuration.cors.allowedOrigins[0]=https://console.amp.203.0.113.10.sslip.io" \
   "$(grep -F 'cors.allowedOrigins' <<<"$th")"
-assert_eq "thunder console redirectUri" \
+# redirectUri emitted under both setup (legacy) and bootstrap (>=0.15.0) keys
+assert_eq "thunder console redirectUri (bootstrap key)" \
+  "thunder.bootstrap.ampConsoleClient.redirectUris[0]=https://console.amp.203.0.113.10.sslip.io/login" \
+  "$(grep -F 'thunder.bootstrap.ampConsoleClient.redirectUris' <<<"$th")"
+assert_eq "thunder console redirectUri (legacy setup key)" \
   "thunder.setup.ampConsoleClient.redirectUris[0]=https://console.amp.203.0.113.10.sslip.io/login" \
-  "$(grep -F 'ampConsoleClient.redirectUris' <<<"$th")"
+  "$(grep -F 'thunder.setup.ampConsoleClient.redirectUris' <<<"$th")"
 
 # --- http mode flips scheme + port ---
 th_http="$(build_thunder_helm_args 203.0.113.10 http)"
