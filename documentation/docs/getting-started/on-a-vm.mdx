@@ -13,15 +13,8 @@ VM's public IP — no domain registration and no client `/etc/hosts` edits.
 **On your laptop:** `ssh`, `tar`, and `nc` (netcat).
 
 **On the VM:**
-- A Linux VM with a **static (reserved) public IP** and SSH access (sudo). The
-  install derives every hostname, TLS certificate, and OAuth issuer from the IP
-  (`*.amp.<IP>.sslip.io`), so a **changing IP breaks the install** — and stopping
-  the VM (for example to resize its disk) releases an ephemeral IP. Reserve the
-  address before installing. If the IP ever changes, reinstall against the new IP.
-- **At least 50 GB of disk.** Building and running agents pushes the in-cluster
-  image store past 13 GB; on a smaller disk the node hits `DiskPressure`, which
-  evicts pods and can take cluster DNS down mid-build. 4 vCPU / 8 GB RAM is a
-  comfortable baseline.
+- A Linux VM with a **static (reserved) public IP** and SSH access (sudo). The install derives every hostname, TLS certificate, and OAuth issuer from the IP (`*.amp.<IP>.sslip.io`), so a **changing IP breaks the install** — and stopping the VM (for example to resize its disk) releases an ephemeral IP. Reserve the address before installing. If the IP ever changes, reinstall against the new IP.
+- **At least 50 GB of disk.** Building and running agents pushes the in-cluster image store past 13 GB; on a smaller disk the node hits `DiskPressure`, which evicts pods and can take cluster DNS down mid-build. 4 vCPU / 8 GB RAM is a comfortable baseline.
 - **Inbound `443/tcp` open** in the cloud security group / firewall. Inbound
   `80/tcp` is also needed by default (Let's Encrypt's HTTP-01 challenge + the
   http→https redirect) — but if your policy forbids opening port 80, use
@@ -75,8 +68,15 @@ VM's loopback and reached only by the Caddy reverse proxy.
 | `https://api.amp.<IP>.sslip.io` | Agent Manager API (used by `amctl`) |
 | `https://thunder.amp.<IP>.sslip.io` | Thunder OAuth (login) |
 | `https://observer.amp.<IP>.sslip.io` | Traces Observer |
-| `https://gateway.amp.<IP>.sslip.io/<context>` | OTel ingest (`/otel`) and all deployed-agent endpoints (path-routed) |
+| `https://gateway.amp.<IP>.sslip.io/otel` | OTel trace ingest from deployed agents |
+| `https://<org>-<project>.agents.<IP>.sslip.io/...` | Deployed-agent invocation endpoints (one wildcard host per org/project) |
 | `https://cp.amp.<IP>.sslip.io` | Gateway control plane — connect external gateways here (on by default) |
+
+## Deployed-agent invocation
+
+When you deploy an agent, its endpoint is published on a per-project host `<org>-<project>.agents.<IP>.sslip.io` and routed by Caddy to the OpenChoreo data-plane gateway. Because these hostnames are dynamic (a new one per org/project), Caddy issues their TLS certificates **on demand** at the first request (via the same ACME challenge as the fixed hosts), rather than up front. Invocations are authenticated with a user token that the gateway validates against the public Thunder issuer.
+
+One known limitation: amp-api currently advertises the agent endpoint with an `http://` scheme even though it is only reachable over TLS, so the console is served with a `Content-Security-Policy: upgrade-insecure-requests` header that makes the browser upgrade the call to `https://`. This is an interim workaround — the proper fix is for amp-api to advertise the `https` endpoint variant; until then, non-browser callers must use the `https://` URL explicitly.
 
 ## TLS
 

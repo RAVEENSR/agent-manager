@@ -151,6 +151,12 @@ phase_install() {
   mapfile -t CP_HELM_ARGS < <(build_cp_helm_args "$VM_IP" "$scheme")
   # shellcheck disable=SC2034
   mapfile -t PLATFORM_RESOURCES_HELM_ARGS < <(build_platform_resources_helm_args)
+  # shellcheck disable=SC2034
+  mapfile -t OBSERVABILITY_HELM_ARGS < <(build_observability_helm_args "$VM_IP" "$scheme")
+  # Advertise deployed-agent endpoints under a public sslip.io host (Caddy fronts
+  # the wildcard *.agents.<ip>.sslip.io with on-demand TLS), not the local default.
+  DP_EXTERNAL_INGRESS="$(render_dataplane_external_ingress "$VM_IP" "$scheme")"
+  export DP_EXTERNAL_INGRESS
   # No safe default: install.sh builds chart refs + raw manifest URLs from amp/v${VERSION},
   # so a placeholder like 0.0.0-dev 404s. Require a real release.
   : "${VERSION:?VERSION is required (an existing amp/v* release, e.g. 0.15.0)}"

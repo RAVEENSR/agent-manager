@@ -17,7 +17,8 @@ assert_eq() {
   fi
 }
 # has <haystack> <needle> -> "yes" if needle present, else "no"
-has() { grep -qF "$2" <<<"$1" && echo yes || echo no; }
+# (-- so needles starting with '-' aren't parsed as grep options)
+has() { grep -qF -- "$2" <<<"$1" && echo yes || echo no; }
 
 # --- vm_scheme ---
 assert_eq "vm_scheme letsencrypt" "https" "$(vm_scheme letsencrypt)"
@@ -70,11 +71,40 @@ assert_eq "amp http scheme" \
   "agentManagerService.config.serverPublicURL=http://api.amp.203.0.113.10.sslip.io" \
   "$(grep -F 'agentManagerService.config.serverPublicURL' <<<"$amp_http")"
 
-# --- build_gateway_helm_args sets the published vhost ---
+# --- build_gateway_helm_args sets the published vhost + user-token keymanager issuer ---
 gw="$(build_gateway_helm_args 203.0.113.10 https)"
 assert_eq "gateway vhost" \
   "gateway.vhost=https://gateway.amp.203.0.113.10.sslip.io" \
   "$(grep -F 'gateway.vhost' <<<"$gw")"
+# keymanagers supplied as a full list via --set-json (a list-index --set wipes the
+# other entry); ThunderKeyManager gets the public issuer, agent-manager-service kept.
+assert_eq "gateway keymanagers via --set-json" "yes" "$(has "$gw" '--set-json')"
+km_json="$(grep -F 'keymanagers=' <<<"$gw")"
+assert_eq "gateway keymanagers is a full list" "yes" "$(has "$km_json" 'keymanagers=[{')"
+assert_eq "gateway keeps agent-manager-service km" "yes" "$(has "$km_json" '"name":"agent-manager-service"')"
+assert_eq "gateway ThunderKeyManager public issuer" "yes" \
+  "$(has "$km_json" '"name":"ThunderKeyManager","issuer":"https://thunder.amp.203.0.113.10.sslip.io"')"
+assert_eq "gateway no sparse/null keymanager" "no" "$(has "$km_json" 'null')"
+
+# --- build_observability_helm_args points the traces observer at the public issuer ---
+obs="$(build_observability_helm_args 203.0.113.10 https)"
+assert_eq "observability traces issuer -> public thunder" \
+  "tracesObserver.auth.issuer=https://thunder.amp.203.0.113.10.sslip.io" \
+  "$(grep -F 'tracesObserver.auth.issuer' <<<"$obs")"
+assert_eq "observability http scheme" \
+  "tracesObserver.auth.issuer=http://thunder.amp.203.0.113.10.sslip.io" \
+  "$(grep -F 'tracesObserver.auth.issuer' <<<"$(build_observability_helm_args 203.0.113.10 http)")"
+
+# --- render_dataplane_external_ingress: public host on :443, both http+https entries
+#     bound to the internal http listener (console reads the http variant; CSP upgrades it) ---
+dpe="$(render_dataplane_external_ingress 203.0.113.10 https)"
+assert_eq "dp external public host"    "yes" "$(has "$dpe" 'host: "agents.203.0.113.10.sslip.io"')"
+assert_eq "dp external port 443"       "yes" "$(has "$dpe" 'port: 443')"
+assert_eq "dp external listener http"  "yes" "$(has "$dpe" 'listenerName: http')"
+assert_eq "dp external has http entry" "yes" "$(printf '%s\n' "$dpe" | grep -qE '^        http:' && echo yes || echo no)"
+assert_eq "dp external has https entry" "yes" "$(printf '%s\n' "$dpe" | grep -qE '^        https:' && echo yes || echo no)"
+assert_eq "dp external no port 19080/19443 (not local default)" "no" "$(has "$dpe" 'port: 1908')"
+assert_eq "dp external http mode port 80" "yes" "$(has "$(render_dataplane_external_ingress 203.0.113.10 http)" 'port: 80')"
 
 # --- build_cp_helm_args points OpenChoreo CP OIDC issuer at the public Thunder URL ---
 cp_args="$(build_cp_helm_args 203.0.113.10 https)"
@@ -178,7 +208,7 @@ assert_eq "caddy observer upstream" "	reverse_proxy 127.0.0.1:9098" "$(grep -F '
 # --- http mode: http:// sites + auto_https off, no email block ---
 cf_http="$(render_caddyfile 203.0.113.10 http "" false)"
 assert_eq "caddy http auto_https off" "	auto_https off" "$(grep -F 'auto_https off' <<<"$cf_http")"
-assert_eq "caddy http console site" "http://console.amp.203.0.113.10.sslip.io {" "$(grep -F 'http://console.amp' <<<"$cf_http")"
+assert_eq "caddy http console site" "http://console.amp.203.0.113.10.sslip.io {" "$(grep -F 'http://console.amp.203.0.113.10.sslip.io {' <<<"$cf_http")"
 assert_eq "caddy http no email" "" "$(grep -F 'email' <<<"$cf_http")"
 
 # --- external gateways on by default => cp block present (4th arg omitted) ---
@@ -196,8 +226,8 @@ assert_eq "np80 global disable_redirects"   "yes" "$(has "$cf_np80" 'auto_https 
 assert_eq "np80 issuer acme"                "yes" "$(has "$cf_np80" 'issuer acme')"
 assert_eq "np80 disable_http_challenge"     "yes" "$(has "$cf_np80" 'disable_http_challenge')"
 assert_eq "np80 keeps email"                "yes" "$(has "$cf_np80" 'email ops@example.com')"
-# per-site tls block appears on each public host incl. cp (one per site = 6)
-assert_eq "np80 tls block per site (6)"     "6"   "$(grep -cF 'issuer acme' <<<"$cf_np80")"
+# per-site tls block appears on each public host incl. cp (6) + the agent wildcard (1) = 7
+assert_eq "np80 tls block per site (7)"     "7"   "$(grep -cF 'issuer acme' <<<"$cf_np80")"
 # default (no_port80 omitted) must NOT add either directive
 cf_def="$(render_caddyfile 203.0.113.10 https "ops@example.com" true)"
 assert_eq "default no disable_redirects"    "no"  "$(has "$cf_def" 'auto_https disable_redirects')"
@@ -223,6 +253,32 @@ assert_eq "coredns host aliases -> node" "yes" \
   "$(has "$cd_cfg" 'name regex (host\.k3d\.internal|host\.docker\.internal) k3d-amp-local-server-0')"
 assert_eq "coredns no longer targets host.k3d.internal as dest" "no" \
   "$(has "$cd_cfg" 'localhost host.k3d.internal')"
+
+# --- render_caddyfile: deployed-agent invocation (CSP on console, wildcard site,
+#     on-demand TLS, CORS, ask endpoint) ---
+cf_ai="$(render_caddyfile 203.0.113.10 https "ops@example.com" true false)"
+assert_eq "console CSP upgrade-insecure-requests" "yes" \
+  "$(has "$cf_ai" 'header Content-Security-Policy "upgrade-insecure-requests"')"
+assert_eq "global on_demand_tls ask" "yes" "$(has "$cf_ai" 'ask http://127.0.0.1:9753')"
+assert_eq "on-demand ask endpoint site" "yes" "$(has "$cf_ai" 'http://127.0.0.1:9753 {')"
+assert_eq "wildcard agent site" "yes" "$(has "$cf_ai" '*.agents.203.0.113.10.sslip.io {')"
+assert_eq "agent site on_demand tls" "yes" "$(has "$cf_ai" 'on_demand')"
+assert_eq "agent site proxies data-plane gw" "yes" "$(has "$cf_ai" 'reverse_proxy 127.0.0.1:19080')"
+assert_eq "agent CORS allow-origin = console" "yes" \
+  "$(has "$cf_ai" 'Access-Control-Allow-Origin "https://console.amp.203.0.113.10.sslip.io"')"
+assert_eq "agent CORS allows X-API-Key" "yes" "$(has "$cf_ai" 'Authorization, Content-Type, X-API-Key')"
+assert_eq "agent CORS preflight short-circuit" "yes" "$(has "$cf_ai" 'respond @cors_preflight 204')"
+# no-port-80: agent site forces TLS-ALPN-01 alongside on_demand
+cf_ai80="$(render_caddyfile 203.0.113.10 https "" true true)"
+assert_eq "agent site on_demand + disable_http_challenge (np80)" "yes" \
+  "$(printf '%s' "$cf_ai80" | awk '/\*\.agents\./{f=1} f' | grep -qF 'disable_http_challenge' && echo yes || echo no)"
+# http mode: no CSP, no on-demand, but still a wildcard agent site with CORS
+cf_aihttp="$(render_caddyfile 203.0.113.10 http "" true false)"
+assert_eq "http mode no CSP"        "no"  "$(has "$cf_aihttp" 'Content-Security-Policy')"
+assert_eq "http mode no on_demand"  "no"  "$(has "$cf_aihttp" 'on_demand')"
+assert_eq "http mode agent site"    "yes" "$(has "$cf_aihttp" 'http://*.agents.203.0.113.10.sslip.io {')"
+assert_eq "http mode agent CORS origin http" "yes" \
+  "$(has "$cf_aihttp" 'Access-Control-Allow-Origin "http://console.amp.203.0.113.10.sslip.io"')"
 
 if [[ "$FAILED" -ne 0 ]]; then echo "TESTS FAILED"; exit 1; fi
 echo "ALL TESTS PASSED"
