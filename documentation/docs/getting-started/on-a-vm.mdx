@@ -13,7 +13,15 @@ VM's public IP — no domain registration and no client `/etc/hosts` edits.
 **On your laptop:** `ssh`, `tar`, and `nc` (netcat).
 
 **On the VM:**
-- A Linux VM with a **public IP** and SSH access (sudo).
+- A Linux VM with a **static (reserved) public IP** and SSH access (sudo). The
+  install derives every hostname, TLS certificate, and OAuth issuer from the IP
+  (`*.amp.<IP>.sslip.io`), so a **changing IP breaks the install** — and stopping
+  the VM (for example to resize its disk) releases an ephemeral IP. Reserve the
+  address before installing. If the IP ever changes, reinstall against the new IP.
+- **At least 50 GB of disk.** Building and running agents pushes the in-cluster
+  image store past 13 GB; on a smaller disk the node hits `DiskPressure`, which
+  evicts pods and can take cluster DNS down mid-build. 4 vCPU / 8 GB RAM is a
+  comfortable baseline.
 - **Inbound `443/tcp` open** in the cloud security group / firewall. Inbound
   `80/tcp` is also needed by default (Let's Encrypt's HTTP-01 challenge + the
   http→https redirect) — but if your policy forbids opening port 80, use
