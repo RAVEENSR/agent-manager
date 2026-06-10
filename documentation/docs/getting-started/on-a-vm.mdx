@@ -48,6 +48,38 @@ The installer fronts the stack with [Caddy](https://caddyserver.com), an open-so
 
 Only `:443` faces the internet; all other service ports are bound to the VM's loopback and reached only by Caddy.
 
+```mermaid
+flowchart TB
+    browser["Browser / API client"]
+    le["Let's Encrypt<br/>(ACME)"]
+
+    subgraph vm["VM — only :443 is public"]
+        caddy["Caddy reverse proxy<br/>host network · :443 · terminates TLS"]
+
+        subgraph k3d["k3d cluster — host ports bound to 127.0.0.1"]
+            console["Console<br/>:3000"]
+            api["amp-api<br/>:9000"]
+            thunder["Thunder OAuth<br/>:8080"]
+            observer["Traces Observer<br/>:9098"]
+            gw["Gateway · OTel ingest<br/>:22893"]
+            cp["Gateway control plane<br/>:9243"]
+            agents["Deployed agents<br/>:19080"]
+        end
+    end
+
+    browser -->|"HTTPS :443"| caddy
+    le <-->|"TLS-ALPN-01<br/>inside the :443 handshake"| caddy
+    caddy -->|"console.amp.&lt;IP&gt;.sslip.io"| console
+    caddy -->|"api.amp.&lt;IP&gt;.sslip.io"| api
+    caddy -->|"thunder.amp.&lt;IP&gt;.sslip.io"| thunder
+    caddy -->|"observer.amp.&lt;IP&gt;.sslip.io"| observer
+    caddy -->|"gateway.amp.&lt;IP&gt;.sslip.io"| gw
+    caddy -->|"cp.amp.&lt;IP&gt;.sslip.io"| cp
+    caddy -->|"*.agents.&lt;IP&gt;.sslip.io<br/>on-demand TLS"| agents
+```
+
+Every public hostname resolves to the VM's IP (via sslip.io) and arrives at Caddy on `:443`; Caddy terminates TLS and reverse-proxies to the matching loopback port. Certificates are obtained over that same `:443` using the TLS-ALPN-01 challenge, so no inbound port 80 is needed. The deployed-agent wildcard gets its certificate on demand at first request.
+
 | URL | Purpose |
 |---|---|
 | `https://console.amp.<IP>.sslip.io` | Console UI |
