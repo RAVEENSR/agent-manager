@@ -1,27 +1,22 @@
 #!/usr/bin/env bash
 # lib-vm.sh — pure helpers for the VM standalone install.
 # Sourcing this file has no side effects; every function writes only to stdout.
-
-# vm_scheme <tls_mode> -> "https" | "http"
-vm_scheme() {
-  case "${1:-}" in
-    letsencrypt) printf 'https' ;;
-    http)        printf 'http' ;;
-    *) printf 'vm_scheme: unknown tls mode: %s\n' "${1:-}" >&2; return 1 ;;
-  esac
-}
+#
+# The VM installer is Let's Encrypt only and 443-only: certificates issue via the
+# TLS-ALPN-01 ACME challenge (inside the :443 handshake), so no inbound port 80 is
+# ever required and every public URL is https.
 
 # vm_host <subdomain> <ip> -> "<sub>.amp.<ip>.sslip.io"
 vm_host() {
   printf '%s.amp.%s.sslip.io' "$1" "$2"
 }
 
-# build_amp_helm_args <ip> <scheme> <external_gateways:true|false (default true)>
+# build_amp_helm_args <ip> <external_gateways:true|false (default true)>
 # Prints helm args, one token per line (--set and KEY=VALUE on separate lines).
 # Consume with (bash >=4):  mapfile -t ARR < <(build_amp_helm_args ...)
 # bash 3.2 (macOS):         while IFS= read -r l; do ARR+=("$l"); done < <(build_amp_helm_args ...)
 build_amp_helm_args() {
-  local ip="$1" scheme="$2" external_gateways="${3:-true}"
+  local ip="$1" external_gateways="${2:-true}"
   local thunder api console_h observer gateway
   thunder="$(vm_host thunder "$ip")"
   api="$(vm_host api "$ip")"
@@ -36,26 +31,26 @@ build_amp_helm_args() {
   local k
   for k in agentManager agentManagerService; do
     printf '%s\n' \
-      "--set" "${k}.config.serverPublicURL=${scheme}://${api}" \
-      "--set" "${k}.config.oauthAuthorizationServers=${scheme}://${thunder}" \
-      "--set" "${k}.config.keyManager.issuer=${scheme}://${thunder}"
+      "--set" "${k}.config.serverPublicURL=https://${api}" \
+      "--set" "${k}.config.oauthAuthorizationServers=https://${thunder}" \
+      "--set" "${k}.config.keyManager.issuer=https://${thunder}"
   done
 
   printf '%s\n' \
-    "--set" "console.config.auth.baseUrl=${scheme}://${thunder}" \
-    "--set" "console.config.auth.signInRedirectURL=${scheme}://${console_h}/login" \
-    "--set" "console.config.auth.signOutRedirectURL=${scheme}://${console_h}/login" \
-    "--set" "console.config.apiBaseUrl=${scheme}://${api}" \
-    "--set" "console.config.obsApiBaseUrl=${scheme}://${observer}" \
-    "--set" "console.config.instrumentationUrl=${scheme}://${gateway}/otel"
+    "--set" "console.config.auth.baseUrl=https://${thunder}" \
+    "--set" "console.config.auth.signInRedirectURL=https://${console_h}/login" \
+    "--set" "console.config.auth.signOutRedirectURL=https://${console_h}/login" \
+    "--set" "console.config.apiBaseUrl=https://${api}" \
+    "--set" "console.config.obsApiBaseUrl=https://${observer}" \
+    "--set" "console.config.instrumentationUrl=https://${gateway}/otel"
 
   if [[ "$external_gateways" == "true" ]]; then
     # Full URL: the console parses it with new URL() to build gateway setup commands.
-    printf '%s\n' "--set" "console.config.gatewayControlPlaneUrl=${scheme}://$(vm_host cp "$ip")"
+    printf '%s\n' "--set" "console.config.gatewayControlPlaneUrl=https://$(vm_host cp "$ip")"
   fi
 }
 
-# build_gateway_helm_args <ip> <scheme>
+# build_gateway_helm_args <ip>
 # Prints GATEWAY_HELM_ARGS tokens. Sets the published vhost so deployed-agent
 # endpoint URLs are externally reachable (path-routed under this single host),
 # and points the gateway runtime's user-token key manager (ThunderKeyManager) at
@@ -70,37 +65,37 @@ build_amp_helm_args() {
 # in full; only the ThunderKeyManager issuer differs from the chart default. This is
 # chart-version-coupled: re-verify both keymanagers (names + jwks URIs) on chart bumps.
 build_gateway_helm_args() {
-  local ip="$1" scheme="$2" thunder keymanagers
-  thunder="${scheme}://$(vm_host thunder "$ip")"
+  local ip="$1" thunder keymanagers
+  thunder="https://$(vm_host thunder "$ip")"
   keymanagers=$(printf '[{"name":"agent-manager-service","issuer":"agent-manager-service","jwks":{"remote":{"uri":"http://amp-api.wso2-amp.svc.cluster.local:9000/auth/external/jwks.json","skipTlsVerify":true}}},{"name":"ThunderKeyManager","issuer":"%s","jwks":{"remote":{"uri":"http://amp-thunder-extension-service.amp-thunder:8090/oauth2/jwks","skipTlsVerify":true}}}]' "$thunder")
   printf '%s\n' \
-    "--set" "gateway.vhost=${scheme}://$(vm_host gateway "$ip")" \
+    "--set" "gateway.vhost=https://$(vm_host gateway "$ip")" \
     "--set-json" "apiGateway.config.policyConfigurations.jwtauth_v1.keymanagers=${keymanagers}"
 }
 
-# build_observability_helm_args <ip> <scheme>
+# build_observability_helm_args <ip>
 # Prints OBSERVABILITY_HELM_ARGS tokens. The traces observer validates the same
 # user token (its `iss` must match), so the console's traces page 401s until its
 # issuer is the public Thunder URL too. jwksUrl stays on the in-cluster service.
 build_observability_helm_args() {
-  local ip="$1" scheme="$2"
+  local ip="$1"
   printf '%s\n' \
-    "--set" "tracesObserver.auth.issuer=${scheme}://$(vm_host thunder "$ip")"
+    "--set" "tracesObserver.auth.issuer=https://$(vm_host thunder "$ip")"
 }
 
-# build_cp_helm_args <ip> <scheme>
+# build_cp_helm_args <ip>
 # Prints CP_HELM_ARGS tokens for the OpenChoreo control-plane install. Thunder's
 # issuer is moved to the public sslip.io URL, so the OpenChoreo CP OIDC config
 # (which validates the issuer string statically) must accept that same issuer —
 # otherwise amp-api -> OpenChoreo calls fail with "INVALID_CLAIMS". jwksUrl /
 # wellKnownEndpoint stay on the internal service (they still resolve in-cluster).
 build_cp_helm_args() {
-  local ip="$1" scheme="$2" thunder
+  local ip="$1" thunder
   thunder="$(vm_host thunder "$ip")"
   printf '%s\n' \
-    "--set" "security.oidc.issuer=${scheme}://${thunder}" \
-    "--set" "security.oidc.authorizationUrl=${scheme}://${thunder}/oauth2/authorize" \
-    "--set" "security.oidc.tokenUrl=${scheme}://${thunder}/oauth2/token"
+    "--set" "security.oidc.issuer=https://${thunder}" \
+    "--set" "security.oidc.authorizationUrl=https://${thunder}/oauth2/authorize" \
+    "--set" "security.oidc.tokenUrl=https://${thunder}/oauth2/token"
 }
 
 # build_platform_resources_helm_args
@@ -117,23 +112,21 @@ build_platform_resources_helm_args() {
     "--set" "global.oauth.tokenUrl=http://amp-thunder-extension-service.amp-thunder.svc.cluster.local:8090/oauth2/token"
 }
 
-# build_thunder_helm_args <ip> <scheme>
+# build_thunder_helm_args <ip>
 # Prints helm args, one token per line.
 build_thunder_helm_args() {
-  local ip="$1" scheme="$2"
-  local thunder console_h port=443
-  [[ "$scheme" == "http" ]] && port=80
+  local ip="$1" thunder console_h
   thunder="$(vm_host thunder "$ip")"
   console_h="$(vm_host console "$ip")"
 
   printf '%s\n' \
     "--set" "thunder.ocIngress.hostname=${thunder}" \
-    "--set" "thunder.configuration.server.publicUrl=${scheme}://${thunder}" \
-    "--set" "thunder.configuration.jwt.issuer=${scheme}://${thunder}" \
+    "--set" "thunder.configuration.server.publicUrl=https://${thunder}" \
+    "--set" "thunder.configuration.jwt.issuer=https://${thunder}" \
     "--set" "thunder.configuration.gateClient.hostname=${thunder}" \
-    "--set" "thunder.configuration.gateClient.scheme=${scheme}" \
-    "--set" "thunder.configuration.gateClient.port=${port}" \
-    "--set" "thunder.configuration.cors.allowedOrigins[0]=${scheme}://${console_h}"
+    "--set" "thunder.configuration.gateClient.scheme=https" \
+    "--set" "thunder.configuration.gateClient.port=443" \
+    "--set" "thunder.configuration.cors.allowedOrigins[0]=https://${console_h}"
 
   # The console client's registered redirect URI lives under `setup` (<=main) and
   # was renamed to `bootstrap` (>=0.15.0, which is what the registration template
@@ -141,7 +134,7 @@ build_thunder_helm_args() {
   # console's signInRedirectURL or Thunder rejects login with "Invalid redirect URI".
   local k
   for k in setup bootstrap; do
-    printf '%s\n' "--set" "thunder.${k}.ampConsoleClient.redirectUris[0]=${scheme}://${console_h}/login"
+    printf '%s\n' "--set" "thunder.${k}.ampConsoleClient.redirectUris[0]=https://${console_h}/login"
   done
 }
 
@@ -205,110 +198,82 @@ data:
 EOF
 }
 
-# render_dataplane_external_ingress <ip> <scheme>
+# render_dataplane_external_ingress <ip>
 # Prints the `external:` http/https entries for install.sh's ClusterDataPlane
 # (DP_EXTERNAL_INGRESS hook), advertising deployed-agent endpoints under the
 # public host <org>-<project>.agents.<ip>.sslip.io instead of the local default
 # openchoreoapis.localhost:19080.
 #
-# https mode emits BOTH entries on :443, bound to the internal http listener (TLS
-# is terminated at Caddy's wildcard *.agents site). The console builds the agent
+# Emits BOTH entries on :443, bound to the internal http listener (TLS is
+# terminated at Caddy's wildcard *.agents site). The console builds the agent
 # invoke URL from the *http* endpoint variant and emits http://...:443/...; if the
 # http entry is absent it can't build the URL and falls back to a relative /chat
 # (405 from the console's own nginx). The console page's CSP upgrade-insecure-requests
 # (render_caddyfile) then upgrades that http://...:443 to https://...:443, which the
-# wildcard site serves. http mode (no TLS, no CSP) emits just the http entry on :80.
+# wildcard site serves.
 render_dataplane_external_ingress() {
-  local ip="$1" scheme="$2"
+  local ip="$1"
   local host="agents.${ip}.sslip.io"
-  if [[ "$scheme" == "https" ]]; then
-    printf '        http:\n          host: "%s"\n          listenerName: http\n          port: 443\n' "$host"
-    printf '        https:\n          host: "%s"\n          listenerName: http\n          port: 443\n' "$host"
-  else
-    printf '        http:\n          host: "%s"\n          listenerName: http\n          port: 80\n' "$host"
-  fi
+  printf '        http:\n          host: "%s"\n          listenerName: http\n          port: 443\n' "$host"
+  printf '        https:\n          host: "%s"\n          listenerName: http\n          port: 443\n' "$host"
 }
 
-# render_caddyfile <ip> <scheme> <acme_email> <external_gateways:true|false (default true)> \
-#                  <no_port80:true|false (default false)>
-# no_port80 (https only): use the TLS-ALPN-01 ACME challenge over :443 and drop the
-# :80 redirect, so certificates issue with only inbound 443 open.
-# Prints a complete Caddyfile to stdout.
+# render_caddyfile <ip> <acme_email> <external_gateways:true|false (default true)>
+# Prints a complete Caddyfile to stdout. Let's Encrypt only, 443-only: every site
+# forces the TLS-ALPN-01 challenge so issuance never needs inbound port 80, and the
+# :80 http->https redirect is dropped (port 80 is never opened).
 render_caddyfile() {
-  local ip="$1" scheme="$2" email="$3" external_gateways="${4:-true}" no_port80="${5:-false}"
-  local prefix=""              # https: bare host (Caddy auto-HTTPS)
-  [[ "$scheme" == "http" ]] && prefix="http://"
+  local ip="$1" email="$2" external_gateways="${3:-true}"
   local console_origin
-  console_origin="${scheme}://$(vm_host console "$ip")"
+  console_origin="https://$(vm_host console "$ip")"
 
-  # Per-site tls block injected only in no-port-80 mode: force the TLS-ALPN-01
-  # ACME challenge (over :443) so issuance never depends on inbound port 80.
-  local tls_block=""
-  [[ "$no_port80" == "true" && "$scheme" == "https" ]] && \
-    tls_block=$'\ttls {\n\t\tissuer acme {\n\t\t\tdisable_http_challenge\n\t\t}\n\t}\n'
+  # Every public site forces the TLS-ALPN-01 ACME challenge (it runs inside the
+  # :443 TLS handshake) so certificate issuance never depends on inbound port 80.
+  local tls_block=$'\ttls {\n\t\tissuer acme {\n\t\t\tdisable_http_challenge\n\t\t}\n\t}\n'
 
-  # Global options block.
-  if [[ "$scheme" == "http" ]]; then
-    printf '{\n\tauto_https off\n}\n\n'
-  else
-    # https: assemble global options from email + optional no-port-80 setting.
-    local gopts=""
-    [[ -n "$email" ]] && gopts+=$'\temail '"$email"$'\n'
-    # disable_redirects stops Caddy serving the HTTP->HTTPS redirect on :80.
-    [[ "$no_port80" == "true" ]] && gopts+=$'\tauto_https disable_redirects\n'
-    # On-demand TLS for the per-agent wildcard hosts (issued at first request).
-    # The ask endpoint (a loopback site below) currently approves any host; Caddy
-    # only triggers on-demand for SNI matching the *.agents wildcard site, so
-    # issuance is bounded to that namespace. Hardening (validate the host against a
-    # live agent route) is a follow-up.
-    gopts+=$'\ton_demand_tls {\n\t\task http://127.0.0.1:9753\n\t}\n'
-    printf '{\n%s}\n\n' "$gopts"
-  fi
+  # Global options: optional ACME contact email, drop the :80 http->https redirect
+  # (port 80 is never opened), and enable on-demand TLS for the per-agent wildcard
+  # hosts. The ask endpoint (loopback site below) approves any host; Caddy only
+  # triggers on-demand for SNI matching the *.agents wildcard, so issuance is bounded
+  # to that namespace (a route-validating ask is a follow-up).
+  local gopts=""
+  [[ -n "$email" ]] && gopts+=$'\temail '"$email"$'\n'
+  gopts+=$'\tauto_https disable_redirects\n'
+  gopts+=$'\ton_demand_tls {\n\t\task http://127.0.0.1:9753\n\t}\n'
+  printf '{\n%s}\n\n' "$gopts"
 
-  _caddy_site() {   # _caddy_site <prefix> <ip> <subdomain> <upstream_port> <tls_block> [extra]
-    printf '%s%s {\n%s%s\treverse_proxy 127.0.0.1:%s\n}\n\n' "$1" "$(vm_host "$3" "$2")" "$5" "${6:-}" "$4"
+  _caddy_site() {   # _caddy_site <ip> <subdomain> <upstream_port> <tls_block> [extra]
+    printf '%s {\n%s%s\treverse_proxy 127.0.0.1:%s\n}\n\n' "$(vm_host "$2" "$1")" "$4" "${5:-}" "$3"
   }
 
-  # console: in https mode, set CSP upgrade-insecure-requests so the browser
-  # upgrades the http:// agent invoke URL amp-api emits to https (the agent host
-  # is only reachable over TLS via the wildcard site; without this the call is
-  # blocked as mixed content). Interim workaround — the proper fix is amp-api
-  # advertising the https endpoint variant.
-  local console_csp=""
-  [[ "$scheme" == "https" ]] && console_csp=$'\theader Content-Security-Policy "upgrade-insecure-requests"\n'
+  # console: CSP upgrade-insecure-requests so the browser upgrades the http:// agent
+  # invoke URL amp-api emits to https (the agent host is only reachable over TLS via
+  # the wildcard site; without this the call is blocked as mixed content). Interim
+  # workaround — the proper fix is amp-api advertising the https endpoint variant.
+  local console_csp=$'\theader Content-Security-Policy "upgrade-insecure-requests"\n'
 
-  _caddy_site "$prefix" "$ip" console  3000   "$tls_block" "$console_csp"  # console UI
-  _caddy_site "$prefix" "$ip" api      9000   "$tls_block"  # agent-manager REST API
-  _caddy_site "$prefix" "$ip" thunder  8080   "$tls_block"  # Thunder OAuth (OC kgateway, host-routed)
-  _caddy_site "$prefix" "$ip" observer 9098   "$tls_block"  # traces observer
-  _caddy_site "$prefix" "$ip" gateway  22893  "$tls_block"  # api-platform gateway: OTel + agent endpoints
+  _caddy_site "$ip" console  3000   "$tls_block" "$console_csp"  # console UI
+  _caddy_site "$ip" api      9000   "$tls_block"  # agent-manager REST API
+  _caddy_site "$ip" thunder  8080   "$tls_block"  # Thunder OAuth (OC kgateway, host-routed)
+  _caddy_site "$ip" observer 9098   "$tls_block"  # traces observer
+  _caddy_site "$ip" gateway  22893  "$tls_block"  # api-platform gateway: OTel ingest
 
   if [[ "$external_gateways" == "true" ]]; then
     # 9243 is HTTPS with a self-signed cert -> proxy over TLS, skip verification.
     # reverse_proxy upgrades the gateway control WebSocket transparently.
-    printf '%s%s {\n%s\treverse_proxy 127.0.0.1:9243 {\n\t\ttransport http {\n\t\t\ttls\n\t\t\ttls_insecure_skip_verify\n\t\t}\n\t}\n}\n\n' \
-      "$prefix" "$(vm_host cp "$ip")" "$tls_block"
+    printf '%s {\n%s\treverse_proxy 127.0.0.1:9243 {\n\t\ttransport http {\n\t\t\ttls\n\t\t\ttls_insecure_skip_verify\n\t\t}\n\t}\n}\n\n' \
+      "$(vm_host cp "$ip")" "$tls_block"
   fi
 
-  # Deployed-agent endpoints: <org>-<project>.agents.<ip>.sslip.io, one host per
-  # org/project (dynamic), all proxied to the data-plane gateway. https mode uses
-  # on-demand TLS (per-host certs at first hit) plus the loopback ask endpoint.
-  # CORS is added here (the gateway adds none) so the cross-origin browser call
-  # from the console succeeds; X-API-Key is the header the console sends the token in.
-  if [[ "$scheme" == "https" ]]; then
-    printf 'http://127.0.0.1:9753 {\n\trespond 200\n}\n\n'   # on-demand TLS ask (always-allow; see note above)
-  fi
-  local agent_tls=""
-  if [[ "$scheme" == "https" ]]; then
-    if [[ "$no_port80" == "true" ]]; then
-      agent_tls=$'\ttls {\n\t\ton_demand\n\t\tissuer acme {\n\t\t\tdisable_http_challenge\n\t\t}\n\t}\n'
-    else
-      agent_tls=$'\ttls {\n\t\ton_demand\n\t}\n'
-    fi
-  fi
+  # Deployed-agent endpoints: <org>-<project>.agents.<ip>.sslip.io (one host per
+  # org/project, dynamic), proxied to the data-plane gateway with on-demand TLS
+  # (per-host certs at first hit) + CORS (the gateway adds none); X-API-Key is the
+  # header the console sends the token in.
+  printf 'http://127.0.0.1:9753 {\n\trespond 200\n}\n\n'   # on-demand TLS ask (always-allow; see note above)
+  local agent_tls=$'\ttls {\n\t\ton_demand\n\t\tissuer acme {\n\t\t\tdisable_http_challenge\n\t\t}\n\t}\n'
   local cors_block
   cors_block=$(printf '\theader {\n\t\tAccess-Control-Allow-Origin "%s"\n\t\tAccess-Control-Allow-Methods "GET, POST, PUT, DELETE, PATCH, OPTIONS"\n\t\tAccess-Control-Allow-Headers "Authorization, Content-Type, X-API-Key"\n\t\tAccess-Control-Allow-Credentials "true"\n\t\tAccess-Control-Max-Age "3600"\n\t\tVary Origin\n\t\tdefer\n\t}\n\t@cors_preflight method OPTIONS\n\trespond @cors_preflight 204\n' "$console_origin")
-  printf '%s*.agents.%s.sslip.io {\n%s%s\n\treverse_proxy 127.0.0.1:19080\n}\n\n' "$prefix" "$ip" "$agent_tls" "$cors_block"
+  printf '*.agents.%s.sslip.io {\n%s%s\n\treverse_proxy 127.0.0.1:19080\n}\n\n' "$ip" "$agent_tls" "$cors_block"
 
   unset -f _caddy_site
 }

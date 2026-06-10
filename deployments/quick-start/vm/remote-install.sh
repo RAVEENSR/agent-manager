@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # remote-install.sh — executes on the target VM. Invoked by install-vm.sh over SSH.
 # Usage: <phase> where phase is one of: bootstrap | preflight | install
-# Config via env: VM_IP, TLS_MODE(letsencrypt|http), EXTERNAL_GATEWAYS(true|false),
-#                 NO_PORT80(true|false), ACME_EMAIL, VERSION.
+# Config via env: VM_IP, EXTERNAL_GATEWAYS(true|false), ACME_EMAIL, VERSION.
+# TLS is always Let's Encrypt, 443-only (TLS-ALPN-01) — no http mode, no port 80.
 set -euo pipefail
 
 PHASE="${1:?usage: remote-install.sh <bootstrap|preflight|install>}"
@@ -12,9 +12,7 @@ QS_DIR="$(cd "${VM_DIR}/.." && pwd)"
 source "${VM_DIR}/lib-vm.sh"
 
 : "${VM_IP:?VM_IP is required}"
-: "${TLS_MODE:=letsencrypt}"
 : "${EXTERNAL_GATEWAYS:=true}"
-: "${NO_PORT80:=false}"
 : "${ACME_EMAIL:=}"
 
 log() { printf '\033[0;34m[vm:%s]\033[0m %s\n' "$PHASE" "$*"; }
@@ -70,27 +68,17 @@ ensure_prerequisites() {
 }
 
 ensure_firewall() {
-  # Open only the ports the selected frontend mode needs (k3d ports are loopback-
-  # bound; SSH stays as-is). http serves on :80; --no-port80 needs only :443;
-  # default letsencrypt needs both (80 for HTTP-01 + redirect).
-  local ports
-  if [[ "$TLS_MODE" == "http" ]]; then
-    ports=(80)
-  elif [[ "$NO_PORT80" == "true" ]]; then
-    ports=(443)
-  else
-    ports=(80 443)
-  fi
-  local port
+  # Only :443 faces the internet (k3d ports are loopback-bound; SSH stays as-is).
+  # Certs issue via TLS-ALPN-01 inside the :443 handshake, so port 80 is never needed.
   if command -v ufw >/dev/null 2>&1; then
-    for port in "${ports[@]}"; do ufw allow "${port}/tcp" || true; done
-    log "ufw: opened ${ports[*]}"
+    ufw allow 443/tcp || true
+    log "ufw: opened 443"
   elif command -v firewall-cmd >/dev/null 2>&1; then
-    for port in "${ports[@]}"; do firewall-cmd --permanent --add-port="${port}/tcp" || true; done
+    firewall-cmd --permanent --add-port=443/tcp || true
     firewall-cmd --reload || true
-    log "firewalld: opened ${ports[*]}"
+    log "firewalld: opened 443"
   else
-    log "No ufw/firewalld found; assuming host firewall is open for ${ports[*]}"
+    log "No ufw/firewalld found; assuming host firewall is open for 443"
   fi
 }
 
@@ -138,24 +126,22 @@ PY
 }
 
 phase_install() {
-  local scheme; scheme="$(vm_scheme "$TLS_MODE")"
-
   # Build the override arrays install.sh honors.
   # shellcheck disable=SC2034  # arrays are inherited by the subshell that sources install.sh
-  mapfile -t AMP_HELM_ARGS < <(build_amp_helm_args "$VM_IP" "$scheme" "$EXTERNAL_GATEWAYS")
+  mapfile -t AMP_HELM_ARGS < <(build_amp_helm_args "$VM_IP" "$EXTERNAL_GATEWAYS")
   # shellcheck disable=SC2034
-  mapfile -t THUNDER_HELM_ARGS < <(build_thunder_helm_args "$VM_IP" "$scheme")
+  mapfile -t THUNDER_HELM_ARGS < <(build_thunder_helm_args "$VM_IP")
   # shellcheck disable=SC2034
-  mapfile -t GATEWAY_HELM_ARGS < <(build_gateway_helm_args "$VM_IP" "$scheme")
+  mapfile -t GATEWAY_HELM_ARGS < <(build_gateway_helm_args "$VM_IP")
   # shellcheck disable=SC2034
-  mapfile -t CP_HELM_ARGS < <(build_cp_helm_args "$VM_IP" "$scheme")
+  mapfile -t CP_HELM_ARGS < <(build_cp_helm_args "$VM_IP")
   # shellcheck disable=SC2034
   mapfile -t PLATFORM_RESOURCES_HELM_ARGS < <(build_platform_resources_helm_args)
   # shellcheck disable=SC2034
-  mapfile -t OBSERVABILITY_HELM_ARGS < <(build_observability_helm_args "$VM_IP" "$scheme")
+  mapfile -t OBSERVABILITY_HELM_ARGS < <(build_observability_helm_args "$VM_IP")
   # Advertise deployed-agent endpoints under a public sslip.io host (Caddy fronts
   # the wildcard *.agents.<ip>.sslip.io with on-demand TLS), not the local default.
-  DP_EXTERNAL_INGRESS="$(render_dataplane_external_ingress "$VM_IP" "$scheme")"
+  DP_EXTERNAL_INGRESS="$(render_dataplane_external_ingress "$VM_IP")"
   export DP_EXTERNAL_INGRESS
   # No safe default: install.sh builds chart refs + raw manifest URLs from amp/v${VERSION},
   # so a placeholder like 0.0.0-dev 404s. Require a real release.
@@ -173,7 +159,7 @@ phase_install() {
   render_coredns_vm_config "k3d-amp-local-server-0" >/tmp/coredns-amp-vm.yaml
   export COREDNS_FILE=/tmp/coredns-amp-vm.yaml
 
-  log "Running base installer with sslip.io overrides (${scheme})"
+  log "Running base installer with sslip.io overrides (https)"
   # Subshell: install.sh's exit calls stay contained; arrays are inherited.
   # The `|| rc=$?` keeps the subshell out of set -e so we capture its status
   # instead of aborting before the check below.
@@ -181,13 +167,12 @@ phase_install() {
   ( set +e; source "${QS_DIR}/install.sh" ) || rc=$?
   if [[ "$rc" -ne 0 ]]; then log "Base installer exited $rc"; return "$rc"; fi
 
-  start_caddy "$scheme"
+  start_caddy
 }
 
 start_caddy() {
-  local scheme="$1"
   mkdir -p /opt/amp
-  render_caddyfile "$VM_IP" "$scheme" "$ACME_EMAIL" "$EXTERNAL_GATEWAYS" "$NO_PORT80" >/opt/amp/Caddyfile
+  render_caddyfile "$VM_IP" "$ACME_EMAIL" "$EXTERNAL_GATEWAYS" >/opt/amp/Caddyfile
   log "Wrote /opt/amp/Caddyfile"
 
   docker rm -f amp-caddy >/dev/null 2>&1 || true
@@ -197,7 +182,7 @@ start_caddy() {
     -v amp-caddy-config:/config \
     -v /opt/amp/Caddyfile:/etc/caddy/Caddyfile:ro \
     caddy:2
-  log "Caddy started on :80/:443"
+  log "Caddy started on :443"
 }
 
 case "$PHASE" in

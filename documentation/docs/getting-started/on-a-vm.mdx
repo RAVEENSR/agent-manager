@@ -16,7 +16,7 @@ VM's public IP — no domain registration and no client `/etc/hosts` edits.
 - A Linux VM with a **static (reserved) public IP** and SSH access (sudo). The install derives every hostname, TLS certificate, and OAuth issuer from the IP (`*.amp.<IP>.sslip.io`), so a **changing IP breaks the install** — and stopping the VM (for example to resize its disk) releases an ephemeral IP. Reserve the address before installing. If the IP ever changes, reinstall against the new IP.
 - **At least 50 GB of disk.** Building and running agents pushes the in-cluster image store past 13 GB; on a smaller disk the node hits `DiskPressure`, which evicts pods and can take cluster DNS down mid-build.
 - **At least 4 vCPUs and 8 GB of RAM** to run the full k3d + OpenChoreo + Agent Manager stack comfortably.
-- **Inbound `443/tcp` open** in the cloud security group / firewall. Inbound `80/tcp` is also needed by default (Let's Encrypt's HTTP-01 challenge + the http→https redirect) — but if your policy forbids opening port 80, use **`--no-port80`**: certificates are then issued via the TLS-ALPN-01 challenge over 443 only. The `:443` exposure must be **TCP passthrough** (not a TLS-terminating load balancer) for this to work. (Or use `--tls http` to skip TLS entirely.)
+- **Inbound `443/tcp` open** in the cloud security group / firewall — and only 443. Certificates issue via the TLS-ALPN-01 ACME challenge, which runs inside the `:443` TLS handshake, so no inbound port 80 is ever needed. The `:443` exposure must be **TCP passthrough** (not a TLS-terminating load balancer in front), since the challenge happens inside the handshake.
 - Docker, k3d, kubectl, helm, and lsof are installed automatically if missing.
 
 ## Install
@@ -35,9 +35,7 @@ cd agent-manager/deployments/quick-start/vm
 Set `--version` to the Agent Manager release you want (an existing `amp/v*`
 [tag](https://github.com/wso2/agent-manager/tags), e.g. `0.15.0`).
 
-The installer runs in three phases — bootstrap (Docker + firewall), a preflight
-reachability check for `:80`/`:443`, then the platform install and Caddy startup.
-Allow 8–15 minutes.
+The installer runs in three phases — bootstrap (Docker + firewall), a preflight reachability check for `:443`, then the platform install and Caddy startup. Allow 8–15 minutes.
 
 ### Options
 
@@ -48,15 +46,13 @@ Allow 8–15 minutes.
 | `--version` | _(required)_ | Agent Manager release to install (an `amp/v*` tag, e.g. `0.15.0`) |
 | `--ssh-user` | `root` | SSH user (must have sudo) |
 | `--email` | _(none)_ | ACME contact for expiry notices |
-| `--tls` | `letsencrypt` | `letsencrypt` (trusted HTTPS) or `http` (no certs) |
 | `--no-external-gateways` | off | Drop the gateway control-plane endpoint if you won't connect external gateways |
-| `--no-port80` | off | Issue certs via TLS-ALPN-01 over 443 only (no inbound port 80). Requires `--tls letsencrypt` and TCP-passthrough on 443 |
 
 ## What gets exposed
 
 The installer fronts the stack with [Caddy](https://caddyserver.com), an open-source web server that terminates TLS, obtains and renews Let's Encrypt certificates automatically, and reverse-proxies each public hostname to the right service. It runs as a single `amp-caddy` Docker container and is the only process listening on the internet-facing ports.
 
-Only `:80` and `:443` face the internet; all other service ports are bound to the VM's loopback and reached only by Caddy.
+Only `:443` faces the internet; all other service ports are bound to the VM's loopback and reached only by Caddy.
 
 | URL | Purpose |
 |---|---|
@@ -76,22 +72,9 @@ One known limitation: amp-api currently advertises the agent endpoint with an `h
 
 ## TLS
 
-With `--tls letsencrypt` (default), Caddy obtains and auto-renews trusted Let's
-Encrypt certificates on first start — no manual certificate steps. Certificates and
-the ACME account persist in the `amp-caddy-data` Docker volume, so restarts do not
-re-request them. With `--tls http`, the same hostnames are served over plain HTTP.
+Caddy obtains and auto-renews trusted Let's Encrypt certificates on first start — no manual certificate steps. Issuance uses the **TLS-ALPN-01** challenge, which runs inside the `:443` TLS handshake, so only inbound 443 is ever required and there is no port-80 dependency. Certificates and the ACME account persist in the `amp-caddy-data` Docker volume, so restarts do not re-request them.
 
-**What port 80 is used for (default mode).** When `:80` is open, Caddy serves
-**only** the ACME HTTP-01 challenge (`/.well-known/acme-challenge/...`) on it and
-**301-redirects every other path to HTTPS** — no application traffic is ever served
-over plain HTTP. (A network security group filters by port, not URL path, so this
-path-level restriction is enforced by Caddy, not the firewall; opening `:80` only
-exposes the challenge + redirect.)
-
-**Locked-down networks (port 80 blocked):** add `--no-port80`. Caddy then uses the
-TLS-ALPN-01 ACME challenge, which runs inside the TLS handshake on 443, so only
-inbound 443 is required. This needs the public `:443` to reach Caddy as raw TCP
-(no TLS-terminating proxy in front), and you lose the automatic http→https redirect.
+Because the challenge happens inside the TLS handshake, the public `:443` must reach Caddy as **raw TCP** — do not put a TLS-terminating load balancer in front of the VM. There is no `:80` listener, so plain `http://` URLs are not served (no automatic http→https redirect); always use the `https://` URLs the installer prints.
 
 ## Persistence and teardown
 
@@ -101,14 +84,7 @@ across Docker/host restarts via named volumes. To tear down, use the existing
 
 ## Connect an external gateway
 
-Agent Manager can drive external WSO2 AI gateways. The control-plane endpoint
-`https://cp.amp.<IP>.sslip.io` is exposed by default for this. In the console, open
-**Infrastructure → Gateways**, generate a registration token, and follow the
-generated commands — they point the gateway at `cp.amp.<IP>.sslip.io:443`, where it
-opens a control WebSocket and pulls its configuration. External gateways require
-`--tls letsencrypt` (the generated Kubernetes command connects on port 443). If you
-do not need external gateways, install with `--no-external-gateways` to drop this
-endpoint.
+Agent Manager can drive external WSO2 AI gateways. The control-plane endpoint `https://cp.amp.<IP>.sslip.io` is exposed by default for this. In the console, open **Infrastructure → Gateways**, generate a registration token, and follow the generated commands — they point the gateway at `cp.amp.<IP>.sslip.io:443`, where it opens a control WebSocket and pulls its configuration. If you do not need external gateways, install with `--no-external-gateways` to drop this endpoint.
 
 **Security:** the registration token grants a gateway your LLM-provider API keys and
 proxy credentials. Treat it as a secret, revoke/regenerate it from the Gateways page
@@ -117,11 +93,6 @@ gateway source IPs at the firewall.
 
 ## Troubleshooting
 
-- **Preflight fails on :80/:443** — open inbound `:443` (and `:80` for the default
-  mode) in your cloud security group. If port 80 cannot be opened, rerun with
-  `--no-port80` (keeps trusted HTTPS via TLS-ALPN-01 over 443); use `--tls http`
-  only when you intentionally want non-TLS access.
-- **Certificate not issued** — check `docker logs amp-caddy`. Let's Encrypt rate
-  limits on sslip.io are high but not infinite; if hit, retry shortly.
-- **Login redirect mismatch** — confirm you reached the console via its
-  `console.amp.<IP>.sslip.io` URL, not the raw IP.
+- **Preflight fails on :443** — open inbound `:443` in your cloud security group / NACL, and make sure the public `:443` reaches the VM as **raw TCP**: a TLS-terminating load balancer in front breaks the TLS-ALPN-01 challenge.
+- **Certificate not issued** — check `docker logs amp-caddy`. Let's Encrypt rate limits on sslip.io are high but not infinite; if hit, retry shortly.
+- **Login redirect mismatch** — confirm you reached the console via its `console.amp.<IP>.sslip.io` URL, not the raw IP.

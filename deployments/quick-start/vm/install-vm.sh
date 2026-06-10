@@ -2,17 +2,17 @@
 # install-vm.sh — laptop-side orchestrator for "Agent Manager on a VM with Docker".
 # Usage:
 #   ./install-vm.sh --host <IP> --ssh-key <path> --version <amp-release>
-#                   [--email <addr>] [--tls letsencrypt|http] [--ssh-user <user>]
-#                   [--no-external-gateways] [--no-port80]
+#                   [--email <addr>] [--ssh-user <user>] [--no-external-gateways]
 #
 # --version: the amp/v* release to install (e.g. 0.15.0). Required — the charts
 #   and manifests are pulled per-release; there is no sensible default.
 #
-# --no-port80: issue Let's Encrypt certs via the TLS-ALPN-01 challenge over :443
-#   only (no inbound port 80 required). Requires --tls letsencrypt.
+# TLS is always Let's Encrypt, 443-only: certificates issue via the TLS-ALPN-01
+# challenge inside the :443 handshake, so only inbound 443 is required (no port 80).
+# The public :443 must reach Caddy as raw TCP (no TLS-terminating proxy in front).
 set -euo pipefail
 
-HOST="" SSH_KEY="" SSH_USER="root" TLS_MODE="letsencrypt" ACME_EMAIL="" EXTERNAL_GATEWAYS="true" NO_PORT80="false"
+HOST="" SSH_KEY="" SSH_USER="root" ACME_EMAIL="" EXTERNAL_GATEWAYS="true"
 AMP_VERSION="${VERSION:-}"   # amp/v* release to install; --version overrides the VERSION env
 VM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 QS_DIR="$(cd "${VM_DIR}/.." && pwd)"
@@ -29,10 +29,8 @@ while [[ $# -gt 0 ]]; do
     --ssh-key) require_value "$1" "${2:-}"; SSH_KEY="$2"; shift 2 ;;
     --ssh-user) require_value "$1" "${2:-}"; SSH_USER="$2"; shift 2 ;;
     --email) require_value "$1" "${2:-}"; ACME_EMAIL="$2"; shift 2 ;;
-    --tls) require_value "$1" "${2:-}"; TLS_MODE="$2"; shift 2 ;;
     --version) require_value "$1" "${2:-}"; AMP_VERSION="$2"; shift 2 ;;
     --no-external-gateways) EXTERNAL_GATEWAYS="false"; shift ;;
-    --no-port80) NO_PORT80="true"; shift ;;
     -h|--help) grep '^#' "$0" | grep -v '^#!' | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown flag: $1" ;;
   esac
@@ -46,19 +44,9 @@ done
   die "--version <release> is required (an existing amp/v* tag, e.g. --version 0.15.0); see https://github.com/wso2/agent-manager/tags"
 [[ -n "$SSH_KEY" ]] || die "--ssh-key <path> is required"
 [[ -f "$SSH_KEY" ]] || die "ssh key not found: $SSH_KEY"
-vm_scheme "$TLS_MODE" >/dev/null || die "--tls must be letsencrypt or http"
-# --no-port80 only applies to Let's Encrypt (http mode serves on :80 by definition).
-[[ "$NO_PORT80" == "true" && "$TLS_MODE" != "letsencrypt" ]] && \
-  die "--no-port80 requires --tls letsencrypt (http mode serves on port 80)"
-# External gateways register on :443 (the console's K8s command hardcodes the port),
-# so they only line up under letsencrypt. Warn instead of failing.
-if [[ "$EXTERNAL_GATEWAYS" == "true" && "$TLS_MODE" == "http" ]]; then
-  log "WARNING: --tls http exposes the control plane but external gateways expect :443 (letsencrypt). Use --tls letsencrypt to connect external gateways, or --no-external-gateways to drop the cp endpoint."
-fi
 
 SSH=(ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new "${SSH_USER}@${HOST}")
 REMOTE_DIR="/opt/amp-quickstart"
-SCHEME="$(vm_scheme "$TLS_MODE")"
 
 remote() { "${SSH[@]}" "$@"; }
 remote_run() {
@@ -69,8 +57,8 @@ remote_run() {
   # Docker version to install and fail on the AMP release string.
   local ver_env=""
   [[ "$phase" == "install" ]] && ver_env="VERSION='${AMP_VERSION}'"
-  remote "sudo VM_IP='${HOST}' TLS_MODE='${TLS_MODE}' EXTERNAL_GATEWAYS='${EXTERNAL_GATEWAYS}' \
-    NO_PORT80='${NO_PORT80}' ACME_EMAIL='${ACME_EMAIL}' ${ver_env} \
+  remote "sudo VM_IP='${HOST}' EXTERNAL_GATEWAYS='${EXTERNAL_GATEWAYS}' \
+    ACME_EMAIL='${ACME_EMAIL}' ${ver_env} \
     bash \"${REMOTE_DIR}/vm/remote-install.sh\" \"${phase}\" \"$*\""
 }
 
@@ -84,30 +72,24 @@ tar -C "${QS_DIR}" -czf - . | remote "sudo tar -C '${REMOTE_DIR}' -xzf -"
 log "Phase 1/3: bootstrap (Docker + firewall)"
 remote_run bootstrap
 
-if [[ "$TLS_MODE" == "letsencrypt" ]]; then
-  # In --no-port80 mode only :443 must be reachable (TLS-ALPN-01); otherwise :80 too.
-  preflight_ports=(80 443)
-  [[ "$NO_PORT80" == "true" ]] && preflight_ports=(443)
-  log "Phase 2/3: preflight — verifying ${preflight_ports[*]} reachable from the internet"
-  for port in "${preflight_ports[@]}"; do
-    remote_run preflight "$port" &
-    # Retry within the remote listener's window instead of a single check after a
-    # fixed sleep — a slow VM/SSH path may not have bound the socket yet.
-    reachable="false"
-    for _ in $(seq 1 12); do
-      if nc -z -w 1 "$HOST" "$port"; then reachable="true"; break; fi
-      sleep 1
-    done
-    if [[ "$reachable" != "true" ]]; then
-      wait || true
-      die "Port ${port} is NOT reachable from this machine.
-  Open inbound ${port}/tcp in your cloud security group / NACL,
-  or rerun with --tls http to skip Let's Encrypt."
-    fi
-    wait || true
-    log "  :${port} reachable"
-  done
+# Preflight: TLS-ALPN-01 needs inbound :443 reachable from the internet.
+log "Phase 2/3: preflight — verifying 443 reachable from the internet"
+remote_run preflight 443 &
+# Retry within the remote listener's window instead of a single check after a
+# fixed sleep — a slow VM/SSH path may not have bound the socket yet.
+reachable="false"
+for _ in $(seq 1 12); do
+  if nc -z -w 1 "$HOST" 443; then reachable="true"; break; fi
+  sleep 1
+done
+if [[ "$reachable" != "true" ]]; then
+  wait || true
+  die "Port 443 is NOT reachable from this machine.
+  Open inbound 443/tcp in your cloud security group / NACL.
+  The public :443 must reach Caddy as raw TCP (no TLS-terminating proxy in front)."
 fi
+wait || true
+log "  :443 reachable"
 
 log "Phase 3/3: install Agent Manager + start Caddy (this takes 8-15 min)"
 remote_run install
@@ -115,10 +97,11 @@ remote_run install
 log "Done. Access URLs:"
 cat <<EOF
 
-  Console:   ${SCHEME}://$(vm_host console "$HOST")
-  API:       ${SCHEME}://$(vm_host api "$HOST")
-  Thunder:   ${SCHEME}://$(vm_host thunder "$HOST")
-  Observer:  ${SCHEME}://$(vm_host observer "$HOST")
-  OTel + agent endpoints: ${SCHEME}://$(vm_host gateway "$HOST")/<context>
+  Console:   https://$(vm_host console "$HOST")
+  API:       https://$(vm_host api "$HOST")
+  Thunder:   https://$(vm_host thunder "$HOST")
+  Observer:  https://$(vm_host observer "$HOST")
+  OTel ingest: https://$(vm_host gateway "$HOST")/otel
+  Deployed agents: https://<org>-<project>.agents.${HOST}.sslip.io/...
 EOF
-[[ "$EXTERNAL_GATEWAYS" == "true" ]] && echo "  Gateway control plane: ${SCHEME}://$(vm_host cp "$HOST")  (connect external gateways here; registration token is secret-bearing)"
+[[ "$EXTERNAL_GATEWAYS" == "true" ]] && echo "  Gateway control plane: https://$(vm_host cp "$HOST")  (connect external gateways here; registration token is secret-bearing)"
