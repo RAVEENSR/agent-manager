@@ -3,48 +3,42 @@ sidebar_position: 4
 ---
 # Run Agent Manager on a VM with Docker
 
-Install Agent Manager on a remote VM where Docker is the only host dependency. The
-installer runs from your laptop, connects to the VM over SSH, and exposes the
-platform over HTTPS using [sslip.io](https://sslip.io) hostnames derived from the
-VM's public IP — no domain registration and no client `/etc/hosts` edits.
+Install Agent Manager on a Linux VM where Docker is the only host dependency. You SSH into the VM and run a single installer there, and it exposes the platform over HTTPS using [sslip.io](https://sslip.io) hostnames derived from the VM's public IP, so there's no domain registration and no client `/etc/hosts` edits.
 
 ## Prerequisites
 
-**On your laptop:** `ssh`, `tar`, and `nc` (netcat).
-
-**On the VM:**
+You only need an SSH client to log into the VM; everything else runs on the VM.
 - A Linux VM with a **static (reserved) public IP** and SSH access (sudo). The install derives every hostname, TLS certificate, and OAuth issuer from the IP (`*.amp.<IP>.sslip.io`), so a **changing IP breaks the install** — and stopping the VM (for example to resize its disk) releases an ephemeral IP. Reserve the address before installing. If the IP ever changes, reinstall against the new IP.
 - **At least 50 GB of disk.** Building and running agents pushes the in-cluster image store past 13 GB; on a smaller disk the node hits `DiskPressure`, which evicts pods and can take cluster DNS down mid-build.
 - **At least 4 vCPUs and 8 GB of RAM** to run the full k3d + OpenChoreo + Agent Manager stack comfortably.
 - **Inbound `443/tcp` open** in the cloud security group / firewall — and only 443. Certificates issue via the TLS-ALPN-01 ACME challenge, which runs inside the `:443` TLS handshake, so no inbound port 80 is ever needed. The `:443` exposure must be **TCP passthrough** (not a TLS-terminating load balancer in front), since the challenge happens inside the handshake.
-- Docker, k3d, kubectl, helm, and lsof are installed automatically if missing.
+- **Docker** is required — the whole stack runs on it (k3d runs the Kubernetes cluster as Docker containers, and Caddy runs as a container). If Docker isn't already installed, the script installs it for you, along with k3d, kubectl, helm, and lsof.
 
 ## Install
 
+SSH into the VM, get the installer, and run it with `sudo`:
+
 ```bash
+# on the VM
 git clone https://github.com/wso2/agent-manager.git
 cd agent-manager/deployments/quick-start/vm
 
-./install-vm.sh \
+sudo ./install-vm.sh \
   --host <VM_PUBLIC_IP> \
-  --ssh-key ~/.ssh/your_key \
   --version <amp-release> \
   --email you@example.com
 ```
 
-Set `--version` to the Agent Manager release you want (an existing `amp/v*`
-[tag](https://github.com/wso2/agent-manager/tags), e.g. `0.15.0`).
+Pass `--host` the VM's **public** IPv4 address — a cloud VM usually can't read its own public IP (it's NAT'd behind the address you used to SSH in), so the installer needs it to build the `*.amp.<IP>.sslip.io` hostnames. Set `--version` to the Agent Manager release you want (an existing `amp/v*` [tag](https://github.com/wso2/agent-manager/tags), e.g. `0.15.0`).
 
-The installer runs in three phases — bootstrap (Docker + firewall), a preflight reachability check for `:443`, then the platform install and Caddy startup. Allow 8–15 minutes.
+The installer runs in two phases — bootstrap (Docker + tools + firewall) and the platform install + Caddy startup. Allow 8–15 minutes. It needs `sudo` because it installs Docker, opens the firewall, and creates the cluster.
 
 ### Options
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--host` | _(required)_ | VM public IPv4 address |
-| `--ssh-key` | _(required)_ | SSH private key path |
+| `--host` | _(required)_ | The VM's public IPv4 address |
 | `--version` | _(required)_ | Agent Manager release to install (an `amp/v*` tag, e.g. `0.15.0`) |
-| `--ssh-user` | `root` | SSH user (must have sudo) |
 | `--email` | _(none)_ | ACME contact for expiry notices |
 | `--no-external-gateways` | off | Drop the gateway control-plane endpoint if you won't connect external gateways |
 
@@ -93,6 +87,6 @@ gateway source IPs at the firewall.
 
 ## Troubleshooting
 
-- **Preflight fails on :443** — open inbound `:443` in your cloud security group / NACL, and make sure the public `:443` reaches the VM as **raw TCP**: a TLS-terminating load balancer in front breaks the TLS-ALPN-01 challenge.
+- **Certificates never issue / hosts unreachable from outside** — open inbound `:443` in your cloud security group / NACL, and make sure the public `:443` reaches the VM as **raw TCP**: a TLS-terminating load balancer in front breaks the TLS-ALPN-01 challenge. The installer can't verify external reachability from inside the VM, so this surfaces as Caddy failing to obtain certificates (`docker logs amp-caddy`).
 - **Certificate not issued** — check `docker logs amp-caddy`. Let's Encrypt rate limits on sslip.io are high but not infinite; if hit, retry shortly.
 - **Login redirect mismatch** — confirm you reached the console via its `console.amp.<IP>.sslip.io` URL, not the raw IP.
