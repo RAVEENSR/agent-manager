@@ -58,6 +58,12 @@ Only `:443` faces the internet; all other service ports are bound to the VM's lo
 | `https://<org>-<project>.agents.<IP>.sslip.io/...` | Deployed-agent invocation endpoints (one wildcard host per org/project) |
 | `https://cp.amp.<IP>.sslip.io` | Gateway control plane — connect external gateways here (on by default) |
 
+## Log in
+
+Open `https://console.amp.<IP>.sslip.io` and sign in as the seeded Agent Manager admin user **`amp-admin@wso2.com`** (password **`Amp-Admin@wso2.com`**). This user holds the AMP `admin` role, which grants every application permission.
+
+From the `0.16.0` release, role-based access control is enforced on the API (`rbacEnabled`), so the token must carry the right scopes. Note that Thunder's own system account (`admin` / `admin`, shown in the bootstrap logs) is **not** granted the Agent Manager application role — signing in with it lets you reach the console but every API call fails with `403 insufficient permissions`. Always use `amp-admin@wso2.com`.
+
 ## Deployed-agent invocation
 
 When you deploy an agent, its endpoint is published on a per-project host `<org>-<project>.agents.<IP>.sslip.io` and routed by Caddy to the OpenChoreo data-plane gateway. Because these hostnames are dynamic (a new one per org/project), Caddy issues their TLS certificates **on demand** at the first request (via the same ACME challenge as the fixed hosts), rather than up front. Invocations are authenticated with a user token that the gateway validates against the public Thunder issuer.
@@ -90,3 +96,4 @@ gateway source IPs at the firewall.
 - **Certificates never issue / hosts unreachable from outside** — open inbound `:443` in your cloud security group / NACL, and make sure the public `:443` reaches the VM as **raw TCP**: a TLS-terminating load balancer in front breaks the TLS-ALPN-01 challenge. The installer can't verify external reachability from inside the VM, so this surfaces as Caddy failing to obtain certificates (`docker logs amp-caddy`).
 - **Certificate not issued** — check `docker logs amp-caddy`. Let's Encrypt rate limits on sslip.io are high but not infinite; if hit, retry shortly.
 - **Login redirect mismatch** — confirm you reached the console via its `console.amp.<IP>.sslip.io` URL, not the raw IP.
+- **`403 insufficient permissions` on API calls** — you are signed in as Thunder's system `admin` account, which has no Agent Manager application role. Sign out and sign back in as `amp-admin@wso2.com` (see [Log in](#log-in)).
