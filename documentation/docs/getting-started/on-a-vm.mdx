@@ -70,7 +70,7 @@ When you deploy an agent, its endpoint is published on a per-project host `<org>
 
 Because issuance is on demand and uses TLS-ALPN-01 (the challenge runs inside the `:443` handshake), the **very first request to a newly-deployed agent host can fail with a one-time certificate error** — most visibly `ERR_CERTIFICATE_TRANSPARENCY_REQUIRED` in Chrome. That first connection is consumed by Caddy answering the ACME challenge, so the browser briefly sees the challenge certificate instead of the real one. Issuance completes within a second or two; reload the page (or open it in a fresh tab) and it serves the trusted Let's Encrypt certificate. This only affects the first hit per new agent host — the certificate is then cached in the `amp-caddy-data` volume.
 
-One known limitation: amp-api currently advertises the agent endpoint with an `http://` scheme even though it is only reachable over TLS, so the console is served with a `Content-Security-Policy: upgrade-insecure-requests` header that makes the browser upgrade the call to `https://`. This is an interim workaround — the proper fix is for amp-api to advertise the `https` endpoint variant; until then, non-browser callers must use the `https://` URL explicitly.
+amp-api advertises each agent endpoint with the `https://` scheme (the installer sets `tlsEnabled` on the service), so the console — and any other caller — invokes it over TLS directly through the wildcard site.
 
 ## TLS
 

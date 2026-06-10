@@ -28,12 +28,20 @@ build_amp_helm_args() {
   # `agentManager` (<=main) was renamed to `agentManagerService` (>=0.15.0). Emit
   # both; helm silently ignores whichever key the installed chart doesn't define,
   # so the right one always wins regardless of the --version pulled.
+  #
+  # config.tlsEnabled (env TLS_ENABLED) selects which advertised endpoint variant
+  # amp-api hands the console for deployed agents: when true it emits the https URL
+  # from the release binding instead of the http one. It does NOT change amp-api's
+  # own serving (that is internalServer.tlsEnabled) — it is purely the endpoint
+  # scheme. The agent host is only reachable over TLS via Caddy's wildcard site, so
+  # without this the console emits http:// and the browser blocks it as mixed content.
   local k
   for k in agentManager agentManagerService; do
     printf '%s\n' \
       "--set" "${k}.config.serverPublicURL=https://${api}" \
       "--set" "${k}.config.oauthAuthorizationServers=https://${thunder}" \
-      "--set" "${k}.config.keyManager.issuer=https://${thunder}"
+      "--set" "${k}.config.keyManager.issuer=https://${thunder}" \
+      "--set" "${k}.config.tlsEnabled=true"
   done
 
   printf '%s\n' \
@@ -205,12 +213,12 @@ EOF
 # openchoreoapis.localhost:19080.
 #
 # Emits BOTH entries on :443, bound to the internal http listener (TLS is
-# terminated at Caddy's wildcard *.agents site). The console builds the agent
-# invoke URL from the *http* endpoint variant and emits http://...:443/...; if the
-# http entry is absent it can't build the URL and falls back to a relative /chat
-# (405 from the console's own nginx). The console page's CSP upgrade-insecure-requests
-# (render_caddyfile) then upgrades that http://...:443 to https://...:443, which the
-# wildcard site serves.
+# terminated at Caddy's wildcard *.agents site). Both variants resolve to the same
+# host:port/path and differ only in scheme; amp-api advertises the https one to the
+# console (build_amp_helm_args sets config.tlsEnabled=true), so the browser calls
+# https://...:443 directly and the wildcard site serves it. The http entry is kept
+# too: a release binding missing a variant makes the console fall back to a relative
+# /chat (405 from its own nginx), so emitting both keeps the binding complete.
 render_dataplane_external_ingress() {
   local ip="$1"
   local host="agents.${ip}.sslip.io"
@@ -246,13 +254,7 @@ render_caddyfile() {
     printf '%s {\n%s%s\treverse_proxy 127.0.0.1:%s\n}\n\n' "$(vm_host "$2" "$1")" "$4" "${5:-}" "$3"
   }
 
-  # console: CSP upgrade-insecure-requests so the browser upgrades the http:// agent
-  # invoke URL amp-api emits to https (the agent host is only reachable over TLS via
-  # the wildcard site; without this the call is blocked as mixed content). Interim
-  # workaround — the proper fix is amp-api advertising the https endpoint variant.
-  local console_csp=$'\theader Content-Security-Policy "upgrade-insecure-requests"\n'
-
-  _caddy_site "$ip" console  3000   "$tls_block" "$console_csp"  # console UI
+  _caddy_site "$ip" console  3000   "$tls_block"  # console UI
   _caddy_site "$ip" api      9000   "$tls_block"  # agent-manager REST API
   _caddy_site "$ip" thunder  8080   "$tls_block"  # Thunder OAuth (OC kgateway, host-routed)
   _caddy_site "$ip" observer 9098   "$tls_block"  # traces observer

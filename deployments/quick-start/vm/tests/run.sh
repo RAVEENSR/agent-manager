@@ -39,6 +39,14 @@ assert_eq "amp oauthAuthorizationServers (service key)" \
 assert_eq "amp keyManager.issuer (service key)" \
   "agentManagerService.config.keyManager.issuer=https://thunder.amp.203.0.113.10.sslip.io" \
   "$(grep -F 'agentManagerService.config.keyManager.issuer' <<<"$amp")"
+# tlsEnabled=true makes amp-api advertise the https deployed-agent endpoint variant;
+# emitted under both keys (old agentManager + new agentManagerService).
+assert_eq "amp tlsEnabled (service key)" \
+  "agentManagerService.config.tlsEnabled=true" \
+  "$(grep -F 'agentManagerService.config.tlsEnabled' <<<"$amp")"
+assert_eq "amp tlsEnabled (legacy key)" \
+  "agentManager.config.tlsEnabled=true" \
+  "$(grep -F 'agentManager.config.tlsEnabled' <<<"$amp")"
 assert_eq "amp console apiBaseUrl" \
   "console.config.apiBaseUrl=https://api.amp.203.0.113.10.sslip.io" \
   "$(grep -F 'config.apiBaseUrl' <<<"$amp")"
@@ -82,7 +90,7 @@ assert_eq "observability traces issuer -> public thunder" \
   "$(grep -F 'tracesObserver.auth.issuer' <<<"$obs")"
 
 # --- render_dataplane_external_ingress: public host on :443, both http+https entries
-#     bound to the internal http listener (console reads the http variant; CSP upgrades it) ---
+#     bound to the internal http listener (amp-api advertises the https variant) ---
 dpe="$(render_dataplane_external_ingress 203.0.113.10)"
 assert_eq "dp external public host"    "yes" "$(has "$dpe" 'host: "agents.203.0.113.10.sslip.io"')"
 assert_eq "dp external port 443"       "yes" "$(has "$dpe" 'port: 443')"
@@ -215,11 +223,13 @@ assert_eq "coredns host aliases -> node" "yes" \
 assert_eq "coredns no longer targets host.k3d.internal as dest" "no" \
   "$(has "$cd_cfg" 'localhost host.k3d.internal')"
 
-# --- render_caddyfile: deployed-agent invocation (CSP on console, wildcard site,
-#     on-demand TLS, CORS, ask endpoint) ---
+# --- render_caddyfile: deployed-agent invocation (wildcard site, on-demand TLS,
+#     CORS, ask endpoint) ---
 cf_ai="$(render_caddyfile 203.0.113.10 "ops@example.com" true)"
-assert_eq "console CSP upgrade-insecure-requests" "yes" \
-  "$(has "$cf_ai" 'header Content-Security-Policy "upgrade-insecure-requests"')"
+# No CSP: amp-api advertises the https agent endpoint (config.tlsEnabled=true), so the
+# console emits https directly and no upgrade-insecure-requests workaround is needed.
+assert_eq "console has no CSP workaround" "no" \
+  "$(has "$cf_ai" 'Content-Security-Policy')"
 assert_eq "global on_demand_tls ask" "yes" "$(has "$cf_ai" 'ask http://127.0.0.1:9753')"
 assert_eq "on-demand ask endpoint site" "yes" "$(has "$cf_ai" 'http://127.0.0.1:9753 {')"
 assert_eq "wildcard agent site" "yes" "$(has "$cf_ai" '*.agents.203.0.113.10.sslip.io {')"
