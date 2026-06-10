@@ -78,6 +78,20 @@ build_cp_helm_args() {
     "--set" "security.oidc.tokenUrl=${scheme}://${thunder}/oauth2/token"
 }
 
+# build_platform_resources_helm_args
+# Prints PLATFORM_RESOURCES_HELM_ARGS tokens. The platform-resources chart's
+# workload-publisher defaults its OAuth token endpoint to the kgateway path
+# (`host.k3d.internal:8080/oauth2/token` + Host `thunder.amp.localhost`). On the
+# VM that route no longer matches: build_cp_helm_args / build_thunder_helm_args
+# move Thunder's vhost to the public sslip.io host, so the localhost Host header
+# 404s and `generate-workload-cr` fails with "Failed to get access token". Point
+# it at the Thunder service directly (no gateway, no Host header, no issuer
+# coupling) — the same in-cluster endpoint every other extension already uses.
+build_platform_resources_helm_args() {
+  printf '%s\n' \
+    "--set" "global.oauth.tokenUrl=http://amp-thunder-extension-service.amp-thunder.svc.cluster.local:8090/oauth2/token"
+}
+
 # build_thunder_helm_args <ip> <scheme>
 # Prints helm args, one token per line.
 build_thunder_helm_args() {
@@ -106,11 +120,64 @@ build_thunder_helm_args() {
   done
 }
 
-# render_k3d_vm_config  (reads k3d config on stdin, writes loopback-bound config on stdout)
-# Rewrites '- port: <host>:<container>' -> '- port: 127.0.0.1:<host>:<container>'.
-# Already-bound entries (containing an IP before the first port) are left untouched.
+# render_k3d_vm_config [node_host]  (reads k3d config on stdin, writes VM config on stdout)
+# Two rewrites:
+#  1. '- port: <host>:<container>' -> '- port: 127.0.0.1:<host>:<container>' so the
+#     k3d host ports bind to loopback only. Already-bound entries are left untouched.
+#  2. The containerd registry mirror *endpoint* host.k3d.internal:10082 -> <node_host>:10082.
+#     The mirror key stays host.k3d.internal:10082 (it must match the image tag the
+#     publish step writes), but the node's containerd resolves host.k3d.internal via
+#     its own /etc/hosts to the Docker bridge gateway — which has nothing listening
+#     once ports are loopback-bound, so agent image pulls fail with ImagePullBackOff.
+#     The node *can* reach the registry LoadBalancer at its own node hostname, which
+#     k3d puts in the node's /etc/hosts (IP-independent). Pod-side DNS is handled
+#     separately by render_coredns_vm_config; this covers the node containerd path.
 render_k3d_vm_config() {
-  sed -E 's/^([[:space:]]*- port: )([0-9]+:[0-9]+)/\1127.0.0.1:\2/'
+  local node_host="${1:-k3d-amp-local-server-0}"
+  sed -E \
+    -e 's/^([[:space:]]*- port: )([0-9]+:[0-9]+)/\1127.0.0.1:\2/' \
+    -e "s#^([[:space:]]*- )http://host\\.k3d\\.internal:10082#\\1http://${node_host}:10082#"
+}
+
+# render_coredns_vm_config <node_host>
+# Prints a `coredns-custom` ConfigMap that rewrites the in-cluster *.localhost /
+# host.k3d.internal names to the k3d server node (<node_host>, e.g.
+# k3d-amp-local-server-0), instead of the base config's `host.k3d.internal`.
+#
+# Why the VM needs this: the stock config points these names at host.k3d.internal,
+# which ensure_coredns_host_aliases maps to the Docker bridge gateway (the host),
+# relying on a host hairpin to the published service ports. But the VM installer
+# binds every k3d host port to 127.0.0.1 (render_k3d_vm_config), so the gateway IP
+# has nothing listening — observer->authz (build logs) and the registry push/pull
+# both fail with "connection refused". The server node is where klipper exposes
+# all the LoadBalancer service ports, so rewriting straight to its hostname is
+# reachable and, unlike a NodeHosts alias, survives k3s NodeHosts reconciliation
+# (the node entry is always present). Applied via install.sh's COREDNS_FILE hook.
+render_coredns_vm_config() {
+  local node_host="$1"
+  cat <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  amp.override: |
+    rewrite stop {
+      name regex (.+\\.)?amp\\.localhost ${node_host}
+      answer auto
+    }
+  openchoreo.override: |
+    rewrite stop {
+      name regex (.+\\.)?openchoreo\\.localhost ${node_host}
+      answer auto
+    }
+  hostalias.override: |
+    rewrite stop {
+      name regex (host\\.k3d\\.internal|host\\.docker\\.internal) ${node_host}
+      answer auto
+    }
+EOF
 }
 
 # render_caddyfile <ip> <scheme> <acme_email> <external_gateways:true|false (default true)> \

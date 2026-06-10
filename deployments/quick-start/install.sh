@@ -664,7 +664,11 @@ fi
 log_step "Step 3/13: Applying CoreDNS Custom Configuration"
 
 log_info "Applying CoreDNS custom configuration for OpenChoreo and AMP..."
-COREDNS_FILE="https://raw.githubusercontent.com/wso2/agent-manager/amp/v${VERSION}/deployments/k8s/coredns-amp-custom.yaml"
+# COREDNS_FILE is overridable (env) so the VM installer can substitute a config
+# that rewrites the in-cluster names to the k3d server node instead of
+# host.k3d.internal — required once host ports are loopback-bound. See
+# deployments/quick-start/vm/lib-vm.sh:render_coredns_vm_config.
+COREDNS_FILE="${COREDNS_FILE:-https://raw.githubusercontent.com/wso2/agent-manager/amp/v${VERSION}/deployments/k8s/coredns-amp-custom.yaml}"
 if kubectl apply -f "${COREDNS_FILE}"; then
     log_success "CoreDNS custom configuration applied successfully"
 else

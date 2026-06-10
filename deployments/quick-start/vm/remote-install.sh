@@ -94,9 +94,23 @@ ensure_firewall() {
   fi
 }
 
+# Warn (don't block) when the root filesystem is too small to build agents. The
+# in-cluster image store alone grows past 13 GB once agents are built; below ~40 GB
+# free the node hits DiskPressure, which evicts pods and can take cluster DNS down
+# mid-build. 50 GB is the documented minimum.
+ensure_disk() {
+  local avail_kb min_kb=$((40 * 1024 * 1024))
+  avail_kb="$(df -Pk / | awk 'NR==2 {print $4}')"
+  if [[ -n "$avail_kb" && "$avail_kb" -lt "$min_kb" ]]; then
+    log "WARNING: only $((avail_kb / 1024 / 1024)) GB free on / — agent builds may"
+    log "         hit DiskPressure. A 50 GB+ disk is recommended (see the VM docs)."
+  fi
+}
+
 phase_bootstrap() {
   ensure_prerequisites
   ensure_firewall
+  ensure_disk
   log "Bootstrap complete"
 }
 
@@ -135,6 +149,8 @@ phase_install() {
   mapfile -t GATEWAY_HELM_ARGS < <(build_gateway_helm_args "$VM_IP" "$scheme")
   # shellcheck disable=SC2034
   mapfile -t CP_HELM_ARGS < <(build_cp_helm_args "$VM_IP" "$scheme")
+  # shellcheck disable=SC2034
+  mapfile -t PLATFORM_RESOURCES_HELM_ARGS < <(build_platform_resources_helm_args)
   # No safe default: install.sh builds chart refs + raw manifest URLs from amp/v${VERSION},
   # so a placeholder like 0.0.0-dev 404s. Require a real release.
   : "${VERSION:?VERSION is required (an existing amp/v* release, e.g. 0.15.0)}"
@@ -143,6 +159,13 @@ phase_install() {
   # Loopback-bound k3d config.
   render_k3d_vm_config <"${QS_DIR}/k3d-config.yaml" >/tmp/k3d-config-vm.yaml
   export K3D_CONFIG=/tmp/k3d-config-vm.yaml
+
+  # CoreDNS rewrites pointed at the k3d server node (not host.k3d.internal), so
+  # in-cluster name resolution still reaches the service ports after they are
+  # loopback-bound. CLUSTER_NAME is fixed to "amp-local" in install.sh, so the
+  # single server node is always "k3d-amp-local-server-0".
+  render_coredns_vm_config "k3d-amp-local-server-0" >/tmp/coredns-amp-vm.yaml
+  export COREDNS_FILE=/tmp/coredns-amp-vm.yaml
 
   log "Running base installer with sslip.io overrides (${scheme})"
   # Subshell: install.sh's exit calls stay contained; arrays are inherited.

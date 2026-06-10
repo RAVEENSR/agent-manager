@@ -150,6 +150,19 @@ assert_eq "k3d leaves nodeFilters intact" \
 assert_eq "k3d leaves already-bound entry untouched" \
   "  - port: 127.0.0.1:3000:3000" \
   "$(render_k3d_vm_config <<<'  - port: 127.0.0.1:3000:3000')"
+# registry mirror endpoint -> node host (so node containerd can pull); key untouched
+reg_in="$(printf '%s\n' \
+  '    mirrors:' \
+  '      "host.k3d.internal:10082":' \
+  '        endpoint:' \
+  '          - http://host.k3d.internal:10082')"
+reg_out="$(render_k3d_vm_config <<<"$reg_in")"
+assert_eq "k3d registry endpoint -> node host" \
+  "          - http://k3d-amp-local-server-0:10082" \
+  "$(grep -F 'endpoint' -A1 <<<"$reg_out" | grep -F 'http://')"
+assert_eq "k3d registry mirror key untouched" \
+  '      "host.k3d.internal:10082":' \
+  "$(grep -F '"host.k3d.internal:10082":' <<<"$reg_out")"
 
 # --- render_caddyfile (https, with email, external gateways disabled => no cp) ---
 cf="$(render_caddyfile 203.0.113.10 https "ops@example.com" false)"
@@ -189,6 +202,27 @@ assert_eq "np80 tls block per site (6)"     "6"   "$(grep -cF 'issuer acme' <<<"
 cf_def="$(render_caddyfile 203.0.113.10 https "ops@example.com" true)"
 assert_eq "default no disable_redirects"    "no"  "$(has "$cf_def" 'auto_https disable_redirects')"
 assert_eq "default no http-challenge block" "no"  "$(has "$cf_def" 'disable_http_challenge')"
+
+# --- build_platform_resources_helm_args points the workload publisher at the
+#     Thunder service directly (the gateway path 404s once Thunder's vhost moves
+#     to the public sslip.io host) ---
+pr="$(build_platform_resources_helm_args)"
+assert_eq "platform-resources oauth tokenUrl (direct svc)" \
+  "global.oauth.tokenUrl=http://amp-thunder-extension-service.amp-thunder.svc.cluster.local:8090/oauth2/token" \
+  "$(grep -F 'global.oauth.tokenUrl' <<<"$pr")"
+assert_eq "platform-resources oauth not via host.k3d.internal" "no" "$(has "$pr" 'host.k3d.internal')"
+
+# --- render_coredns_vm_config rewrites the in-cluster names to the server node ---
+cd_cfg="$(render_coredns_vm_config k3d-amp-local-server-0)"
+assert_eq "coredns configmap name" "yes" "$(has "$cd_cfg" 'name: coredns-custom')"
+assert_eq "coredns openchoreo -> node" "yes" \
+  "$(has "$cd_cfg" 'name regex (.+\.)?openchoreo\.localhost k3d-amp-local-server-0')"
+assert_eq "coredns amp -> node" "yes" \
+  "$(has "$cd_cfg" 'name regex (.+\.)?amp\.localhost k3d-amp-local-server-0')"
+assert_eq "coredns host aliases -> node" "yes" \
+  "$(has "$cd_cfg" 'name regex (host\.k3d\.internal|host\.docker\.internal) k3d-amp-local-server-0')"
+assert_eq "coredns no longer targets host.k3d.internal as dest" "no" \
+  "$(has "$cd_cfg" 'localhost host.k3d.internal')"
 
 if [[ "$FAILED" -ne 0 ]]; then echo "TESTS FAILED"; exit 1; fi
 echo "ALL TESTS PASSED"
