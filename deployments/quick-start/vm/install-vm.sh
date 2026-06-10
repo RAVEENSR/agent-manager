@@ -170,6 +170,10 @@ run_install() {
   # only now, after bootstrap, so the piped installers above never saw it.
   export VERSION="$AMP_VERSION"
 
+  # Suppress install.sh's localhost completion URLs — they are unreachable on a VM
+  # (k3d ports are loopback-bound). This script prints the public sslip.io URLs below.
+  export SHOW_LOCALHOST_URLS=false
+
   # Loopback-bound k3d config.
   render_k3d_vm_config <"${QS_DIR}/k3d-config.yaml" >/tmp/k3d-config-vm.yaml
   export K3D_CONFIG=/tmp/k3d-config-vm.yaml
