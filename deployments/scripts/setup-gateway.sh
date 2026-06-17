@@ -56,16 +56,36 @@ else
     echo "⚠️  Gateway did not become ready in time"
 fi
 
-kubectl apply -f "${SCRIPT_DIR}/../values/otel-collector-rest-api.yaml"
+# The apigateway reports Programmed before it is actually matchable by
+# RestApis, and the gateway-extension's RestApi controller does not requeue on
+# "No matching gateway available" — so a RestApi applied the instant the
+# gateway flips Programmed can stay GatewayNotReady indefinitely (observed in
+# the heavy instrumentation-matrix tier). A passive `kubectl wait` of any
+# length can't fix this; the controller has to be poked. Re-create the RestApi
+# on an interval to force a fresh reconcile against the now-settled gateway,
+# until it programs or we hit the deadline.
+OTEL_RESTAPI="amp-otel-collector-tracing-rest-api"
+OTEL_RESTAPI_NS="openchoreo-data-plane"
+OTEL_RESTAPI_MANIFEST="${SCRIPT_DIR}/../values/otel-collector-rest-api.yaml"
+OTEL_RESTAPI_DEADLINE=$((SECONDS + 300))
 
-echo "⏳ Waiting for RestApi to be programmed..."
-if kubectl wait --for=condition=Programmed restapi/amp-otel-collector-tracing-rest-api -n openchoreo-data-plane --timeout=300s; then
-    echo "✅ RestApi is programmed"
-else
-    echo "❌ RestApi amp-otel-collector-tracing-rest-api did not become Programmed in time"
-    kubectl describe restapi/amp-otel-collector-tracing-rest-api -n openchoreo-data-plane || true
-    exit 1
-fi
+echo "⏳ Programming RestApi ${OTEL_RESTAPI} (re-create until matched)..."
+kubectl apply -f "${OTEL_RESTAPI_MANIFEST}"
+while true; do
+    if kubectl wait --for=condition=Programmed "restapi/${OTEL_RESTAPI}" \
+        -n "${OTEL_RESTAPI_NS}" --timeout=30s >/dev/null 2>&1; then
+        echo "✅ RestApi is programmed"
+        break
+    fi
+    if [ "${SECONDS}" -ge "${OTEL_RESTAPI_DEADLINE}" ]; then
+        echo "❌ RestApi ${OTEL_RESTAPI} did not become Programmed in time"
+        kubectl describe "restapi/${OTEL_RESTAPI}" -n "${OTEL_RESTAPI_NS}" || true
+        exit 1
+    fi
+    echo "↻ RestApi not matched yet; re-creating to force a reconcile..."
+    kubectl delete -f "${OTEL_RESTAPI_MANIFEST}" --ignore-not-found --wait=true --timeout=60s || true
+    kubectl apply -f "${OTEL_RESTAPI_MANIFEST}"
+done
 
 echo ""
 echo "✅ API Platform Gateway installed"
