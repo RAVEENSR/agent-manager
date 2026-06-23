@@ -1274,6 +1274,29 @@ class Trace:
                 if system_prompt:
                     break
 
+        # Fall back to the agent's LLM spans when the agent span records no
+        # input/output (e.g. a LangGraph invoke_agent wrapper carries neither):
+        # first user message as the goal, last LLM response as the final output.
+        # Mirrors the system_prompt fallback above so agent-level judges still
+        # receive real content instead of an empty response.
+        agent_input = agent_span.input
+        agent_output = agent_span.output
+        if not (agent_input or "").strip() or not (agent_output or "").strip():
+            ordered_llms = [s for s in llm_spans if s.start_time is not None]
+            ordered_llms.sort(key=lambda s: s.start_time)
+            ordered_llms += [s for s in llm_spans if s.start_time is None]
+            if not (agent_input or "").strip():
+                for llm in ordered_llms:
+                    user_msg = next((m.content for m in llm.get_user_messages() if m.content.strip()), "")
+                    if user_msg:
+                        agent_input = user_msg
+                        break
+            if not (agent_output or "").strip():
+                for llm in reversed(ordered_llms):
+                    if llm.output and llm.output.strip():
+                        agent_output = llm.output
+                        break
+
         return AgentTrace(
             agent_id=agent_span.span_id,
             agent_name=agent_span.name,
@@ -1281,8 +1304,8 @@ class Trace:
             model=agent_span.model,
             system_prompt=system_prompt,
             available_tools=list(agent_span.available_tools),
-            input=agent_span.input,
-            output=agent_span.output,
+            input=agent_input,
+            output=agent_output,
             steps=agent_steps,
             metrics=agent_metrics,
         )

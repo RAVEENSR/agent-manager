@@ -457,6 +457,55 @@ class TestTrajectoryGetAgents:
         agents = trajectory.get_agents()
         assert len(agents) == 2
 
+    def test_io_falls_back_to_llm_spans_when_agent_span_empty(self):
+        """Agent-rooted traces (e.g. a LangGraph invoke_agent wrapper) record no
+        input/output on the agent span itself. _create_agent_trace must derive
+        them from the agent's LLM spans — first user message as the goal, last
+        LLM response as the final output — so agent-level judges receive real
+        content instead of an empty response."""
+        agent = AgentSpan(
+            span_id="a1",
+            parent_span_id=None,
+            start_time=datetime(2026, 1, 1, 12, 0, 0),
+            name="LangGraph",
+            input="",  # invoke_agent wrapper carries neither
+            output="",
+        )
+        llm1 = LLMSpan(
+            span_id="llm-1",
+            parent_span_id="a1",
+            start_time=datetime(2026, 1, 1, 12, 0, 1),
+            input=[UserMessage(content="find accommodations in Spain")],
+            output="Let me look that up.",
+        )
+        llm2 = LLMSpan(
+            span_id="llm-2",
+            parent_span_id="a1",
+            start_time=datetime(2026, 1, 1, 12, 0, 2),
+            input=[UserMessage(content="continue")],
+            output="Here are five hotels in Spain.",
+        )
+        # Spans intentionally out of order to prove the fallback sorts by start_time.
+        trajectory = Trace(trace_id="t1", spans=[agent, llm2, llm1])
+        agent_trace = trajectory._create_agent_trace("a1")
+        assert agent_trace.input == "find accommodations in Spain"  # first user msg, earliest span
+        assert agent_trace.output == "Here are five hotels in Spain."  # last LLM response
+
+    def test_io_preserved_when_agent_span_has_them(self, agent_span):
+        """When the agent span already carries input/output, they are used as-is
+        (the LLM-span fallback must not override real agent I/O)."""
+        llm = LLMSpan(
+            span_id="llm-x",
+            parent_span_id="agent-1",
+            start_time=datetime(2026, 1, 1, 12, 0, 1),
+            input=[UserMessage(content="unrelated turn")],
+            output="unrelated response",
+        )
+        trajectory = Trace(trace_id="t1", spans=[agent_span, llm])
+        agent_trace = trajectory._create_agent_trace("agent-1")
+        assert agent_trace.input == "I want to check my order status"
+        assert agent_trace.output == "Your order #123 is being shipped."
+
 
 # ============================================================================
 # TESTS: Trace - _get_agent_steps() Reconstruction
