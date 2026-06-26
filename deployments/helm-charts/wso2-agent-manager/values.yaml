@@ -48,10 +48,24 @@ agentManagerService:
     pullPolicy: IfNotPresent
 
   service:
-    type: LoadBalancer
+    # ClusterIP by default; external access is via the control-plane gateway
+    # HTTPRoute below. For local dev that wants a raw LoadBalancer, apply
+    # values-dev.yaml.
+    type: ClusterIP
     port: 9000
     targetPort: 8080
     annotations: {}
+
+  # HTTPRoute exposing the public AMP API through the OpenChoreo control-plane
+  # gateway-default (same pattern AMP uses for Thunder). The route lives in the
+  # gateway's namespace and a ReferenceGrant lets it reach the amp-api Service
+  # in this release's namespace.
+  ocIngress:
+    enabled: true
+    hostname: "api.amp.localhost"
+    gateway:
+      name: gateway-default
+      namespace: openchoreo-control-plane
 
   gatewayMgtService:
     # Gateway-control / xDS management surface. Its only consumer is the
@@ -308,9 +322,21 @@ console:
     pullPolicy: Always
 
   service:
-    type: LoadBalancer
+    # ClusterIP by default; external access is via the control-plane gateway
+    # HTTPRoute below. For local dev that wants a raw LoadBalancer, apply
+    # values-dev.yaml.
+    type: ClusterIP
     port: 3000
     targetPort: 3000
+
+  # HTTPRoute exposing the console through the OpenChoreo control-plane
+  # gateway-default. See agentManagerService.ocIngress for the pattern.
+  ocIngress:
+    enabled: true
+    hostname: "console.amp.localhost"
+    gateway:
+      name: gateway-default
+      namespace: openchoreo-control-plane
 
   resources:
     requests:

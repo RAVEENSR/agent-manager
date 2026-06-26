@@ -1,0 +1,37 @@
+{{/*
+HTTPRoute exposing the Traces Observer through the OpenChoreo observability-
+plane gateway-default, instead of a per-service cloud LoadBalancer. The
+Traces Observer Service lives in the same namespace as the gateway, so unlike
+the management routes on the control-plane gateway this needs no
+ReferenceGrant.
+*/}}
+{{- if and .Values.tracesObserver.enabled .Values.tracesObserver.ocIngress.enabled }}
+{{- $gwNamespace := .Values.tracesObserver.ocIngress.gateway.namespace | default .Release.Namespace }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ .Values.tracesObserver.name }}
+  namespace: {{ $gwNamespace }}
+  labels:
+    app.kubernetes.io/name: traces-observer
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  hostnames:
+    - {{ .Values.tracesObserver.ocIngress.hostname | quote }}
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ .Values.tracesObserver.ocIngress.gateway.name }}
+  rules:
+    - backendRefs:
+        - group: ""
+          kind: Service
+          name: {{ .Values.tracesObserver.name }}
+          namespace: {{ .Release.Namespace }}
+          port: {{ .Values.tracesObserver.port }}
+          weight: 1
+      matches:
+        - path:
+            type: PathPrefix
+            value: /
+{{- end }}

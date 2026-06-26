@@ -1,0 +1,22 @@
+# Local-development overlay for wso2-agent-manager.
+#
+# Apply on top of the default values for a raw LoadBalancer-per-service setup,
+# the way local/dev installs historically worked:
+#   helm install amp wso2-agent-manager -f values.yaml -f values-dev.yaml
+#
+# The chart defaults are prod-safe (ClusterIP + control-plane gateway
+# HTTPRoutes). This overlay swaps those back to LoadBalancers and turns the
+# gateway routes off, so a minimal dev cluster without the OpenChoreo plane
+# gateways still gets reachable services.
+
+agentManagerService:
+  service:
+    type: LoadBalancer
+  ocIngress:
+    enabled: false
+
+console:
+  service:
+    type: LoadBalancer
+  ocIngress:
+    enabled: false

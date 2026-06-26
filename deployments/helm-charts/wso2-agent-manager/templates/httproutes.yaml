@@ -1,0 +1,89 @@
+{{/*
+HTTPRoutes that expose the console and the public AMP API through the
+OpenChoreo control-plane gateway-default, instead of per-service cloud
+LoadBalancers. This mirrors how AMP already exposes Thunder
+(wso2-amp-thunder-extension/templates/thunder-httproute.yaml): the route must
+live in the gateway's namespace (the gateway only admits HTTPRoutes from its
+own namespace), and a ReferenceGrant lets it reference the backend Services
+that live in this release's namespace.
+*/}}
+{{- $apiIngress := and .Values.agentManagerService.enabled .Values.agentManagerService.ocIngress.enabled -}}
+{{- $consoleIngress := and .Values.console.enabled .Values.console.ocIngress.enabled -}}
+{{- if or $apiIngress $consoleIngress }}
+---
+# Allows HTTPRoutes in the control-plane gateway namespace to reference the
+# amp-api / amp-console Services in this release's namespace.
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: amp-management-backend
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agent-management-platform.labels" . | nindent 4 }}
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: {{ .Values.agentManagerService.ocIngress.gateway.namespace }}
+  to:
+    - group: ""
+      kind: Service
+{{- end }}
+{{- if $apiIngress }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: amp-api
+  namespace: {{ .Values.agentManagerService.ocIngress.gateway.namespace }}
+  labels:
+    {{- include "agent-management-platform.agentManagerService.labels" . | nindent 4 }}
+spec:
+  hostnames:
+    - {{ .Values.agentManagerService.ocIngress.hostname | quote }}
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ .Values.agentManagerService.ocIngress.gateway.name }}
+  rules:
+    - backendRefs:
+        - group: ""
+          kind: Service
+          name: amp-api
+          namespace: {{ .Release.Namespace }}
+          port: {{ .Values.agentManagerService.service.port }}
+          weight: 1
+      matches:
+        - path:
+            type: PathPrefix
+            value: /
+{{- end }}
+{{- if $consoleIngress }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: amp-console
+  namespace: {{ .Values.console.ocIngress.gateway.namespace }}
+  labels:
+    {{- include "agent-management-platform.console.labels" . | nindent 4 }}
+spec:
+  hostnames:
+    - {{ .Values.console.ocIngress.hostname | quote }}
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ .Values.console.ocIngress.gateway.name }}
+  rules:
+    - backendRefs:
+        - group: ""
+          kind: Service
+          name: amp-console
+          namespace: {{ .Release.Namespace }}
+          port: {{ .Values.console.service.port }}
+          weight: 1
+      matches:
+        - path:
+            type: PathPrefix
+            value: /
+{{- end }}

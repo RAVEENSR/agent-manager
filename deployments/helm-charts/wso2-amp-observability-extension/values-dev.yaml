@@ -1,0 +1,19 @@
+# Local-development overlay for wso2-amp-observability-extension.
+#
+# Apply on top of the default values for a raw LoadBalancer-per-service setup:
+#   helm install amp-obs wso2-amp-observability-extension -f values.yaml -f values-dev.yaml
+#
+# The chart defaults are prod-safe (ClusterIP + an observability-plane gateway
+# HTTPRoute for the Traces Observer). This overlay swaps those back to
+# LoadBalancers and turns the gateway route off, so a minimal dev cluster
+# without the OpenChoreo plane gateways still gets reachable services.
+
+tracesObserver:
+  service:
+    type: LoadBalancer
+  ocIngress:
+    enabled: false
+
+otelCollector:
+  service:
+    type: LoadBalancer
