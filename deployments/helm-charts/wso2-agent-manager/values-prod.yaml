@@ -1,0 +1,52 @@
+# Production overlay for wso2-agent-manager.
+#
+# Apply on top of the default values:
+#   helm install amp wso2-agent-manager -f values.yaml -f values-prod.yaml
+#
+# It turns on the external-secrets guard (requireExternalSecrets) and points
+# every credential at a pre-created Kubernetes Secret instead of the committed
+# dev literals. Create those Secrets first; the names below are examples —
+# change them to match your own, and ensure each carries the referenced key.
+#
+# Scope: this overlay covers only the agent-manager chart's own credentials.
+# Two related credentials live in other charts and must be externalized there:
+#   - the OpenSearch password -> wso2-amp-observability-extension
+#   - any managed-database wiring (postgresql.external.*) -> prod-hardening pass
+#
+# The guard fails the render and lists every credential still missing an
+# existingSecret, so an incomplete prod install is caught before it ships a
+# default password.
+
+agentManagerService:
+  # Fail the render unless every credential below resolves to an existingSecret.
+  requireExternalSecrets: true
+
+  config:
+    apiKey:
+      # Shared with agent instrumentation sidecars (AMP_AGENT_API_KEY); both
+      # sides read this same Secret, so externalize it rather than randomizing.
+      existingSecret: "amp-api-key"
+      existingSecretKey: "api-key"
+    encryptionKey:
+      # Encrypts stored secrets at rest. Losing it makes them unrecoverable, so
+      # it must be externally managed and stable across reinstalls.
+      existingSecret: "amp-encryption-key"
+      existingSecretKey: "encryption-key"
+    openbao:
+      existingSecret: "amp-openbao-token"
+      existingSecretKey: "openbao-token"
+    workflowPlaneOpenbao:
+      existingSecret: "amp-workflow-openbao-token"
+      existingSecretKey: "openbao-token"
+    thunder:
+      existingSecret: "amp-thunder-client-secret"
+      existingSecretKey: "thunder-client-secret"
+
+postgresql:
+  auth:
+    # In-cluster Postgres reading its password from a pre-created Secret. The
+    # Secret must carry the keys the Bitnami subchart expects (at least
+    # "password" for the application user, and "postgres-password" for admin).
+    # For a managed database instead, set postgresql.enabled=false and supply
+    # postgresql.external.{host,port,database,username,existingSecret}.
+    existingSecret: "amp-postgresql"

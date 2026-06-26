@@ -36,6 +36,12 @@ agentManagerService:
   enabled: true
   replicaCount: 1
 
+  # Production guard. When true, the chart refuses to render unless every
+  # credential (Postgres, OpenBao, Thunder, API key, encryption key) is
+  # supplied via an existingSecret instead of a committed literal default.
+  # Leave false for local/dev installs; enable it in prod via values-prod.yaml.
+  requireExternalSecrets: false
+
   image:
     repository: ghcr.io/wso2/amp-api
     tag: "0.0.0-dev"
