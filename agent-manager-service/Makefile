@@ -124,6 +124,23 @@ codegenfmt-check:
 gen-instrumentation-baseline: ## Regenerate instrumentation/baseline.json from .github/release-config.json.
 	GOFLAGS=-mod=mod go run ./scripts/gen_instrumentation_baseline.go
 
+GATEWAY_SCOPES_MANIFEST := ../deployments/helm-charts/wso2-agent-manager/files/amp-api-route-scopes.yaml
+
+.PHONY: gen-gateway-scopes
+gen-gateway-scopes: ## Regenerate the gateway route->scope manifest from the api/ route registrars.
+	GOFLAGS=-mod=mod go run ./scripts/gen_gateway_route_manifest
+
+.PHONY: gen-gateway-scopes-check
+gen-gateway-scopes-check: ## Fail if the committed gateway route->scope manifest is out of date.
+	@$(MAKE) gen-gateway-scopes
+	@if [ ! -z "$$(git status --porcelain -- '$(GATEWAY_SCOPES_MANIFEST)')" ]; then \
+	  git diff --color -- '$(GATEWAY_SCOPES_MANIFEST)' | cat; \
+	  git status --porcelain -- '$(GATEWAY_SCOPES_MANIFEST)'; \
+	  echo "The gateway route->scope manifest is out of date."; \
+	  echo "Please run 'make gen-gateway-scopes' locally and commit the changes."; \
+	  exit 1; \
+	fi
+
 .PHONY: gen-evaluators-dev
 gen-evaluators-dev: ## Generate builtin evaluators using local amp-evaluation SDK
 	@echo "Generating builtin evaluators (dev mode)..."

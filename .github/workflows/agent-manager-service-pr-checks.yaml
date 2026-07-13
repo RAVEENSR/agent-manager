@@ -5,6 +5,7 @@ on:
     branches: ["main"]
     paths:
       - "agent-manager-service/**"
+      - "deployments/helm-charts/wso2-agent-manager/files/amp-api-route-scopes.yaml"
       - ".github/workflows/agent-manager-service-pr-checks.yaml"
 
 jobs:
@@ -198,3 +199,7 @@ jobs:
       - name: Run code generation and format check
         working-directory: ./agent-manager-service
         run: make codegenfmt-check
+
+      - name: Check gateway route->scope manifest is up to date
+        working-directory: ./agent-manager-service
+        run: make gen-gateway-scopes-check

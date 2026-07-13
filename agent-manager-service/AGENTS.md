@@ -29,7 +29,8 @@ Do these in order. Steps 1–2 are mandatory before writing any Go type for the 
 5. **Register routes with authz** in `api/<resource>_routes.go` (see Permissions).
 6. **Add the permission(s) to roles** in `rbac/predefined_roles.go`.
 7. **`make codegen`** — only if you added/changed an interface (regenerates wire DI + mocks).
-8. **Test** — write a service unit test (see Testing). Run the done-checklist.
+8. **`make gen-gateway-scopes`** — regenerates the gateway route→scope manifest from the route registrars. Required after any route/permission change; CI (`gen-gateway-scopes-check`) fails on drift. See Permissions.
+9. **Test** — write a service unit test (see Testing). Run the done-checklist.
 
 ## Layering
 
@@ -61,6 +62,7 @@ Rules:
 - **Name permissions `resource:verb`** — `:create`/`:read`/`:update`/`:delete`, or a coarser `:manage` only where existing resources do.
 - **Every new permission must be granted by at least one role** in `PredefinedRolePermissions` (`RoleAdmin` / `RoleDeveloper` / `RoleAILead` / `RolePlatformEngineer`) — an ungranted permission is unreachable.
 - Scope/audience is a first-pass filter; the per-route permission is enforcement. `RequireOrgMatch` checks org-vs-path, but the service must **also** validate org against the target resource it loads (defense in depth).
+- **Patterns must be statically resolvable.** `scripts/gen_gateway_route_manifest` reads these registrar calls by AST to build the gateway scope manifest. It folds string literals, local `:=` vars, `+` concatenation, and the `route(method, path)` helper, and resolves `rbac.<Perm>` selectors — anything else (a computed pattern, a non-`rbac` permission) is a hard error. Keep patterns literal/foldable and run `make gen-gateway-scopes` after changes.
 
 ## Code generation
 
