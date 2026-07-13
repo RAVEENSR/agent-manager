@@ -1,0 +1,26 @@
+{{- if .Values.apiGateway.enabled }}
+---
+# Standalone APIGateway CR (issue #1131) — watched by the cluster-wide
+# gateway-operator, which helm-installs the gateway stack (controller + router
+# + policy-engine) from the configRef ConfigMap. Unlike the per-env data-plane
+# gateways, this instance is standalone: it has NO spec.controlPlane, so it does
+# not register with Agent Manager and has no bootstrap token. Its RestApi CRs
+# reach it purely by the restapi-target label selector.
+#
+# NOTE: standalone-operator behavior (a CR with no controlPlane) is validated on
+# a real cluster during rollout; see the design doc section 9b.
+apiVersion: gateway.api-platform.wso2.com/v1alpha1
+kind: APIGateway
+metadata:
+  name: {{ include "agent-management-platform.apiGateway.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agent-management-platform.apiGateway.labels" . | nindent 4 }}
+spec:
+  apiSelector:
+    scope: LabelSelector
+    matchLabels:
+      gateway.api-platform.wso2.com/restapi-target: {{ include "agent-management-platform.apiGateway.name" . | quote }}
+  configRef:
+    name: {{ include "agent-management-platform.apiGateway.configMapName" . }}
+{{- end }}

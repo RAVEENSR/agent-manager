@@ -24,6 +24,13 @@ spec:
     - group: ""
       kind: Service
       name: amp-api-gateway-manager
+{{- if .Values.apiGateway.enabled }}
+    # Allow the api.amp.localhost HTTPRoute to reach the standalone API Platform
+    # Gateway runtime Service (issue #1131) so /api/v1 can be fronted by it.
+    - group: ""
+      kind: Service
+      name: {{ include "agent-management-platform.apiGateway.runtimeServiceName" . }}
+{{- end }}
 {{- if .Values.console.enabled }}
 ---
 # HTTPRoute in the gateway namespace to route traffic to the Console.
@@ -89,6 +96,24 @@ spec:
           namespace: {{ .Release.Namespace }}
           port: {{ .Values.agentManagerService.service.port }}
           weight: 1
+{{- if .Values.apiGateway.enabled }}
+    # /api/v1 is fronted by the standalone API Platform Gateway (issue #1131),
+    # which validates the JWT and enforces per-operation scopes before proxying
+    # to amp-api. Longer-prefix precedence keeps /mcp and / on amp-api directly.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1
+      timeouts:
+        request: {{ .Values.agentManagerService.ocIngress.requestTimeout | default "60s" }}
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: {{ include "agent-management-platform.apiGateway.runtimeServiceName" . }}
+          namespace: {{ .Release.Namespace }}
+          port: 22893
+          weight: 1
+{{- end }}
     - matches:
         - path:
             type: PathPrefix

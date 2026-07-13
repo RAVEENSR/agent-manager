@@ -39,6 +39,38 @@ ocIngress:
   gatewayName: gateway-default
   gatewayNamespace: openchoreo-control-plane
 
+# API Platform Gateway in front of the Agent Manager API (issue #1131).
+# When enabled, a standalone APIGateway CR (reconciled by the cluster-wide
+# gateway-operator) fronts /api/v1: it validates the JWT and enforces
+# per-operation scopes, then proxies to amp-api. /mcp, /auth/*, /.well-known/*
+# and /healthz stay routed directly to amp-api. Default off: a pure no-op for
+# existing installs. Requires the gateway-operator + its CRDs to be installed.
+apiGateway:
+  enabled: false
+  # APIGateway CR name (and the restapi-target label value binding RestApis to it).
+  name: amp-platform-gateway
+  # developmentMode relaxes the gateway stack for non-production (mirrors the
+  # per-env extension default); set false and supply encryption keys in prod.
+  developmentMode: true
+  # "" or unset -> follow agentManagerService.config.rbacEnabled. Set "true"/"false"
+  # to force. The gateway must never enforce scopes when amp-api runs with RBAC off.
+  enforceScopes: ""
+  # Runtime replica count for HA (the whole console/CLI API surface depends on it).
+  runtime:
+    replicaCount: 2
+  # Instance-global upstream timeouts (gateway 1.1.0 has no per-route knob).
+  timeouts:
+    routeTimeoutMs: 300000
+    routeIdleTimeoutMs: 300000
+    connectTimeoutMs: 5000
+  # Override the jwt-auth keymanagers (list of {name, issuer, jwks:{remote:{uri}}}).
+  # Empty -> a single ThunderKeyManager derived from
+  # agentManagerService.config.keyManager.{issuer,jwksUrl}.
+  keymanagers: []
+  # Full override of gateway.config.policy_configurations. Empty -> the default
+  # jwtauth_v1 block built from keymanagers above.
+  policyConfigurations: {}
+
 # Agent Manager Service Configuration
 agentManagerService:
   enabled: true

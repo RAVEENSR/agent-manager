@@ -1,0 +1,56 @@
+{{- if .Values.apiGateway.enabled }}
+{{- $enforce := (eq (include "agent-management-platform.apiGateway.enforceScopes" .) "true") }}
+{{- $issuer := .Values.agentManagerService.config.keyManager.issuer }}
+{{- $manifest := .Files.Get "files/amp-api-route-scopes.yaml" | fromYaml }}
+---
+# RestApi CR binding the AMP API (/api/v1) to the standalone gateway. Operations
+# are generated from files/amp-api-route-scopes.yaml (see the route-scope
+# generator). Every operation carries its own jwt-auth policy; scoped routes add
+# requiredScopes when enforcement is on. Two operations carry NO policy:
+# OPTIONS /* (CORS preflight -> amp-api's CORS middleware) and GET /config
+# (unauthenticated pre-login bootstrap). amp-api re-validates every request, so
+# the gateway is an additional enforcement layer, never the sole one.
+apiVersion: gateway.api-platform.wso2.com/v1alpha1
+kind: RestApi
+metadata:
+  name: {{ include "agent-management-platform.apiGateway.name" . }}-amp-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agent-management-platform.apiGateway.labels" . | nindent 4 }}
+    gateway.api-platform.wso2.com/restapi-target: {{ include "agent-management-platform.apiGateway.name" . | quote }}
+spec:
+  displayName: amp-api
+  version: v1
+  context: {{ $manifest.context | default "/api/v1" | quote }}
+  upstream:
+    main:
+      url: http://{{ include "agent-management-platform.agentManagerService.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.agentManagerService.service.port }}{{ $manifest.context | default "/api/v1" }}
+  operations:
+    # CORS preflight — no policy; forwarded to amp-api's CORS middleware.
+    - method: OPTIONS
+      path: /*
+    # Unauthenticated discovery endpoint the console needs before login.
+    - method: GET
+      path: /config
+    {{- range $r := $manifest.routes }}
+    - method: {{ $r.method }}
+      path: {{ $r.path | quote }}
+      policies:
+        - name: jwt-auth
+          version: v1
+          params:
+            issuers:
+              - {{ $issuer | quote }}
+            forwardToken: true
+            {{- /* Forward the bearer under Authorization, not the policy's default
+                   x-forwarded-authorization (which strips it), so amp-api's own JWT
+                   middleware still validates the token behind the gateway. */}}
+            forwardedTokenHeader: Authorization
+            {{- if and $enforce (ne $r.auth "jwt-only") $r.requiredScopes }}
+            requiredScopes:
+              {{- range $r.requiredScopes }}
+              - {{ . | quote }}
+              {{- end }}
+            {{- end }}
+    {{- end }}
+{{- end }}

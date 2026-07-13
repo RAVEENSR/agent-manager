@@ -1,0 +1,161 @@
+{{- if .Values.apiGateway.enabled }}
+---
+# ConfigMap holding the Helm values the gateway-operator uses to install the
+# gateway stack for this instance (referenced by the APIGateway CR's configRef).
+# Cloned from the per-env extension's gateway-config, with standalone deltas:
+#   * NO controller.controlPlane block (no host, no token) -> standalone mode.
+#     A token with an empty host is a fatal config error, so it must be absent.
+#   * jwtauth_v1 keymanager derived from the same Thunder issuer/JWKS amp-api
+#     validates against, so both hops accept identical tokens.
+#   * router.upstream route timeout raised (timeouts are instance-global in
+#     gateway 1.1.0; the default 60s is too tight for slow build-log/metric calls).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agent-management-platform.apiGateway.configMapName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agent-management-platform.apiGateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway-config
+data:
+  values.yaml: |
+    gateway:
+      developmentMode: {{ .Values.apiGateway.developmentMode }}
+      config:
+        controller:
+          server:
+            api_port: 9090
+            xds_port: 18000
+            shutdown_timeout: 15s
+            gateway_id: {{ include "agent-management-platform.apiGateway.name" . | quote }}
+          policy_server:
+            port: 18001
+            tls:
+              enabled: false
+          storage:
+            type: sqlite
+            sqlite:
+              path: ./data/gateway.db
+          controlplane:
+            reconnect_initial: 1s
+            reconnect_max: 5m
+            polling_interval: 15m
+            deployment_push_enabled: false
+            sync_batch_size: 50
+          logging:
+            level: info
+            format: json
+        router:
+          gateway_host: "*"
+          listener_port: 22893
+          https_enabled: true
+          https_port: 22894
+          access_logs:
+            enabled: true
+            format: json
+          upstream:
+            timeouts:
+              route_timeout_ms: {{ .Values.apiGateway.timeouts.routeTimeoutMs | default 300000 }}
+              route_idle_timeout_ms: {{ .Values.apiGateway.timeouts.routeIdleTimeoutMs | default 300000 }}
+              connect_timeout_ms: {{ .Values.apiGateway.timeouts.connectTimeoutMs | default 5000 }}
+          policy_engine:
+            mode: uds
+            timeout_ms: 60000
+            failure_mode_allow: false
+            route_cache_action: RETAIN
+            allow_mode_override: true
+            message_timeout_ms: 60000
+            tls:
+              enabled: false
+          logging:
+            level: info
+            format: json
+        policy_engine:
+          server:
+            extproc_port: 9001
+          admin:
+            enabled: true
+            port: 9002
+          config_mode:
+            mode: xds
+          xds:
+            connect_timeout: 10s
+            request_timeout: 5s
+            initial_reconnect_delay: 1s
+            max_reconnect_delay: 60s
+            tls:
+              enabled: false
+          logging:
+            level: info
+            format: json
+        policy_configurations:
+          {{- if .Values.apiGateway.policyConfigurations }}
+          {{- .Values.apiGateway.policyConfigurations | toYaml | nindent 10 }}
+          {{- else }}
+          jwtauth_v1:
+            keymanagers:
+              {{- if .Values.apiGateway.keymanagers }}
+              {{- .Values.apiGateway.keymanagers | toYaml | nindent 14 }}
+              {{- else }}
+              - name: ThunderKeyManager
+                issuer: {{ .Values.agentManagerService.config.keyManager.issuer | quote }}
+                jwks:
+                  remote:
+                    uri: {{ .Values.agentManagerService.config.keyManager.jwksUrl | quote }}
+                    skipTlsVerify: true
+              {{- end }}
+            authheaderscheme: ""
+            onfailurestatuscode: 401
+            errormessageformat: json
+            errormessage: "Authentication failed"
+            leeway: 30s
+            allowedalgorithms:
+              - RS256
+              - ES256
+            jwkscachettl: 5m
+            jwksfetchtimeout: 5s
+            jwksfetchretrycount: 3
+            jwksfetchretryinterval: 2s
+            validateissuer: true
+          {{- end }}
+
+      controller:
+        tls:
+          enabled: true
+          certificateProvider: cert-manager
+          certManager:
+            createIssuer: true
+        storage:
+          type: sqlite
+          sqlitePath: ./data/gateway.db
+        persistence:
+          enabled: true
+          size: 100Mi
+        logging:
+          level: info
+        deployment:
+          podSecurityContext:
+            fsGroup: 10001
+            runAsUser: 10001
+            runAsGroup: 10001
+            runAsNonRoot: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+
+      gatewayRuntime:
+        deployment:
+          replicaCount: {{ .Values.apiGateway.runtime.replicaCount | default 2 }}
+          podLabels:
+            openchoreo.dev/system-component: gateway-runtime
+        service:
+          type: ClusterIP
+          ports:
+            http: 22893
+            https: 22894
+            envoyAdmin: 9901
+            policyEngineAdmin: 9002
+            policyEngineMetrics: 9003
+{{- end }}

@@ -231,6 +231,60 @@ TLS Certificates Secret name
 
 {{/*
 ==============================================
+API Platform Gateway Helpers (issue #1131)
+==============================================
+*/}}
+
+{{/*
+Name of the standalone APIGateway CR (and its restapi-target label value).
+*/}}
+{{- define "agent-management-platform.apiGateway.name" -}}
+{{- default "amp-platform-gateway" .Values.apiGateway.name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Name of the ConfigMap holding the gateway stack Helm values (configRef).
+*/}}
+{{- define "agent-management-platform.apiGateway.configMapName" -}}
+{{- printf "%s-config" (include "agent-management-platform.apiGateway.name" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Name of the gateway runtime Service the operator creates for this instance.
+The operator names the Helm release "<cr-name>-gateway"; the gateway chart's
+fullname collapses to the release name (chart name "gateway" is a substring),
+and the runtime Service is "<fullname>-gateway-runtime" — hence the doubled
+"-gateway-gateway-runtime". Verified against the live per-env instance.
+*/}}
+{{- define "agent-management-platform.apiGateway.runtimeServiceName" -}}
+{{- printf "%s-gateway-gateway-runtime" (include "agent-management-platform.apiGateway.name" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+API Platform Gateway labels
+*/}}
+{{- define "agent-management-platform.apiGateway.labels" -}}
+{{ include "agent-management-platform.labels" . }}
+app.kubernetes.io/component: api-platform-gateway
+{{- end }}
+
+{{/*
+Resolve whether the gateway should enforce scopes. apiGateway.enforceScopes
+wins when set ("true"/"false"); otherwise follow the service's RBAC setting so
+the gateway never enforces scopes amp-api itself is configured to skip.
+*/}}
+{{- define "agent-management-platform.apiGateway.enforceScopes" -}}
+{{- if kindIs "invalid" .Values.apiGateway.enforceScopes -}}
+{{- .Values.agentManagerService.config.rbacEnabled -}}
+{{- else if eq (toString .Values.apiGateway.enforceScopes) "" -}}
+{{- .Values.agentManagerService.config.rbacEnabled -}}
+{{- else -}}
+{{- toString .Values.apiGateway.enforceScopes -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+==============================================
 Image Pull Secrets
 ==============================================
 */}}
