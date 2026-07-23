@@ -27,7 +27,7 @@ Install Agent Manager on a Linux VM where Docker is the only host dependency. Pi
 <Tabs groupId="vm-installer">
 <TabItem value="simple" label="Simple (IP + automatic TLS)" default>
 
-The simple installer exposes the platform over HTTPS using [sslip.io](https://sslip.io) hostnames derived from the VM's public IP, so there's no domain registration and no client `/etc/hosts` edits.
+The simple installer exposes the platform over HTTPS using [sslip.io](https://sslip.io) hostnames derived from the VM's public IP, so there's no domain registration.
 
 ## Prerequisites
 
@@ -111,6 +111,7 @@ flowchart TB
             api["amp-api"]
             thunder["Thunder OAuth"]
             cp["Gateway control plane<br/>(external AI gateways)"]
+            envthunder["Per-environment Thunder"]
             observer["Agent Manager Observer"]
             gw["AI Gateway<br/>OTel ingest · LLM proxy"]
             agents["Deployed agents"]
@@ -120,28 +121,37 @@ flowchart TB
     browser -->|"HTTPS :443"| caddy
     le <-->|"TLS-ALPN-01<br/>inside the :443 handshake"| caddy
     caddy -->|"console.amp.&lt;IP&gt;.sslip.io<br/>api.amp.&lt;IP&gt;.sslip.io<br/>thunder.amp.&lt;IP&gt;.sslip.io<br/>cp.amp.&lt;IP&gt;.sslip.io"| cpgw
+    caddy -->|"*.thunder.amp.&lt;IP&gt;.sslip.io<br/>on-demand TLS"| cpgw
     caddy -->|"observer.amp.&lt;IP&gt;.sslip.io"| opgw
     caddy -->|"gateway.amp.&lt;IP&gt;.sslip.io<br/>*.agents.&lt;IP&gt;.sslip.io<br/>on-demand TLS"| dpgw
     cpgw --> console
     cpgw --> api
     cpgw --> thunder
     cpgw --> cp
+    cpgw --> envthunder
     opgw --> observer
     dpgw --> gw
     dpgw --> agents
 ```
 
-Every public hostname resolves to the VM's IP (via sslip.io) and arrives at Caddy on `:443`; Caddy terminates TLS and reverse-proxies to the matching loopback port. The Agent Manager services are ClusterIP inside the cluster: Caddy forwards the console, API, Thunder, and gateway-control-plane hosts to the OpenChoreo control-plane kgateway (loopback `:8080`), the observer host to the observability-plane kgateway (loopback `:11080`), and the OTel-ingest host plus the deployed-agent wildcard to the data-plane kgateway (loopback `:19080`) — each gateway routes by the preserved `Host` header. Certificates are obtained over that same `:443` using the TLS-ALPN-01 challenge, so no inbound port 80 is needed. The deployed-agent wildcard gets its certificate on demand at first request.
+Every public hostname resolves to the VM's IP (via sslip.io) and arrives at Caddy on `:443`; Caddy terminates TLS and reverse-proxies to the matching loopback port. The Agent Manager services are ClusterIP inside the cluster: Caddy forwards the console, API, Thunder, gateway-control-plane, and per-environment Thunder hosts to the OpenChoreo control-plane kgateway (loopback `:8080`), the observer host to the observability-plane kgateway (loopback `:11080`), and the OTel-ingest host plus the deployed-agent wildcard to the data-plane kgateway (loopback `:19080`) — each gateway routes by the preserved `Host` header. Certificates are obtained over that same `:443` using the TLS-ALPN-01 challenge, so no inbound port 80 is needed.
+
+Two of these tiers are **dynamic** — a new host appears the first time you deploy into a new org/project, and each time you create an environment — so a wildcard certificate cannot be issued for them via TLS-ALPN-01 up front. Caddy instead issues one concrete certificate per hostname **on demand**, at the first request to it.
 
 | URL | Purpose |
 |---|---|
 | `https://console.amp.<IP>.sslip.io` | Console UI |
 | `https://api.amp.<IP>.sslip.io` | Agent Manager API (used by `amctl`) |
 | `https://thunder.amp.<IP>.sslip.io` | Thunder OAuth (login) |
+| `https://<org>-<env>.thunder.<IP>.sslip.io` | Per-environment Thunder (one host per environment, created on demand) |
 | `https://observer.amp.<IP>.sslip.io` | Agent Manager Observer |
-| `https://gateway.amp.<IP>.sslip.io/otel` | OTel trace ingest from deployed agents |
+| `https://gateway.amp.<IP>.sslip.io/otel` | OTel trace ingest for **externally-hosted** agents (see below) |
 | `https://<org>-<project>.agents.<IP>.sslip.io/...` | Deployed-agent invocation endpoints (one wildcard host per org/project) |
 | `https://cp.amp.<IP>.sslip.io` | Gateway control plane; connect external gateways here (on by default) |
+
+:::note Agents deployed on this VM do not use the public OTel host
+`gateway.amp.<IP>.sslip.io/otel` exists for agents running **outside** the platform, which set [`AMP_OTEL_ENDPOINT`](../components/amp-instrumentation.mdx) themselves. Agents deployed by Agent Manager run inside the cluster and export their traces straight to the in-cluster gateway runtime instead, so their traffic never leaves the VM or passes through Caddy.
+:::
 
 ## Log in
 
@@ -153,7 +163,9 @@ The **`admin`** account is provisioned with the `Agent Manager Admin` role durin
 
 When you deploy an agent, its endpoint is published on a per-project host `<org>-<project>.agents.<IP>.sslip.io` and routed by Caddy to the OpenChoreo data-plane gateway. Because these hostnames are dynamic (a new one per org/project), Caddy issues their TLS certificates **on demand** at the first request (via the same ACME challenge as the fixed hosts), rather than up front. Invocations are authenticated with a user token that the gateway validates against the public Thunder issuer.
 
-Because issuance is on demand and uses TLS-ALPN-01 (the challenge runs inside the `:443` handshake), the **very first request to a newly-deployed agent host can fail with a one-time certificate error**, most visibly `ERR_CERTIFICATE_TRANSPARENCY_REQUIRED` in Chrome. That first connection is consumed by Caddy answering the ACME challenge, so the browser briefly sees the challenge certificate instead of the real one. Issuance completes within a second or two; reload the page (or open it in a fresh tab) and it serves the trusted Let's Encrypt certificate. This only affects the first hit per new agent host; the certificate is then cached in the `amp-caddy-data` volume.
+Because issuance is on demand and uses TLS-ALPN-01 (the challenge runs inside the `:443` handshake), the **very first request to a newly-deployed agent host can fail with a one-time certificate error**. That first connection is consumed by Caddy answering the ACME challenge, so the client briefly sees the challenge certificate instead of the real one. Every client hits this — only the wording differs: Chromium-based browsers (Chrome, Edge, Brave) report `ERR_CERTIFICATE_TRANSPARENCY_REQUIRED`, while other browsers and command-line clients report their own untrusted-certificate error. Issuance completes within a second or two; reload the page (or open it in a fresh tab) and it serves the trusted Let's Encrypt certificate. This only affects the first hit per new agent host; the certificate is then cached in the `amp-caddy-data` volume.
+
+The same applies to the per-environment Thunder hosts (`<org>-<env>.thunder.<IP>.sslip.io`): they are created when you add an environment and get their certificates on demand the same way, so the first request to a brand-new environment's Thunder can show the same one-time error.
 
 amp-api advertises each agent endpoint with the `https://` scheme (the installer sets `tlsEnabled` on the service), so the console (and any other caller) invokes it over TLS directly through the wildcard site.
 
@@ -165,16 +177,17 @@ Because the challenge happens inside the TLS handshake, the public `:443` must r
 
 ## Persistence and teardown
 
-Application data (PostgreSQL), issued certificates, and the k3d cluster persist across Docker/host restarts via named volumes. To tear down completely, delete the cluster, then remove the Caddy front door and its volumes (which hold the issued certificates and ACME account):
+Application data (PostgreSQL), issued certificates, and the k3d cluster persist across Docker/host restarts via named volumes. Everything the installer created lives either inside the k3d cluster or in the Caddy container and its two volumes, so tearing down is the three commands below, plus one optional cleanup:
 
 ```bash
-cd agent-manager/deployments/quick-start
-sudo ./uninstall.sh --delete-cluster                    # delete the k3d cluster (workloads + app data)
+sudo k3d cluster delete amp-local                        # delete the cluster (workloads + app data)
 sudo docker rm -f amp-caddy                              # remove the Caddy front door
 sudo docker volume rm amp-caddy-data amp-caddy-config    # drop the cached certs + ACME account
+
+sudo rm -f /opt/amp/Caddyfile                            # optional: the generated Caddy config
 ```
 
-Use `sudo`; the installer runs Docker and k3d as root. Plain `./uninstall.sh` (without `--delete-cluster`) only removes the Helm releases and leaves the cluster running; `uninstall.sh` does not touch the Caddy container or its volumes, so remove those separately as shown.
+Use `sudo`; the installer runs Docker and k3d as root. Note that the installer leaves no repository checkout on the VM — `bootstrap.sh` unpacks the versioned bundle into a temporary directory and deletes it on exit — so teardown is done with the commands above rather than an uninstall script. Deleting the cluster removes the platform's data; deleting the Caddy volumes discards the issued certificates and the ACME account, so a reinstall re-requests them from Let's Encrypt (which counts against its rate limits).
 
 ## Connect an external gateway
 
@@ -187,7 +200,7 @@ Agent Manager can drive external WSO2 AI gateways. The control-plane endpoint `h
 - **Certificates never issue / hosts unreachable from outside.** Open inbound `:443` in your cloud security group / NACL, and make sure the public `:443` reaches the VM as **raw TCP**: a TLS-terminating load balancer in front breaks the TLS-ALPN-01 challenge. The installer can't verify external reachability from inside the VM, so this surfaces as Caddy failing to obtain certificates (`docker logs amp-caddy`).
 - **Certificate not issued.** Check `docker logs amp-caddy`. Let's Encrypt rate limits on sslip.io are high but not infinite; if hit, retry shortly.
 - **Login redirect mismatch.** Confirm you reached the console via its `console.amp.<IP>.sslip.io` URL, not the raw IP.
-- **Certificate error on first agent invocation** (`ERR_CERTIFICATE_TRANSPARENCY_REQUIRED` or similar): the per-agent certificate is issued on demand, and the first request races with that issuance. Reload the page after a second or two; it only happens once per new agent host (see [Deployed-agent invocation](#deployed-agent-invocation)).
+- **Certificate error on first agent invocation** (`ERR_CERTIFICATE_TRANSPARENCY_REQUIRED` in Chromium-based browsers, an untrusted-certificate warning elsewhere): the per-agent certificate is issued on demand, and the first request races with that issuance. Reload the page after a second or two; it only happens once per new agent host (see [Deployed-agent invocation](#deployed-agent-invocation)).
 
 </TabItem>
 <TabItem value="advanced" label="Advanced">
