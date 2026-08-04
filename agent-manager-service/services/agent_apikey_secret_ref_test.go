@@ -60,7 +60,7 @@ func TestInjectAgentAPIKeySecretRef_NoopOnEmptyRef(t *testing.T) {
 	assert.Empty(t, traitEnvConfigs, "an empty ref must not add an entry (would clobber the base fallback)")
 }
 
-func TestResolveAgentAPIKeySecretRef_ReturnsPerEnvRemoteRef(t *testing.T) {
+func TestStoreAgentAPIKey_ResolvesRemoteRefAfterCreate(t *testing.T) {
 	ocClient := &clientmocks.OpenChoreoClientMock{
 		GetSecretReferenceFunc: func(_ context.Context, _, secretRefName string) (*client.SecretReferenceInfo, error) {
 			return &client.SecretReferenceInfo{
@@ -73,14 +73,19 @@ func TestResolveAgentAPIKeySecretRef_ReturnsPerEnvRemoteRef(t *testing.T) {
 			}, nil
 		},
 	}
-	s := &agentManagerService{ocClient: ocClient, logger: discardLogger()}
+	secretMgmtClient := &clientmocks.SecretManagementClientMock{
+		CreateSecretFunc: func(_ context.Context, location secretmanagersvc.SecretLocation, _ map[string]string) (string, error) {
+			return location.SecretRefName(), nil
+		},
+	}
+	s := &agentManagerService{ocClient: ocClient, secretMgmtClient: secretMgmtClient, logger: discardLogger()}
 
-	ref, property, err := s.resolveAgentAPIKeySecretRef(context.Background(), "org", "proj", "agent", "production")
+	ref, property, err := s.storeAgentAPIKey(context.Background(), "org", "proj", "agent", "production", "the-api-key")
 
 	require.NoError(t, err)
 	assert.Equal(t, "org/proj/production/agent/agent-agent-api-key", ref)
 	assert.Equal(t, "api-key", property)
-	// The lookup must key off the deterministic per-env SecretReference name.
+	// The lookup must key off the deterministic per-env SecretReference name returned by CreateSecret.
 	require.Len(t, ocClient.GetSecretReferenceCalls(), 1)
 	expectedName := agentAPIKeySecretLocation("org", "proj", "agent", "production").SecretRefName()
 	assert.Equal(t, expectedName, ocClient.GetSecretReferenceCalls()[0].SecretRefName)
