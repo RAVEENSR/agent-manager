@@ -76,7 +76,7 @@ type GatewayRepository interface {
 	AcquireEnvironmentLock(tx *gorm.DB, environmentID string) error
 	CreateTx(tx *gorm.DB, gateway *models.Gateway) error
 	CreateEnvironmentMappingTx(tx *gorm.DB, mapping *models.GatewayEnvironmentMapping) error
-	CountIngressCapableInEnvironment(tx *gorm.DB, environmentID string) (int64, error)
+	ListIngressCapableInEnvironment(tx *gorm.DB, environmentID string) ([]*models.Gateway, error)
 
 	// Gateway association checking operations
 	HasGatewayDeployments(gatewayID, ouID string) (bool, error)
@@ -602,19 +602,27 @@ func (r *GatewayRepo) CreateEnvironmentMappingTx(tx *gorm.DB, mapping *models.Ga
 	return tx.Create(mapping).Error
 }
 
-// CountIngressCapableInEnvironment counts non-deleted ingress-capable gateways mapped
+// ListIngressCapableInEnvironment returns the non-deleted ingress-capable gateways mapped
 // to the environment. Deliberately omits is_active: the cap is a membership rule, and
 // is_active is WebSocket liveness that flaps.
-func (r *GatewayRepo) CountIngressCapableInEnvironment(tx *gorm.DB, environmentID string) (int64, error) {
-	var count int64
-	err := tx.Table("gateway_environment_mappings AS m").
-		Joins("JOIN gateways g ON g.uuid = m.gateway_uuid").
-		Where("m.environment_uuid = ?", environmentID).
-		Where("g.deleted_at IS NULL").
-		Where("g.gateway_functionality_type IN ?", models.IngressGatewayRoles).
-		Count(&count).Error
+//
+// Returns rows rather than a count, and does not filter by organization, because the
+// caller needs both halves of the picture. A row owned by the caller's organization
+// blocks registration and has to be named in the rejection; a row owned by a different
+// organization is corrupt data on a per-organization environment, and reporting it
+// without blocking is what stops it holding a slot no tenant can see or delete.
+func (r *GatewayRepo) ListIngressCapableInEnvironment(tx *gorm.DB, environmentID string) ([]*models.Gateway, error) {
+	var gateways []*models.Gateway
+	// Model() rather than Table() so GORM applies the soft-delete predicate itself and
+	// projects gateways' own columns explicitly — both tables carry created_at, and the
+	// raw-table form would have to disambiguate by hand.
+	err := tx.Model(&models.Gateway{}).
+		Joins("JOIN gateway_environment_mappings ON gateway_environment_mappings.gateway_uuid = gateways.uuid").
+		Where("gateway_environment_mappings.environment_uuid = ?", environmentID).
+		Where("gateways.gateway_functionality_type IN ?", models.IngressGatewayRoles).
+		Find(&gateways).Error
 	if err != nil {
-		return 0, fmt.Errorf("failed to count ingress-capable gateways in environment %s: %w", environmentID, err)
+		return nil, fmt.Errorf("failed to list ingress-capable gateways in environment %s: %w", environmentID, err)
 	}
-	return count, nil
+	return gateways, nil
 }

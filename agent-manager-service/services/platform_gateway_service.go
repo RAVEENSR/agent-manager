@@ -975,13 +975,8 @@ func (s *PlatformGatewayService) assignGatewayToEnvironmentTx(
 	}
 
 	if gateway.IsIngressCapable() {
-		count, err := s.gatewayRepo.CountIngressCapableInEnvironment(tx, envIDStr)
-		if err != nil {
+		if err := s.enforceIngressCap(tx, gateway, envIDStr); err != nil {
 			return err
-		}
-		if count > 0 {
-			return fmt.Errorf("%w: environment %s already has an ingress gateway; "+
-				"register this gateway with gatewayType EGRESS instead", utils.ErrGatewayIngressCapExceeded, envIDStr)
 		}
 	}
 
@@ -991,6 +986,55 @@ func (s *PlatformGatewayService) assignGatewayToEnvironmentTx(
 	}
 	if err := s.gatewayRepo.CreateEnvironmentMappingTx(tx, mapping); err != nil {
 		return fmt.Errorf("failed to create gateway-environment mapping: %w", err)
+	}
+	return nil
+}
+
+// enforceIngressCap rejects the mapping when the gateway's own organization already holds
+// the environment's ingress slot.
+//
+// The cap is scoped to the organization on purpose. Environments are per-organization, so
+// an ingress-capable row owned by a different organization is corrupt data — yet an
+// unscoped count let such a row hold the slot while staying invisible to every
+// organization-scoped read. That asymmetry is what produced "environment already has an
+// ingress gateway" against an organization whose gateway list came back empty, with no
+// row the tenant could find or delete. Scoping removes the phantom block; the foreign row
+// is logged instead, so the corruption stays observable.
+//
+// The trade-off: a foreign row that still corresponds to a live gateway no longer blocks
+// here, and the conflict resurfaces further down as duplicate routing for the same
+// hostname. That is the better failure — this counter cannot see routing, and refusing
+// a tenant on account of a row it cannot reach is not enforcement, it is a dead end.
+func (s *PlatformGatewayService) enforceIngressCap(tx *gorm.DB, gateway *models.Gateway, envIDStr string) error {
+	existing, err := s.gatewayRepo.ListIngressCapableInEnvironment(tx, envIDStr)
+	if err != nil {
+		return err
+	}
+
+	// Partition before deciding, so a foreign row is reported even when a same-org row
+	// is also present and short-circuits the request.
+	var blocking *models.Gateway
+	foreign := make([]string, 0, len(existing))
+	for _, gw := range existing {
+		if gw.OUID == gateway.OUID {
+			if blocking == nil {
+				blocking = gw
+			}
+			continue
+		}
+		foreign = append(foreign, fmt.Sprintf("%s (%s, org %s)", gw.Name, gw.UUID, gw.OUID))
+	}
+
+	if len(foreign) > 0 {
+		slog.Warn("environment has ingress-capable gateways owned by another organization; "+
+			"these are not counted against this organization's ingress cap",
+			"environmentID", envIDStr, "ouID", gateway.OUID, "foreignGateways", strings.Join(foreign, ", "))
+	}
+
+	if blocking != nil {
+		return fmt.Errorf("%w: environment %s already has an ingress gateway %q (%s); "+
+			"register this gateway with gatewayType EGRESS instead",
+			utils.ErrGatewayIngressCapExceeded, envIDStr, blocking.Name, blocking.UUID)
 	}
 	return nil
 }

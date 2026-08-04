@@ -62,22 +62,118 @@ func TestNormalizeGatewayRole(t *testing.T) {
 	}
 }
 
-// A second ingress-capable gateway in one environment is rejected.
+// A second ingress-capable gateway in one environment is rejected when it belongs to the
+// same organization, and the rejection names the gateway holding the slot. The name is
+// asserted because the message is the only place an operator learns which row to remove —
+// "environment already has an ingress gateway" on its own sends them looking.
 func TestAssignGatewayToEnvironment_SecondIngressRejected(t *testing.T) {
 	envID := uuid.New().String()
-	gw := &models.Gateway{UUID: uuid.New(), GatewayFunctionalityType: models.GatewayRoleBoth}
+	gw := &models.Gateway{UUID: uuid.New(), OUID: "org-a", GatewayFunctionalityType: models.GatewayRoleBoth}
+	blocker := &models.Gateway{
+		UUID: uuid.New(), OUID: "org-a", Name: "api-platform-default-default",
+		GatewayFunctionalityType: models.GatewayRoleIngress,
+	}
 	repo := &repomocks.GatewayRepositoryMock{
-		GetByUUIDFunc:                        func(string) (*models.Gateway, error) { return gw, nil },
-		TransactionFunc:                      func(fn func(tx *gorm.DB) error) error { return fn(nil) },
-		AcquireEnvironmentLockFunc:           func(*gorm.DB, string) error { return nil },
-		EnvironmentMappingExistsFunc:         func(string, string) (bool, error) { return false, nil },
-		CountIngressCapableInEnvironmentFunc: func(*gorm.DB, string) (int64, error) { return 1, nil },
+		GetByUUIDFunc:                func(string) (*models.Gateway, error) { return gw, nil },
+		TransactionFunc:              func(fn func(tx *gorm.DB) error) error { return fn(nil) },
+		AcquireEnvironmentLockFunc:   func(*gorm.DB, string) error { return nil },
+		EnvironmentMappingExistsFunc: func(string, string) (bool, error) { return false, nil },
+		ListIngressCapableInEnvironmentFunc: func(*gorm.DB, string) ([]*models.Gateway, error) {
+			return []*models.Gateway{blocker}, nil
+		},
 	}
 	svc := NewPlatformGatewayService(repo, nil)
 
 	err := svc.AssignGatewayToEnvironment(gw.UUID.String(), envID)
 
 	require.ErrorIs(t, err, utils.ErrGatewayIngressCapExceeded)
+	require.Contains(t, err.Error(), blocker.Name)
+	require.Contains(t, err.Error(), blocker.UUID.String())
+}
+
+// An ingress-capable gateway owned by a different organization does not block, and the
+// mapping is created. This is the bug being fixed: environments are per-organization, so
+// a foreign row is corrupt data, and an unscoped count let it hold the slot while staying
+// invisible to every organization-scoped read — a 409 against a tenant whose gateway list
+// came back empty, with nothing it could find or delete.
+func TestAssignGatewayToEnvironment_ForeignOrgIngressDoesNotBlock(t *testing.T) {
+	envID := uuid.New().String()
+	gw := &models.Gateway{UUID: uuid.New(), OUID: "org-a", GatewayFunctionalityType: models.GatewayRoleBoth}
+	orphan := &models.Gateway{
+		UUID: uuid.New(), OUID: "org-defunct", Name: "stale-gateway",
+		GatewayFunctionalityType: models.GatewayRoleBoth,
+	}
+	created := false
+	repo := &repomocks.GatewayRepositoryMock{
+		GetByUUIDFunc:                func(string) (*models.Gateway, error) { return gw, nil },
+		TransactionFunc:              func(fn func(tx *gorm.DB) error) error { return fn(nil) },
+		AcquireEnvironmentLockFunc:   func(*gorm.DB, string) error { return nil },
+		EnvironmentMappingExistsFunc: func(string, string) (bool, error) { return false, nil },
+		ListIngressCapableInEnvironmentFunc: func(*gorm.DB, string) ([]*models.Gateway, error) {
+			return []*models.Gateway{orphan}, nil
+		},
+		CreateEnvironmentMappingTxFunc: func(*gorm.DB, *models.GatewayEnvironmentMapping) error {
+			created = true
+			return nil
+		},
+	}
+	svc := NewPlatformGatewayService(repo, nil)
+
+	require.NoError(t, svc.AssignGatewayToEnvironment(gw.UUID.String(), envID))
+	require.True(t, created, "a foreign-organization row must not hold this organization's ingress slot")
+}
+
+// A same-organization blocker still wins when a foreign row is present alongside it, so
+// scoping the cap cannot be mistaken for removing it.
+func TestAssignGatewayToEnvironment_SameOrgBlockerWinsOverForeignRow(t *testing.T) {
+	envID := uuid.New().String()
+	gw := &models.Gateway{UUID: uuid.New(), OUID: "org-a", GatewayFunctionalityType: models.GatewayRoleBoth}
+	repo := &repomocks.GatewayRepositoryMock{
+		GetByUUIDFunc:                func(string) (*models.Gateway, error) { return gw, nil },
+		TransactionFunc:              func(fn func(tx *gorm.DB) error) error { return fn(nil) },
+		AcquireEnvironmentLockFunc:   func(*gorm.DB, string) error { return nil },
+		EnvironmentMappingExistsFunc: func(string, string) (bool, error) { return false, nil },
+		ListIngressCapableInEnvironmentFunc: func(*gorm.DB, string) ([]*models.Gateway, error) {
+			return []*models.Gateway{
+				{UUID: uuid.New(), OUID: "org-defunct", Name: "stale-gateway", GatewayFunctionalityType: models.GatewayRoleBoth},
+				{UUID: uuid.New(), OUID: "org-a", Name: "ours", GatewayFunctionalityType: models.GatewayRoleIngress},
+			}, nil
+		},
+		CreateEnvironmentMappingTxFunc: func(*gorm.DB, *models.GatewayEnvironmentMapping) error {
+			t.Fatal("a same-organization ingress gateway must still block")
+			return nil
+		},
+	}
+	svc := NewPlatformGatewayService(repo, nil)
+
+	err := svc.AssignGatewayToEnvironment(gw.UUID.String(), envID)
+
+	require.ErrorIs(t, err, utils.ErrGatewayIngressCapExceeded)
+	require.Contains(t, err.Error(), "ours")
+}
+
+// An empty result frees the slot.
+func TestAssignGatewayToEnvironment_FirstIngressAllowed(t *testing.T) {
+	envID := uuid.New().String()
+	gw := &models.Gateway{UUID: uuid.New(), OUID: "org-a", GatewayFunctionalityType: models.GatewayRoleIngress}
+	created := false
+	repo := &repomocks.GatewayRepositoryMock{
+		GetByUUIDFunc:                func(string) (*models.Gateway, error) { return gw, nil },
+		TransactionFunc:              func(fn func(tx *gorm.DB) error) error { return fn(nil) },
+		AcquireEnvironmentLockFunc:   func(*gorm.DB, string) error { return nil },
+		EnvironmentMappingExistsFunc: func(string, string) (bool, error) { return false, nil },
+		ListIngressCapableInEnvironmentFunc: func(*gorm.DB, string) ([]*models.Gateway, error) {
+			return nil, nil
+		},
+		CreateEnvironmentMappingTxFunc: func(*gorm.DB, *models.GatewayEnvironmentMapping) error {
+			created = true
+			return nil
+		},
+	}
+	svc := NewPlatformGatewayService(repo, nil)
+
+	require.NoError(t, svc.AssignGatewayToEnvironment(gw.UUID.String(), envID))
+	require.True(t, created)
 }
 
 // A second EGRESS gateway is allowed. This is the supported both+egress shape and the
@@ -92,9 +188,9 @@ func TestAssignGatewayToEnvironment_SecondEgressAllowed(t *testing.T) {
 		TransactionFunc:              func(fn func(tx *gorm.DB) error) error { return fn(nil) },
 		AcquireEnvironmentLockFunc:   func(*gorm.DB, string) error { return nil },
 		EnvironmentMappingExistsFunc: func(string, string) (bool, error) { return false, nil },
-		CountIngressCapableInEnvironmentFunc: func(*gorm.DB, string) (int64, error) {
+		ListIngressCapableInEnvironmentFunc: func(*gorm.DB, string) ([]*models.Gateway, error) {
 			t.Fatal("egress gateways must not be counted against the ingress cap")
-			return 0, nil
+			return nil, nil
 		},
 		CreateEnvironmentMappingTxFunc: func(*gorm.DB, *models.GatewayEnvironmentMapping) error {
 			created = true
@@ -128,9 +224,9 @@ func TestAssignGatewayToEnvironment_IdempotentWhenAlreadyMapped(t *testing.T) {
 			require.True(t, lockAcquired, "expected environment lock to be acquired before the existence check")
 			return true, nil
 		},
-		CountIngressCapableInEnvironmentFunc: func(*gorm.DB, string) (int64, error) {
+		ListIngressCapableInEnvironmentFunc: func(*gorm.DB, string) ([]*models.Gateway, error) {
 			t.Fatal("an already-mapped gateway must not be counted against the ingress cap")
-			return 0, nil
+			return nil, nil
 		},
 		CreateEnvironmentMappingTxFunc: func(*gorm.DB, *models.GatewayEnvironmentMapping) error {
 			t.Fatal("an already-mapped gateway must not be re-inserted")
@@ -160,11 +256,17 @@ func TestRegisterGateway_CapRejectionRollsBackGatewayRow(t *testing.T) {
 		},
 		CreateTxFunc: func(*gorm.DB, *models.Gateway) error { createdInTx = true; return nil },
 		GetByUUIDFunc: func(string) (*models.Gateway, error) {
-			return &models.Gateway{UUID: uuid.New(), GatewayFunctionalityType: models.GatewayRoleBoth}, nil
+			return &models.Gateway{UUID: uuid.New(), OUID: "org", GatewayFunctionalityType: models.GatewayRoleBoth}, nil
 		},
-		AcquireEnvironmentLockFunc:           func(*gorm.DB, string) error { return nil },
-		EnvironmentMappingExistsFunc:         func(string, string) (bool, error) { return false, nil },
-		CountIngressCapableInEnvironmentFunc: func(*gorm.DB, string) (int64, error) { return 1, nil },
+		AcquireEnvironmentLockFunc:   func(*gorm.DB, string) error { return nil },
+		EnvironmentMappingExistsFunc: func(string, string) (bool, error) { return false, nil },
+		// RegisterGateway passes the row it just built, whose OUID is the "org" argument
+		// below, so the blocker has to share it to exercise the cap.
+		ListIngressCapableInEnvironmentFunc: func(*gorm.DB, string) ([]*models.Gateway, error) {
+			return []*models.Gateway{
+				{UUID: uuid.New(), OUID: "org", Name: "incumbent", GatewayFunctionalityType: models.GatewayRoleIngress},
+			}, nil
+		},
 	}
 	svc := NewPlatformGatewayService(repo, nil)
 

@@ -24,9 +24,6 @@ import (
 //			CountActiveTokensFunc: func(gatewayId string) (int, error) {
 //				panic("mock out the CountActiveTokens method")
 //			},
-//			CountIngressCapableInEnvironmentFunc: func(tx *gorm.DB, environmentID string) (int64, error) {
-//				panic("mock out the CountIngressCapableInEnvironment method")
-//			},
 //			CountWithFiltersFunc: func(filters repositories.GatewayFilterOptions) (int64, error) {
 //				panic("mock out the CountWithFilters method")
 //			},
@@ -108,6 +105,9 @@ import (
 //			ListIdentityProvidersByOrgFunc: func(ouID string) ([]repositories.IdentityProviderWithContext, error) {
 //				panic("mock out the ListIdentityProvidersByOrg method")
 //			},
+//			ListIngressCapableInEnvironmentFunc: func(tx *gorm.DB, environmentID string) ([]*models.Gateway, error) {
+//				panic("mock out the ListIngressCapableInEnvironment method")
+//			},
 //			ListWithFiltersFunc: func(filters repositories.GatewayFilterOptions) ([]*models.Gateway, error) {
 //				panic("mock out the ListWithFilters method")
 //			},
@@ -138,9 +138,6 @@ type GatewayRepositoryMock struct {
 
 	// CountActiveTokensFunc mocks the CountActiveTokens method.
 	CountActiveTokensFunc func(gatewayId string) (int, error)
-
-	// CountIngressCapableInEnvironmentFunc mocks the CountIngressCapableInEnvironment method.
-	CountIngressCapableInEnvironmentFunc func(tx *gorm.DB, environmentID string) (int64, error)
 
 	// CountWithFiltersFunc mocks the CountWithFilters method.
 	CountWithFiltersFunc func(filters repositories.GatewayFilterOptions) (int64, error)
@@ -223,6 +220,9 @@ type GatewayRepositoryMock struct {
 	// ListIdentityProvidersByOrgFunc mocks the ListIdentityProvidersByOrg method.
 	ListIdentityProvidersByOrgFunc func(ouID string) ([]repositories.IdentityProviderWithContext, error)
 
+	// ListIngressCapableInEnvironmentFunc mocks the ListIngressCapableInEnvironment method.
+	ListIngressCapableInEnvironmentFunc func(tx *gorm.DB, environmentID string) ([]*models.Gateway, error)
+
 	// ListWithFiltersFunc mocks the ListWithFilters method.
 	ListWithFiltersFunc func(filters repositories.GatewayFilterOptions) ([]*models.Gateway, error)
 
@@ -254,13 +254,6 @@ type GatewayRepositoryMock struct {
 		CountActiveTokens []struct {
 			// GatewayId is the gatewayId argument value.
 			GatewayId string
-		}
-		// CountIngressCapableInEnvironment holds details about calls to the CountIngressCapableInEnvironment method.
-		CountIngressCapableInEnvironment []struct {
-			// Tx is the tx argument value.
-			Tx *gorm.DB
-			// EnvironmentID is the environmentID argument value.
-			EnvironmentID string
 		}
 		// CountWithFilters holds details about calls to the CountWithFilters method.
 		CountWithFilters []struct {
@@ -417,6 +410,13 @@ type GatewayRepositoryMock struct {
 			// OuID is the ouID argument value.
 			OuID string
 		}
+		// ListIngressCapableInEnvironment holds details about calls to the ListIngressCapableInEnvironment method.
+		ListIngressCapableInEnvironment []struct {
+			// Tx is the tx argument value.
+			Tx *gorm.DB
+			// EnvironmentID is the environmentID argument value.
+			EnvironmentID string
+		}
 		// ListWithFilters holds details about calls to the ListWithFilters method.
 		ListWithFilters []struct {
 			// Filters is the filters argument value.
@@ -452,7 +452,6 @@ type GatewayRepositoryMock struct {
 	}
 	lockAcquireEnvironmentLock                   sync.RWMutex
 	lockCountActiveTokens                        sync.RWMutex
-	lockCountIngressCapableInEnvironment         sync.RWMutex
 	lockCountWithFilters                         sync.RWMutex
 	lockCreate                                   sync.RWMutex
 	lockCreateEnvironmentMapping                 sync.RWMutex
@@ -480,6 +479,7 @@ type GatewayRepositoryMock struct {
 	lockListIdentityProvidersByEnvironment       sync.RWMutex
 	lockListIdentityProvidersByGateway           sync.RWMutex
 	lockListIdentityProvidersByOrg               sync.RWMutex
+	lockListIngressCapableInEnvironment          sync.RWMutex
 	lockListWithFilters                          sync.RWMutex
 	lockRevokeToken                              sync.RWMutex
 	lockTransaction                              sync.RWMutex
@@ -553,42 +553,6 @@ func (mock *GatewayRepositoryMock) CountActiveTokensCalls() []struct {
 	mock.lockCountActiveTokens.RLock()
 	calls = mock.calls.CountActiveTokens
 	mock.lockCountActiveTokens.RUnlock()
-	return calls
-}
-
-// CountIngressCapableInEnvironment calls CountIngressCapableInEnvironmentFunc.
-func (mock *GatewayRepositoryMock) CountIngressCapableInEnvironment(tx *gorm.DB, environmentID string) (int64, error) {
-	if mock.CountIngressCapableInEnvironmentFunc == nil {
-		panic("GatewayRepositoryMock.CountIngressCapableInEnvironmentFunc: method is nil but GatewayRepository.CountIngressCapableInEnvironment was just called")
-	}
-	callInfo := struct {
-		Tx            *gorm.DB
-		EnvironmentID string
-	}{
-		Tx:            tx,
-		EnvironmentID: environmentID,
-	}
-	mock.lockCountIngressCapableInEnvironment.Lock()
-	mock.calls.CountIngressCapableInEnvironment = append(mock.calls.CountIngressCapableInEnvironment, callInfo)
-	mock.lockCountIngressCapableInEnvironment.Unlock()
-	return mock.CountIngressCapableInEnvironmentFunc(tx, environmentID)
-}
-
-// CountIngressCapableInEnvironmentCalls gets all the calls that were made to CountIngressCapableInEnvironment.
-// Check the length with:
-//
-//	len(mockedGatewayRepository.CountIngressCapableInEnvironmentCalls())
-func (mock *GatewayRepositoryMock) CountIngressCapableInEnvironmentCalls() []struct {
-	Tx            *gorm.DB
-	EnvironmentID string
-} {
-	var calls []struct {
-		Tx            *gorm.DB
-		EnvironmentID string
-	}
-	mock.lockCountIngressCapableInEnvironment.RLock()
-	calls = mock.calls.CountIngressCapableInEnvironment
-	mock.lockCountIngressCapableInEnvironment.RUnlock()
 	return calls
 }
 
@@ -1492,6 +1456,42 @@ func (mock *GatewayRepositoryMock) ListIdentityProvidersByOrgCalls() []struct {
 	mock.lockListIdentityProvidersByOrg.RLock()
 	calls = mock.calls.ListIdentityProvidersByOrg
 	mock.lockListIdentityProvidersByOrg.RUnlock()
+	return calls
+}
+
+// ListIngressCapableInEnvironment calls ListIngressCapableInEnvironmentFunc.
+func (mock *GatewayRepositoryMock) ListIngressCapableInEnvironment(tx *gorm.DB, environmentID string) ([]*models.Gateway, error) {
+	if mock.ListIngressCapableInEnvironmentFunc == nil {
+		panic("GatewayRepositoryMock.ListIngressCapableInEnvironmentFunc: method is nil but GatewayRepository.ListIngressCapableInEnvironment was just called")
+	}
+	callInfo := struct {
+		Tx            *gorm.DB
+		EnvironmentID string
+	}{
+		Tx:            tx,
+		EnvironmentID: environmentID,
+	}
+	mock.lockListIngressCapableInEnvironment.Lock()
+	mock.calls.ListIngressCapableInEnvironment = append(mock.calls.ListIngressCapableInEnvironment, callInfo)
+	mock.lockListIngressCapableInEnvironment.Unlock()
+	return mock.ListIngressCapableInEnvironmentFunc(tx, environmentID)
+}
+
+// ListIngressCapableInEnvironmentCalls gets all the calls that were made to ListIngressCapableInEnvironment.
+// Check the length with:
+//
+//	len(mockedGatewayRepository.ListIngressCapableInEnvironmentCalls())
+func (mock *GatewayRepositoryMock) ListIngressCapableInEnvironmentCalls() []struct {
+	Tx            *gorm.DB
+	EnvironmentID string
+} {
+	var calls []struct {
+		Tx            *gorm.DB
+		EnvironmentID string
+	}
+	mock.lockListIngressCapableInEnvironment.RLock()
+	calls = mock.calls.ListIngressCapableInEnvironment
+	mock.lockListIngressCapableInEnvironment.RUnlock()
 	return calls
 }
 
