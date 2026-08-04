@@ -168,6 +168,17 @@ spec:
                     limits:
                       cpu: ${environmentConfigs.resources.limits.?cpu.orValue(parameters.resources.limits.cpu)}
                       memory: ${environmentConfigs.resources.limits.?memory.orValue(parameters.resources.limits.memory)}
+                  startupProbe:
+                    tcpSocket:
+                      port: ${workload.endpoints.transformList(name, ep, [ep.port]).flatten()[0]}
+                    periodSeconds: 5
+                    failureThreshold: 60
+                    initialDelaySeconds: 10
+                  readinessProbe:
+                    tcpSocket:
+                      port: ${workload.endpoints.transformList(name, ep, [ep.port]).flatten()[0]}
+                    periodSeconds: 5
+                    failureThreshold: 6
                   env: ${dependencies.toContainerEnvs()}
                   envFrom: ${configurations.toContainerEnvFrom()}
                   volumeMounts: |

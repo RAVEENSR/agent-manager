@@ -920,7 +920,14 @@ func (c *openChoreoClient) GetDeployments(ctx context.Context, ouID, pipelineNam
 				componentRelease = componentReleaseMap[*releaseBinding.Spec.ReleaseName]
 			}
 
-			deploymentDetail, err := toDeploymentDetailsResponse(releaseBinding, componentRelease, environmentMap, promotionTargetEnv, workloadEndpoints, liveWorkloadContainerImage)
+			// Only bindings that would otherwise report "active" need the extra
+			// resource-tree lookup; every other status is already accurate without it.
+			var runtime runtimeReplicaState
+			if determineDeploymentStatus(releaseBinding, runtimeReplicaState{}) == DeploymentStatusActive {
+				runtime = c.fetchRuntimeReplicaState(ctx, namespaceName, releaseBinding.Metadata.Name)
+			}
+
+			deploymentDetail, err := toDeploymentDetailsResponse(releaseBinding, componentRelease, environmentMap, promotionTargetEnv, workloadEndpoints, liveWorkloadContainerImage, runtime)
 			if err != nil {
 				return nil, fmt.Errorf("failed to build deployment details for environment %s: %w", envName, err)
 			}
@@ -1025,7 +1032,11 @@ func (c *openChoreoClient) IsDeploymentInProgress(ctx context.Context, ouID, com
 	for i := range resp.JSON200.Items {
 		binding := &resp.JSON200.Items[i]
 		if binding.Spec != nil && binding.Spec.Environment == environment {
-			status := determineDeploymentStatus(binding)
+			// Deliberately binding-only: this guards against concurrent *rollouts*, and
+			// callers abort the deploy when it reports true. Counting a booting pod as
+			// in-progress here would block redeploys for the whole startup window — and
+			// forever for an agent whose pods never become ready.
+			status := determineDeploymentStatus(binding, runtimeReplicaState{})
 			return status == DeploymentStatusInProgress, nil
 		}
 	}
@@ -1033,8 +1044,104 @@ func (c *openChoreoClient) IsDeploymentInProgress(ctx context.Context, ouID, com
 	return false, nil
 }
 
-// determineDeploymentStatus determines deployment status from release binding conditions
-func determineDeploymentStatus(binding *gen.ReleaseBinding) string {
+// runtimeReplicaState is the agent's live pod readiness, read from the SandboxWarmPool
+// in the release binding's Kubernetes resource tree.
+//
+// A ReleaseBinding reports Ready=True (and ResourcesReady=True, "All N resources ready")
+// as soon as the dataplane resources are applied — it never observes whether a pod passed
+// its readiness probe. An agent whose container is still booting therefore shows as Ready
+// on the binding while its Service has zero ready endpoints, which is what made the console
+// report "active" while invocations still failed with 503. The warm pool's replica counts
+// are the only readiness signal available, so they are consulted separately.
+//
+// found is false when the state could not be determined (no warm pool node in the tree, or
+// the tree fetch failed); callers then fall back to the binding conditions alone rather than
+// reporting a worse status than they can prove.
+type runtimeReplicaState struct {
+	found   bool
+	desired int32
+	ready   int32
+}
+
+// isBooting reports whether the agent is expected to be serving but no replica is ready yet.
+func (r runtimeReplicaState) isBooting() bool {
+	return r.found && r.desired > 0 && r.ready == 0
+}
+
+// runtimeReplicaStateFromTree extracts the warm pool replica counts from a resource tree.
+// The node's full object is used rather than its health field: OpenChoreo reports the
+// SandboxWarmPool as Healthy regardless of how many replicas are ready.
+func runtimeReplicaStateFromTree(tree *gen.K8sResourceTreeResponse) runtimeReplicaState {
+	if tree == nil {
+		return runtimeReplicaState{}
+	}
+
+	for _, rendered := range tree.RenderedReleases {
+		for i := range rendered.Nodes {
+			node := &rendered.Nodes[i]
+			if node.Kind != resourceKindSandboxWarmPool {
+				continue
+			}
+
+			status, ok := node.Object["status"].(map[string]interface{})
+			if !ok {
+				// The pool exists but has not reported status yet: nothing is ready.
+				return runtimeReplicaState{found: true, desired: 0, ready: 0}
+			}
+
+			return runtimeReplicaState{
+				found:   true,
+				desired: replicaCount(status, "replicas"),
+				ready:   replicaCount(status, "readyReplicas"),
+			}
+		}
+	}
+
+	return runtimeReplicaState{}
+}
+
+// replicaCount reads an integral replica field out of an unstructured status map. JSON
+// numbers decode as float64, so the concrete numeric types are handled explicitly.
+func replicaCount(status map[string]interface{}, key string) int32 {
+	switch v := status[key].(type) {
+	case float64:
+		return int32(v)
+	case int64:
+		return int32(v)
+	case int:
+		return int32(v)
+	default:
+		return 0
+	}
+}
+
+// fetchRuntimeReplicaState looks up the live warm pool replica counts for a release binding.
+// It is best effort: any failure yields an unknown state so deployment listings degrade to
+// binding-only status instead of erroring.
+func (c *openChoreoClient) fetchRuntimeReplicaState(ctx context.Context, namespaceName, bindingName string) runtimeReplicaState {
+	if bindingName == "" {
+		return runtimeReplicaState{}
+	}
+
+	resp, err := c.ocClient.GetReleaseBindingK8sResourceTreeWithResponse(ctx, namespaceName, bindingName)
+	if err != nil {
+		slog.Warn("failed to fetch resource tree for deployment readiness",
+			"binding", bindingName, "namespace", namespaceName, "error", err)
+		return runtimeReplicaState{}
+	}
+	if resp.StatusCode() != http.StatusOK {
+		slog.Warn("resource tree request returned non-OK for deployment readiness",
+			"binding", bindingName, "namespace", namespaceName, "status", resp.StatusCode())
+		return runtimeReplicaState{}
+	}
+
+	return runtimeReplicaStateFromTree(resp.JSON200)
+}
+
+// determineDeploymentStatus determines deployment status from release binding conditions,
+// downgrading "active" to "in-progress" while the agent's pods are still starting.
+// Pass an unknown runtimeReplicaState to derive the status from the binding alone.
+func determineDeploymentStatus(binding *gen.ReleaseBinding, runtime runtimeReplicaState) string {
 	if binding == nil {
 		return DeploymentStatusNotDeployed
 	}
@@ -1054,6 +1161,12 @@ func determineDeploymentStatus(binding *gen.ReleaseBinding) string {
 		if condition.Type == "Ready" {
 			switch condition.Status {
 			case "True":
+				// The binding is applied, but the agent cannot serve traffic until a pod
+				// passes its readiness probe. Reporting "active" here is what let callers
+				// invoke an agent whose container was still booting and get a 503.
+				if runtime.isBooting() {
+					return DeploymentStatusInProgress
+				}
 				return DeploymentStatusActive
 			case "False":
 				// Check reason for more specific status
@@ -1095,12 +1208,12 @@ func findPromotionTargetEnvironment(sourceEnvName string, promotionPaths []model
 	return nil
 }
 
-func toDeploymentDetailsResponse(binding *gen.ReleaseBinding, componentRelease *gen.ComponentRelease, environmentMap map[string]*models.EnvironmentResponse, promotionTargetEnv *models.PromotionTargetEnvironment, workloadEndpoints map[string]*gen.WorkloadEndpoint, liveWorkloadContainerImage string) (*models.DeploymentResponse, error) {
+func toDeploymentDetailsResponse(binding *gen.ReleaseBinding, componentRelease *gen.ComponentRelease, environmentMap map[string]*models.EnvironmentResponse, promotionTargetEnv *models.PromotionTargetEnvironment, workloadEndpoints map[string]*gen.WorkloadEndpoint, liveWorkloadContainerImage string, runtime runtimeReplicaState) (*models.DeploymentResponse, error) {
 	if binding == nil || binding.Spec == nil {
 		return nil, fmt.Errorf("release binding is nil or has no spec")
 	}
 
-	status := determineDeploymentStatus(binding)
+	status := determineDeploymentStatus(binding, runtime)
 
 	// Extract endpoints from release binding status, enriched with workload endpoint info
 	endpoints := extractEndpointsFromBinding(binding, workloadEndpoints)
