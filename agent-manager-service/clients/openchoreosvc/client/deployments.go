@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -1061,43 +1062,97 @@ type runtimeReplicaState struct {
 	found   bool
 	desired int32
 	ready   int32
+
+	// notReadyResource describes a resource the deployment depends on that reports itself not
+	// ready — in practice an ExternalSecret that will not sync, which leaves the container
+	// in CreateContainerConfigError ("secret ... not found") indefinitely. It separates
+	// "cannot start" from "still starting" so a broken deployment is not reported as
+	// in-progress forever. Empty when nothing reported itself unready.
+	notReadyResource string
 }
 
-// isBooting reports whether the agent is expected to be serving but no replica is ready yet.
+// isBooting reports whether the agent is expected to be serving but no replica is ready
+// yet, and nothing is known to be preventing it from starting.
 func (r runtimeReplicaState) isBooting() bool {
-	return r.found && r.desired > 0 && r.ready == 0
+	return r.found && r.desired > 0 && r.ready == 0 && r.notReadyResource == ""
 }
 
-// runtimeReplicaStateFromTree extracts the warm pool replica counts from a resource tree.
-// The node's full object is used rather than its health field: OpenChoreo reports the
-// SandboxWarmPool as Healthy regardless of how many replicas are ready.
+// isFailed reports whether the agent cannot serve and a dependency explains why.
+// Requires ready == 0: a pool still serving on a previously synced Secret is working,
+// whatever that Secret's ExternalSecret currently reports.
+func (r runtimeReplicaState) isFailed() bool {
+	return r.found && r.desired > 0 && r.ready == 0 && r.notReadyResource != ""
+}
+
+// runtimeReplicaStateFromTree extracts warm pool replica counts and any blocking
+// dependency failure from a resource tree.
+//
+// Node objects are inspected rather than the nodes' health field, which cannot be used
+// for either signal: OpenChoreo reports the SandboxWarmPool as Healthy regardless of how
+// many replicas are ready, and reports an ExternalSecret as Healthy while its own status
+// says Ready=False/SecretSyncedError. Pods are not in the tree at all (and the OpenChoreo
+// API exposes no pod endpoint), so container-level failures such as ImagePullBackOff or
+// CrashLoopBackOff cannot be detected here.
 func runtimeReplicaStateFromTree(tree *gen.K8sResourceTreeResponse) runtimeReplicaState {
 	if tree == nil {
 		return runtimeReplicaState{}
 	}
 
+	state := runtimeReplicaState{}
 	for _, rendered := range tree.RenderedReleases {
 		for i := range rendered.Nodes {
 			node := &rendered.Nodes[i]
-			if node.Kind != resourceKindSandboxWarmPool {
-				continue
+
+			if node.Kind == resourceKindSandboxWarmPool {
+				state.found = true
+				// A pool with no status yet has nothing ready; the zero counts already say so.
+				if status, ok := node.Object["status"].(map[string]interface{}); ok {
+					state.desired = replicaCount(status, "replicas")
+					state.ready = replicaCount(status, "readyReplicas")
+				}
 			}
 
-			status, ok := node.Object["status"].(map[string]interface{})
-			if !ok {
-				// The pool exists but has not reported status yet: nothing is ready.
-				return runtimeReplicaState{found: true, desired: 0, ready: 0}
-			}
-
-			return runtimeReplicaState{
-				found:   true,
-				desired: replicaCount(status, "replicas"),
-				ready:   replicaCount(status, "readyReplicas"),
+			// Any resource that reports itself not ready is a candidate explanation. No kind
+			// is singled out: ExternalSecret happens to be the only kind in the tree today
+			// that publishes a Ready condition (Backend and RestApi use Accepted/Programmed,
+			// the rest publish none), so naming it would add a rule without changing what is
+			// matched, and would need editing whenever another kind starts reporting Ready.
+			if state.notReadyResource == "" {
+				state.notReadyResource = notReadyCondition(node)
 			}
 		}
 	}
 
-	return runtimeReplicaState{}
+	return state
+}
+
+// notReadyCondition returns a description of a node's Ready=False condition, or "" when
+// the node is ready or reports no Ready condition.
+func notReadyCondition(node *gen.ResourceNode) string {
+	status, ok := node.Object["status"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	conditions, ok := status["conditions"].([]interface{})
+	if !ok {
+		return ""
+	}
+
+	for _, raw := range conditions {
+		condition, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if condition["type"] != "Ready" || condition["status"] != "False" {
+			continue
+		}
+
+		reason, _ := condition["reason"].(string)
+		message, _ := condition["message"].(string)
+		return strings.TrimSpace(fmt.Sprintf("%s %s: %s %s", node.Kind, node.Name, reason, message))
+	}
+
+	return ""
 }
 
 // replicaCount reads an integral replica field out of an unstructured status map. JSON
@@ -1135,7 +1190,12 @@ func (c *openChoreoClient) fetchRuntimeReplicaState(ctx context.Context, namespa
 		return runtimeReplicaState{}
 	}
 
-	return runtimeReplicaStateFromTree(resp.JSON200)
+	state := runtimeReplicaStateFromTree(resp.JSON200)
+	slog.Debug("resolved agent runtime state",
+		"binding", bindingName, "namespace", namespaceName,
+		"desired", state.desired, "ready", state.ready, "cause", state.notReadyResource)
+
+	return state
 }
 
 // determineDeploymentStatus determines deployment status from release binding conditions,
@@ -1164,6 +1224,9 @@ func determineDeploymentStatus(binding *gen.ReleaseBinding, runtime runtimeRepli
 				// The binding is applied, but the agent cannot serve traffic until a pod
 				// passes its readiness probe. Reporting "active" here is what let callers
 				// invoke an agent whose container was still booting and get a 503.
+				if runtime.isFailed() {
+					return DeploymentStatusFailed
+				}
 				if runtime.isBooting() {
 					return DeploymentStatusInProgress
 				}
