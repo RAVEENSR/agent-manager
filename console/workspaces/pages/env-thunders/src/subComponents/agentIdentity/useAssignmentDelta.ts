@@ -65,6 +65,23 @@ export function useAssignmentDelta<T>(initialIds: string[], idOf: (item: T) => s
     setRemovedIds(new Set());
   };
 
+  // Partial-reset helpers used when a save only partially succeeds (e.g. one
+  // batch call in a Promise.allSettled fails): clear just the ids that were
+  // confirmed saved, leaving the rest queued so the user can retry.
+  const clearPendingAdds = (ids: Iterable<string>) => {
+    const idSet = ids instanceof Set ? ids : new Set(ids);
+    setPendingAdds((prev) => prev.filter((item) => !idSet.has(idOf(item))));
+  };
+
+  const clearRemovedIds = (ids: Iterable<string>) => {
+    const idSet = ids instanceof Set ? ids : new Set(ids);
+    setRemovedIds((prev) => {
+      const next = new Set(prev);
+      idSet.forEach((id) => next.delete(id));
+      return next;
+    });
+  };
+
   const isDirty = pendingAdds.length > 0 || removedIds.size > 0;
 
   return {
@@ -76,6 +93,8 @@ export function useAssignmentDelta<T>(initialIds: string[], idOf: (item: T) => s
     handleAdd,
     handleRemove,
     reset,
+    clearPendingAdds,
+    clearRemovedIds,
     isDirty,
   };
 }

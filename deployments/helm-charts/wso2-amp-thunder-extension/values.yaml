@@ -165,9 +165,22 @@ thunder:
         memory: 128Mi
   bootstrap:
     enabled: true
+    # The observability data-read scopes, single-sourced: 59-am-mcp-client.sh
+    # subtracts this list from am-mcp's allowance and 64-am-obs-mcp-client.sh
+    # appends it to am-obs-mcp's OIDC scopes (both at template render time).
+    # The same scopes also appear in ampScopes below as part of the full
+    # catalog for the other interactive clients.
+    observabilityScopes:
+      - "amp:observability:trace-read"
+      - "amp:observability:log-read"
+      - "amp:observability:build-log-read"
+      - "amp:observability:metric-read"
     # Full list of AMP OAuth2 scopes that interactive clients are allowed to request.
     # Thunder only grants scopes that appear in an app's registered scope list, so all
     # permission scopes must be declared here for role-based access to work.
+    # Exception: am-mcp's allowance is this catalog MINUS observabilityScopes
+    # (filtered in 59-am-mcp-client.sh) — those scopes are owned exclusively
+    # by the observer MCP client (amObsMcpClient below).
     ampScopes:
       - "openid"
       - "profile"
@@ -252,10 +265,10 @@ thunder:
       - "amp:monitor:execute"
       - "amp:monitor:score-read"
       - "amp:monitor:score-publish"
-      - "amp:observability:org-dashboard"
-      - "amp:observability:project-dashboard"
-      - "amp:observability:guardrail-metric"
-      - "amp:observability:infra-metric"
+      - "amp:observability:trace-read"
+      - "amp:observability:log-read"
+      - "amp:observability:build-log-read"
+      - "amp:observability:metric-read"
       - "amp:role:create"
       - "amp:role:read"
       - "amp:role:update"
@@ -292,6 +305,8 @@ thunder:
         - 60-amp-resource-server.sh
         - 61-amp-default-roles.sh
         - 62-amp-default-groups.sh
+        - 63-am-observer-client.sh
+        - 64-am-obs-mcp-client.sh
     # Observer Resource Reader Client configuration (for observability plane to read resources)
     observerResourceReaderClient:
       clientId: "openchoreo-observer-resource-reader-client" # clusterauthzrolebinding is already created with this clientId by openchoreo, so it should not be changed unless the corresponding ClusterAuthzRoleBinding is also updated
@@ -355,6 +370,29 @@ thunder:
       pkceRequired: false
       publicClient: false
       accessTokenValidityPeriod: 3600
+    # AM Observer Client configuration (dedicated outbound identity for
+    # agent-manager-observer's calls to the OpenChoreo observer backend).
+    # Its authority comes from the OpenChoreo ClusterAuthzRoleBinding
+    # (amp-observer-reader-binding in wso2-amp-platform-resources-extension),
+    # NOT from AMP scopes — it has no scope allowance at all, so its tokens
+    # fail agent-manager-service's scope checks by construction.
+    # WARNING: clientSecret below is a LOCAL-DEVELOPMENT-ONLY placeholder.
+    # In production, override amObserverClient.clientSecret via a Kubernetes
+    # Secret or external secret manager. Deploying with this default value is
+    # insecure.
+    # NOTE: pre-install bootstrap job only — see the upgrade note on
+    # mcpResourceServers below / docs/reference/mcp-server.mdx.
+    amObserverClient:
+      clientId: "am-observer-client"
+      clientSecret: "am-observer-client-secret"
+      name: "AM Observer Client"
+      description: "Dedicated client for agent-manager-observer to read observability data from the OpenChoreo observer"
+      grantTypes:
+        - "client_credentials"
+      tokenEndpointAuthMethod: "client_secret_basic"
+      pkceRequired: false
+      publicClient: false
+      accessTokenValidityPeriod: 3600
     # AMP CLI Client configuration (public PKCE client for interactive login)
     amCliClient:
       clientId: "amctl"
@@ -410,6 +448,112 @@ thunder:
         - "groups"
         - "ouId"
         - "ouHandle"
+    # AMP Observer MCP Client configuration (public PKCE client for the
+    # observer MCP server's interactive login). Allowed ONLY the OIDC scopes
+    # plus the four observability data-read scopes; the am-service MCP client
+    # (amMcpClient above) is allowed the rest of the catalog.
+    # NOTE: pre-install bootstrap job only — see the upgrade note on
+    # mcpResourceServers below / docs/reference/mcp-server.mdx.
+    amObsMcpClient:
+      clientId: "am-obs-mcp"
+      name: "AMP Observer MCP"
+      description: "AMP Observer MCP application for interactive user login"
+      redirectUris:
+        - "http://127.0.0.1:33419/callback"
+        - "http://localhost:33419/callback"
+      grantTypes:
+        - "authorization_code"
+        - "refresh_token"
+      responseTypes:
+        - "code"
+      allowedUserTypes:
+        - "engineer"
+      tokenEndpointAuthMethod: "none"
+      pkceRequired: true
+      publicClient: true
+      accessTokenValidityPeriod: 3600
+      idTokenValidityPeriod: 3600
+      # OIDC scopes only — the four observability data-read scopes are
+      # appended from observabilityScopes at template render time
+      # (64-am-obs-mcp-client.sh).
+      scopes:
+        - "openid"
+        - "profile"
+        - "email"
+      userAttributes:
+        - "given_name"
+        - "family_name"
+        - "email"
+        - "username"
+        - "groups"
+        - "ouId"
+        - "ouHandle"
+    # MCP resource servers — RFC 8707 resource indicators for the platform's
+    # MCP endpoints. Thunder (v0.45+) rejects an authorize request with
+    # invalid_target unless its `resource` parameter exactly matches a
+    # registered resource-server identifier. MCP clients send the canonical
+    # origin of the MCP endpoint WITH a trailing slash, so each identifier
+    # must be the externally reachable base URL of the service (the same value
+    # as agent-manager's serverPublicURL / the observability extension's
+    # amObserver.publicUrl), slash included.
+    #
+    # Thunder additionally downscopes granted scopes to the permissions defined
+    # on the resource server named in `resource`, so each entry mirrors the
+    # slice of the amp permission tree its MCP client is allowed, selected by
+    # permissionSet:
+    #   - "amp-minus-observability": the full amp tree minus the four
+    #     amp:observability:*-read actions (matches the am-mcp client)
+    #   - "observability-only": only the amp:observability resource with its
+    #     four *-read actions (matches the am-obs-mcp client)
+    # The handle MUST stay empty: Thunder prefixes derived permissions with the
+    # resource-server handle, and the scope strings must come out identical to
+    # the amp resource server's (amp:project:read etc.). The bootstrap roots
+    # the tree under a top-level "amp" resource instead.
+    # NOTE: seeded by the pre-install bootstrap job only — on existing installs,
+    # re-run the bootstrap job (it automatically replaces MCP resource servers
+    # created by an older bootstrap with a non-empty handle); a helm upgrade
+    # alone will not re-seed.
+    #
+    # Each resource server's identifier is derived by the bootstrap template from
+    # the base URL named in baseUrlValue, with the trailing slash appended. The
+    # base URLs live as their own scalars below rather than inline here so a
+    # deployment can override just the host: `helm --set` merges a scalar, but
+    # `--set mcpResourceServers[0].identifier=...` REPLACES the whole list element
+    # and silently drops name/handle/description/permissionSet. Point each base
+    # URL at the externally reachable origin of its MCP endpoint's service — the
+    # same value as agent-manager's serverPublicURL and the observability
+    # extension's amObserver.publicUrl. Defaults suit a k3d/local install, where
+    # amp-api is reached through the OpenChoreo control-plane gateway rather than
+    # on its container port.
+    #
+    # An identifier is matched EXACTLY, so a service reachable on more than one
+    # origin needs one entry per origin. Entries marked `optional: true` are
+    # skipped when their base URL is empty. agentManagerMcpDevBaseUrl is the
+    # opt-in second origin for the dev stack, where `make setup`
+    # (deployments/setup/setup-openchoreo.sh, this chart's only installer on that
+    # path) runs agent-manager-service as a host process on :9000 — an MCP client
+    # there asks for resource http://localhost:9000/, so without that entry
+    # Thunder answers invalid_target. setup-openchoreo.sh sets it.
+    agentManagerMcpBaseUrl: "http://api.amp.localhost:8080"
+    agentManagerMcpDevBaseUrl: ""
+    observerMcpBaseUrl: "http://traces.amp.localhost:11080"
+    mcpResourceServers:
+      - name: "AMP Agent Manager MCP"
+        handle: ""
+        baseUrlValue: "agentManagerMcpBaseUrl"
+        description: "Resource identifier for the agent-manager MCP endpoint"
+        permissionSet: "amp-minus-observability"
+      - name: "AMP Agent Manager MCP (dev)"
+        handle: ""
+        baseUrlValue: "agentManagerMcpDevBaseUrl"
+        optional: true
+        description: "Resource identifier for the agent-manager MCP endpoint on the docker-compose dev stack"
+        permissionSet: "amp-minus-observability"
+      - name: "AMP Observer MCP"
+        handle: ""
+        baseUrlValue: "observerMcpBaseUrl"
+        description: "Resource identifier for the observer MCP endpoint"
+        permissionSet: "observability-only"
     # AMP Console Client configuration
     ampConsoleClient:
       clientId: "amp-console-client"

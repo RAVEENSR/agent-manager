@@ -369,7 +369,7 @@ func convertToSpecGatewayResponse(gw *models.GatewayResponse) spec.GatewayRespon
 		Uuid:        gw.UUID,
 		Name:        gw.Name,
 		DisplayName: gw.DisplayName,
-		GatewayType: spec.GatewayType(gw.GatewayType),
+		GatewayType: canonicalGatewayType(gw.GatewayType),
 		Vhost:       gw.VHost,
 		IsCritical:  gw.IsCritical,
 		Status:      spec.GatewayStatus(gw.Status),
@@ -382,11 +382,11 @@ func (c *environmentController) ListThunderInstances(w http.ResponseWriter, r *h
 	ctx := r.Context()
 	log := logger.GetLogger(ctx)
 
-	orgName := r.PathValue(utils.PathParamOrgName)
+	ouID := middleware.OUIDFromRequest(r)
 
-	result, err := c.environmentService.ListThunderInstances(ctx, orgName)
+	result, err := c.environmentService.ListThunderInstances(ctx, ouID)
 	if err != nil {
-		log.Error("ListThunderInstances: failed to list thunder instances", "orgName", orgName, "error", err)
+		log.Error("ListThunderInstances: failed to list thunder instances", "ouID", ouID, "error", err)
 		utils.WriteErrorResponse(w, http.StatusInternalServerError, "Failed to list Thunder instances")
 		return
 	}

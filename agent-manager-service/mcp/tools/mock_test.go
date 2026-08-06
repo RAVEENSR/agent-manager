@@ -22,6 +22,7 @@ import (
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/spec"
+	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
 
 // MockToolsetHandler implements every toolset interface for use in tool-package tests.
@@ -86,13 +87,6 @@ func (m *MockToolsetHandler) CreateAgent(
 	return nil
 }
 
-func (m *MockToolsetHandler) GetAgent(
-	ctx context.Context, ouID string, projectName string, agentName string,
-) (*models.AgentResponse, error) {
-	m.recordCall("GetAgent", ouID, projectName, agentName)
-	return &models.AgentResponse{Name: agentName}, nil
-}
-
 // Build Toolset Handler
 
 func (m *MockToolsetHandler) ListAgentBuilds(
@@ -147,4 +141,30 @@ func (m *MockToolsetHandler) UpdateDeploymentState(
 ) error {
 	m.recordCall("UpdateDeploymentState", ouID, projectName, agentName, environment, state)
 	return nil
+}
+
+// Environment Toolset Handler
+
+func (m *MockToolsetHandler) ListEnvironments(
+	ctx context.Context, ouID string, limit int32, offset int32,
+) (*models.EnvironmentListResponse, error) {
+	m.recordCall("ListEnvironments", ouID, limit, offset)
+	return &models.EnvironmentListResponse{
+		Environments: []models.GatewayEnvironmentResponse{
+			{Name: testEnvName, DisplayName: "Default Env", IsProduction: false},
+		},
+		Total:  1,
+		Limit:  limit,
+		Offset: offset,
+	}, nil
+}
+
+func (m *MockToolsetHandler) GetEnvironment(
+	ctx context.Context, ouID string, envName string,
+) (*models.GatewayEnvironmentResponse, error) {
+	m.recordCall("GetEnvironment", ouID, envName)
+	if envName != testEnvName {
+		return nil, utils.ErrEnvironmentNotFound
+	}
+	return &models.GatewayEnvironmentResponse{Name: testEnvName, DisplayName: "Default Env", IsProduction: false}, nil
 }

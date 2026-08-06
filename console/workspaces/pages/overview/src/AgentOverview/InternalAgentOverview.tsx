@@ -19,19 +19,45 @@
 import {
     useGetAgent,
     useGetAgentBuilds,
+    useListAgentDeployments,
 } from "@agent-management-platform/api-client";
 import {
     Box,
-    Stack,
 } from "@wso2/oxygen-ui";
 import { useParams } from "react-router-dom";
 
-import { EnvironmentCard, usePipelineEnvironments } from "@agent-management-platform/shared-component";
+import {
+    DeploymentStatus,
+    EnvironmentCard,
+    usePipelineEnvironments,
+} from "@agent-management-platform/shared-component";
 import { KindInfoCard } from "./KindInfoCard";
-import { EnvMonitorsSection } from "./EnvMonitorsSection";
-import { EnvObservabilitySection } from "./EnvObservabilitySection";
 import { AgentInfoCard } from "./AgentInfoCard";
-import { EnvAgentRolesGroupsSection } from "./EnvAgentRolesGroupsSection";
+import { EnvironmentSectionsContent } from "./EnvironmentSectionsContent";
+import { EnvironmentSingleHeader } from "./EnvironmentSingleHeader";
+import { EnvironmentTabsBar } from "./EnvironmentTabsBar";
+import { UppercaseCaptionLabel } from "./SectionHeader";
+import { useSelectedEnvironmentParam } from "./useSelectedEnvironmentParam";
+
+const DOT_COLOR_BY_STATUS: Record<DeploymentStatus, string> = {
+    [DeploymentStatus.ACTIVE]: "success.main",
+    [DeploymentStatus.INACTIVE]: "text.disabled",
+    [DeploymentStatus.DEPLOYING]: "warning.main",
+    [DeploymentStatus.ERROR]: "error.main",
+    [DeploymentStatus.FAILED]: "error.main",
+    [DeploymentStatus.SUSPENDED]: "text.disabled",
+};
+
+type DeploymentMap = Record<string, { status: string; lastDeployed: string }>;
+
+const KNOWN_DEPLOYMENT_STATUSES = new Set<string>(Object.values(DeploymentStatus));
+
+function statusOf(deployments: DeploymentMap | undefined, envName: string): DeploymentStatus {
+    const status = deployments?.[envName]?.status;
+    return status && KNOWN_DEPLOYMENT_STATUSES.has(status)
+        ? (status as DeploymentStatus)
+        : DeploymentStatus.INACTIVE;
+}
 
 export const InternalAgentOverview = () => {
     const { orgId, agentId, projectId } = useParams();
@@ -48,8 +74,19 @@ export const InternalAgentOverview = () => {
     // Show only the environments in the current project's deployment pipeline,
     // ordered by the promotion chain.
     const sortedEnvironmentList = usePipelineEnvironments(orgId, projectId);
+    const { data: deployments } = useListAgentDeployments(
+        { orgName: orgId, projName: projectId, agentName: agentId },
+        { enabled: !!orgId && !!projectId && !!agentId },
+    );
+    const { selectedEnvironment, selectEnvironment } =
+        useSelectedEnvironmentParam(
+            sortedEnvironmentList,
+            (env) => statusOf(deployments, env.name) !== DeploymentStatus.INACTIVE,
+        );
 
     const isKindAgent = !!agent?.kindName;
+    const hasMultipleEnvironments = sortedEnvironmentList.length > 1;
+    const selectedEnvironmentStatus = statusOf(deployments, selectedEnvironment?.name ?? "");
 
     return (
         <Box display="flex" flexDirection="column" gap={2}>
@@ -76,43 +113,52 @@ export const InternalAgentOverview = () => {
                 )
             )}
 
-            <Stack spacing={2}>
-                {sortedEnvironmentList.map(
-                    (environment, index) =>
-                        environment && orgId && projectId && agentId && (
-                            <EnvironmentCard
-                                key={environment.name}
+            {selectedEnvironment && orgId && projectId && agentId && (
+                <Box display="flex" flexDirection="column" gap={1.5}>
+                    {hasMultipleEnvironments && (
+                        <UppercaseCaptionLabel>Environments</UppercaseCaptionLabel>
+                    )}
+                    <EnvironmentCard
+                        key={selectedEnvironment.name}
+                        orgId={orgId}
+                        projectId={projectId}
+                        agentId={agentId}
+                        environment={selectedEnvironment}
+                        isFirstEnvironment={
+                            sortedEnvironmentList[0]?.name === selectedEnvironment.name
+                        }
+                        tabsHeader={
+                            hasMultipleEnvironments ? (
+                                <EnvironmentTabsBar
+                                    environments={sortedEnvironmentList}
+                                    selectedName={selectedEnvironment.name}
+                                    onSelect={selectEnvironment}
+                                    dotColor={(env) => (
+                                        DOT_COLOR_BY_STATUS[statusOf(deployments, env.name)]
+                                    )}
+                                />
+                            ) : (
+                                <EnvironmentSingleHeader
+                                    environment={selectedEnvironment}
+                                    status={selectedEnvironmentStatus}
+                                    dotColor={DOT_COLOR_BY_STATUS[selectedEnvironmentStatus]}
+                                />
+                            )
+                        }
+                        bottomContent={
+                            <EnvironmentSectionsContent
                                 orgId={orgId}
                                 projectId={projectId}
                                 agentId={agentId}
-                                environment={environment}
-                                isFirstEnvironment={index === 0}
-                                bottomContent={
-                                    <>
-                                        <EnvAgentRolesGroupsSection
-                                            orgId={orgId}
-                                            projectId={projectId}
-                                            agentId={agentId}
-                                            envId={environment.name}
-                                        />
-                                        <EnvMonitorsSection
-                                            orgId={orgId}
-                                            projectId={projectId}
-                                            agentId={agentId}
-                                            envId={environment.name}
-                                        />
-                                        <EnvObservabilitySection
-                                            orgId={orgId}
-                                            projectId={projectId}
-                                            agentId={agentId}
-                                            envId={environment.name}
-                                        />
-                                    </>
-                                }
+                                envId={selectedEnvironment.name}
+                                configurations={agent?.configurations}
+                                isolationTier={selectedEnvironment.isolationTier}
+                                deploymentStatus={selectedEnvironmentStatus}
                             />
-                        ),
-                )}
-            </Stack>
+                        }
+                    />
+                </Box>
+            )}
         </Box>
     );
 };

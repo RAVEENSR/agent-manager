@@ -1,4 +1,4 @@
-.PHONY: help setup setup-colima setup-k3d setup-openchoreo setup-default-env-thunder setup-sandbox setup-gvisor setup-kata setup-platform setup-gateway setup-console-local setup-console-local-force dev-up dev-down dev-restart dev-rebuild dev-logs dev-migrate openchoreo-up openchoreo-down openchoreo-status teardown db-connect db-logs service-logs service-shell console-logs port-forward stop-port-forward gen-eval-artifacts gen-instrumentation-contract check-contract-drift check-matrix-manifest e2e-test
+.PHONY: help setup setup-colima setup-k3d setup-openchoreo setup-default-env-thunder setup-sandbox setup-gvisor setup-kata setup-platform setup-gateway setup-console-local setup-console-local-force setup-amp teardown-amp reset-amp dev-up dev-down dev-restart dev-rebuild dev-logs dev-migrate openchoreo-up openchoreo-down openchoreo-status teardown db-connect db-logs service-logs service-shell console-logs port-forward stop-port-forward gen-eval-artifacts gen-instrumentation-contract check-contract-drift check-matrix-manifest e2e-test
 
 # Absolute path to the console directory on the host. Passed to docker-compose
 # so the container mounts and builds at the same path, keeping rush/pnpm
@@ -58,6 +58,9 @@ help:
 	@echo "  make e2e-test           - Run E2E tests (cluster must be running)"
 	@echo ""
 	@echo "🧹 Cleanup:"
+	@echo "  make reset-amp          - Fast reset: teardown-amp + setup-amp (OpenChoreo base preserved)"
+	@echo "  make teardown-amp       - Remove AMP layer only (extensions, platform, gateways, env-Thunders)"
+	@echo "  make setup-amp          - Reinstall AMP layer atop the existing OpenChoreo base"
 	@echo "  make teardown           - Remove everything (Kind cluster + platform)"
 	@echo ""
 
@@ -76,6 +79,41 @@ setup: setup-colima setup-k3d setup-openchoreo setup-platform setup-sandbox setu
 	@echo ""
 	@echo "Run 'make stop-port-forward' to stop port-forwards"
 	@echo "Run 'make port-forward' to restart in a dedicated terminal"
+
+# AMP-layer lifecycle: rebuild everything above the OpenChoreo base (colima,
+# k3d, prerequisites, planes, gateway-operator, agent-sandbox stay untouched).
+# Mirrors the tail of `make setup` exactly, minus the base steps.
+reset-amp:
+	@$(MAKE) teardown-amp
+	@$(MAKE) setup-amp
+
+teardown-amp:
+	@cd deployments/setup && ./teardown-amp.sh
+
+setup-amp: setup-console-local
+	@cd deployments/setup && ./setup-amp-extensions.sh $(CURDIR)
+	@$(MAKE) setup-platform
+	@$(MAKE) dev-migrate
+	@cd deployments/setup && ./port-forward.sh --platform --background
+	@$(MAKE) wait-ams-healthy
+	@$(MAKE) setup-default-env-thunder
+	@$(MAKE) setup-gateway
+	@cd deployments/setup && ./port-forward.sh --background
+	@echo ""
+	@echo "✅ AMP layer ready!"
+	@echo "   Console: http://localhost:3000"
+	@echo "   API:     http://localhost:9000"
+
+# Air recompiles the Go service on a fresh container start, so :9000 lags
+# `docker compose up` by up to a couple of minutes. Steps that call the AMS API
+# (setup-default-env-thunder) must gate on this or they fail with HTTP 000.
+wait-ams-healthy:
+	@echo "⏳ Waiting for agent-manager-service on :9000..."
+	@for i in $$(seq 1 60); do \
+		curl -sf http://localhost:9000/healthz >/dev/null 2>&1 && exit 0; \
+		sleep 3; \
+	done; \
+	echo "❌ agent-manager-service not healthy on :9000 after 3 minutes"; exit 1
 
 # Setup individual components
 setup-colima:
@@ -308,7 +346,7 @@ setup-ai-gateway: dev-migrate
 		--set gateway.name="default" \
 		--set gateway.displayName="Default AI Gateway" \
 		--set gateway.vhost="http://ai-gateway.amp.localhost:8084" \
-		--set gateway.type="AI" \
+		--set gateway.type="EGRESS" \
 		--set apiGateway.controlPlane.host="host.k3d.internal:9243" \
 		--set developmentMode=true
 	@echo "⏳ Waiting for gateway bootstrap job..."

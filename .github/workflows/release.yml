@@ -450,7 +450,7 @@ jobs:
         package-charts,
       ]
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
       checks: write
@@ -496,7 +496,7 @@ jobs:
           CHART_VERSION: ${{ inputs.target_version }}
         run: |
           set -o pipefail
-          cd test/e2e && go run github.com/onsi/ginkgo/v2/ginkgo -v -p --timeout 45m \
+          cd test/e2e && go run github.com/onsi/ginkgo/v2/ginkgo -v --procs=2 --timeout 70m \
             --poll-progress-after=600s --keep-going --junit-report=report.xml \
             ./tests/... 2>&1 | tee e2e-output.log
 

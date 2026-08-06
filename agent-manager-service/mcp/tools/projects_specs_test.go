@@ -19,6 +19,7 @@ package tools
 import (
 	"testing"
 
+	"github.com/wso2/agent-manager/agent-manager-service/rbac"
 	"github.com/wso2/agent-manager/agent-manager-service/spec"
 )
 
@@ -29,11 +30,12 @@ func projectToolSpecs() []toolTestSpec {
 		{
 			name:                "list_projects",
 			toolset:             "project",
+			permissions:         []rbac.Permission{rbac.ProjectRead},
 			descriptionKeywords: []string{"list", "project"},
 			descriptionMinLen:   20,
 			requiredParams:      nil,
-			optionalParams:      []string{"org_name", "limit", "offset"},
-			testArgs:            map[string]any{"org_name": testOrgName},
+			optionalParams:      []string{"limit", "offset"},
+			testArgs:            map[string]any{},
 			expectedMethod:      "ListProjects",
 			validateCall: func(t *testing.T, args []interface{}) {
 				if got, want := args[0], testOrgName; got != want {
@@ -44,12 +46,12 @@ func projectToolSpecs() []toolTestSpec {
 		{
 			name:                "create_project",
 			toolset:             "project",
+			permissions:         []rbac.Permission{rbac.ProjectCreate},
 			descriptionKeywords: []string{"create", "project"},
 			descriptionMinLen:   20,
 			requiredParams:      []string{"project_name", "display_name"},
-			optionalParams:      []string{"org_name", "description"},
+			optionalParams:      []string{"description"},
 			testArgs: map[string]any{
-				"org_name":     testOrgName,
 				"project_name": testProjectName,
 				"display_name": testDisplayName,
 			},

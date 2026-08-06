@@ -46,7 +46,6 @@ import {
 } from "@agent-management-platform/types";
 import { PageLayout } from "@agent-management-platform/views";
 import { GatewayIdentityProvidersCard } from "./GatewayIdentityProvidersCard";
-import { GatewayReconfigureCard } from "./GatewayReconfigureCard";
 import { ViewGatewayGetStarted } from "./ViewGatewayGetStarted";
 
 export const ViewGateway: React.FC = () => {
@@ -302,16 +301,6 @@ export const ViewGateway: React.FC = () => {
               gatewayName={gateway.displayName || gateway.name}
               environments={gateway.environments ?? []}
             />
-
-            {isActive && (
-              <GatewayReconfigureCard
-                registrationToken={registrationToken}
-                hasJustRegeneratedToken={hasJustRegeneratedToken}
-                onReconfigure={handleRegenerateToken}
-                isReconfiguring={isRotating}
-                onCopy={handleCopy}
-              />
-            )}
           </Stack>
         )}
       </PageLayout>

@@ -173,14 +173,23 @@ export const AddLLMProviderForm: React.FC<AddLLMProviderFormProps> = ({
     orgName: orgId,
   });
 
+  // Egress-capable only: ingress gateways are not legal LLM placement targets and the
+  // server rejects them. No status filter — the server's candidate set is not
+  // liveness-filtered either, so filtering here would offer a narrower set than the
+  // server accepts and hide a valid choice whenever a gateway is briefly disconnected.
   const gateways = useMemo(
-    () => gatewaysData?.gateways.filter((g) => g.status === "ACTIVE") ?? [],
+    () =>
+      gatewaysData?.gateways.filter(
+        (g) => g.gatewayType === "EGRESS" || g.gatewayType === "BOTH",
+      ) ?? [],
     [gatewaysData?.gateways],
   );
 
+  // Auto-select only when the choice is unambiguous. With two egress gateways the user
+  // must pick, because the server 400s on an unnamed gateway in that case.
   useEffect(() => {
-    if (gateways.length > 0 && formData.gatewayIds?.length === 0) {
-        setFormData({ ...formData, gatewayIds: [gateways[0].uuid] });
+    if (gateways.length === 1 && formData.gatewayIds?.length === 0) {
+      setFormData({ ...formData, gatewayIds: [gateways[0].uuid] });
     }
   }, [gateways]);
 
@@ -663,8 +672,8 @@ export const AddLLMProviderForm: React.FC<AddLLMProviderFormProps> = ({
         <Collapse in={!!formData.templateId}>
           {!isLoadingGateways && gateways.length === 0 && (
             <Alert severity="warning">
-              No active gateway is configured for this organization. Ask an
-              admin to configure one before creating an LLM provider.
+              No egress-capable gateway is configured for this organization.
+              Ask an admin to configure one before creating an LLM provider.
             </Alert>
           )}
           {!isLoadingGateways && gateways.length > 1 && (

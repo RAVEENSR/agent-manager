@@ -43,32 +43,23 @@ type Provider interface {
 	Capabilities() StoreCapabilities
 }
 
-// SecretReferenceManager is an optional interface a Provider can implement to
-// signal that it manages SecretReference CRDs internally (e.g., the Secret
-// Manager API). When a provider implements this and ManagesSecretReferences()
-// returns true, the high-level secret management client will NOT attempt to
-// create/update/delete SecretReferences via the OpenChoreo client.
-type SecretReferenceManager interface {
-	ManagesSecretReferences() bool
-}
-
 // SecretsClient performs secret operations on a backend.
 // This interface follows the external-secrets SecretsClient pattern.
-// Each provider interprets the SecretLocation according to its storage model:
-//   - OpenBao: constructs KV path from location segments (org/project/env/entity)
-//   - Cloud Secret Manager API: uses location fields as labels for secret organization
+// Each provider interprets the SecretLocation according to its storage model
+// (e.g. the OpenChoreo provider derives the secret name from the location).
+// Providers are expected to manage any SecretReference CRs internally.
 type SecretsClient interface {
 	// PushSecret writes a secret to the backend, replacing all existing data.
-	// Returns the secret reference (KV path for OpenBao, secret ID for cloud).
+	// Returns the secret reference identifier (the secret name for OpenChoreo).
 	// If the secret already exists, it will be fully replaced.
 	// Metadata is used for ownership tracking (managed-by).
-	PushSecret(ctx context.Context, location SecretLocation, value []byte, metadata *SecretMetadata) (string, error)
+	PushSecret(ctx context.Context, location SecretLocation, data map[string]string, metadata *SecretMetadata) (string, error)
 
-	// PatchSecret merges data with an existing secret (server-side merge).
-	// Keys in value are added/updated, keys set to null are deleted, omitted keys are preserved.
-	// Returns the secret reference (KV path for OpenBao, secret ID for cloud).
+	// PatchSecret merges data with an existing secret.
+	// Keys in data are added/updated, keys in keysToDelete are removed, omitted keys are preserved.
+	// Returns the secret reference identifier (the secret name for OpenChoreo).
 	// Returns ErrSecretNotFound if the secret doesn't exist.
-	PatchSecret(ctx context.Context, location SecretLocation, value []byte, metadata *SecretMetadata) (string, error)
+	PatchSecret(ctx context.Context, location SecretLocation, data map[string]string, keysToDelete []string, metadata *SecretMetadata) (string, error)
 
 	// DeleteSecret removes a secret from the backend.
 	// Returns nil if the secret doesn't exist (idempotent).
@@ -79,11 +70,6 @@ type SecretsClient interface {
 	// Returns SecretInfo containing ID, keys list, and labels.
 	// Returns ErrSecretNotFound if the secret doesn't exist.
 	GetSecret(ctx context.Context, location SecretLocation) (*SecretInfo, error)
-
-	// GetSecretWithValue retrieves the actual secret values.
-	// Returns ErrSecretNotFound if the secret doesn't exist.
-	// Returns ErrNotSupported if the provider doesn't support value retrieval.
-	GetSecretWithValue(ctx context.Context, location SecretLocation) ([]byte, error)
 
 	// Close cleans up any resources held by the client.
 	Close(ctx context.Context) error

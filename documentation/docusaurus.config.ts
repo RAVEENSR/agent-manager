@@ -20,7 +20,12 @@ const config: Config = {
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
   future: {
-    v4: true, // Improve compatibility with the upcoming Docusaurus v4
+    // Disabled: on Docusaurus 3.10.2, v4:true pulls in the Rust-based Faster
+    // bundler, which has a build-breaking MDX compilation bug when several
+    // near-identical versioned docs are processed together (confirmed via
+    // bisection against getting-started/on-a-vm.mdx's 5 version copies,
+    // reproducible only with v4 enabled). Revisit once that's fixed upstream.
+    v4: false,
   },
 
   // Set the production url of your site here

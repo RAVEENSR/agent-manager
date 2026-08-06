@@ -45,6 +45,9 @@ var ErrNotThunderMode = errors.New("not in Thunder mode")
 // Distinct from real DB errors so callers can decide whether to provision-on-demand vs retry.
 var ErrPublisherCredentialNotFound = errors.New("publisher credentials not found")
 
+// ErrSchedulerCredentialNotFound means a scheduler credential still wasn't found right after provisioning it.
+var ErrSchedulerCredentialNotFound = errors.New("scheduler credentials not found")
+
 // PublisherCredentials holds the provisioned OAuth2 credentials for publishing scores.
 type PublisherCredentials struct {
 	ClientID     string // OAuth2 client ID (becomes JWT subject)
@@ -99,14 +102,15 @@ func NewStaticPublisherCredentialProvisioner() PublisherCredentialProvisioner {
 
 // publisherCredentialProvisioner provisions per-org credentials via Thunder + SecretManagementClient.
 type publisherCredentialProvisioner struct {
-	thunderClient thundersvc.ThunderClient
-	secretClient  secretmanagersvc.SecretManagementClient
-	ocClient      client.OpenChoreoClient
-	credRepo      repositories.OrgPublisherCredentialRepository
-	logger        *slog.Logger
-	encryptionKey []byte
-	idpTokenURL   string
-	ocBaseURL     string
+	thunderClient     thundersvc.ThunderClient
+	secretClient      secretmanagersvc.SecretManagementClient
+	ocClient          client.OpenChoreoClient
+	credRepo          repositories.OrgPublisherCredentialRepository
+	schedulerCredRepo repositories.OrgSchedulerCredentialRepository
+	logger            *slog.Logger
+	encryptionKey     []byte
+	idpTokenURL       string
+	ocBaseURL         string
 
 	sfg singleflight.Group // serializes provisioning and per-org client construction
 
@@ -127,6 +131,7 @@ func NewPublisherCredentialProvisioner(
 	secretClient secretmanagersvc.SecretManagementClient,
 	ocClient client.OpenChoreoClient,
 	credRepo repositories.OrgPublisherCredentialRepository,
+	schedulerCredRepo repositories.OrgSchedulerCredentialRepository,
 ) (PublisherCredentialProvisioner, error) {
 	if cfg.Thunder.BaseURL == "" {
 		logger.Info("Thunder not configured, using static publisher credentials")
@@ -151,15 +156,16 @@ func NewPublisherCredentialProvisioner(
 	)
 
 	return &publisherCredentialProvisioner{
-		thunderClient: thunderCl,
-		secretClient:  secretClient,
-		ocClient:      ocClient,
-		credRepo:      credRepo,
-		logger:        logger,
-		encryptionKey: encryptionKey,
-		idpTokenURL:   cfg.IDP.TokenURL,
-		ocBaseURL:     cfg.OpenChoreo.BaseURL,
-		orgOCClients:  make(map[string]client.OpenChoreoClient),
+		thunderClient:     thunderCl,
+		secretClient:      secretClient,
+		ocClient:          ocClient,
+		credRepo:          credRepo,
+		schedulerCredRepo: schedulerCredRepo,
+		logger:            logger,
+		encryptionKey:     encryptionKey,
+		idpTokenURL:       cfg.IDP.TokenURL,
+		ocBaseURL:         cfg.OpenChoreo.BaseURL,
+		orgOCClients:      make(map[string]client.OpenChoreoClient),
 	}, nil
 }
 
@@ -170,6 +176,14 @@ func publisherSecretLocation(ouID string) secretmanagersvc.SecretLocation {
 	return secretmanagersvc.SecretLocation{
 		OrgName:    ouID,
 		EntityName: "amp-publisher-" + ouID,
+	}
+}
+
+// schedulerSecretLocation builds the SecretLocation for scheduler-only credentials.
+func schedulerSecretLocation(ouID string) secretmanagersvc.SecretLocation {
+	return secretmanagersvc.SecretLocation{
+		OrgName:    ouID,
+		EntityName: "amp-scheduler-" + ouID,
 	}
 }
 
@@ -197,13 +211,20 @@ func (p *publisherCredentialProvisioner) resolveSecretRef(ctx context.Context, o
 		secretRefName, len(ref.Data))
 }
 
-// EnsureCredentials provisions per-org publisher credentials.
+// EnsureCredentials provisions per-org publisher and scheduler credentials.
 // Uses singleflight to deduplicate concurrent provisioning calls for the same org.
 func (p *publisherCredentialProvisioner) EnsureCredentials(ctx context.Context, ouID, orgUUID string) (*PublisherCredentials, error) {
 	p.logger.Debug("EnsureCredentials called", "ouID", ouID, "orgUUID", orgUUID)
 
 	result, err, _ := p.sfg.Do("provision:"+ouID, func() (any, error) {
-		return p.provisionCredentials(ctx, ouID, orgUUID)
+		pubCreds, err := p.provisionPublisherCredentials(ctx, ouID, orgUUID)
+		if err != nil {
+			return nil, err
+		}
+		if err := p.provisionSchedulerCredentials(ctx, ouID, orgUUID); err != nil {
+			return nil, fmt.Errorf("failed to provision scheduler credentials for org %s: %w", ouID, err)
+		}
+		return pubCreds, nil
 	})
 	if err != nil {
 		return nil, err
@@ -211,8 +232,8 @@ func (p *publisherCredentialProvisioner) EnsureCredentials(ctx context.Context, 
 	return result.(*PublisherCredentials), nil
 }
 
-// provisionCredentials performs the DB lookup and, if needed, the full Thunder provisioning flow.
-func (p *publisherCredentialProvisioner) provisionCredentials(ctx context.Context, ouID, orgUUID string) (*PublisherCredentials, error) {
+// provisionPublisherCredentials provisions the eval-job pod's credential — bound to no OpenChoreo role.
+func (p *publisherCredentialProvisioner) provisionPublisherCredentials(ctx context.Context, ouID, orgUUID string) (*PublisherCredentials, error) {
 	// Check DB for existing credentials
 	existing, err := p.credRepo.GetByOrgName(ouID)
 	if err != nil {
@@ -223,13 +244,6 @@ func (p *publisherCredentialProvisioner) provisionCredentials(ctx context.Contex
 	} else {
 		p.logger.Debug("Found existing publisher credentials in DB",
 			"ouID", ouID, "clientID", existing.ClientID)
-
-		// Ensure the binding exists — idempotent, handles orgs provisioned before this was added.
-		// Non-fatal: log and continue if the ClusterAuthzRole isn't installed yet.
-		if bindErr := p.ocClient.EnsureClusterRoleBinding(ctx, existing.ClientID, schedulerRoleName); bindErr != nil {
-			p.logger.Warn("Failed to ensure ClusterAuthzRoleBinding for existing credentials",
-				"ouID", ouID, "clientID", existing.ClientID, "error", bindErr)
-		}
 
 		return &PublisherCredentials{
 			ClientID:     existing.ClientID,
@@ -292,17 +306,6 @@ func (p *publisherCredentialProvisioner) provisionCredentials(ctx context.Contex
 		return nil, fmt.Errorf("failed to encrypt publisher secret for org %s: %w", ouID, err)
 	}
 
-	// Bind the publisher app to the scheduler role in OpenChoreo so it can create/track WorkflowRuns.
-	// Uses the system OC client (not org-bound) — ClusterAuthzRoleBindings are cluster-scoped resources.
-	// Non-fatal: log and continue if the ClusterAuthzRole isn't installed yet.
-	if bindErr := p.ocClient.EnsureClusterRoleBinding(ctx, clientID, schedulerRoleName); bindErr != nil {
-		p.logger.Warn("Failed to ensure ClusterAuthzRoleBinding for new credentials",
-			"ouID", ouID, "clientID", clientID, "role", schedulerRoleName, "error", bindErr)
-	} else {
-		p.logger.Info("ClusterAuthzRoleBinding ensured",
-			"ouID", ouID, "clientID", clientID, "role", schedulerRoleName)
-	}
-
 	// Save to DB — treat as fatal since we just provisioned real credentials
 	dbCred := &models.OrgPublisherCredential{
 		OUID:                  ouID,
@@ -324,6 +327,102 @@ func (p *publisherCredentialProvisioner) provisionCredentials(ctx context.Contex
 		SecretKVPath: resolvedKVPath,
 		SecretKey:    resolvedKey,
 	}, nil
+}
+
+// provisionSchedulerCredentials provisions the scheduler-only credential, bound to schedulerRoleName; never injected into the eval-job pod.
+func (p *publisherCredentialProvisioner) provisionSchedulerCredentials(ctx context.Context, ouID, orgUUID string) error {
+	existing, err := p.schedulerCredRepo.GetByOrgName(ouID)
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("failed to look up scheduler credentials for org %s: %w", ouID, err)
+		}
+		// ErrRecordNotFound: no credentials yet, fall through to provision.
+	} else {
+		p.logger.Debug("Found existing scheduler credentials in DB",
+			"ouID", ouID, "clientID", existing.ClientID)
+
+		// Idempotent re-verify; non-fatal if the ClusterAuthzRole isn't installed yet.
+		if bindErr := p.ocClient.EnsureClusterRoleBinding(ctx, existing.ClientID, schedulerRoleName); bindErr != nil {
+			p.logger.Warn("Failed to ensure ClusterAuthzRoleBinding for existing scheduler credentials",
+				"ouID", ouID, "clientID", existing.ClientID, "error", bindErr)
+		}
+		return nil
+	}
+
+	p.logger.Info("No existing scheduler credentials, provisioning via Thunder", "ouID", ouID)
+
+	appName := "amp-scheduler-" + ouID
+	clientID, clientSecret, created, err := p.thunderClient.EnsureApp(ctx, appName, orgUUID)
+	if err != nil {
+		return fmt.Errorf("failed to provision Thunder scheduler app for org %s: %w", ouID, err)
+	}
+	p.logger.Info("Thunder EnsureApp result for scheduler credential",
+		"ouID", ouID, "clientID", clientID, "created", created, "hasSecret", clientSecret != "")
+
+	if !created && clientSecret == "" {
+		p.logger.Warn("Thunder scheduler app exists but secret not available — regenerating client secret",
+			"ouID", ouID, "clientID", clientID)
+
+		clientSecret, err = p.thunderClient.RegenerateAppClientSecret(ctx, appName)
+		if err != nil {
+			return fmt.Errorf("failed to regenerate scheduler client secret for org %s: %w", ouID, err)
+		}
+		p.logger.Info("Regenerated Thunder scheduler client secret",
+			"ouID", ouID, "clientID", clientID)
+	}
+
+	if clientSecret == "" {
+		return fmt.Errorf("failed to provision scheduler credentials for org %s: no client secret available", ouID)
+	}
+
+	location := schedulerSecretLocation(ouID)
+	secretData := map[string]string{
+		"client-id":     clientID,
+		"client-secret": clientSecret,
+	}
+
+	secretRefName, createErr := p.secretClient.CreateSecret(ctx, location, secretData)
+	if createErr != nil {
+		return fmt.Errorf("failed to store scheduler secret for org %s: %w", ouID, createErr)
+	}
+	p.logger.Info("Scheduler secret stored successfully",
+		"ouID", ouID, "secretRefName", secretRefName)
+
+	resolvedKVPath, resolvedKey, resolveErr := p.resolveSecretRef(ctx, ouID, secretRefName)
+	if resolveErr != nil {
+		return fmt.Errorf("failed to resolve SecretReference for scheduler credentials of org %s: %w", ouID, resolveErr)
+	}
+
+	encryptedSecret, err := utils.EncryptBytes([]byte(clientSecret), p.encryptionKey)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt scheduler secret for org %s: %w", ouID, err)
+	}
+
+	// ClusterAuthzRoleBindings are cluster-scoped; non-fatal if the role isn't installed yet.
+	if bindErr := p.ocClient.EnsureClusterRoleBinding(ctx, clientID, schedulerRoleName); bindErr != nil {
+		p.logger.Warn("Failed to ensure ClusterAuthzRoleBinding for new scheduler credentials",
+			"ouID", ouID, "clientID", clientID, "role", schedulerRoleName, "error", bindErr)
+	} else {
+		p.logger.Info("ClusterAuthzRoleBinding ensured for scheduler credential",
+			"ouID", ouID, "clientID", clientID, "role", schedulerRoleName)
+	}
+
+	dbCred := &models.OrgSchedulerCredential{
+		OUID:                  ouID,
+		OrgUUID:               orgUUID,
+		ClientID:              clientID,
+		SecretKVPath:          resolvedKVPath,
+		SecretKey:             resolvedKey,
+		ClientSecretEncrypted: encryptedSecret,
+	}
+	if dbErr := p.schedulerCredRepo.Upsert(dbCred); dbErr != nil {
+		return fmt.Errorf("failed to persist scheduler credentials for org %s: %w", ouID, dbErr)
+	}
+
+	p.logger.Info("Provisioned new scheduler credentials",
+		"ouID", ouID, "clientID", clientID, "kvPath", resolvedKVPath, "secretKey", resolvedKey)
+
+	return nil
 }
 
 // GetOCClientForOrg returns a cached OC client authenticated with the publisher app's
@@ -352,25 +451,35 @@ func (p *publisherCredentialProvisioner) GetOCClientForOrg(ctx context.Context, 
 
 		// DB I/O and decrypt run with no lock held; singleflight already serializes
 		// concurrent callers for this ouID.
-		cred, err := p.credRepo.GetByOrgName(ouID)
+		cred, err := p.schedulerCredRepo.GetByOrgName(ouID)
 		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil, fmt.Errorf("%w: org %s — call EnsureCredentials first", ErrPublisherCredentialNotFound, ouID)
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, fmt.Errorf("failed to look up scheduler credentials for org %s: %w", ouID, err)
 			}
-			return nil, fmt.Errorf("failed to look up publisher credentials for org %s: %w", ouID, err)
+			// Provision on demand: the periodic scheduler calls this directly and never calls EnsureCredentials.
+			p.logger.Info("No scheduler credentials found for org, provisioning on demand", "ouID", ouID)
+			if provErr := p.provisionSchedulerCredentials(ctx, ouID, ""); provErr != nil {
+				return nil, fmt.Errorf("failed to provision scheduler credentials for org %s: %w", ouID, provErr)
+			}
+			cred, err = p.schedulerCredRepo.GetByOrgName(ouID)
+			if err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return nil, fmt.Errorf("%w: org %s — provisioned but still not found: %w", ErrSchedulerCredentialNotFound, ouID, err)
+				}
+				return nil, fmt.Errorf("failed to look up scheduler credentials for org %s after provisioning: %w", ouID, err)
+			}
 		}
 		if len(cred.ClientSecretEncrypted) == 0 {
-			// Record exists but has no encrypted secret — orgs provisioned before migration 014
-			// have a null client_secret_encrypted column. Regenerate the Thunder client secret,
+			// Record exists but has no encrypted secret — regenerate the Thunder client secret,
 			// push it to the secret store, and persist the encrypted copy to DB.
 			p.logger.Info("No encrypted secret for org, regenerating Thunder client secret",
 				"ouID", ouID, "clientID", cred.ClientID)
-			newSecret, backfillErr := p.thunderClient.RegenerateClientSecret(ctx, ouID)
+			newSecret, backfillErr := p.thunderClient.RegenerateAppClientSecret(ctx, cred.ClientID)
 			if backfillErr != nil {
 				return nil, fmt.Errorf("failed to regenerate client secret for org %s: %w", ouID, backfillErr)
 			}
 			// Propagate the new secret to the secret store.
-			if _, backfillErr = p.secretClient.PatchSecret(ctx, publisherSecretLocation(ouID),
+			if _, backfillErr = p.secretClient.PatchSecret(ctx, schedulerSecretLocation(ouID),
 				map[string]string{"client-secret": newSecret}, nil); backfillErr != nil {
 				return nil, fmt.Errorf("failed to update secret store for org %s: %w", ouID, backfillErr)
 			}
@@ -379,7 +488,7 @@ func (p *publisherCredentialProvisioner) GetOCClientForOrg(ctx context.Context, 
 				return nil, fmt.Errorf("failed to encrypt regenerated client secret for org %s: %w", ouID, backfillErr)
 			}
 			cred.ClientSecretEncrypted = encrypted
-			if backfillErr = p.credRepo.Upsert(cred); backfillErr != nil {
+			if backfillErr = p.schedulerCredRepo.Upsert(cred); backfillErr != nil {
 				return nil, fmt.Errorf("failed to persist regenerated secret for org %s: %w", ouID, backfillErr)
 			}
 			p.logger.Info("Backfilled encrypted client secret", "ouID", ouID, "clientID", cred.ClientID)

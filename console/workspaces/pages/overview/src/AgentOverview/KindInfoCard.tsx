@@ -18,6 +18,7 @@
 
 import { useGetAgentKind } from "@agent-management-platform/api-client";
 import { absoluteRouteMap } from "@agent-management-platform/types";
+import { MarkdownView } from "@agent-management-platform/views";
 import {
     Box,
     Card,
@@ -32,6 +33,7 @@ import { ExternalLink, Tag } from "@wso2/oxygen-ui-icons-react";
 import { formatDistanceToNow } from "date-fns";
 import React from "react";
 import { generatePath, Link } from "react-router-dom";
+import { UppercaseCaptionLabel } from "./SectionHeader";
 
 interface KindInfoCardProps {
     orgId: string;
@@ -56,94 +58,82 @@ export const KindInfoCard: React.FC<KindInfoCardProps> = ({
     return (
         <Card variant="outlined">
             <CardContent sx={{ py: 1.5, "&:last-child": { pb: 1.5 } }}>
-                <Box pb={1}>
-                    <Typography variant="h6">Kind Details</Typography>
-                </Box>
-                <Divider sx={{ mb: 1.5 }} />
-                <Box display="flex" gap={2} minWidth={0}>
-
-                    <Box flex={1} minWidth={0}>
-                        <Typography variant="caption" color="text.secondary" fontWeight={600}
-                            sx={{ textTransform: "uppercase", letterSpacing: "0.05em", display: "block", mb: 0.75 }}>
-                            Agent Kind
-                        </Typography>
-                        {isLoading ? (
-                            <>
-                                <Skeleton variant="text" width={160} />
-                                <Skeleton variant="text" width={200} sx={{ mt: 0.25 }} />
-                            </>
-                        ) : (
-                            <>
-                                <Box display="flex" alignItems="center" gap={0.5} minWidth={0}>
-                                    <Typography variant="body2" noWrap>
-                                        {kind?.displayName ?? kindName}
-                                    </Typography>
-                                    <IconButton
-                                        size="small"
-                                        component={Link}
-                                        to={kindHref}
-                                        sx={{ p: 0.25, flexShrink: 0 }}
-                                    >
-                                        <ExternalLink size={12} />
-                                    </IconButton>
-                                </Box>
-                                {kind?.description && (
-                                    <Tooltip title={kind.description} placement="bottom-start">
-                                        <Typography variant="caption" color="text.secondary" mt={0.25}
-                                            sx={{
-                                                overflow: "hidden",
-                                                display: "-webkit-box",
-                                                WebkitLineClamp: 2,
-                                                WebkitBoxOrient: "vertical",
-                                            }}>
-                                            {kind.description}
-                                        </Typography>
-                                    </Tooltip>
-                                )}
-                            </>
-                        )}
-                    </Box>
-
-                    <Divider orientation="vertical" flexItem />
-
-                    <Box flex={1} minWidth={0}>
-                        <Typography variant="caption" color="text.secondary" fontWeight={600}
-                            sx={{ textTransform: "uppercase", letterSpacing: "0.05em", display: "block", mb: 0.75 }}>
-                            Latest Release
-                        </Typography>
-                        {isLoading ? (
-                            <Skeleton variant="rounded" height={28} />
-                        ) : !latestVersionData ? (
-                            <Typography variant="body2" color="text.secondary">No versions yet.</Typography>
-                        ) : (
-                            <Box display="flex" alignItems="center" gap={1.5} minWidth={0}>
-                                <Box display="flex" alignItems="center" gap={0.5} sx={{ flexShrink: 0 }}>
-                                    <Tag size={13} />
-                                    <Typography variant="body2" color="text.secondary" noWrap>
-                                        v{latestVersionData.version}
-                                    </Typography>
-                                </Box>
-                                <Typography variant="body2" color="text.secondary" noWrap flex={1}>
-                                    {formatDistanceToNow(
-                                        new Date(latestVersionData.createdAt), { addSuffix: true },
-                                    )}
+                <Box
+                    display="flex"
+                    alignItems="center"
+                    justifyContent="space-between"
+                    flexWrap="wrap"
+                    gap={1.5}
+                    pb={1}
+                    minWidth={0}
+                >
+                    {isLoading ? (
+                        <Skeleton variant="text" width={160} />
+                    ) : (
+                        <>
+                            <Box display="flex" alignItems="center" gap={0.5} minWidth={0}>
+                                <Typography variant="h6" noWrap>
+                                    Kind: {kind?.displayName ?? kindName}
                                 </Typography>
-                                {(framework || model) && (
-                                    <Typography variant="caption" color="text.secondary" noWrap sx={{ flexShrink: 0 }}>
-                                        {`Agent Type: ${[framework, model].filter(Boolean).join("/")}`}
-                                    </Typography>
-                                )}
                                 <IconButton
                                     size="small"
                                     component={Link}
                                     to={kindHref}
+                                    sx={{ p: 0.25, flexShrink: 0 }}
+                                    aria-label="View Agent Kind details"
                                 >
                                     <ExternalLink size={12} />
                                 </IconButton>
                             </Box>
-                        )}
-                    </Box>
 
+                            {latestVersionData && (
+                                <Box display="flex" alignItems="center" gap={1.5} minWidth={0}>
+                                    <Box display="flex" alignItems="center" gap={0.5} sx={{ flexShrink: 0 }}>
+                                        <Tag size={13} />
+                                        <Typography variant="body2" color="text.secondary" noWrap>
+                                            v{latestVersionData.version}
+                                        </Typography>
+                                    </Box>
+                                    <Typography variant="body2" color="text.secondary" noWrap>
+                                        {formatDistanceToNow(
+                                            new Date(latestVersionData.createdAt),
+                                            { addSuffix: true },
+                                        )}
+                                    </Typography>
+                                    {(framework || model) && (
+                                        <Typography variant="caption" color="text.secondary" noWrap sx={{ flexShrink: 0 }}>
+                                            {`Agent Type: ${[framework, model].filter(Boolean).join("/")}`}
+                                        </Typography>
+                                    )}
+                                </Box>
+                            )}
+                        </>
+                    )}
+                </Box>
+                <Divider sx={{ mb: 1.5 }} />
+                <Box minWidth={0}>
+                    <UppercaseCaptionLabel sx={{ display: "block", mb: 0.75 }}>
+                        Description
+                    </UppercaseCaptionLabel>
+                    {isLoading ? (
+                        <Skeleton variant="text" width={200} />
+                    ) : kind?.description ? (
+                        <Tooltip title={kind.description} placement="bottom-start">
+                            <Box
+                                sx={{
+                                    overflow: "hidden",
+                                    display: "-webkit-box",
+                                    WebkitLineClamp: 2,
+                                    WebkitBoxOrient: "vertical",
+                                }}>
+                                <MarkdownView content={kind.description} />
+                            </Box>
+                        </Tooltip>
+                    ) : (
+                        <Typography variant="body2" color="text.secondary">
+                            No description provided.
+                        </Typography>
+                    )}
                 </Box>
             </CardContent>
         </Card>

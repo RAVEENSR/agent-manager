@@ -17,10 +17,10 @@
  */
 
 import {
+  useDeployedAgentKindVersion,
   useGetAgent,
   useGetAgentBuilds,
   useListAgentDeployments,
-  useListAgentKindVersions,
 } from "@agent-management-platform/api-client";
 import {
   absoluteRouteMap,
@@ -42,18 +42,34 @@ import {
 import {
   CheckCircle as CheckCircleRounded,
   Circle as CircleOutlined,
-  Clock,
   Rocket as RocketLaunchOutlined,
-  FlaskConical as TryOutlined,
-  Link as LinkOutlined,
   PauseCircle,
   Play,
-  Tag,
 } from "@wso2/oxygen-ui-icons-react";
-import { NoDataFound, TextInput } from "@agent-management-platform/views";
-import { formatDistanceToNow } from "date-fns";
+import { NoDataFound } from "@agent-management-platform/views";
 import { generatePath, Link } from "react-router-dom";
-import { IsolationTierBadge } from "../IsolationTierIndicator";
+
+/**
+ * The agent's Deploy page — shared by every "Go to Deployment" / "Promote" /
+ * "View Deployment" link on this card.
+ */
+export function getAgentDeploymentPath(orgId: string, projectId: string, agentId: string): string {
+  return generatePath(
+    absoluteRouteMap.children.org.children.projects.children.agents.children.deployment.path,
+    { orgId, projectId, agentId },
+  );
+}
+
+/** The agent's per-environment Security (API key) page. */
+export function getAgentSecurityPath(
+  orgId: string, projectId: string, agentId: string, envId: string,
+): string {
+  return generatePath(
+    absoluteRouteMap.children.org.children.projects.children.agents
+      .children.environment.children.security.path,
+    { orgId, projectId, agentId, envId },
+  );
+}
 
 export enum DeploymentStatus {
   ACTIVE = "active",
@@ -70,6 +86,17 @@ export interface EnvironmentCardProps {
   projectId: string;
   agentId: string;
   actions?: React.ReactNode;
+  /**
+   * Rendered below the header/tabs row, in every render branch
+   * (external, not-yet-deployed, deployed) regardless of deployment status.
+   * This card no longer lists `currentDeployment.endpoints` itself (see
+   * EnvironmentCard.tsx history) — a caller that wants endpoint/invoke-URL
+   * visibility must render it here, as pages/overview's
+   * EnvCapabilitiesSection does. Individual sections (Capabilities, Configs,
+   * Agent Identity, Deployment Status, Monitors, Traces) each decide for
+   * themselves whether they have anything to show; Monitors/Traces already
+   * hide themselves while there's no live deployment traffic to report on.
+   */
   bottomContent?: React.ReactNode;
   /**
    * Whether this is the first (root) environment of the deployment pipeline.
@@ -78,9 +105,23 @@ export interface EnvironmentCardProps {
    * callers without pipeline context keep the deploy-oriented wording.
    */
   isFirstEnvironment?: boolean;
+  /** Replaces the environment name heading, e.g. a tab strip switching between sibling envs. */
+  tabsHeader?: React.ReactNode;
+  /**
+   * Suppresses the environment name heading entirely (no tabsHeader, no
+   * fallback title) — e.g. when there's only one environment and naming it
+   * adds no information.
+   */
+  hideEnvTitle?: boolean;
 }
 
-export const EnvStatus = ({ status }: { status?: DeploymentStatus, }) => {
+export const EnvStatus = ({
+  status,
+  suffix,
+}: {
+  status?: DeploymentStatus;
+  suffix?: string;
+}) => {
   const theme = useTheme();
   if (!status) {
     return null;
@@ -93,7 +134,7 @@ export const EnvStatus = ({ status }: { status?: DeploymentStatus, }) => {
         }
         variant="outlined"
         size="small"
-        label="Deployed"
+        label={suffix ? `Deployed · ${suffix}` : "Deployed"}
         color="success"
       />
     );
@@ -139,18 +180,6 @@ export const EnvStatus = ({ status }: { status?: DeploymentStatus, }) => {
   }
 };
 
-const formatRelativeTime = (value?: string | number | Date) => {
-  if (!value) {
-    return "—";
-  }
-
-  const date = value instanceof Date ? value : new Date(value);
-
-  return Number.isNaN(date.getTime())
-    ? "—"
-    : formatDistanceToNow(date, { addSuffix: true });
-};
-
 export const EnvironmentCard = (props: EnvironmentCardProps) => {
   const {
     environment,
@@ -160,8 +189,9 @@ export const EnvironmentCard = (props: EnvironmentCardProps) => {
     actions,
     bottomContent,
     isFirstEnvironment = true,
+    tabsHeader,
+    hideEnvTitle,
   } = props;
-  const theme = useTheme();
   const { data: agent, isLoading: isAgentLoading } = useGetAgent({
     orgName: orgId,
     projName: projectId,
@@ -177,13 +207,8 @@ export const EnvironmentCard = (props: EnvironmentCardProps) => {
     );
 
   const kindName = agent?.kindName;
-  const { data: kindVersions } = useListAgentKindVersions({
-    orgName: orgId,
-    kindName: kindName ?? "",
-  });
-
   const currentDeployment = deployments?.[environment?.name ?? ""];
-  const envTitle = `${environment?.displayName ?? environment?.name ?? "Environment"} Environment`;
+  const envTitle = environment?.displayName ?? environment?.name ?? "Environment";
 
   const { data: buildsData } = useGetAgentBuilds({
     orgName: !isExternal ? orgId : "",
@@ -195,19 +220,11 @@ export const EnvironmentCard = (props: EnvironmentCardProps) => {
     (b) => b.status === "Succeeded" || b.status === "Completed"
   ) ?? false;
 
-  const deployedVersion = (() => {
-    if (!currentDeployment?.imageId || !kindName) return null;
-    const matched = kindVersions?.find((v) => v.imageId === currentDeployment.imageId);
-    return matched?.version ?? null;
-  })();
-
-  const deployedVersionLabel = deployedVersion ? `v${deployedVersion}` : null;
-
-  const latestKindVersion = kindVersions?.length
-    ? [...kindVersions].sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    )[0]
-    : undefined;
+  const { deployedVersion, latestKindVersion } = useDeployedAgentKindVersion({
+    orgName: orgId,
+    kindName,
+    imageId: currentDeployment?.imageId,
+  });
 
   const isKindOutdated =
     !!kindName &&
@@ -226,25 +243,7 @@ export const EnvironmentCard = (props: EnvironmentCardProps) => {
         <CardContent>
           <Box display="flex" flexDirection="row" gap={1} justifyContent="space-between" alignItems="center">
             <Box display="flex" flexDirection="row" gap={1} alignItems="center">
-              <Typography variant="h6">{envTitle}</Typography>
-              <Chip
-                icon={
-                  <LinkOutlined size={16} color={theme.vars?.palette?.success?.main} />
-                }
-                variant="outlined"
-                size="small"
-                label="Registered"
-                color="success"
-              />
-              <Box
-                display="flex"
-                flexDirection="row"
-                gap={1}
-                alignItems="center"
-              >
-                <Clock size={16} color={theme.vars?.palette?.text?.secondary} />
-                {formatRelativeTime(agent?.createdAt)}
-              </Box>
+              {!hideEnvTitle && (tabsHeader ?? <Typography variant="h6">{envTitle}</Typography>)}
             </Box>
             <Box display="flex" flexDirection="row" gap={1} alignItems="center">
               {actions}
@@ -261,26 +260,94 @@ export const EnvironmentCard = (props: EnvironmentCardProps) => {
     return (
       <Card variant="outlined" sx={{ "&.MuiCard-root": { backgroundColor: "background.paper" } }}>
         <CardContent>
-          <Box display="flex" flexDirection="row" gap={1} alignItems="center">
-            <IsolationTierBadge tier={environment?.isolationTier} size={16} />
-            <Typography variant="h6">{envTitle}</Typography>
-            <EnvStatus status={DeploymentStatus.INACTIVE} />
+          <Box display="flex" flexDirection="row" gap={1} justifyContent="space-between" alignItems="center">
+            <Box display="flex" flexDirection="row" gap={1} alignItems="center">
+              {!hideEnvTitle && (tabsHeader ?? <Typography variant="h6">{envTitle}</Typography>)}
+            </Box>
           </Box>
+          {bottomContent}
         </CardContent>
       </Card>
     );
   }
 
   // ── Internal agent — deployment exists ────────────────────────────────────
-  const deploymentStatus = currentDeployment.status as DeploymentStatus;
-  // Metrics/traces and monitor sections only carry meaningful data while the
-  // deployment is serving traffic (active) or has failed while running (error).
-  // For idle/transitional states (deploying, suspended) there is nothing live
-  // to show, so we hide them and surface an empty state instead.
-  const showObservability =
-    deploymentStatus === DeploymentStatus.ACTIVE ||
-    deploymentStatus === DeploymentStatus.ERROR ||
-    deploymentStatus === DeploymentStatus.FAILED;
+  // The status-message block below bottomContent — computed once (rather
+  // than a separate `hasStatusMessage` boolean re-deriving the same status
+  // union) so the "is there anything to show" check and the render can never
+  // drift apart. A plain active, up-to-date deployment resolves to null, so
+  // the divider before it is skipped too.
+  const statusMessage =
+    currentDeployment.status === DeploymentStatus.INACTIVE ? (
+      <NoDataFound
+        disableBackground
+        message="Not Deployed"
+        icon={<RocketLaunchOutlined size={32} />}
+        subtitle={
+          hasSuccessfulBuild
+            ? isFirstEnvironment
+              ? "A successful build is available. Deploy it to get started."
+              : "Promote a deployment from the previous environment to get started."
+            : "No successful build found. Build the agent before deploying."
+        }
+        action={
+          hasSuccessfulBuild && (
+            <Button
+              startIcon={<RocketLaunchOutlined size={16} />}
+              variant="outlined"
+              component={Link}
+              to={getAgentDeploymentPath(orgId, projectId, agentId)}
+              size="small"
+            >
+              {isFirstEnvironment ? "Go to Deployment" : "Promote"}
+            </Button>
+          )
+        }
+      />
+    ) : currentDeployment.status === DeploymentStatus.DEPLOYING ? (
+      <NoDataFound disableBackground message="Deploying..." icon={<CircularProgress size={32} />} />
+    ) : currentDeployment.status === DeploymentStatus.ERROR ||
+      currentDeployment.status === DeploymentStatus.FAILED ? (
+      <Alert
+        severity="error"
+        sx={{ width: "100%" }}
+        action={
+          <Button
+            component={Link}
+            to={getAgentDeploymentPath(orgId, projectId, agentId)}
+            color="inherit"
+            size="small"
+          >
+            View Deployment
+          </Button>
+        }
+      >
+        Deployment failed. Check the deployment page for more details.
+      </Alert>
+    ) : currentDeployment.status === DeploymentStatus.SUSPENDED ? (
+      <NoDataFound
+        disableBackground
+        message="Suspended"
+        icon={<PauseCircle size={32} />}
+        subtitle="This deployment is currently suspended. Resume it from the deployment page to make the agent available again."
+        action={
+          <Button
+            startIcon={<Play size={16} />}
+            variant="outlined"
+            component={Link}
+            to={getAgentDeploymentPath(orgId, projectId, agentId)}
+            size="small"
+          >
+            Go to Deployment
+          </Button>
+        }
+      />
+    ) : currentDeployment.status === DeploymentStatus.ACTIVE && isKindOutdated ? (
+      <Alert severity="warning" sx={{ width: "100%" }}>
+        A newer version of this Agent Kind is available: <strong>v{latestKindVersion!.version}</strong>.{" "}
+        Currently deployed: <strong>v{deployedVersion}</strong>.
+      </Alert>
+    ) : null;
   return (
     <Card variant="outlined">
       <CardContent>
@@ -288,183 +355,39 @@ export const EnvironmentCard = (props: EnvironmentCardProps) => {
           display="flex"
           flexDirection="row"
           gap={1}
-          pb={1}
           justifyContent="space-between"
           alignItems="center"
         >
           <Box display="flex" flexDirection="row" gap={1} alignItems="center">
-            <IsolationTierBadge tier={environment?.isolationTier} size={16} />
-            <Typography variant="h6">
-              {environment?.displayName} Environment
-            </Typography>
-            {currentDeployment?.status === DeploymentStatus.ACTIVE && (
-              <>
-                <EnvStatus status={DeploymentStatus.ACTIVE} />
-                <Box
-                  display="flex"
-                  flexDirection="row"
-                  gap={1}
-                  alignItems="center"
-                >
-                  <Clock size={16} color={theme.vars?.palette?.text?.secondary} />
-                  {formatRelativeTime(currentDeployment?.lastDeployed)}
-                </Box>
-              </>
-            )}
-            {(currentDeployment?.status === DeploymentStatus.ERROR ||
-              currentDeployment?.status === DeploymentStatus.FAILED) && (
-                <EnvStatus status={currentDeployment.status as DeploymentStatus} />
-              )}
-            {currentDeployment?.status === DeploymentStatus.SUSPENDED && (
-              <EnvStatus status={DeploymentStatus.SUSPENDED} />
+            {!hideEnvTitle && (
+              tabsHeader ?? (
+                <Typography variant="h6">
+                  {envTitle}
+                </Typography>
+              )
             )}
           </Box>
           <Box display="flex" flexDirection="row" gap={1} alignItems="center">
-            {deployedVersionLabel && (
-              <Chip
-                icon={<Tag size={14} />}
-                label={deployedVersionLabel}
-                size="small"
-                variant="outlined"
-              />
-            )}
-            {currentDeployment?.status === DeploymentStatus.ACTIVE && (
-              <>
-                {actions}
-                <Button
-                  startIcon={<TryOutlined size={16} />}
-                  variant="text"
-                  component={Link}
-                  to={generatePath(
-                    absoluteRouteMap.children.org.children.projects.children
-                      .agents.children.environment.children.tryOut.path,
-                    {
-                      orgId,
-                      projectId,
-                      agentId,
-                      envId: environment?.name ?? "",
-                    }
-                  )}
-                  color="primary"
-                  size="small"
-                >
-                  Try It
-                </Button>
-              </>
-            )}
+            {currentDeployment?.status === DeploymentStatus.ACTIVE && actions}
           </Box>
         </Box>
-        <Divider />
-        <Box
-          display="flex"
-          width="100%"
-          justifyContent="center"
-          flexDirection="column"
-          gap={1}
-          pt={2}
-          alignItems="center"
-        >
-          {currentDeployment.status === DeploymentStatus.INACTIVE && (
-            <NoDataFound
-              disableBackground
-              message="Not Deployed"
-              icon={<RocketLaunchOutlined size={32} />}
-              subtitle={
-                hasSuccessfulBuild
-                  ? isFirstEnvironment
-                    ? "A successful build is available. Deploy it to get started."
-                    : "Promote a deployment from the previous environment to get started."
-                  : "No successful build found. Build the agent before deploying."
-              }
-              action={
-                hasSuccessfulBuild && (
-                  <Button
-                    startIcon={<RocketLaunchOutlined size={16} />}
-                    variant="outlined"
-                    component={Link}
-                    to={generatePath(
-                      absoluteRouteMap.children.org.children.projects.children
-                        .agents.children.deployment.path,
-                      { orgId, projectId, agentId }
-                    )}
-                    size="small"
-                  >
-                    {isFirstEnvironment ? "Go to Deployment" : "Promote"}
-                  </Button>
-                )
-              }
-            />
-          )}
-          {currentDeployment.status === DeploymentStatus.DEPLOYING && (
-            <NoDataFound disableBackground message="Deploying..." icon={<CircularProgress size={32} />} />
-          )}
-          {(currentDeployment.status === DeploymentStatus.ERROR ||
-            currentDeployment.status === DeploymentStatus.FAILED) && (
-              <Alert
-                severity="error"
-                sx={{ width: "100%" }}
-                action={
-                  <Button
-                    component={Link}
-                    to={generatePath(
-                      absoluteRouteMap.children.org.children.projects.children
-                        .agents.children.deployment.path,
-                      { orgId, projectId, agentId }
-                    )}
-                    color="inherit"
-                    size="small"
-                  >
-                    View Deployment
-                  </Button>
-                }
-              >
-                Deployment failed. Check the deployment page for more details.
-              </Alert>
-            )}
-          {currentDeployment.status === DeploymentStatus.SUSPENDED && (
-            <NoDataFound
-              disableBackground
-              message="Suspended"
-              icon={<PauseCircle size={32} />}
-              subtitle="This deployment is currently suspended. Resume it from the deployment page to make the agent available again."
-              action={
-                <Button
-                  startIcon={<Play size={16} />}
-                  variant="outlined"
-                  component={Link}
-                  to={generatePath(
-                    absoluteRouteMap.children.org.children.projects.children
-                      .agents.children.deployment.path,
-                    { orgId, projectId, agentId }
-                  )}
-                  size="small"
-                >
-                  Go to Deployment
-                </Button>
-              }
-            />
-          )}
-          {currentDeployment.status === DeploymentStatus.ACTIVE && (
-            <Box display="flex" flexGrow={1} flexDirection="column" width="100%" gap={isKindOutdated ? 2 : 4} alignItems="flex-start">
-              {isKindOutdated && (
-                <Alert severity="warning" sx={{ width: "100%" }}>
-                  A newer version of this Agent Kind is available: <strong>v{latestKindVersion!.version}</strong>.{" "}
-                  Currently deployed: <strong>v{deployedVersion}</strong>.
-                </Alert>
-              )}
-              {currentDeployment.endpoints?.map((endpoint) => (
-                <TextInput
-                  slotProps={{ input: { readOnly: true } }}
-                  key={endpoint.url}
-                  label="URL"
-                  value={endpoint.url}
-                  fullWidth
-                />
-              ))}
+        {bottomContent}
+        {statusMessage && (
+          <>
+            <Divider />
+            <Box
+              display="flex"
+              width="100%"
+              justifyContent="center"
+              flexDirection="column"
+              gap={1}
+              pt={2}
+              alignItems="center"
+            >
+              {statusMessage}
             </Box>
-          )}
-        </Box>
-        {showObservability && bottomContent}
+          </>
+        )}
       </CardContent>
     </Card>
   );

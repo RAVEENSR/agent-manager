@@ -18,11 +18,18 @@
 
 import { Box, Button, Card, CardContent, Typography } from "@wso2/oxygen-ui";
 import { Edit } from "@wso2/oxygen-ui-icons-react";
-import { DrawerWrapper, DrawerHeader, DrawerContent, TextInput, useFormValidation } from "@agent-management-platform/views";
+import {
+  DrawerWrapper,
+  DrawerHeader,
+  DrawerContent,
+  TextInput,
+  useDrawerFullscreen,
+  useFormValidation,
+} from "@agent-management-platform/views";
 import { z } from "zod";
 import { useUpdateAgent } from "@agent-management-platform/api-client";
 import { AgentResponse, UpdateAgentRequest } from "@agent-management-platform/types";
-import { LabelsEditor } from "@agent-management-platform/shared-component";
+import { LabelsEditor, MarkdownEditor } from "@agent-management-platform/shared-component";
 import { useEffect, useState, useCallback } from "react";
 
 interface EditAgentDrawerProps {
@@ -63,6 +70,7 @@ export function EditAgentDrawer({ open, onClose, agent, orgId, projectId }: Edit
     description: agent.description || '',
   });
   const [labels, setLabels] = useState<Record<string, string>>(agent.labels ?? {});
+  const { isFullscreen, toggle: toggleFullscreen, reset: resetFullscreen } = useDrawerFullscreen();
 
   const { errors, validateField, validateForm, clearErrors, setFieldError } =
     useFormValidation<EditAgentFormValues>(editAgentSchema);
@@ -79,8 +87,9 @@ export function EditAgentDrawer({ open, onClose, agent, orgId, projectId }: Edit
       });
       setLabels(agent.labels ?? {});
       clearErrors();
+      resetFullscreen();
     }
-  }, [agent, open, clearErrors]);
+  }, [agent, open, clearErrors, resetFullscreen]);
 
   const handleFieldChange = useCallback((field: keyof EditAgentFormValues, value: string) => {
     const error = validateField(field, value);
@@ -125,11 +134,13 @@ export function EditAgentDrawer({ open, onClose, agent, orgId, projectId }: Edit
     !errors.displayName && !errors.description && formData.displayName.trim().length > 0;
 
   return (
-    <DrawerWrapper open={open} onClose={onClose}>
+    <DrawerWrapper open={open} onClose={onClose} fullscreen={isFullscreen}>
       <DrawerHeader
         icon={<Edit size={24} />}
         title="Edit Agent"
         onClose={onClose}
+        isFullscreen={isFullscreen}
+        onToggleFullscreen={toggleFullscreen}
       />
       <DrawerContent>
         <form onSubmit={handleSubmit}>
@@ -149,16 +160,12 @@ export function EditAgentDrawer({ open, onClose, agent, orgId, projectId }: Edit
                     helperText={errors.displayName}
                     disabled={isPending}
                   />
-                  <TextInput
-                    placeholder="Short description of what this agent does"
+                  <MarkdownEditor
+                    id="description"
                     label="Description (optional)"
-                    fullWidth
-                    size="small"
-                    multiline
-                    minRows={2}
-                    maxRows={6}
+                    placeholder="Short description of what this agent does. Markdown is supported."
                     value={formData.description || ''}
-                    onChange={(e) => handleFieldChange('description', e.target.value)}
+                    onChange={(value) => handleFieldChange('description', value)}
                     error={!!errors.description}
                     helperText={errors.description}
                     disabled={isPending}

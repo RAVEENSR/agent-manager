@@ -25,24 +25,31 @@ import (
 
 	"github.com/wso2/agent-manager/agent-manager-observer/controllers"
 	"github.com/wso2/agent-manager/agent-manager-observer/middleware"
+	"github.com/wso2/agent-manager/agent-manager-observer/rbac"
 )
 
-// rejectPublisherToken mirrors the REST RejectPublisherAudience guard for the
-// am-obs-mcp logs/build-logs/metrics tools. Publisher-audience (amp-publisher-*)
-// tokens are allowed on /mcp for the trace tools, but must never read logs,
-// build logs or metrics on any transport. The per-request bearer token is
-// carried on req.Extra.Header (set by the streamable-HTTP transport for every
-// tool call); JWTAuth has already verified it, so this only re-reads the
-// audience claim.
-func rejectPublisherToken(req *gomcp.CallToolRequest) error {
-	var authHeader string
-	if req != nil && req.Extra != nil && req.Extra.Header != nil {
-		authHeader = req.Extra.Header.Get("Authorization")
+// requireToolPermission builds the per-call authorization guard for a tool,
+// applying the same policy as the REST routes (middleware.AuthorizePermission):
+// ordinary tokens need the tool's amp scope when RBAC is enabled, and
+// publisher-audience (amp-publisher-*) tokens are confined to their implicit
+// trace-read permission regardless of the flag. The per-call bearer token is
+// read from req.Extra.Header (set by the streamable-HTTP transport for every
+// tool call); JWTAuth has already verified it. The handler ctx cannot be used
+// instead: the transport derives it from the session-initializing request, so
+// middleware.GetTokenClaims(ctx) would reflect the initialize token, not the
+// current call's.
+func requireToolPermission(rbacEnabled bool, perm rbac.Permission) func(*gomcp.CallToolRequest) error {
+	return func(req *gomcp.CallToolRequest) error {
+		var authHeader string
+		if req != nil && req.Extra != nil && req.Extra.Header != nil {
+			authHeader = req.Extra.Header.Get("Authorization")
+		}
+		claims := middleware.ParseUnverifiedClaims(authHeader)
+		if err := middleware.AuthorizePermission(claims, perm, rbacEnabled); err != nil {
+			return fmt.Errorf("%w: this tool requires the %s scope", err, perm.Scope())
+		}
+		return nil
 	}
-	if middleware.IsPublisherAudience(authHeader) {
-		return fmt.Errorf("publisher tokens are not permitted on this tool")
-	}
-	return nil
 }
 
 // maxLogsLimit is the maximum "limit" get_runtime_logs accepts, mirroring
@@ -81,24 +88,24 @@ func (t *Toolsets) registerObservabilityTools(server *gomcp.Server) {
 		Name: "get_runtime_logs",
 		Description: "Return runtime logs for an agent. " +
 			"Runtime logs are the application logs emitted by a deployed agent, and they can be filtered by time window, log level, sort order, or text search.",
-	}, withToolLogging("get_runtime_logs", getRuntimeLogs(t.Observability)))
+	}, withToolLogging("get_runtime_logs", getRuntimeLogs(t.Observability, requireToolPermission(t.RBACEnabled, rbac.LogRead))))
 
 	gomcp.AddTool(server, &gomcp.Tool{
 		Name: "get_build_logs",
 		Description: "Return logs for a specific build of an internal agent. " +
 			"Build logs are the step-by-step output produced while packaging the agent source into a runnable image.",
-	}, withToolLogging("get_build_logs", getBuildLogs(t.Observability)))
+	}, withToolLogging("get_build_logs", getBuildLogs(t.Observability, requireToolPermission(t.RBACEnabled, rbac.BuildLogRead))))
 
 	gomcp.AddTool(server, &gomcp.Tool{
 		Name: "get_metrics",
 		Description: "Return CPU and memory usage, request and limit metrics for an agent over a selected time range. " +
 			"Metrics describe runtime resource consumption for a deployment in a specific environment.",
-	}, withToolLogging("get_metrics", getMetrics(t.Observability)))
+	}, withToolLogging("get_metrics", getMetrics(t.Observability, requireToolPermission(t.RBACEnabled, rbac.MetricRead))))
 }
 
-func getRuntimeLogs(obs *controllers.ObservabilityController) func(context.Context, *gomcp.CallToolRequest, runtimeLogsInput) (*gomcp.CallToolResult, any, error) {
+func getRuntimeLogs(obs *controllers.ObservabilityController, authorize func(*gomcp.CallToolRequest) error) func(context.Context, *gomcp.CallToolRequest, runtimeLogsInput) (*gomcp.CallToolResult, any, error) {
 	return func(ctx context.Context, req *gomcp.CallToolRequest, input runtimeLogsInput) (*gomcp.CallToolResult, any, error) {
-		if err := rejectPublisherToken(req); err != nil {
+		if err := authorize(req); err != nil {
 			return nil, nil, err
 		}
 		organization, err := requireField(input.Organization, "organization")
@@ -162,9 +169,9 @@ func getRuntimeLogs(obs *controllers.ObservabilityController) func(context.Conte
 	}
 }
 
-func getBuildLogs(obs *controllers.ObservabilityController) func(context.Context, *gomcp.CallToolRequest, buildLogsInput) (*gomcp.CallToolResult, any, error) {
+func getBuildLogs(obs *controllers.ObservabilityController, authorize func(*gomcp.CallToolRequest) error) func(context.Context, *gomcp.CallToolRequest, buildLogsInput) (*gomcp.CallToolResult, any, error) {
 	return func(ctx context.Context, req *gomcp.CallToolRequest, input buildLogsInput) (*gomcp.CallToolResult, any, error) {
-		if err := rejectPublisherToken(req); err != nil {
+		if err := authorize(req); err != nil {
 			return nil, nil, err
 		}
 		organization, err := requireField(input.Organization, "organization")
@@ -184,9 +191,9 @@ func getBuildLogs(obs *controllers.ObservabilityController) func(context.Context
 	}
 }
 
-func getMetrics(obs *controllers.ObservabilityController) func(context.Context, *gomcp.CallToolRequest, metricsInput) (*gomcp.CallToolResult, any, error) {
+func getMetrics(obs *controllers.ObservabilityController, authorize func(*gomcp.CallToolRequest) error) func(context.Context, *gomcp.CallToolRequest, metricsInput) (*gomcp.CallToolResult, any, error) {
 	return func(ctx context.Context, req *gomcp.CallToolRequest, input metricsInput) (*gomcp.CallToolResult, any, error) {
-		if err := rejectPublisherToken(req); err != nil {
+		if err := authorize(req); err != nil {
 			return nil, nil, err
 		}
 		organization, err := requireField(input.Organization, "organization")

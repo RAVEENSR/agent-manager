@@ -24,6 +24,9 @@ import type {
   UpdateAgentDeploySettingsRequest,
   UpdateAgentConfigurationsPathParams,
   UpdateAgentConfigurationsRequest,
+  RegenerateTracingTokenPathParams,
+  RegenerateTracingTokenRequest,
+  RegenerateTracingTokenResponse,
   DeploymentListResponse,
   DeploymentResponse,
   ListAgentDeploymentsPathParams,
@@ -116,6 +119,25 @@ export async function updateAgentConfigurations(params: UpdateAgentConfiguration
         { token },
     );
     if (!res.ok) throw await res.json();
+}
+
+// eslint-disable-next-line max-len
+export async function regenerateTracingToken(params: RegenerateTracingTokenPathParams, body: RegenerateTracingTokenRequest, getToken?: () => Promise<string>)
+: Promise<RegenerateTracingTokenResponse> {
+    const { orgName = "default", projName = "default", agentName } = params;
+
+    if (!agentName) {
+        throw new Error("agentName is required");
+    }
+
+    const token = getToken ? await getToken() : undefined;
+    const res = await httpPOST(
+        `${SERVICE_BASE}/orgs/${encodeURIComponent(orgName)}/projects/${encodeURIComponent(projName)}/agents/${encodeURIComponent(agentName)}/tracing-token/regenerate`,
+        body,
+        { token },
+    );
+    if (!res.ok) throw await res.json();
+    return res.json();
 }
 
 // eslint-disable-next-line max-len

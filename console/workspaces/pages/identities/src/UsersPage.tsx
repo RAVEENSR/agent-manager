@@ -146,18 +146,20 @@ export const UsersPage: React.FC = () => {
               </Stack>
             }
           />
-          {!isLoading && total === 0 ? (
-            <ListingTable.EmptyState
-              illustration={<Users size={64} />}
-              title="No users yet"
-              description='Click "Add User" to create one or "Invite User" to invite someone.'
-            />
-          ) : !isLoading && filteredUsers.length === 0 ? (
-            <ListingTable.EmptyState
-              illustration={<Users size={64} />}
-              title="No users found"
-              description={`No users match "${search}". Try a different search term.`}
-            />
+          {!isLoading && filteredUsers.length === 0 ? (
+            search ? (
+              <ListingTable.EmptyState
+                illustration={<Users size={64} />}
+                title="No users found"
+                description={`No users match "${search}". Try a different search term.`}
+              />
+            ) : (
+              <ListingTable.EmptyState
+                illustration={<Users size={64} />}
+                title="No users yet"
+                description='Click "Add User" to create one or "Invite User" to invite someone.'
+              />
+            )
           ) : (
             <ListingTable variant="table">
               <ListingTable.Head>

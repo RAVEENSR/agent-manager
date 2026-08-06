@@ -18,8 +18,8 @@ import {
 import type { PageMetadata } from "@agent-management-platform/types";
 
 export const metaData: PageMetadata = {
-  title: "MCP Proxies",
-  description: "A page component for MCP Proxy management",
+  title: "MCP Servers",
+  description: "A page component for MCP Server management",
   icon: MCPLogo,
   path: "/mcp-proxies",
   component: MCPProxiesOrganization,

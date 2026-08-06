@@ -17,9 +17,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { debounce } from "lodash";
-import { useFetchMCPProxyServerInfo } from "@agent-management-platform/api-client";
+import {
+  useFetchMCPProxyServerInfo,
+  useListGateways,
+} from "@agent-management-platform/api-client";
 import {
   type Environment,
+  type GatewayResponse,
   type MCPServerInfoFetchResponse,
 } from "@agent-management-platform/types";
 import {
@@ -36,22 +40,18 @@ import {
   Form,
   FormControl,
   FormLabel,
-  IconButton,
-  InputAdornment,
+  MenuItem,
+  Select,
   Stack,
   TextField,
   Tooltip,
   Typography,
 } from "@wso2/oxygen-ui";
-import {
-  ChevronDown,
-  Eye,
-  EyeOff,
-  HelpCircle,
-} from "@wso2/oxygen-ui-icons-react";
+import { ChevronDown, HelpCircle } from "@wso2/oxygen-ui-icons-react";
 import { useSnackBar } from "@agent-management-platform/views";
 import { validateEndpointUrl } from "@agent-management-platform/shared-component";
 import { MCPCapabilitiesView } from "../components/MCPCapabilitiesView";
+import { AuthHeaderRow } from "./AuthHeaderRow";
 
 // EndpointDraft is a single endpoint captured in the form. Its `id` maps to the backend
 // endpoint handle (unique within the parent proxy); a fresh draft carries a temporary
@@ -65,6 +65,11 @@ export interface EndpointDraft {
   authValue: string;
   // Environment UUIDs (not names) this endpoint serves — stable across renames.
   environments: string[];
+  // Egress gateway chosen per environment UUID, for environments with 2+
+  // egress-capable gateways (a single candidate is inferred server-side, so it's
+  // omitted here). Once a binding is deployed, its entry is the deployed gateway
+  // and is locked; entries for undeployed bindings are the user's in-form pick.
+  gatewayByEnv?: Record<string, string>;
   fetchedInfo: MCPServerInfoFetchResponse;
   serverName?: string;
   serverVersion?: string;
@@ -113,9 +118,23 @@ export function EndpointFormFields({
     useState(hasStoredCredential);
   const [showAuthValue, setShowAuthValue] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(hasStoredCredential);
+  // Mirrors Postman's per-header checkbox: unchecking excludes the header from the
+  // fetch/save without losing the typed key/value.
+  const [authEnabled, setAuthEnabled] = useState(true);
   const [selectedEnvIds, setSelectedEnvIds] = useState<string[]>(
     initialDraft?.environments ?? [],
   );
+  // Gateway ids the endpoint is already deployed to, per environment — read once
+  // from initialDraft (GET only echoes gatewayId for a binding that's actually
+  // deployed), so this never changes for the life of the form and locks the select.
+  const deployedGatewayByEnv = useMemo(
+    () => initialDraft?.gatewayByEnv ?? {},
+    [initialDraft],
+  );
+  // User's in-form gateway pick per environment, for bindings not yet deployed.
+  const [selectedGatewayByEnv, setSelectedGatewayByEnv] = useState<
+    Record<string, string>
+  >({});
   const [fetchedInfo, setFetchedInfo] =
     useState<MCPServerInfoFetchResponse | null>(
       initialDraft?.fetchedInfo ?? null,
@@ -123,10 +142,64 @@ export function EndpointFormFields({
   const [urlError, setUrlError] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
 
+  // When exactly one environment is available, there's nothing to choose between —
+  // assign it automatically instead of showing a single-option selector.
+  useEffect(() => {
+    const onlyEnvId =
+      availableEnvironments.length === 1 ? availableEnvironments[0].id : null;
+    if (!onlyEnvId) return;
+    setSelectedEnvIds((prev) => (prev.length === 0 ? [onlyEnvId] : prev));
+  }, [availableEnvironments]);
+
+  const { data: gatewaysData } = useListGateways({ orgName: orgId });
+
+  // Egress-capable gateways (EGRESS or BOTH), grouped by the environment UUIDs
+  // they're attached to. An environment with 0-1 candidates needs no picker: the
+  // server infers the sole candidate, or there's genuinely nothing to deploy to.
+  const egressGatewaysByEnv = useMemo(() => {
+    const map: Record<string, GatewayResponse[]> = {};
+    (gatewaysData?.gateways ?? []).forEach((gateway) => {
+      if (gateway.gatewayType !== "EGRESS" && gateway.gatewayType !== "BOTH") {
+        return;
+      }
+      (gateway.environments ?? []).forEach((env) => {
+        if (!env.id) return;
+        (map[env.id] ??= []).push(gateway);
+      });
+    });
+    return map;
+  }, [gatewaysData]);
+
+  const environmentNameById = useMemo(() => {
+    const map: Record<string, string> = {};
+    availableEnvironments.forEach((env) => {
+      if (env.id) map[env.id] = env.displayName || env.name;
+    });
+    return map;
+  }, [availableEnvironments]);
+
+  // Per-environment gateway actually sent on save: the locked deployed gateway
+  // where one exists, otherwise the user's in-form pick. Environments left
+  // unset are simply absent, so the payload omits gatewayId for them.
+  const effectiveGatewayByEnv = useMemo(() => {
+    const map: Record<string, string> = {};
+    selectedEnvIds.forEach((envId) => {
+      const value = deployedGatewayByEnv[envId] ?? selectedGatewayByEnv[envId];
+      if (value) map[envId] = value;
+    });
+    return map;
+  }, [selectedEnvIds, deployedGatewayByEnv, selectedGatewayByEnv]);
+
   const trimmedUrl = url.trim();
   const isFetched = Boolean(fetchedInfo);
   const isFetching = fetchServerInfo.isPending;
   const canAdd = isFetched && selectedEnvIds.length > 0;
+  // Unchecking the header excludes it from the fetch/save entirely, same as leaving
+  // it blank. An untouched masked credential means "keep the stored value", so it
+  // resolves to empty (omitted) rather than replaying the sentinel to the backend.
+  const effectiveAuthHeader = authEnabled ? authHeader.trim() : "";
+  const effectiveAuthValue = authEnabled ? authValue.trim() : "";
+  const resolvedAuthValue = isCredentialMasked ? "" : effectiveAuthValue;
   // In edit mode, Save stays disabled until the user actually changes something; a
   // brand-new endpoint (no initialDraft) is always a change. The credential counts as
   // changed only once the masked stored value has been replaced, and a re-fetch counts
@@ -135,11 +208,21 @@ export function EndpointFormFields({
     !initialDraft ||
     name.trim() !== initialDraft.name ||
     trimmedUrl !== initialDraft.url ||
-    authHeader.trim() !== initialDraft.authHeader ||
-    (!isCredentialMasked && authValue.trim().length > 0) ||
+    effectiveAuthHeader !== initialDraft.authHeader ||
+    Boolean(resolvedAuthValue) ||
     !sameIdSet(selectedEnvIds, initialDraft.environments) ||
+    !sameGatewayMap(effectiveGatewayByEnv, initialDraft.gatewayByEnv ?? {}) ||
     capabilitiesChanged(fetchedInfo, initialDraft.fetchedInfo);
-  const canSave = canAdd && hasChanges;
+  // An environment with 2+ egress candidates and no pick would be rejected by the
+  // server as ambiguous, so require a selection wherever the picker renders.
+  const hasGatewaySelection = selectedEnvIds.every((envId) => {
+    const candidates = egressGatewaysByEnv[envId] ?? [];
+    return (
+      candidates.length <= 1 ||
+      Boolean(deployedGatewayByEnv[envId] ?? selectedGatewayByEnv[envId])
+    );
+  });
+  const canSave = canAdd && hasChanges && hasGatewaySelection;
 
   const clearFetched = useCallback(() => {
     setFetchedInfo(null);
@@ -153,9 +236,9 @@ export function EndpointFormFields({
 
   const performFetch = useCallback(async () => {
     const urlValidationError = validateEndpointUrl(trimmedUrl, {
-      requiredMessage: "Enter a valid MCP Proxy endpoint URL.",
-      invalidMessage: "Enter a valid MCP Proxy endpoint URL.",
-      protocolMessage: "Enter a valid MCP Proxy endpoint URL.",
+      requiredMessage: "Enter a valid MCP Server endpoint URL.",
+      invalidMessage: "Enter a valid MCP Server endpoint URL.",
+      protocolMessage: "Enter a valid MCP Server endpoint URL.",
     });
     if (urlValidationError) {
       setUrlError(urlValidationError);
@@ -163,10 +246,9 @@ export function EndpointFormFields({
     }
     setUrlError(null);
 
-    const header = authHeader.trim();
     // The stored credential is never returned, so it can't be replayed to the
     // live fetch — ask the user to re-enter it before re-fetching.
-    if (header && isCredentialMasked) {
+    if (effectiveAuthHeader && isCredentialMasked) {
       setIsCredentialMasked(false);
       setAuthValue("");
       setAdvancedOpen(true);
@@ -175,8 +257,7 @@ export function EndpointFormFields({
       );
       return;
     }
-    const value = authValue.trim();
-    if (Boolean(header) !== Boolean(value)) {
+    if (Boolean(effectiveAuthHeader) !== Boolean(effectiveAuthValue)) {
       setAdvancedOpen(true);
       setAuthError("Enter both an authentication header and value.");
       return;
@@ -184,8 +265,15 @@ export function EndpointFormFields({
     setAuthError(null);
 
     const body =
-      header && value
-        ? { url: trimmedUrl, auth: { type: "api-key" as const, header, value } }
+      effectiveAuthHeader && effectiveAuthValue
+        ? {
+            url: trimmedUrl,
+            auth: {
+              type: "api-key" as const,
+              header: effectiveAuthHeader,
+              value: effectiveAuthValue,
+            },
+          }
         : { url: trimmedUrl };
 
     const generation = ++fetchGenerationRef.current;
@@ -218,7 +306,15 @@ export function EndpointFormFields({
         pushSnackBar({ message, type: "error" });
       }
     }
-  }, [authHeader, authValue, fetchServerInfo, orgId, pushSnackBar, trimmedUrl]);
+  }, [
+    effectiveAuthHeader,
+    effectiveAuthValue,
+    isCredentialMasked,
+    fetchServerInfo,
+    orgId,
+    pushSnackBar,
+    trimmedUrl,
+  ]);
 
   // Auto-fetch server info shortly after the URL or auth fields settle, instead of
   // requiring an explicit "Fetch" click. `performFetch` is re-created on every render
@@ -251,19 +347,17 @@ export function EndpointFormFields({
     }
     if (!trimmedUrl) return;
     debouncedFetch();
-  }, [trimmedUrl, authHeader, authValue, debouncedFetch]);
+  }, [trimmedUrl, authHeader, authValue, authEnabled, debouncedFetch]);
 
   const handleAdd = useCallback(() => {
     if (!fetchedInfo || selectedEnvIds.length === 0) return;
-    // An untouched masked credential means "keep the stored value" — emit an empty
-    // authValue so the save path omits it and the backend preserves the secret.
-    const resolvedAuthValue = isCredentialMasked ? "" : authValue.trim();
     onAdd({
       name: name.trim(),
       url: trimmedUrl,
-      authHeader: authHeader.trim(),
+      authHeader: effectiveAuthHeader,
       authValue: resolvedAuthValue,
       environments: selectedEnvIds,
+      gatewayByEnv: effectiveGatewayByEnv,
       fetchedInfo,
       serverName:
         getServerInfoValue(fetchedInfo.serverInfo, "name") ??
@@ -273,11 +367,11 @@ export function EndpointFormFields({
         initialDraft?.serverVersion,
     });
   }, [
-    authHeader,
-    authValue,
+    effectiveAuthHeader,
+    resolvedAuthValue,
+    effectiveGatewayByEnv,
     fetchedInfo,
     initialDraft,
-    isCredentialMasked,
     name,
     onAdd,
     selectedEnvIds,
@@ -293,11 +387,6 @@ export function EndpointFormFields({
 
   return (
     <Form.Stack spacing={2.5}>
-      <Typography variant="body2" color="text.secondary">
-        Point to your MCP server and choose the environments this endpoint
-        serves. Capabilities are fetched automatically once the URL is valid.
-      </Typography>
-
       <FormControl fullWidth>
         <FormLabel>Endpoint Name</FormLabel>
         <TextField
@@ -310,7 +399,7 @@ export function EndpointFormFields({
       </FormControl>
 
       <FormControl fullWidth error={Boolean(urlError)}>
-        <FormLabel required>MCP Proxy Endpoint URL</FormLabel>
+        <FormLabel required>MCP Server Endpoint URL</FormLabel>
         <TextField
           fullWidth
           value={url}
@@ -319,7 +408,7 @@ export function EndpointFormFields({
             clearFetched();
             setUrlError(null);
           }}
-          placeholder="Enter URL of your MCP Proxy"
+          placeholder="Enter URL of your MCP Server"
           error={Boolean(urlError)}
           helperText={urlError}
         />
@@ -342,123 +431,140 @@ export function EndpointFormFields({
           </Stack>
         </AccordionSummary>
         <AccordionDetails>
-          <Form.Stack spacing={2}>
-            <Typography variant="subtitle2" fontWeight={600}>
-              Configure Authentication Header
-            </Typography>
-            <Form.Stack
-              direction={{ xs: "column", md: "row" }}
-              spacing={2}
-              useFlexGap
-            >
-              <FormControl sx={{ flex: 1 }} error={Boolean(authError)}>
-                <FormLabel>Header</FormLabel>
-                <TextField
-                  fullWidth
-                  value={authHeader}
-                  onChange={(event) => {
-                    setAuthHeader(event.target.value);
-                    clearFetched();
-                    setAuthError(null);
-                  }}
-                  placeholder="Header"
-                  error={Boolean(authError)}
-                />
-              </FormControl>
-              <FormControl sx={{ flex: 1 }} error={Boolean(authError)}>
-                <FormLabel>Value</FormLabel>
-                <TextField
-                  fullWidth
-                  value={authValue}
-                  onFocus={() => {
-                    // Reveal a blank field so the user replaces the hidden
-                    // stored credential rather than editing the mask.
-                    if (isCredentialMasked) {
-                      setAuthValue("");
-                      setIsCredentialMasked(false);
-                      clearFetched();
-                    }
-                  }}
-                  onChange={(event) => {
-                    setAuthValue(event.target.value);
-                    setIsCredentialMasked(false);
-                    clearFetched();
-                    setAuthError(null);
-                  }}
-                  placeholder="Value"
-                  error={Boolean(authError)}
-                  helperText={
-                    authError ??
-                    (isCredentialMasked
-                      ? "Leave unchanged to keep the stored value."
-                      : undefined)
-                  }
-                  type={showAuthValue ? "text" : "password"}
-                  slotProps={{
-                    input: {
-                      endAdornment: (
-                        <InputAdornment position="end">
-                          <IconButton
-                            aria-label={
-                              showAuthValue
-                                ? "Hide header value"
-                                : "Show header value"
-                            }
-                            onClick={() => setShowAuthValue((prev) => !prev)}
-                            edge="end"
-                          >
-                            {showAuthValue ? (
-                              <EyeOff size={18} />
-                            ) : (
-                              <Eye size={18} />
-                            )}
-                          </IconButton>
-                        </InputAdornment>
-                      ),
-                    },
-                  }}
-                />
-              </FormControl>
-            </Form.Stack>
-          </Form.Stack>
+          <AuthHeaderRow
+            enabled={authEnabled}
+            onEnabledChange={(enabled) => {
+              setAuthEnabled(enabled);
+              clearFetched();
+              setAuthError(null);
+            }}
+            headerValue={authHeader}
+            onHeaderChange={(value) => {
+              setAuthHeader(value);
+              clearFetched();
+              setAuthError(null);
+            }}
+            valueValue={authValue}
+            onValueFocus={() => {
+              // Reveal a blank field so the user replaces the hidden
+              // stored credential rather than editing the mask.
+              if (isCredentialMasked) {
+                setAuthValue("");
+                setIsCredentialMasked(false);
+                clearFetched();
+              }
+            }}
+            onValueChange={(value) => {
+              setAuthValue(value);
+              setIsCredentialMasked(false);
+              clearFetched();
+              setAuthError(null);
+            }}
+            showValue={showAuthValue}
+            onToggleShowValue={() => setShowAuthValue((prev) => !prev)}
+            error={Boolean(authError)}
+            caption={
+              authError ??
+              (isCredentialMasked
+                ? "Leave unchanged to keep the stored value."
+                : null)
+            }
+            captionColor={authError ? "error" : "text.secondary"}
+          />
         </AccordionDetails>
       </Accordion>
 
-      <FormControl fullWidth>
-        <FormLabel required>Environments</FormLabel>
-        <Autocomplete
-          multiple
-          options={availableEnvironments}
-          size="small"
-          value={availableEnvironments.filter(
-            (env) => env.id != null && selectedEnvIds.includes(env.id),
+      {availableEnvironments.length !== 1 && (
+        <FormControl fullWidth>
+          <FormLabel required={availableEnvironments.length > 1}>
+            Environments
+          </FormLabel>
+          {availableEnvironments.length > 1 ? (
+            <>
+              <Autocomplete
+                multiple
+                options={availableEnvironments}
+                size="small"
+                value={availableEnvironments.filter(
+                  (env) => env.id != null && selectedEnvIds.includes(env.id),
+                )}
+                onChange={(_, selected) =>
+                  setSelectedEnvIds(
+                    selected
+                      .map((env) => env.id)
+                      .filter((id): id is string => Boolean(id)),
+                  )
+                }
+                getOptionLabel={(option) => option.displayName || option.name}
+                isOptionEqualToValue={(option, value) => option.id === value.id}
+                renderInput={(params) => (
+                  <TextField {...params} placeholder="Select environment(s)" />
+                )}
+                sx={{ mt: 0.5 }}
+              />
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ mt: 0.5 }}
+              >
+                An environment can be assigned to only one endpoint.
+              </Typography>
+            </>
+          ) : (
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+              All environments are already assigned
+            </Typography>
           )}
-          onChange={(_, selected) =>
-            setSelectedEnvIds(
-              selected
-                .map((env) => env.id)
-                .filter((id): id is string => Boolean(id)),
-            )
-          }
-          getOptionLabel={(option) => option.displayName || option.name}
-          isOptionEqualToValue={(option, value) => option.id === value.id}
-          renderInput={(params) => (
-            <TextField
-              {...params}
-              placeholder={
-                availableEnvironments.length === 0
-                  ? "All environments are already assigned"
-                  : "Select environment(s)"
+        </FormControl>
+      )}
+
+      {selectedEnvIds.map((envId) => {
+        const candidates = egressGatewaysByEnv[envId] ?? [];
+        // 0 or 1 candidate needs no picker: the server infers the sole one (or
+        // there's nothing to deploy to yet — the ingress-only case).
+        if (candidates.length <= 1) return null;
+        const deployed = deployedGatewayByEnv[envId];
+        return (
+          <FormControl fullWidth key={envId}>
+            <FormLabel required>
+              Egress gateway — {environmentNameById[envId] ?? envId}
+            </FormLabel>
+            <Select
+              size="small"
+              value={deployed ?? selectedGatewayByEnv[envId] ?? ""}
+              disabled={Boolean(deployed)}
+              onChange={(e) =>
+                setSelectedGatewayByEnv({
+                  ...selectedGatewayByEnv,
+                  [envId]: e.target.value as string,
+                })
               }
-            />
-          )}
-          disabled={availableEnvironments.length === 0}
-          sx={{ mt: 0.5 }}
-        />
-        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
-          An environment can be assigned to only one endpoint.
-        </Typography>
-      </FormControl>
+            >
+              {candidates.map((gw) => (
+                <MenuItem key={gw.uuid} value={gw.uuid}>
+                  {gw.displayName || gw.name}
+                </MenuItem>
+              ))}
+            </Select>
+            {deployed ? (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ mt: 0.5 }}
+              >
+                Placement is fixed once deployed. Delete and recreate the
+                binding to change it.
+              </Typography>
+            ) : (
+              !selectedGatewayByEnv[envId] && (
+                <Typography variant="caption" color="error" sx={{ mt: 0.5 }}>
+                  Select an egress gateway for this environment.
+                </Typography>
+              )
+            )}
+          </FormControl>
+        );
+      })}
 
       <Collapse in={isFetching || isFetched} timeout="auto" unmountOnExit>
         <Stack spacing={2}>
@@ -530,6 +636,17 @@ function sameIdSet(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   const setB = new Set(b);
   return a.every((id) => setB.has(id));
+}
+
+// Whether the per-environment gateway selection matches the stored one.
+function sameGatewayMap(
+  a: Record<string, string>,
+  b: Record<string, string>,
+): boolean {
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((key) => a[key] === b[key]);
 }
 
 // Whether a re-fetch produced capabilities that differ from the stored ones. Only the

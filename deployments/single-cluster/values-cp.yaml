@@ -7,6 +7,10 @@ openchoreoApi:
     server:
       publicUrl: "http://api.openchoreo.localhost:8080"
 
+features:
+  secretManagement:
+    enabled: true
+
 gateway:
   httpPort: 8080
   httpsPort: 8443

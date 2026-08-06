@@ -44,6 +44,7 @@ export interface UpdateAgentDeploySettingsRequest {
   enableOAuthSecurity?: boolean;
   corsConfig?: CorsConfig;
   oauthConfig?: OAuthConfig;
+  resilienceTimeoutSeconds?: number;
 }
 
 export type UpdateAgentDeploySettingsPathParams = AgentPathParams;
@@ -55,6 +56,20 @@ export interface UpdateAgentConfigurationsRequest {
 }
 
 export type UpdateAgentConfigurationsPathParams = AgentPathParams;
+
+export interface RegenerateTracingTokenRequest {
+  environmentName: string;
+  /** Go duration string (e.g. "2160h"). Omit to use the server-configured default. */
+  expiresIn?: string;
+}
+
+export type RegenerateTracingTokenPathParams = AgentPathParams;
+
+export interface RegenerateTracingTokenResponse {
+  environmentName: string;
+  expiresAt: number;
+  rotatedAt: number;
+}
 
 // Responses
 export interface DeploymentResponse {
@@ -119,6 +134,17 @@ export interface ConfigurationResponse {
   projectName: string;
   agentName: string;
   environment: string;
+  enableAutoInstrumentation?: boolean;
+  instrumentationVersion?: string;
+  enableApiKeySecurity?: boolean;
+  enableOAuthSecurity?: boolean;
+  corsConfig?: CorsConfig;
+  oauthConfig?: OAuthConfig;
+  /**
+   * Max duration (seconds) the gateway keeps a response open between the agent and the
+   * client before cutting it off, for this agent's endpoint in this environment.
+   */
+  resilienceTimeoutSeconds?: number;
   configurations: ConfigurationData;
 }
 

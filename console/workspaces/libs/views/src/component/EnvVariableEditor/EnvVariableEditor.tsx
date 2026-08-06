@@ -182,21 +182,29 @@ export function EnvVariableEditor({
             slotProps={{ input: { endAdornment: valueEndAdornment } }}
           />
         </Box>
-        {onSensitiveChange && (
-          <Box mr={4}>
-            <FormControlLabel
-              control={
-                <Checkbox
-                  size="small"
-                  checked={isSensitive}
-                  onChange={(e) => onSensitiveChange(e.target.checked)}
-                />
-              }
-              label="Mark as Secret"
-              sx={{ whiteSpace: 'nowrap', marginRight: 0 }}
-            />
-          </Box>
-        )}
+        {/* Always reserve this slot, same reasoning as the edit/delete icons below:
+            a row with no onSensitiveChange (e.g. a kind-declared secret, which can't
+            be un-marked) would otherwise be narrower than its siblings and throw off
+            the Key/Value column alignment across rows. */}
+        <Box
+          mr={4}
+          sx={{
+            visibility: onSensitiveChange ? 'visible' : 'hidden',
+            pointerEvents: onSensitiveChange ? 'auto' : 'none',
+          }}
+        >
+          <FormControlLabel
+            control={
+              <Checkbox
+                size="small"
+                checked={isSensitive}
+                onChange={(e) => onSensitiveChange?.(e.target.checked)}
+              />
+            }
+            label="Mark as Secret"
+            sx={{ whiteSpace: 'nowrap', marginRight: 0 }}
+          />
+        </Box>
         <Box pb={1} display="flex" alignItems="center">
           {/* Always reserve this slot so the delete buttons stay aligned across
               rows. Existing secrets toggle between Edit (locked) and Cancel

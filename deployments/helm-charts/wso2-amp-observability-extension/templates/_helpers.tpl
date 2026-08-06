@@ -51,6 +51,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+Accepted token audiences: auth.audience plus publicUrl with the trailing slash
+Thunder stamps on RFC 8707 resource identifiers. nospace keeps a spaced-out list
+from defeating the uniq. See values.yaml for why it is derived.
+*/}}
+{{- define "amp-observability-extension.audience" -}}
+{{- $audiences := .Values.amObserver.auth.audience | nospace | splitList "," | compact -}}
+{{- with .Values.amObserver.publicUrl -}}
+{{- $audiences = append $audiences (printf "%s/" (trimSuffix "/" .)) -}}
+{{- end -}}
+{{- join "," (uniq $audiences) -}}
+{{- end }}
+
+{{/*
 Create the name of the service account to use
 */}}
 {{- define "amp-observability-extension.serviceAccountName" -}}

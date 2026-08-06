@@ -85,7 +85,8 @@ download_and_verify() {
     if command -v shasum >/dev/null 2>&1; then
         grep -F "  $ARCHIVE" checksums.txt | shasum -a 256 -c --quiet
     elif command -v sha256sum >/dev/null 2>&1; then
-        grep -F "  $ARCHIVE" checksums.txt | sha256sum -c --quiet
+        # No --quiet: BusyBox rejects it. Explicit "-": Apple's sha256sum won't read a bare stdin checklist.
+        grep -F "  $ARCHIVE" checksums.txt | sha256sum -c -
     else
         fail "Neither sha256sum nor shasum found. Cannot verify checksum."
     fi

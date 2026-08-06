@@ -18,12 +18,14 @@ package controllers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 
 	"github.com/wso2/agent-manager/agent-manager-service/middleware"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/logger"
+	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/services"
 	"github.com/wso2/agent-manager/agent-manager-service/spec"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
@@ -97,6 +99,13 @@ func (c *agentKindController) GetKind(w http.ResponseWriter, r *http.Request) {
 
 	result, err := c.kindService.GetKind(ctx, ouID, kindName)
 	if err != nil {
+		if errors.Is(err, utils.ErrAgentKindNotFound) {
+			// Not being published yet is a normal state for callers probing
+			// "does this kind exist," not an error — respond 200 with a null
+			// body instead of 404 (result is already nil here).
+			utils.WriteSuccessResponse(w, http.StatusOK, result)
+			return
+		}
 		log.Error("Failed to get agent kind", "error", err)
 		handleCommonErrors(w, err, "Failed to get agent kind")
 		return
@@ -180,6 +189,14 @@ func (c *agentKindController) ListVersions(w http.ResponseWriter, r *http.Reques
 
 	result, err := c.kindService.ListVersions(ctx, ouID, kindName)
 	if err != nil {
+		if errors.Is(err, utils.ErrAgentKindNotFound) {
+			// No kind published yet means no versions — respond 200 with an
+			// empty list (not the nil `result`, which would marshal to
+			// `null` instead of `[]`), matching the "kind exists but has zero
+			// versions" case the service already returns successfully.
+			utils.WriteSuccessResponse(w, http.StatusOK, []models.AgentKindVersionResponse{})
+			return
+		}
 		log.Error("Failed to list agent kind versions", "error", err)
 		handleCommonErrors(w, err, "Failed to list agent kind versions")
 		return

@@ -36,7 +36,8 @@ type AgentResponse struct {
 	// Name of the Agent Kind this agent was instantiated from (absent for source-built agents)
 	KindName *string `json:"kindName,omitempty"`
 	// User-defined key/value labels. Keys are 1-63 characters of [a-zA-Z0-9._-] starting and ending alphanumeric (not enforceable here as an OpenAPI 3.0 property-name pattern — validated server-side); values follow the same rules but may be empty. At most 10 labels per resource.
-	Labels *map[string]string `json:"labels,omitempty"`
+	Labels    *map[string]string `json:"labels,omitempty"`
+	CreatedBy *AgentCreatedBy    `json:"createdBy,omitempty"`
 }
 
 // NewAgentResponse instantiates a new AgentResponse object
@@ -448,6 +449,38 @@ func (o *AgentResponse) SetLabels(v map[string]string) {
 	o.Labels = &v
 }
 
+// GetCreatedBy returns the CreatedBy field value if set, zero value otherwise.
+func (o *AgentResponse) GetCreatedBy() AgentCreatedBy {
+	if o == nil || IsNil(o.CreatedBy) {
+		var ret AgentCreatedBy
+		return ret
+	}
+	return *o.CreatedBy
+}
+
+// GetCreatedByOk returns a tuple with the CreatedBy field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *AgentResponse) GetCreatedByOk() (*AgentCreatedBy, bool) {
+	if o == nil || IsNil(o.CreatedBy) {
+		return nil, false
+	}
+	return o.CreatedBy, true
+}
+
+// HasCreatedBy returns a boolean if a field has been set.
+func (o *AgentResponse) HasCreatedBy() bool {
+	if o != nil && !IsNil(o.CreatedBy) {
+		return true
+	}
+
+	return false
+}
+
+// SetCreatedBy gets a reference to the given AgentCreatedBy and assigns it to the CreatedBy field.
+func (o *AgentResponse) SetCreatedBy(v AgentCreatedBy) {
+	o.CreatedBy = &v
+}
+
 func (o AgentResponse) MarshalJSON() ([]byte, error) {
 	toSerialize, err := o.ToMap()
 	if err != nil {
@@ -483,6 +516,9 @@ func (o AgentResponse) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.Labels) {
 		toSerialize["labels"] = o.Labels
+	}
+	if !IsNil(o.CreatedBy) {
+		toSerialize["createdBy"] = o.CreatedBy
 	}
 	return toSerialize, nil
 }

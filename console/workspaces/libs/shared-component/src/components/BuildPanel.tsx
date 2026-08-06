@@ -38,37 +38,13 @@ import {
 } from "@wso2/oxygen-ui";
 import { DrawerHeader, DrawerContent } from "@agent-management-platform/views";
 import { useMemo, useState } from "react";
+import { parseGitHubUrl } from "../utils/githubUrl";
 
 interface BuildPanelProps {
   onClose: () => void;
   orgName: string;
   projName: string;
   agentName: string;
-}
-
-/**
- * Parses a GitHub repository URL to extract owner and repository name.
- * Supports formats:
- * - https://github.com/owner/repo
- * - https://github.com/owner/repo.git
- * - git@github.com:owner/repo.git
- */
-function parseGitHubUrl(url: string): { owner: string; repo: string } | null {
-  if (!url) return null;
-
-  // Handle HTTPS URLs: https://github.com/owner/repo or https://github.com/owner/repo.git
-  const httpsMatch = url.match(/github\.com\/([^/]+)\/([^/.]+)/);
-  if (httpsMatch) {
-    return { owner: httpsMatch[1], repo: httpsMatch[2] };
-  }
-
-  // Handle SSH URLs: git@github.com:owner/repo.git
-  const sshMatch = url.match(/github\.com:([^/]+)\/([^/.]+)/);
-  if (sshMatch) {
-    return { owner: sshMatch[1], repo: sshMatch[2] };
-  }
-
-  return null;
 }
 
 export function BuildPanel({

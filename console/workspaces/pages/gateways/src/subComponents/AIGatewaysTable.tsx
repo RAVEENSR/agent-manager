@@ -20,7 +20,6 @@ import {
   Alert,
   Avatar,
   Box,
-  Button,
   Chip,
   IconButton,
   ListingTable,
@@ -33,12 +32,11 @@ import {
 import {
   AlertTriangle,
   Edit,
-  Plus,
   Search,
   DoorClosedLocked,
   Trash,
 } from "@wso2/oxygen-ui-icons-react";
-import { generatePath, Link, useNavigate, useParams } from "react-router-dom";
+import { generatePath, useNavigate, useParams } from "react-router-dom";
 import {
   useDeleteGateway,
   useListEnvironments,
@@ -149,20 +147,6 @@ export function AIGatewaysTable({ onEditGateway }: AIGatewaysTableProps) {
           disabled={isLoading}
         />
       </Box>
-      {gateways.length > 0 && (
-        <Button
-          component={Link}
-          to={generatePath(
-            absoluteRouteMap.children.org.children.gateways.children.add.path,
-            { orgId },
-          )}
-          variant="contained"
-          color="primary"
-          startIcon={<Plus size={16} />}
-        >
-          Add Gateway
-        </Button>
-      )}
     </Stack>
   );
 
@@ -335,21 +319,7 @@ export function AIGatewaysTable({ onEditGateway }: AIGatewaysTableProps) {
           <ListingTable.EmptyState
             illustration={<DoorClosedLocked size={64} />}
             title="No available gateway"
-            description="Add a gateway to manage and monitor your gateway deployments."
-            action={
-              <Button
-                component={Link}
-                to={generatePath(
-                  absoluteRouteMap.children.org.children.gateways.children.add
-                    .path,
-                  { orgId },
-                )}
-                variant="contained"
-                startIcon={<Plus size={16} />}
-              >
-                Add Gateway
-              </Button>
-            }
+            description="No gateways have been configured yet."
           />
         </ListingTable.Container>
       );

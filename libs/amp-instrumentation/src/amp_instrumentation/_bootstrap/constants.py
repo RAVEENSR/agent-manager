@@ -21,7 +21,7 @@ This module centralizes all environment variable names used for configuration.
 
 # Application Configuration
 AMP_OTEL_ENDPOINT = "AMP_OTEL_ENDPOINT"
-AMP_AGENT_API_KEY = "AMP_AGENT_API_KEY"
+AMP_AGENT_API_KEY = "AMP_AGENT_API_KEY"  # nosec B105 - False positive: ENV var key, not a secret
 AMP_TRACE_CONTENT = "AMP_TRACE_CONTENT"
 AMP_AGENT_VERSION = "AMP_AGENT_VERSION"
 AMP_DEBUG = "AMP_DEBUG"

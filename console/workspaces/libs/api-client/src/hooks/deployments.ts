@@ -21,6 +21,7 @@ import {
   deployAgent,
   updateAgentDeploySettings,
   updateAgentConfigurations,
+  regenerateTracingToken,
   listAgentDeployments,
   getAgentEndpoints,
   getAgentConfigurations,
@@ -46,6 +47,9 @@ import type {
   UpdateAgentDeploySettingsRequest,
   UpdateAgentConfigurationsPathParams,
   UpdateAgentConfigurationsRequest,
+  RegenerateTracingTokenPathParams,
+  RegenerateTracingTokenRequest,
+  RegenerateTracingTokenResponse,
   DeploymentListResponse,
   DeploymentResponse,
   ListAgentDeploymentsPathParams,
@@ -126,6 +130,22 @@ export function useUpdateAgentConfigurations() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agent'] });
       queryClient.invalidateQueries({ queryKey: ['agent-configurations'] });
+      queryClient.invalidateQueries({ queryKey: ['agent-deployments'] });
+    },
+  });
+}
+
+export function useRegenerateTracingToken() {
+  const queryClient = useQueryClient();
+  const { getToken } = useAuthHooks();
+  return useApiMutation<RegenerateTracingTokenResponse, unknown,
+  { params: RegenerateTracingTokenPathParams; body: RegenerateTracingTokenRequest }>({
+    // The drawer pushes its own detailed success/error snackbars (expiry date, restart notice),
+    // so suppress the generic ones here to avoid duplicate toasts.
+    showSuccess: false,
+    showError: false,
+    mutationFn: ({ params, body }) => regenerateTracingToken(params, body, getToken),
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agent-deployments'] });
     },
   });
@@ -246,8 +266,9 @@ export function usePromoteAgent() {
     action: { verb: 'promote', target: 'agent' },
     mutationFn: ({ params, body }) => promoteAgent(params, body, getToken),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['agent-deployments'] });
       queryClient.invalidateQueries({ queryKey: ['agent'] });
+      queryClient.invalidateQueries({ queryKey: ['agent-configurations'] });
+      queryClient.invalidateQueries({ queryKey: ['agent-deployments'] });
     },
   });
 }

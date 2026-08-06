@@ -48,10 +48,15 @@ _TOKEN_REFRESH_SKEW_S = 30
 # (and the app is registered for it + assigned a role that grants it — both done
 # for amp-api-client in the Thunder bootstrap). Omitting `scope` yields a token
 # with no scope claim, so every call 403s. Request exactly the permissions this
-# provisioning flow exercises (create project/agent, read builds+deployments,
-# mint API key, and the teardown deletes). Mirrors how the console requests its
-# scope list. Unauthorised/unknown scopes are silently filtered by Thunder, so
-# this stays a tight, intention-revealing set.
+# heavy-tier flow exercises: provisioning (create project/agent, read
+# builds+deployments, mint API key, teardown deletes) plus reading the emitted
+# spans back from the observer (heavy/observer.py reuses this same token for
+# GET /api/v1/traces[/…], which the observer wraps in RequirePermission(
+# TraceRead) under RBAC_ENABLED=true — so amp:observability:trace-read is
+# required or every trace poll 403s and the cell reports a pipeline error
+# instead of no-spans-captured). Mirrors how the console requests its scope
+# list. Unauthorised/unknown scopes are silently filtered by Thunder, so this
+# stays a tight, intention-revealing set.
 #
 # Thunder v0.45 namespaces every AMP scope with the `amp:` resource-server
 # handle (permissions are built as <resource-server>:<resource>:<action>; see
@@ -61,7 +66,8 @@ _TOKEN_REFRESH_SKEW_S = 30
 _TOKEN_SCOPES = (
     "amp:project:create amp:project:read amp:project:delete "
     "amp:agent:create amp:agent:read amp:agent:delete amp:agent:build "
-    "amp:agent:deploy-non-production amp:agent:api-key-manage"
+    "amp:agent:deploy-non-production amp:agent:api-key-manage "
+    "amp:observability:trace-read"
 )
 
 # The deployed agent's source is cloned from this repo ref by the in-cluster

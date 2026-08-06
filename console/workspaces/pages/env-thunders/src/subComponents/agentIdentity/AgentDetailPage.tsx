@@ -32,8 +32,8 @@ import {
   Tooltip,
   Typography,
 } from "@wso2/oxygen-ui";
-import { Trash } from "@wso2/oxygen-ui-icons-react";
-import { generatePath, useNavigate, useParams } from "react-router-dom";
+import { Shield, Trash, Users } from "@wso2/oxygen-ui-icons-react";
+import { generatePath, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   useAddAgentIdentityGroupMembers,
   useAddAgentIdentityRoleAssignees,
@@ -52,12 +52,10 @@ import {
   type ThunderGroup,
   type ThunderRole,
 } from "@agent-management-platform/types";
-import {
-  BackButton,
-  EditFormSkeleton,
-  EntityHeader,
-} from "@agent-management-platform/shared-component";
+import { EditFormSkeleton } from "@agent-management-platform/shared-component";
+import { PageLayout } from "@agent-management-platform/views";
 import { useAssignmentDelta } from "./useAssignmentDelta";
+import { withSearchParams } from "../../utils/withSearchParams";
 
 type TabId = "roles" | "groups";
 
@@ -79,6 +77,7 @@ function AssignmentTab<T extends AssignableItem>({
   noOptionsText,
   removeTooltip,
   emptyText,
+  emptyIcon,
   canEdit,
   isLoadingCatalog,
   availableItems,
@@ -94,6 +93,7 @@ function AssignmentTab<T extends AssignableItem>({
   noOptionsText: string;
   removeTooltip: string;
   emptyText: string;
+  emptyIcon: React.ReactNode;
   canEdit: boolean;
   isLoadingCatalog: boolean;
   availableItems: T[];
@@ -138,9 +138,9 @@ function AssignmentTab<T extends AssignableItem>({
       )}
 
       {displayedItems.length === 0 ? (
-        <Typography variant="body2" color="text.secondary">
-          {emptyText}
-        </Typography>
+        <ListingTable.Container>
+          <ListingTable.EmptyState illustration={emptyIcon} title={emptyText} />
+        </ListingTable.Container>
       ) : (
         <ListingTable.Container>
           <ListingTable>
@@ -176,12 +176,13 @@ function AssignmentTab<T extends AssignableItem>({
 }
 
 export const AgentDetailPage: React.FC = () => {
-  const { orgId, envName, projectName, agentName } = useParams<{
+  const { orgId, projectName, agentName } = useParams<{
     orgId: string;
-    envName: string;
     projectName: string;
     agentName: string;
   }>();
+  const [searchParams] = useSearchParams();
+  const envName = searchParams.get("envName") ?? "";
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabId>("roles");
   const [isSaving, setIsSaving] = useState(false);
@@ -191,12 +192,12 @@ export const AgentDetailPage: React.FC = () => {
   const { data: rolesData, isLoading: isLoadingRoles, error: rolesError } =
     useGetAgentRoles(
       { orgName: orgId, projName: projectName, agentName },
-      { environment: envName ?? "" },
+      { environment: envName },
     );
   const { data: groupsData, isLoading: isLoadingGroups, error: groupsError } =
     useGetAgentGroups(
       { orgName: orgId, projName: projectName, agentName },
-      { environment: envName ?? "" },
+      { environment: envName },
     );
   const { data: agentData, isLoading: isLoadingAgent } = useGetAgent({
     orgName: orgId,
@@ -208,15 +209,15 @@ export const AgentDetailPage: React.FC = () => {
     projName: projectName,
   });
   const { data: identityAgentsData, isLoading: isLoadingIdentityAgents } =
-    useListAgentIdentityAgents({ orgName: orgId, envName: envName ?? "" });
+    useListAgentIdentityAgents({ orgName: orgId, envName });
   const { data: allRolesData, isLoading: isLoadingAllRoles } =
     useListAgentIdentityRoles(
-      { orgName: orgId, envName: envName ?? "" },
+      { orgName: orgId, envName },
       { offset: 0, limit: CATALOG_PAGE_SIZE },
     );
   const { data: allGroupsData, isLoading: isLoadingAllGroups } =
     useListAgentIdentityGroups(
-      { orgName: orgId, envName: envName ?? "" },
+      { orgName: orgId, envName },
       { offset: 0, limit: CATALOG_PAGE_SIZE },
     );
 
@@ -273,9 +274,10 @@ export const AgentDetailPage: React.FC = () => {
   );
 
   const agentsNode =
-    absoluteRouteMap.children.org.children.thunderInstances.children.view.children.agents;
-  const agentsPath =
-    orgId && envName ? generatePath(agentsNode.path, { orgId, envName }) : "#";
+    absoluteRouteMap.children.org.children.thunderInstances.children.agents;
+  const agentsPath = orgId
+    ? withSearchParams(generatePath(agentsNode.path, { orgId }), searchParams)
+    : "#";
 
   const handleSave = async () => {
     if (!orgId || !envName || !thunderAgentId) return;
@@ -338,12 +340,13 @@ export const AgentDetailPage: React.FC = () => {
     isLoadingProject ||
     isLoadingIdentityAgents;
 
+  const title = agentData?.displayName || agentName || "Agent";
+
   if (isLoading) {
     return (
-      <>
-        <BackButton to={agentsPath} label="Agents" />
+      <PageLayout title={title} backHref={agentsPath} backLabel="Back to Agents" disableIcon>
         <EditFormSkeleton tabs={2} />
-      </>
+      </PageLayout>
     );
   }
 
@@ -351,16 +354,14 @@ export const AgentDetailPage: React.FC = () => {
   const canEdit = !!thunderAgentId;
 
   return (
-    <>
-      <BackButton to={agentsPath} label="Agents" />
+    <PageLayout
+      title={title}
+      backHref={agentsPath}
+      backLabel="Back to Agents"
+      description={projectData?.displayName || projectName}
+      disableIcon
+    >
       <Stack spacing={3}>
-        <EntityHeader
-          fallback="A"
-          name={agentData?.displayName || agentName || ""}
-          subtitle={projectData?.displayName || projectName}
-          id={agentName ?? ""}
-        />
-
         {(rolesError != null || groupsError != null) && (
           <Alert severity="error">
             Failed to load this agent&apos;s roles/groups. Please try again.
@@ -396,6 +397,7 @@ export const AgentDetailPage: React.FC = () => {
               noOptionsText="No roles available"
               removeTooltip="Remove role"
               emptyText="No roles assigned to this agent."
+              emptyIcon={<Shield size={64} />}
               canEdit={canEdit}
               isLoadingCatalog={isLoadingAllRoles}
               availableItems={availableRoles}
@@ -417,6 +419,7 @@ export const AgentDetailPage: React.FC = () => {
               noOptionsText="No groups available"
               removeTooltip="Remove from group"
               emptyText="This agent is not a member of any groups."
+              emptyIcon={<Users size={64} />}
               canEdit={canEdit}
               isLoadingCatalog={isLoadingAllGroups}
               availableItems={availableGroups}
@@ -443,7 +446,7 @@ export const AgentDetailPage: React.FC = () => {
           </Stack>
         )}
       </Stack>
-    </>
+    </PageLayout>
   );
 };
 

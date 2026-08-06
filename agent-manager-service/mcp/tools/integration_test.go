@@ -70,7 +70,7 @@ func TestToolResponseFormat(t *testing.T) {
 
 	result, err := clientSession.CallTool(ctx, &gomcp.CallToolParams{
 		Name:      "list_projects",
-		Arguments: map[string]any{"org_name": testOrgName},
+		Arguments: map[string]any{},
 	})
 	if err != nil {
 		t.Fatalf("CallTool failed: %v", err)

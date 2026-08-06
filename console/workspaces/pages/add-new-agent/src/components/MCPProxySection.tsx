@@ -73,7 +73,7 @@ const ProxyDisplay: React.FC<{
   proxy: ProxyInfo | null;
   isSelected: boolean;
   fallbackLabel?: string;
-}> = ({ proxy, isSelected, fallbackLabel = "Select MCP proxy" }) => {
+}> = ({ proxy, isSelected, fallbackLabel = "Select MCP Server" }) => {
   return (
     <Stack direction="row" spacing={2} flexGrow={1} alignItems="center">
       <Avatar
@@ -152,7 +152,7 @@ const EntryCard: React.FC<EntryCardProps> = ({
   const firstProxyEntry = Object.values(entry.selectedProxyByEnv).find(
     (e): e is { id: string; name: string } => e !== null && e !== undefined,
   );
-  const displayName = firstProxyEntry?.name ?? `MCP Proxy ${index + 1}`;
+  const displayName = firstProxyEntry?.name ?? `MCP Server ${index + 1}`;
 
   const handleEnvTabChange = useCallback(
     (_: React.SyntheticEvent, v: number) => setSelectedEnvIndex(v),
@@ -199,7 +199,7 @@ const EntryCard: React.FC<EntryCardProps> = ({
       >
         <Stack direction="row" alignItems="center" justifyContent="space-between" flexGrow={1} pr={1}>
           <Typography variant="subtitle2">{displayName}</Typography>
-          <IconButton size="small" aria-label="Remove MCP proxy" onClick={handleRemoveClick}>
+          <IconButton size="small" aria-label="Remove MCP Server" onClick={handleRemoveClick}>
             <Trash2 size={16} />
           </IconButton>
         </Stack>
@@ -231,7 +231,7 @@ const EntryCard: React.FC<EntryCardProps> = ({
                 startIcon={<Plus size={16} />}
                 onClick={handleOpenDrawer}
               >
-                Select MCP Proxy for {selectedEnvLabel}
+                Select MCP Server for {selectedEnvLabel}
               </Button>
             )}
           </Box>
@@ -461,7 +461,7 @@ export const MCPProxySection: React.FC<MCPProxySectionProps> = ({
 
   return (
     <Form.Section>
-      <Form.Subheader>MCP Proxies (Optional)</Form.Subheader>
+      <Form.Subheader>MCP Servers (Optional)</Form.Subheader>
 
       <Stack spacing={1}>
         {mcpProxies.map((entry, index) => {
@@ -516,18 +516,18 @@ export const MCPProxySection: React.FC<MCPProxySectionProps> = ({
       >
         <DrawerHeader
           icon={<ServerCog size={24} />}
-          title="Select MCP Proxy"
+          title="Select MCP Server"
           onClose={handleDrawerClose}
         />
         <DrawerContent>
           <Stack>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
               {editingIndex === null
-                ? "Select an MCP proxy for this configuration."
-                : "Change the MCP proxy for this configuration."}
+                ? "Select an MCP server for this configuration."
+                : "Change the MCP server for this configuration."}
             </Typography>
             <SearchBar
-              placeholder="Search MCP proxies"
+              placeholder="Search MCP servers"
               size="small"
               fullWidth
               value={proxySearchQuery}
@@ -555,8 +555,8 @@ export const MCPProxySection: React.FC<MCPProxySectionProps> = ({
                     <ListingTable.Container>
                       <ListingTable.EmptyState
                         illustration={<Search size={64} />}
-                        title={isSearchMode ? "No MCP proxies match your search" : "No MCP proxies available"}
-                        description={isSearchMode ? "Try a different keyword or clear the search filter." : "No MCP proxies found. Add MCP proxies from the organization MCP Proxies page first."}
+                        title={isSearchMode ? "No MCP servers match your search" : "No MCP servers available"}
+                        description={isSearchMode ? "Try a different keyword or clear the search filter." : "No MCP servers found. Add MCP servers from the organization MCP Servers page first."}
                         action={
                           (!isSearchMode && orgId) ? (
                             <Button
@@ -573,7 +573,7 @@ export const MCPProxySection: React.FC<MCPProxySectionProps> = ({
                                 )
                               }
                             >
-                              Add MCP Proxy
+                              Register MCP Server
                             </Button>
                           ) : undefined
                         }
@@ -624,7 +624,7 @@ export const MCPProxySection: React.FC<MCPProxySectionProps> = ({
                 >
                   <Plus size={16} />
                   <Typography variant="body2" color="primary">
-                    Add MCP Proxy
+                    Register MCP Server
                   </Typography>
                   <ExternalLink size={14} />
                 </Box>

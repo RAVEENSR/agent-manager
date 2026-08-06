@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -80,6 +81,11 @@ func loadEnvs() {
 		User:     r.readRequiredString("DB_USER"),
 		Password: r.readRequiredString("DB_PASSWORD"),
 		DBName:   r.readRequiredString("DB_NAME"),
+		// Left empty by default so the connection string stays byte-identical to
+		// pre-DB_SSL_MODE builds: pgx applies its libpq-compatible "prefer"
+		// default and still honours PGSSLMODE/PGSSLROOTCERT from the environment.
+		SSLMode:     strings.TrimSpace(r.readOptionalString("DB_SSL_MODE", "")),
+		SSLRootCert: strings.TrimSpace(r.readOptionalString("DB_SSL_ROOT_CERT", "")),
 	}
 	config.POSTGRESQL.DbConfigs = DbConfigs{
 		// gorm configs
@@ -145,11 +151,6 @@ func loadEnvs() {
 
 	config.InstrumentationURL = r.readOptionalString("INSTRUMENTATION_URL", "http://default-default.gateway.localhost:19080/otel")
 	config.DefaultGatewayPort = int(r.readOptionalInt64("DEFAULT_GATEWAY_PORT", 19080))
-	config.GatewayRuntime = GatewayRuntimeConfig{
-		NamePrefix:    r.readOptionalString("GATEWAY_RUNTIME_NAME_PREFIX", "api-platform-"),
-		ServiceSuffix: r.readOptionalString("GATEWAY_RUNTIME_SERVICE_SUFFIX", "-gateway-gateway-runtime"),
-		Port:          int(r.readOptionalInt64("GATEWAY_RUNTIME_PORT", 22893)),
-	}
 	config.KeyManagerConfigurations = KeyManagerConfigurations{
 		// Comma-separated list of allowed issuers and audiences
 		Issuer:   r.readOptionalStringList("KEY_MANAGER_ISSUER", "Agent Management Platform Local"),
@@ -174,7 +175,7 @@ func loadEnvs() {
 		PrivateKeyPath:        r.readOptionalString("JWT_SIGNING_PRIVATE_KEY_PATH", "keys/private.pem"),
 		PublicKeysConfigPath:  r.readOptionalString("JWT_SIGNING_PUBLIC_KEYS_CONFIG", "keys/public-keys-config.json"),
 		ActiveKeyID:           r.readOptionalString("JWT_SIGNING_ACTIVE_KEY_ID", "key-1"),
-		DefaultExpiryDuration: r.readOptionalString("JWT_SIGNING_DEFAULT_EXPIRY", "8760h"), // 1 year default
+		DefaultExpiryDuration: r.readOptionalString("JWT_SIGNING_DEFAULT_EXPIRY", "2160h"), // 90 days default
 		Issuer:                r.readOptionalString("JWT_SIGNING_ISSUER", "agent-manager-service"),
 		DefaultEnvironment:    r.readOptionalString("JWT_SIGNING_DEFAULT_ENVIRONMENT", "default"),
 	}
@@ -211,10 +212,11 @@ func loadEnvs() {
 	}
 
 	config.SecretManager = SecretManagerConfig{
-		Provider:        r.readOptionalString("SECRET_MANAGER_PROVIDER", "openbao"),
-		RefreshInterval: r.readOptionalString("OPENBAO_REFRESH_INTERVAL", "1h"),
-		BaseURL:         r.readOptionalString("SECRET_MANAGER_API_URL", ""),
-		Timeout:         int(r.readOptionalInt64("SECRET_MANAGER_API_TIMEOUT", 30)),
+		Provider:                     r.readOptionalString("SECRET_MANAGER_PROVIDER", "openchoreo"),
+		TargetPlaneKind:              r.readOptionalString("SECRET_MANAGER_TARGET_PLANE_KIND", "ClusterDataPlane"),
+		TargetPlaneName:              r.readOptionalString("SECRET_MANAGER_TARGET_PLANE_NAME", "default"),
+		RefreshInterval:              r.readOptionalString("SECRET_MANAGER_REFRESH_INTERVAL", "1h"),
+		AgentIdentityRefreshInterval: r.readOptionalString("AGENT_IDENTITY_REFRESH_INTERVAL", "15s"),
 	}
 
 	// OpenBao KV store configuration (data plane - for deployment secrets)
@@ -270,8 +272,9 @@ func loadEnvs() {
 	validateServerPublicURL(config, r)
 	validateInstrumentationURL(config, r)
 	validateObserverURLs(config, r)
-	validateGatewayRuntimeConfig(config, r)
 	validateResourceLimitsConfig(config, r)
+	validatePostgresTLSConfig(config, r)
+	validateSecretManagerConfig(config, r)
 	validateAgentWorkloadCORSConfig(agentWorkloadConfig, r)
 
 	r.logAndExitIfErrorsFound()
@@ -279,15 +282,48 @@ func loadEnvs() {
 	slog.Info("configReader: configs loaded")
 }
 
-func validateGatewayRuntimeConfig(cfg *Config, r *configReader) {
-	if strings.TrimSpace(cfg.GatewayRuntime.NamePrefix) == "" {
-		r.errors = append(r.errors, fmt.Errorf("GATEWAY_RUNTIME_NAME_PREFIX must be non-empty"))
+// validPostgresSSLModes is the set of libpq sslmode values pgx accepts. Kept as
+// an explicit allowlist so a typo fails config load with a clear message instead
+// of surfacing as an opaque driver parse error at first connect.
+var validPostgresSSLModes = map[string]struct{}{
+	"disable":     {},
+	"allow":       {},
+	"prefer":      {},
+	"require":     {},
+	"verify-ca":   {},
+	"verify-full": {},
+}
+
+// validateSecretManagerConfig fails config load on a malformed or nonpositive
+// AGENT_IDENTITY_REFRESH_INTERVAL, instead of silently falling back to
+// agentIdentityInjectionService's own default at first use (see
+// secretSyncWaitDuration's doc comment).
+func validateSecretManagerConfig(cfg *Config, r *configReader) {
+	d, err := time.ParseDuration(cfg.SecretManager.AgentIdentityRefreshInterval)
+	switch {
+	case err != nil:
+		r.errors = append(r.errors, fmt.Errorf(
+			"AGENT_IDENTITY_REFRESH_INTERVAL %q is not a valid duration: %w", cfg.SecretManager.AgentIdentityRefreshInterval, err,
+		))
+	case d <= 0:
+		r.errors = append(r.errors, fmt.Errorf(
+			"AGENT_IDENTITY_REFRESH_INTERVAL must be a positive duration, got %q", cfg.SecretManager.AgentIdentityRefreshInterval,
+		))
 	}
-	if strings.TrimSpace(cfg.GatewayRuntime.ServiceSuffix) == "" {
-		r.errors = append(r.errors, fmt.Errorf("GATEWAY_RUNTIME_SERVICE_SUFFIX must be non-empty"))
+}
+
+func validatePostgresTLSConfig(cfg *Config, r *configReader) {
+	// loadEnvs already trims, so in the real flow this value is exactly what
+	// makeConnString puts in the DSN. Trimmed again here so the check holds for
+	// callers that build a Config directly rather than from the environment.
+	mode := strings.TrimSpace(cfg.POSTGRESQL.SSLMode)
+	if mode == "" {
+		return
 	}
-	if cfg.GatewayRuntime.Port < 1 || cfg.GatewayRuntime.Port > 65535 {
-		r.errors = append(r.errors, fmt.Errorf("GATEWAY_RUNTIME_PORT must be between 1 and 65535, got %d", cfg.GatewayRuntime.Port))
+	if _, ok := validPostgresSSLModes[mode]; !ok {
+		r.errors = append(r.errors, fmt.Errorf(
+			"DB_SSL_MODE %q is not a valid PostgreSQL sslmode (disable, allow, prefer, require, verify-ca, verify-full)", mode,
+		))
 	}
 }
 

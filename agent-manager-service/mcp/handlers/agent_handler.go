@@ -44,10 +44,6 @@ func (h *AgentHandler) CreateAgent(ctx context.Context, ouID string, projectName
 	return h.agentSvc.CreateAgent(ctx, ouID, projectName, req)
 }
 
-func (h *AgentHandler) GetAgent(ctx context.Context, ouID string, projectName string, agentName string) (*models.AgentResponse, error) {
-	return h.agentSvc.GetAgent(ctx, ouID, projectName, agentName)
-}
-
 func (h *AgentHandler) GenerateToken(ctx context.Context, ouID string, projectName string, agentName string, environment string, expiresIn string) (*spec.TokenResponse, error) {
 	if h.tokenSvc == nil {
 		return nil, fmt.Errorf("token service not configured")

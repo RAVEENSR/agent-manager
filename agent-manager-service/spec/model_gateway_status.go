@@ -20,10 +20,10 @@ type GatewayStatus string
 
 // List of GatewayStatus
 const (
-	ACTIVE       GatewayStatus = "ACTIVE"
-	INACTIVE     GatewayStatus = "INACTIVE"
-	PROVISIONING GatewayStatus = "PROVISIONING"
-	ERROR        GatewayStatus = "ERROR"
+	GATEWAYSTATUS_ACTIVE       GatewayStatus = "ACTIVE"
+	GATEWAYSTATUS_INACTIVE     GatewayStatus = "INACTIVE"
+	GATEWAYSTATUS_PROVISIONING GatewayStatus = "PROVISIONING"
+	GATEWAYSTATUS_ERROR        GatewayStatus = "ERROR"
 )
 
 // All allowed values of GatewayStatus enum

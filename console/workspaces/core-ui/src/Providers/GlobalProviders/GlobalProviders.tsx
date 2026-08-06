@@ -18,25 +18,14 @@
 
 import { AuthProvider } from "@agent-management-platform/auth";
 import { ClientProvider } from "@agent-management-platform/api-client";
-import { OxygenUIThemeProvider } from "@wso2/oxygen-ui";
+import { AcrylicOrangeTheme as AmTheme, OxygenUIThemeProvider } from "@wso2/oxygen-ui";
 import { ConfirmationDialogProvider } from "@agent-management-platform/shared-component";
 import {
-  AppThemeProvider,
-  useAppTheme,
   SnackBarProvider,
   ExternalModuleProvider,
   type ExternalModule,
 } from "@agent-management-platform/views";
 import { RuntimeConfigProvider } from "./RuntimeConfigProvider";
-
-const ThemedShell = ({ children }: { children: React.ReactNode }) => {
-  const { themeObject } = useAppTheme();
-  return (
-    <OxygenUIThemeProvider theme={themeObject}>
-      {children}
-    </OxygenUIThemeProvider>
-  );
-};
 
 export const GlobalProviders = ({
   children,
@@ -46,22 +35,20 @@ export const GlobalProviders = ({
   externalPageModules?: ExternalModule[];
 }) => {
   return (
-    <AppThemeProvider>
-      <ThemedShell>
-        <SnackBarProvider>
-          <AuthProvider>
-            <ClientProvider>
-              <RuntimeConfigProvider>
-                <ConfirmationDialogProvider>
-                  <ExternalModuleProvider externalPageModules={externalPageModules}>
-                    {children}
-                  </ExternalModuleProvider>
-                </ConfirmationDialogProvider>
-              </RuntimeConfigProvider>
-            </ClientProvider>
-          </AuthProvider>
-        </SnackBarProvider>
-      </ThemedShell>
-    </AppThemeProvider>
+    <OxygenUIThemeProvider theme={AmTheme}>
+      <SnackBarProvider>
+        <AuthProvider>
+          <ClientProvider>
+            <RuntimeConfigProvider>
+              <ConfirmationDialogProvider>
+                <ExternalModuleProvider externalPageModules={externalPageModules}>
+                  {children}
+                </ExternalModuleProvider>
+              </ConfirmationDialogProvider>
+            </RuntimeConfigProvider>
+          </ClientProvider>
+        </AuthProvider>
+      </SnackBarProvider>
+    </OxygenUIThemeProvider>
   );
 };

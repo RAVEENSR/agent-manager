@@ -22,16 +22,26 @@ interface GatewayTypeChipProps {
   type: GatewayType | string;
 }
 
+const GATEWAY_TYPE_LABELS: Record<string, string> = {
+  INGRESS: "Ingress",
+  EGRESS: "Egress",
+  BOTH: "Ingress + Egress",
+};
+
 export function GatewayTypeChip({ type }: GatewayTypeChipProps) {
-  const isAI = type.toUpperCase() === "AI";
+  // Server emits canonical uppercase (see gatewayType normalization); .toUpperCase()
+  // is belt-and-braces for old cached responses.
+  const normalized = type.toUpperCase();
+  const label = GATEWAY_TYPE_LABELS[normalized] ?? normalized;
+  const isEgressCapable = normalized === "EGRESS" || normalized === "BOTH";
 
   return (
     <Chip
-      label={isAI ? "AI" : "Regular"}
+      label={label}
       size="small"
       variant="outlined"
       sx={(theme) =>
-        isAI
+        isEgressCapable
           ? {
               color: theme.vars?.palette.info.main ?? theme.palette.info.main,
               bgcolor: `rgba(${theme.vars?.palette.info.mainChannel ?? "0 0 0"} / 0.08)`,

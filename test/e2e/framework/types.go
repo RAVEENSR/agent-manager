@@ -325,6 +325,7 @@ type CreateGatewayRequest struct {
 	DisplayName    string   `json:"displayName"`
 	GatewayType    string   `json:"gatewayType"`
 	Vhost          string   `json:"vhost"`
+	RuntimeUrl     string   `json:"runtimeUrl,omitempty"`
 	Region         string   `json:"region,omitempty"`
 	IsCritical     *bool    `json:"isCritical,omitempty"`
 	EnvironmentIds []string `json:"environmentIds,omitempty"`
@@ -332,6 +333,7 @@ type CreateGatewayRequest struct {
 
 type UpdateGatewayRequest struct {
 	DisplayName *string `json:"displayName,omitempty"`
+	RuntimeUrl  *string `json:"runtimeUrl,omitempty"`
 	IsCritical  *bool   `json:"isCritical,omitempty"`
 }
 
@@ -342,6 +344,7 @@ type GatewayResponse struct {
 	DisplayName      string          `json:"displayName"`
 	GatewayType      string          `json:"gatewayType"`
 	Vhost            string          `json:"vhost"`
+	RuntimeUrl       string          `json:"runtimeUrl,omitempty"`
 	Region           string          `json:"region,omitempty"`
 	IsCritical       bool            `json:"isCritical"`
 	Status           string          `json:"status"`

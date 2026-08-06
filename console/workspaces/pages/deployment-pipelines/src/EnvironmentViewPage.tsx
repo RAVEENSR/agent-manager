@@ -18,8 +18,6 @@
 import {
   Alert,
   Avatar,
-  Card,
-  CardContent,
   Chip,
   Grid,
   IconButton,
@@ -37,6 +35,7 @@ import {
   GatewayTypeChip,
   getAvatarInitials,
   getErrorMessage,
+  InfoCard,
 } from "@agent-management-platform/shared-component";
 import {
   useGetEnvironment,
@@ -45,7 +44,6 @@ import {
 } from "@agent-management-platform/api-client";
 import {
   absoluteRouteMap,
-  type GatewayListenerSpec,
   type GatewayResponse,
   type GatewayStatus,
 } from "@agent-management-platform/types";
@@ -74,73 +72,6 @@ const GATEWAY_AVATAR_SX = {
   bgcolor: "primary.main",
   color: "primary.contrastText",
 } as const;
-
-function InfoCard({ label, value }: { label: string; value: string }) {
-  return (
-    <Card variant="outlined" sx={{ height: "100%" }}>
-      <CardContent sx={{ p: 2, "&:last-child": { pb: 2 } }}>
-        <Stack spacing={0.5}>
-          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500 }}>
-            {label}
-          </Typography>
-          <Typography
-            variant="body2"
-            sx={{ fontFamily: "monospace", wordBreak: "break-all" }}
-          >
-            {value}
-          </Typography>
-        </Stack>
-      </CardContent>
-    </Card>
-  );
-}
-
-interface EndpointCardProps {
-  label: string;
-  scheme: "http" | "https";
-  endpoint: GatewayListenerSpec;
-  onCopy: (value: string, message: string) => void;
-}
-
-function EndpointCard({ label, scheme, endpoint, onCopy }: EndpointCardProps) {
-  const url = endpoint.host
-    ? `${scheme}://${endpoint.host}${endpoint.port ? `:${endpoint.port}` : ""}`
-    : undefined;
-  const displayValue = url ?? "Not configured";
-
-  return (
-    <Card variant="outlined" sx={{ height: "100%" }}>
-      <CardContent sx={{ p: 2, "&:last-child": { pb: 2 } }}>
-        <Stack spacing={0.5}>
-          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500 }}>
-            {label}
-          </Typography>
-          <Stack direction="row" alignItems="center" spacing={1}>
-            <Typography
-              variant="body2"
-              color={url ? "text.primary" : "text.secondary"}
-              sx={{ fontFamily: "monospace", wordBreak: "break-all", flex: 1, fontSize: "0.8rem" }}
-            >
-              {displayValue}
-            </Typography>
-            {url && (
-              <Tooltip title={`Copy ${label}`}>
-                <IconButton
-                  size="small"
-                  aria-label={`Copy ${label}`}
-                  onClick={() => onCopy(url, `${label} copied to clipboard`)}
-                  sx={{ flexShrink: 0 }}
-                >
-                  <Copy size={14} />
-                </IconButton>
-              </Tooltip>
-            )}
-          </Stack>
-        </Stack>
-      </CardContent>
-    </Card>
-  );
-}
 
 export function EnvironmentViewPage() {
   const { orgId, envName } = useParams<{ orgId: string; envName: string }>();
@@ -178,9 +109,6 @@ export function EnvironmentViewPage() {
       );
     });
   };
-
-  const httpEndpoint = env?.gateway?.ingress?.external?.http;
-  const httpsEndpoint = env?.gateway?.ingress?.external?.https;
 
   const displayName = env?.displayName ?? env?.name ?? envName ?? "";
 
@@ -258,41 +186,15 @@ export function EnvironmentViewPage() {
 
       {env && !envError && (
         <Stack spacing={3}>
-          <Stack spacing={1.5}>
-            {env.dnsPrefix || httpEndpoint || httpsEndpoint ? (
+          {env.dnsPrefix && (
+            <Stack spacing={1.5}>
               <Grid container spacing={2}>
-                {env.dnsPrefix && (
-                  <Grid size={{ xs: 12, sm: 6, md: 4 }}>
-                    <InfoCard label="DNS Prefix" value={env.dnsPrefix} />
-                  </Grid>
-                )}
-                {httpEndpoint && (
-                  <Grid size={{ xs: 12, sm: 6, md: 4 }}>
-                    <EndpointCard
-                      label="HTTP Endpoint"
-                      scheme="http"
-                      endpoint={httpEndpoint}
-                      onCopy={handleCopy}
-                    />
-                  </Grid>
-                )}
-                {httpsEndpoint && (
-                  <Grid size={{ xs: 12, sm: 6, md: 4 }}>
-                    <EndpointCard
-                      label="HTTPS Endpoint"
-                      scheme="https"
-                      endpoint={httpsEndpoint}
-                      onCopy={handleCopy}
-                    />
-                  </Grid>
-                )}
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
+                  <InfoCard label="DNS Prefix" value={env.dnsPrefix} />
+                </Grid>
               </Grid>
-            ) : (
-              <Typography variant="body2" color="text.secondary">
-                No external ingress configured for this environment.
-              </Typography>
-            )}
-          </Stack>
+            </Stack>
+          )}
 
           <Stack spacing={1.5}>
             <Typography variant="overline" color="text.secondary">
@@ -378,7 +280,7 @@ export function EnvironmentViewPage() {
 
           <Stack spacing={1.5}>
             <Typography variant="overline" color="text.secondary">
-              Identity Providers
+              Thunder Id
             </Typography>
             {isLoadingProviders ? (
               <Stack spacing={1}>
@@ -388,8 +290,8 @@ export function EnvironmentViewPage() {
               <ListingTable.Container>
                 <ListingTable.EmptyState
                   illustration={<KeyRound size={56} />}
-                  title="No identity providers in this environment"
-                  description="Each environment automatically gets a Thunder identity provider."
+                  title="No Thunder Id in this environment"
+                  description="Each environment automatically gets a Thunder Id."
                 />
               </ListingTable.Container>
             ) : (
@@ -410,8 +312,8 @@ export function EnvironmentViewPage() {
                       onClick={() =>
                         navigate(
                           generatePath(
-                            absoluteRouteMap.children.org.children.thunderInstances.children.view
-                              .path,
+                            absoluteRouteMap.children.org.children.environments.children.view
+                              .children.identityProvider.path,
                             { orgId: orgId ?? "", envName: thunderInstance.envName },
                           ),
                         )
@@ -431,7 +333,7 @@ export function EnvironmentViewPage() {
                               <KeyRound size={16} />
                             </Avatar>
                           }
-                          primary="Thunder"
+                          primary="Thunder Id"
                           secondary="System identity provider"
                         />
                       </ListingTable.Cell>

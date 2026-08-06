@@ -60,7 +60,7 @@ export function useCreateMCPProxy() {
     unknown,
     { params: CreateMCPProxyPathParams; body: MCPProxy }
   >({
-    action: { verb: "create", target: "mcp proxy" },
+    action: { verb: "create", target: "mcp server" },
     mutationFn: ({ params, body }) => createMCPProxy(params, body, getToken),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mcp-proxies"] });
@@ -85,7 +85,7 @@ export function useUpdateMCPProxy() {
     unknown,
     { params: UpdateMCPProxyPathParams; body: MCPProxy }
   >({
-    action: { verb: "update", target: "mcp proxy" },
+    action: { verb: "update", target: "mcp server" },
     mutationFn: ({ params, body }) => updateMCPProxy(params, body, getToken),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mcp-proxies"] });
@@ -98,7 +98,7 @@ export function useDeleteMCPProxy() {
   const { getToken } = useAuthHooks();
   const queryClient = useQueryClient();
   return useApiMutation<void, unknown, DeleteMCPProxyPathParams>({
-    action: { verb: "delete", target: "mcp proxy" },
+    action: { verb: "delete", target: "mcp server" },
     mutationFn: (params) => deleteMCPProxy(params, getToken),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mcp-proxies"] });

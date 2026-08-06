@@ -184,10 +184,11 @@ function findEndpointForEnvUuid(
 
 /**
  * Compact loading/error fallback shared by ConnectIdentityCredentials and
- * ConnectIdentityEndpoints below — lighter-weight than ManageIdentityDrawer's
- * ListingTable.EmptyState-based QueryStateFallback, since these render as
- * stacked sections inside an already content-dense drawer rather than each
- * owning their own dedicated panel.
+ * ConnectIdentityEndpoints below — lighter-weight than the Agent ID page's
+ * (@agent-management-platform/env-thunders) ListingTable.EmptyState-based
+ * QueryStateFallback, since these render as stacked sections inside an
+ * already content-dense drawer rather than each owning their own dedicated
+ * panel.
  */
 const ConnectQueryFallback: React.FC<{
   isLoading: boolean;
@@ -857,7 +858,7 @@ export const ViewMCPServerComponent = () => {
                 This tool uses OAuth (AgentID) security. These values are
                 injected into your agent&apos;s pod at runtime, use them in
                 your code to request a token. Scopes are configured on this
-                MCP proxy&apos;s own security settings.
+                MCP Server&apos;s own security settings.
               </Typography>
             </Alert>
             <Form.Section>
@@ -926,12 +927,12 @@ export const ViewMCPServerComponent = () => {
             <Card variant="outlined">
               <CardContent sx={{ position: "relative" }}>
                 {configProxyHref && (
-                  <Tooltip title="View MCP proxy" placement="top" arrow>
+                  <Tooltip title="View MCP Server" placement="top" arrow>
                     <IconButton
                       size="small"
                       color="primary"
                       onClick={() => navigate(configProxyHref)}
-                      aria-label={`View MCP proxy ${configProxy.name ?? configProxyName} in the organization`}
+                      aria-label={`View MCP Server ${configProxy.name ?? configProxyName} in the organization`}
                       sx={{ position: "absolute", top: 8, right: 8 }}
                     >
                       <ExternalLink size={16} />

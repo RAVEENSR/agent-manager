@@ -18,20 +18,40 @@ package tools
 
 import gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+// Register registers every configured toolset on the server and installs the
+// authorization middleware that enforces each tool's declared permissions.
 func (tools *Toolsets) Register(server *gomcp.Server) {
+	tools.register(server)
+}
+
+// register is Register minus the exported surface: it returns the registry so
+// same-package tests can assert the tool→permission wiring directly.
+// The fail-closed authorization middleware is installed on the server before
+// the nil-receiver check, so even a server built with nil toolsets (no tools
+// registered at all) denies every tools/call rather than silently having no
+// authz middleware installed. Installing it before any tools are added is
+// safe: sessions only exist after Connect, which happens after Register
+// returns in both production and tests.
+func (tools *Toolsets) register(server *gomcp.Server) *toolRegistry {
+	reg := newToolRegistry()
+	server.AddReceivingMiddleware(reg.authzMiddleware())
 	if tools == nil {
-		return
+		return reg
 	}
 	if tools.ProjectToolset != nil {
-		tools.registerProjectTools(server)
+		tools.registerProjectTools(server, reg)
 	}
 	if tools.AgentToolset != nil {
-		tools.registerAgentTools(server)
+		tools.registerAgentTools(server, reg)
 	}
 	if tools.BuildToolset != nil {
-		tools.registerBuildTools(server)
+		tools.registerBuildTools(server, reg)
 	}
 	if tools.DeploymentToolset != nil {
-		tools.registerDeploymentTools(server)
+		tools.registerDeploymentTools(server, reg)
 	}
+	if tools.EnvironmentToolset != nil {
+		tools.registerEnvironmentTools(server, reg)
+	}
+	return reg
 }

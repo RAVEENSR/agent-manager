@@ -21,12 +21,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/secretmanagersvc"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/thundersvc"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
@@ -62,18 +64,19 @@ const provisionRetryDelay = 3 * time.Minute
 // gateway) is a later phase and is deliberately not implemented here.
 //
 // Deployment-pluggable (see app.Options.AgentThunderProvisioning; the
-// open-source build injects NewOpenBaoAgentThunderProvisioning). Credential
+// open-source build injects DBBackedAgentThunderProvisioning). Credential
 // storage goes through secretmanagersvc.SecretManagementClient — the same
 // deployment-pluggable seam LLM/MCP/publisher secrets already use (see
 // app.Options's secretProvider) — instead of talking to OpenBao directly, so
 // a deployment can swap secret backends without any AgentID-specific code
-// change. AgentThunderClient.SecretRefPath stores whatever
-// secretmanagersvc.SecretLocation.KVPath() computes for one binding — an
-// opaque, backend-agnostic identifier (empty means "no credential currently
-// stored", e.g. revoked). AgentIdentityInjectionService recomputes the same
-// SecretLocation from binding fields rather than trusting this string's
-// content, so both services always agree on where a binding's credential
-// lives — see agentIdentitySecretLocation.
+// change. AgentThunderClient.SecretRefPath stores the SecretReference name
+// CreateSecret returns (empty means "no credential currently stored", e.g.
+// revoked) — never a locally-computed KV path. CreateSecret's own call
+// already creates a fully-configured SecretReference as a side effect of
+// storing the value (see CreateSecretRequest.Labels's doc comment: "Labels
+// applied to the underlying SecretReference"), so this stored name is the
+// only thing AgentIdentityInjectionService needs to point a pod's
+// SecretKeyRef at it — see storeCredential and agentIdentitySecretLocation.
 type AgentThunderProvisioningService interface {
 	// ProvisionForAgent writes a PENDING binding for every environment in
 	// envNames (write-ahead — Section 6.2), then attempts all of them
@@ -147,6 +150,15 @@ type AgentThunderProvisioningService interface {
 	// in one environment. Returns utils.ErrAgentIdentityNotProvisioned if the
 	// binding doesn't exist or hasn't completed yet.
 	GetAgentGroups(ctx context.Context, ouID, projectName, agentName, envName string) ([]thundersvc.ThunderGroup, error)
+
+	// HealSecretRef corrects binding.SecretRefPath when it doesn't match the
+	// credential's actual remote KV key, by re-resolving it via the same
+	// GetSecretReference lookup storeCredential itself uses (see its doc
+	// comment) — one bounded OpenChoreo read per call, no writes. No-op for
+	// external agents, unprovisioned bindings, and bindings already holding
+	// the correct value. Called once per completed internal binding from the
+	// reconciler's unbounded startup sweep.
+	HealSecretRef(ctx context.Context, binding models.AgentThunderClient) error
 }
 
 // AgentThunderBindingState is a minimal, internal snapshot of one binding's
@@ -168,6 +180,13 @@ type agentThunderProvisioningService struct {
 	repo             repositories.AgentThunderClientRepository
 	envResolver      thundersvc.EnvThunderResolver
 	secretMgmtClient secretmanagersvc.SecretManagementClient
+	// ocClient resolves the REAL remote KV key for a stored credential — the
+	// SecretReference secretMgmtClient.CreateSecret manages internally is not
+	// itself reachable from the agent's own workload namespace, only whatever
+	// the secret provider decides as its physical location; storeCredential
+	// reads that back once, at credential creation/rotation, rather than
+	// guessing it locally. See storeCredential's doc comment.
+	ocClient client.OpenChoreoClient
 	// workloadInjector pushes an internal agent's credential into its live
 	// workload (Gateway Binding). Optional (nil skips injection). Used by the
 	// post-provisioning reconcile hook to cover agents whose workload comes up
@@ -201,25 +220,136 @@ func agentIdentitySecretLocation(ouID, projectName, agentName, envName string) s
 	}
 }
 
+// createSecretConflictRetryMarker is the exact substring secretmanagersvc's
+// OpenChoreo provider includes only when a create conflict's own fallback
+// update then also fails (PushSecret's "failed to update secret after create
+// conflict" wrap in clients/secretmanagersvc/providers/openchoreo/client.go).
+// The secret manager doesn't expose a distinct sentinel for this exact shape,
+// so this is the only way to tell it apart from other, unrelated not-found
+// errors without changing the secret manager itself.
+const createSecretConflictRetryMarker = "after create conflict"
+
 // storeCredential writes the client ID/secret pair for one binding via the
-// shared secret management client and returns the KV path to persist in
-// AgentThunderClient.SecretRefPath — computed directly from the location
-// rather than using CreateSecret's own return value, since that value is a
-// SecretReference CR name when an OpenChoreo client is configured (see
-// SecretManagementClient.CreateSecret's doc comment), not the raw KV path.
+// shared secret management client and returns the remote KV key to persist
+// in AgentThunderClient.SecretRefPath.
+//
+// CreateSecret's own return value is only the name of the tracking
+// SecretReference it manages internally (see
+// SecretManagementClient.CreateSecret's doc comment) — that resource is not
+// reachable from the agent's own workload namespace. The actual remote KV
+// location is decided by whichever secret provider is plugged in and is only
+// ever learned by reading it back via GetSecretReference, once, here — never
+// guessed locally, and never re-verified by AgentIdentityInjectionService on
+// its own (much more frequent) injection path. Same resolve-don't-guess
+// pattern as agentManagerService.storeAgentAPIKey.
 func (s *agentThunderProvisioningService) storeCredential(ctx context.Context, ouID, projectName, agentName, envName, clientID, clientSecret string) (string, error) {
 	location := agentIdentitySecretLocation(ouID, projectName, agentName, envName)
-	if _, err := s.secretMgmtClient.CreateSecret(ctx, location, map[string]string{
+	data := map[string]string{
 		thundersvc.AgentSecretKeyClientID:     clientID,
 		thundersvc.AgentSecretKeyClientSecret: clientSecret,
-	}); err != nil {
+	}
+	refName, err := s.secretMgmtClient.CreateSecret(ctx, location, data)
+	if err != nil {
+		if !errors.Is(err, utils.ErrNotFound) || !strings.Contains(err.Error(), createSecretConflictRetryMarker) {
+			return "", err
+		}
+		// An already-provisioned internal agent already has a data-plane
+		// SecretReference for this name, owned by the identity injection
+		// service rather than by this code, which is why the create above
+		// failed here. Delete it and create again: the retry succeeds
+		// because it's now a plain create with nothing in the way, same as
+		// a brand-new agent's first credential.
+		injector := s.getWorkloadInjector()
+		if injector == nil {
+			return "", err
+		}
+		if cleanupErr := injector.CleanupForEnvironment(ctx, ouID, agentName, envName); cleanupErr != nil {
+			return "", fmt.Errorf("clear existing SecretReference before retry: %w: %w", cleanupErr, err)
+		}
+		refName, err = s.secretMgmtClient.CreateSecret(ctx, location, data)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	kvPath, err := s.resolveClientSecretKVPath(ctx, ouID, refName)
+	if err != nil {
 		return "", err
 	}
-	kvPath, err := location.KVPath()
-	if err != nil {
-		return "", fmt.Errorf("derive kv path: %w", err)
-	}
 	return kvPath, nil
+}
+
+// resolveClientSecretKVPath reads back the real remote KV key for refName's
+// AgentSecretKeyClientSecret data source. The one place both storeCredential
+// (at creation/rotation) and HealSecretRef (the one-time startup backfill)
+// learn where a credential actually lives — never guessed, never computed
+// from agentIdentitySecretLocation.
+func (s *agentThunderProvisioningService) resolveClientSecretKVPath(ctx context.Context, ouID, refName string) (string, error) {
+	if s.ocClient == nil {
+		return "", fmt.Errorf("resolve stored KV path for SecretReference %q: OpenChoreo client not configured", refName)
+	}
+	ref, err := s.ocClient.GetSecretReference(ctx, ouID, refName)
+	if err != nil {
+		return "", fmt.Errorf("resolve stored KV path for SecretReference %q: %w", refName, err)
+	}
+	for _, ds := range ref.Data {
+		if ds.SecretKey == thundersvc.AgentSecretKeyClientSecret {
+			return ds.RemoteRef.Key, nil
+		}
+	}
+	return "", fmt.Errorf("SecretReference %q has no %q data source", refName, thundersvc.AgentSecretKeyClientSecret)
+}
+
+// HealSecretRef corrects a binding's SecretRefPath if its stored value
+// doesn't match the credential's actual remote KV key. Re-resolves via the
+// same GetSecretReference lookup storeCredential itself uses — the binding's
+// deterministic SecretReference name is a pure function of (ouID,
+// projectName, agentName, envName), so re-deriving it locally and reading it
+// back is always safe regardless of how the stored value got stale. Called
+// once per completed internal binding from the reconciler's unbounded
+// startup sweep; a no-op on every run after the first successful heal for a
+// given binding.
+//
+// The OpenChoreo resolve runs BEFORE the binding lock (never hold a lock
+// across I/O), but the write is gated on a fresh re-read taken INSIDE the
+// same bindingLocks key every other SecretRefPath writer (RegenerateSecret,
+// RevokeSecret, DeleteAllBindings) already holds. The sweep that calls this
+// runs concurrently with the HTTP server from process startup (Start()
+// backgrounds it and returns immediately) — without the re-read, a revoke or
+// delete landing on this binding between the sweep's initial snapshot and
+// this call's resolve would have its SecretRefPath="" clear silently
+// overwritten with a resolved-but-now-orphaned path, which the injection
+// reconciler would then treat as a live credential and re-inject.
+func (s *agentThunderProvisioningService) HealSecretRef(ctx context.Context, binding models.AgentThunderClient) error {
+	if binding.ProvisioningType != models.AgentProvisioningTypeInternal || binding.SecretRefPath == "" {
+		return nil
+	}
+	refName := agentIdentitySecretLocation(binding.OUID, binding.ProjectName, binding.AgentName, binding.EnvironmentName).SecretRefName()
+	kvPath, err := s.resolveClientSecretKVPath(ctx, binding.OUID, refName)
+	if err != nil {
+		return fmt.Errorf("heal secret ref for binding %s: %w", binding.ID, err)
+	}
+	if binding.SecretRefPath == kvPath {
+		return nil
+	}
+
+	release, lockErr := s.bindingLocks.Lock(ctx, bindingLockKey(binding.OUID, binding.ProjectName, binding.AgentName, binding.EnvironmentName))
+	if lockErr != nil {
+		return fmt.Errorf("heal secret ref for binding %s: %w", binding.ID, lockErr)
+	}
+	defer release()
+
+	current, err := s.repo.Get(ctx, binding.OUID, binding.ProjectName, binding.AgentName, binding.EnvironmentName)
+	if err != nil {
+		if errors.Is(err, repositories.ErrAgentThunderClientNotFound) {
+			return nil // deleted while this heal was resolving — nothing left to heal
+		}
+		return fmt.Errorf("heal secret ref for binding %s: %w", binding.ID, err)
+	}
+	if current.SecretRefPath == "" || current.SecretRefPath == kvPath {
+		return nil // revoked/cleared for deletion since the snapshot, or already healed
+	}
+	return s.repo.UpdateSecretRef(ctx, current.ID, kvPath)
 }
 
 // deleteCredential permanently removes the stored credential (and its
@@ -240,7 +370,7 @@ func (s *agentThunderProvisioningService) deleteCredential(ctx context.Context, 
 type WorkloadInjectorSetter interface {
 	// SetWorkloadInjector backfills the workload injector once the real
 	// AgentIdentityInjectionService exists (this service is constructed before
-	// the OpenChoreo client — see NewOpenBaoAgentThunderProvisioning). app.Run
+	// the OpenChoreo client — see DBBackedAgentThunderProvisioning). app.Run
 	// calls it exactly once, before the reconciler or HTTP server start. No-op
 	// when injector is nil. If this backfill is ever skipped (a startup-order
 	// regression), the post-provisioning reconcile hook logs a warning rather
@@ -294,11 +424,17 @@ func reconcileWorkloadInjection(ctx context.Context, injector AgentIdentityInjec
 	}
 }
 
-// NewOpenBaoAgentThunderProvisioning returns the deployment factory that builds
-// the OpenBao-backed provisioning service once the DB and secret management
-// client are available (see app.Options.AgentThunderProvisioning). Used by the
+// DBBackedAgentThunderProvisioning returns a constructor to be called
+// once the DB and secret management client are available (see
+// app.Options.AgentThunderProvisioning), rather than building the
+// provisioning service immediately. Used by the
 // open-source deployment, which provisions AgentIDs against per-environment
-// Thunder via env-Thunder.
+// Thunder via env-Thunder. "DB-backed" (not "default") is the load-bearing
+// distinction: the env-Thunder system-client credential this service reads
+// (via NewEnvThunderSecretReader) is decrypted from AMS's own Postgres rather
+// than read back from a key vault — the same reason a SaaS/cloud deployment,
+// whose vault may be reveal-once, needs this same DB-backed approach rather
+// than an alternative provisioning implementation.
 //
 // secretMgmtClient is supplied by app.Run, built the same way as the shared
 // one wiring.InitializeAppParams builds for every other secret-backed service
@@ -316,14 +452,15 @@ func reconcileWorkloadInjection(ctx context.Context, injector AgentIdentityInjec
 // agent whose workload comes up outside AgentManagerService.DeployAgent (a
 // git/build-pipeline agent, or a kind-sourced one) would never get its AgentID
 // env vars — neither path calls InjectForEnvironment itself.
-func NewOpenBaoAgentThunderProvisioning() func(db *gorm.DB, secretMgmtClient secretmanagersvc.SecretManagementClient, encryptionKey []byte) AgentThunderProvisioningService {
-	return func(db *gorm.DB, secretMgmtClient secretmanagersvc.SecretManagementClient, encryptionKey []byte) AgentThunderProvisioningService {
+func DBBackedAgentThunderProvisioning() func(db *gorm.DB, secretMgmtClient secretmanagersvc.SecretManagementClient, ocClient client.OpenChoreoClient, encryptionKey []byte) AgentThunderProvisioningService {
+	return func(db *gorm.DB, secretMgmtClient secretmanagersvc.SecretManagementClient, ocClient client.OpenChoreoClient, encryptionKey []byte) AgentThunderProvisioningService {
 		envThunderRepo := repositories.NewEnvThunderSystemClientRepo(db)
 		return NewAgentThunderProvisioningService(
 			repositories.NewAgentThunderClientRepo(db),
 			thundersvc.NewEnvThunderResolver(NewEnvThunderSecretReader(envThunderRepo, encryptionKey)),
 			secretMgmtClient,
-			nil, // see doc comment above
+			ocClient,
+			nil, // workload injector — see doc comment above
 			slog.Default(),
 		)
 	}
@@ -335,6 +472,7 @@ func NewAgentThunderProvisioningService(
 	repo repositories.AgentThunderClientRepository,
 	envResolver thundersvc.EnvThunderResolver,
 	secretMgmtClient secretmanagersvc.SecretManagementClient,
+	ocClient client.OpenChoreoClient,
 	workloadInjector AgentIdentityInjectionService,
 	logger *slog.Logger,
 ) AgentThunderProvisioningService {
@@ -342,6 +480,7 @@ func NewAgentThunderProvisioningService(
 		repo:             repo,
 		envResolver:      envResolver,
 		secretMgmtClient: secretMgmtClient,
+		ocClient:         ocClient,
 		workloadInjector: workloadInjector,
 		logger:           logger,
 	}
@@ -947,13 +1086,16 @@ func (s *agentThunderProvisioningService) DeleteAllBindings(ctx context.Context,
 
 			// The AgentID SecretReference CR is independent of whether the identity
 			// ever landed in Thunder — clean it up for every internal binding, even
-			// ones that never completed.
+			// ones that never completed (a crash between storeCredential creating it
+			// and UpdateAfterAttempt persisting ThunderAgentID/SecretRefPath would
+			// otherwise leave it permanently orphaned, since it precedes the
+			// early-return below).
 			if b.ProvisioningType == models.AgentProvisioningTypeInternal {
 				if injector == nil {
 					s.logger.Warn("Skipping agent identity SecretReference cleanup: no workload injector configured",
 						"ouID", ouID, "bindingID", b.ID, "agentName", agentName, "env", b.EnvironmentName)
 				} else if err := injector.CleanupForEnvironment(ctx, ouID, agentName, b.EnvironmentName); err != nil {
-					s.logger.Warn("Failed to delete agent identity SecretReference during agent deletion", "ouID", ouID, "bindingID", b.ID, "agentName", agentName, "env", b.EnvironmentName, "error", err)
+					s.logger.Warn("Failed to clean up agent identity data-plane SecretReference", "ouID", ouID, "bindingID", b.ID, "agentName", agentName, "env", b.EnvironmentName, "error", err)
 				}
 			}
 			if b.ThunderAgentID == "" {

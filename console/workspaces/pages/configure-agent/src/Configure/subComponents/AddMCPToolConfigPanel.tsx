@@ -326,7 +326,7 @@ export function AddMCPToolConfigPanel({
                     <ListingTable.EmptyState
                       illustration={<ServerCog size={64} />}
                       title="No MCP servers available"
-                      description="No MCP servers found. Add MCP servers from the organization MCP Proxies page first."
+                      description="No MCP servers found. Add MCP servers from the organization MCP Servers page first."
                       action={
                         orgId ? (
                           <Button
@@ -343,7 +343,7 @@ export function AddMCPToolConfigPanel({
                               )
                             }
                           >
-                            Add MCP Server
+                            Register MCP Server
                           </Button>
                         ) : undefined
                       }
@@ -485,7 +485,7 @@ export function AddMCPToolConfigPanel({
                       This tool uses OAuth (AgentID) security. These values
                       are injected into the agent&apos;s pod at runtime, use
                       them in your code to request a token. Scopes are
-                      configured on this MCP proxy&apos;s own security
+                      configured on this MCP Server&apos;s own security
                       settings.
                     </Typography>
                   </Alert>

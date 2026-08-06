@@ -46,6 +46,7 @@ import {
 import {
   absoluteRouteMap,
   globalConfig,
+  isAgentIdentityEnabled,
 } from "@agent-management-platform/types";
 import { useAuthHooks } from "@agent-management-platform/auth";
 import { useGetAgent } from "@agent-management-platform/api-client";
@@ -96,6 +97,7 @@ export function useNavigationItems(): Array<
   });
   const { environments, isLoading: isLoadingEnvironments } =
     usePipelineEnvironmentsState(orgId, projectId);
+  const agentIdEnabled = isAgentIdentityEnabled();
 
   const externalNavItems = useExternalNavItems();
   const { userInfo } = useAuthHooks();
@@ -195,6 +197,60 @@ export function useNavigationItems(): Array<
   ).environments;
   const evaluatorsOrgRoute = absoluteRouteMap.children.org.children.evaluators;
 
+  // Security section shared by the internal-agent menus below: Agent ID, plus
+  // gateway credentials for agent-api agents. Spread as a section only when it
+  // has items, so disabling Agent ID for a non-agent-api agent leaves no empty
+  // section header behind.
+  const agentSecurityItems: NavigationItem[] = [
+    ...(agentIdEnabled
+      ? [
+          {
+            label: "Agent ID",
+            type: "item" as const,
+            icon: <thunderInstancesMetadata.icon size={20} />,
+            isActive: !!matchPath(
+              agentsChildren.agentId?.wildPath ?? "",
+              pathname,
+            ),
+            href: generatePath(agentsChildren.agentId?.path ?? "", {
+              orgId,
+              projectId,
+              agentId,
+            }),
+          },
+        ]
+      : []),
+    ...(agent?.agentType?.type === "agent-api"
+      ? [
+          {
+            label: "Credentials",
+            type: "item" as const,
+            icon: <ShieldCheck size={20} />,
+            isActive: !!matchPath(
+              absoluteRouteMap.children.org.children.projects.children.agents
+                .children.environment.children.security.wildPath,
+              pathname,
+            ),
+            href: generatePath(
+              absoluteRouteMap.children.org.children.projects.children.agents
+                .children.environment.children.security.path,
+              { orgId, projectId, agentId, envId: defaultEnv },
+            ),
+          },
+        ]
+      : []),
+  ];
+  const agentSecuritySections: NavigationSection[] = agentSecurityItems.length
+    ? [
+        {
+          title: "Security",
+          type: "section",
+          icon: <ShieldCheck />,
+          items: agentSecurityItems,
+        },
+      ]
+    : [];
+
   if (isLoadingAgent || (isLoadingEnvironments && agentId)) {
     return [];
   }
@@ -229,20 +285,55 @@ export function useNavigationItems(): Array<
           href: generatePath(item.route, { orgId, projectId, agentId }),
         })),
       {
-        label: "Configure",
-        type: "item",
-        icon: <Settings size={20} />,
-        isActive: !!matchPath(
-          absoluteRouteMap.children.org.children.projects.children.agents
-            .children.configure.wildPath,
-          pathname,
-        ),
-        href: generatePath(
-          absoluteRouteMap.children.org.children.projects.children.agents
-            .children.configure.path,
-          { orgId, projectId, agentId },
-        ),
+        title: "Agent Lifecycle",
+        type: "section",
+        icon: <Rocket />,
+        items: [
+          {
+            label: "Configure",
+            type: "item",
+            icon: <Settings size={20} />,
+            isActive: !!matchPath(
+              absoluteRouteMap.children.org.children.projects.children.agents
+                .children.configure.wildPath,
+              pathname,
+            ),
+            href: generatePath(
+              absoluteRouteMap.children.org.children.projects.children.agents
+                .children.configure.path,
+              { orgId, projectId, agentId },
+            ),
+          },
+        ],
       },
+      // Agent ID is the only Security item for external agents, so the whole
+      // section goes away when the feature is disabled.
+      ...(agentIdEnabled
+        ? [
+            {
+              title: "Security",
+              type: "section" as const,
+              icon: <ShieldCheck />,
+              items: [
+                {
+                  label: "Agent ID",
+                  type: "item" as const,
+                  icon: <thunderInstancesMetadata.icon size={20} />,
+                  isActive: !!matchPath(
+                    absoluteRouteMap.children.org.children.projects.children
+                      .agents.children.agentId.wildPath,
+                    pathname,
+                  ),
+                  href: generatePath(
+                    absoluteRouteMap.children.org.children.projects.children
+                      .agents.children.agentId.path,
+                    { orgId, projectId, agentId },
+                  ),
+                },
+              ],
+            },
+          ]
+        : []),
       {
         title: "Observability",
         type: "section",
@@ -309,75 +400,57 @@ export function useNavigationItems(): Array<
         ),
       },
       {
-        label: "Configure",
-        type: "item",
-        icon: <Settings size={20} />,
-        isActive: !!matchPath(
-          agentsChildren.configure?.wildPath ?? "",
-          pathname,
-        ),
-        href: generatePath(agentsChildren.configure?.path ?? "", {
-          orgId,
-          projectId,
-          agentId,
-        }),
+        title: "Agent Lifecycle",
+        type: "section",
+        icon: <Rocket />,
+        items: [
+          {
+            label: "Configure",
+            type: "item",
+            icon: <Settings size={20} />,
+            isActive: !!matchPath(
+              agentsChildren.configure?.wildPath ?? "",
+              pathname,
+            ),
+            href: generatePath(agentsChildren.configure?.path ?? "", {
+              orgId,
+              projectId,
+              agentId,
+            }),
+          },
+          {
+            label: "Deploy",
+            type: "item",
+            icon: <Rocket size={20} />,
+            isActive: !!matchPath(
+              absoluteRouteMap.children.org.children.projects.children.agents
+                .children.deployment.wildPath,
+              pathname,
+            ),
+            href: generatePath(
+              absoluteRouteMap.children.org.children.projects.children.agents
+                .children.deployment.path,
+              { orgId, projectId, agentId },
+            ),
+          },
+          {
+            label: "Try It",
+            type: "item",
+            icon: <FlaskConical size={20} />,
+            isActive: !!matchPath(
+              absoluteRouteMap.children.org.children.projects.children.agents
+                .children.environment.children.tryOut.wildPath,
+              pathname,
+            ),
+            href: generatePath(
+              absoluteRouteMap.children.org.children.projects.children.agents
+                .children.environment.children.tryOut.path,
+              { orgId, projectId, agentId, envId: defaultEnv },
+            ),
+          },
+        ],
       },
-      {
-        label: "Deploy",
-        type: "item",
-        icon: <Rocket size={20} />,
-        isActive: !!matchPath(
-          absoluteRouteMap.children.org.children.projects.children.agents
-            .children.deployment.wildPath,
-          pathname,
-        ),
-        href: generatePath(
-          absoluteRouteMap.children.org.children.projects.children.agents
-            .children.deployment.path,
-          { orgId, projectId, agentId },
-        ),
-      },
-      {
-        label: "Try It",
-        type: "item",
-        icon: <FlaskConical size={20} />,
-        isActive: !!matchPath(
-          absoluteRouteMap.children.org.children.projects.children.agents
-            .children.environment.children.tryOut.wildPath,
-          pathname,
-        ),
-        href: generatePath(
-          absoluteRouteMap.children.org.children.projects.children.agents
-            .children.environment.children.tryOut.path,
-          { orgId, projectId, agentId, envId: defaultEnv },
-        ),
-      },
-      ...(agent?.agentType?.type === "agent-api"
-        ? [
-            {
-              title: "Security",
-              type: "section" as const,
-              icon: <ShieldCheck />,
-              items: [
-                {
-                  label: "Credentials",
-                  type: "item" as const,
-                  icon: <ShieldCheck size={20} />,
-                  isActive: !!matchPath(
-                    absoluteRouteMap.children.org.children.projects.children
-                      .agents.children.environment.children.security.wildPath,
-                    pathname,
-                  ),
-                  href: generatePath(
-                    absoluteRouteMap.children.org.children.projects.children
-                      .agents.children.environment.children.security.path,
-                    { orgId, projectId, agentId, envId: defaultEnv },
-                  ),
-                },
-              ],
-            },
-          ]
-        : []),
+      ...agentSecuritySections,
       {
         title: "Observability",
         type: "section",
@@ -485,105 +558,87 @@ export function useNavigationItems(): Array<
         ),
       },
       {
-        label: "Build",
-        type: "item",
-        icon: <Wrench size={20} />,
-        isActive: !!matchPath(
-          absoluteRouteMap.children.org.children.projects.children.agents
-            .children.build.wildPath,
-          pathname,
-        ),
-        href: generatePath(
-          absoluteRouteMap.children.org.children.projects.children.agents
-            .children.build.path,
-          { orgId, projectId, agentId },
-        ),
+        title: "Agent Lifecycle",
+        type: "section",
+        icon: <Rocket />,
+        items: [
+          {
+            label: "Configure",
+            type: "item",
+            icon: <Settings size={20} />,
+            isActive: !!matchPath(
+              agentsChildren.configure?.wildPath ?? "",
+              pathname,
+            ),
+            href: generatePath(agentsChildren.configure?.path ?? "", {
+              orgId,
+              projectId,
+              agentId,
+            }),
+          },
+          {
+            label: "Build",
+            type: "item",
+            icon: <Wrench size={20} />,
+            isActive: !!matchPath(
+              absoluteRouteMap.children.org.children.projects.children.agents
+                .children.build.wildPath,
+              pathname,
+            ),
+            href: generatePath(
+              absoluteRouteMap.children.org.children.projects.children.agents
+                .children.build.path,
+              { orgId, projectId, agentId },
+            ),
+          },
+          {
+            label: "Deploy",
+            type: "item",
+            icon: <Rocket size={20} />,
+            isActive: !!matchPath(
+              absoluteRouteMap.children.org.children.projects.children.agents
+                .children.deployment.wildPath,
+              pathname,
+            ),
+            href: generatePath(
+              absoluteRouteMap.children.org.children.projects.children.agents
+                .children.deployment.path,
+              { orgId, projectId, agentId },
+            ),
+          },
+          {
+            label: "Try It",
+            type: "item",
+            icon: <FlaskConical size={20} />,
+            isActive: !!matchPath(
+              absoluteRouteMap.children.org.children.projects.children.agents
+                .children.environment.children.tryOut.wildPath,
+              pathname,
+            ),
+            href: generatePath(
+              absoluteRouteMap.children.org.children.projects.children.agents
+                .children.environment.children.tryOut.path,
+              { orgId, projectId, agentId, envId: defaultEnv },
+            ),
+          },
+          {
+            label: "Publish",
+            type: "item",
+            icon: <Package size={20} />,
+            isActive: !!matchPath(
+              absoluteRouteMap.children.org.children.projects.children.agents
+                .children.publish.wildPath,
+              pathname,
+            ),
+            href: generatePath(
+              absoluteRouteMap.children.org.children.projects.children.agents
+                .children.publish.path,
+              { orgId, projectId, agentId },
+            ),
+          },
+        ],
       },
-      {
-        label: "Configure",
-        type: "item",
-        icon: <Settings size={20} />,
-        isActive: !!matchPath(
-          agentsChildren.configure?.wildPath ?? "",
-          pathname,
-        ),
-        href: generatePath(agentsChildren.configure?.path ?? "", {
-          orgId,
-          projectId,
-          agentId,
-        }),
-      },
-      {
-        label: "Deploy",
-        type: "item",
-        icon: <Rocket size={20} />,
-        isActive: !!matchPath(
-          absoluteRouteMap.children.org.children.projects.children.agents
-            .children.deployment.wildPath,
-          pathname,
-        ),
-        href: generatePath(
-          absoluteRouteMap.children.org.children.projects.children.agents
-            .children.deployment.path,
-          { orgId, projectId, agentId },
-        ),
-      },
-      {
-        label: "Publish",
-        type: "item",
-        icon: <Package size={20} />,
-        isActive: !!matchPath(
-          absoluteRouteMap.children.org.children.projects.children.agents
-            .children.publish.wildPath,
-          pathname,
-        ),
-        href: generatePath(
-          absoluteRouteMap.children.org.children.projects.children.agents
-            .children.publish.path,
-          { orgId, projectId, agentId },
-        ),
-      },
-      {
-        label: "Try It",
-        type: "item",
-        icon: <FlaskConical size={20} />,
-        isActive: !!matchPath(
-          absoluteRouteMap.children.org.children.projects.children.agents
-            .children.environment.children.tryOut.wildPath,
-          pathname,
-        ),
-        href: generatePath(
-          absoluteRouteMap.children.org.children.projects.children.agents
-            .children.environment.children.tryOut.path,
-          { orgId, projectId, agentId, envId: defaultEnv },
-        ),
-      },
-      ...(agent?.agentType?.type === "agent-api"
-        ? [
-            {
-              title: "Security",
-              type: "section" as const,
-              icon: <ShieldCheck />,
-              items: [
-                {
-                  label: "Credentials",
-                  type: "item" as const,
-                  icon: <ShieldCheck size={20} />,
-                  isActive: !!matchPath(
-                    absoluteRouteMap.children.org.children.projects.children
-                      .agents.children.environment.children.security.wildPath,
-                    pathname,
-                  ),
-                  href: generatePath(
-                    absoluteRouteMap.children.org.children.projects.children
-                      .agents.children.environment.children.security.path,
-                    { orgId, projectId, agentId, envId: defaultEnv },
-                  ),
-                },
-              ],
-            },
-          ]
-        : []),
+      ...agentSecuritySections,
       {
         title: "Observability",
         type: "section",
@@ -752,7 +807,7 @@ export function useNavigationItems(): Array<
                   ),
                 },
                 {
-                  label: "MCP Proxies",
+                  label: "MCP Servers",
                   type: "item" as const,
                   icon: <MCPLogo size={20} />,
                   href: generatePath(mcpProxiesOrgRoute.path, { orgId }),
@@ -795,6 +850,16 @@ export function useNavigationItems(): Array<
                   isActive: !!matchPath(gatewaysOrgRoute.wildPath, pathname),
                 },
                 {
+                  label: "Environments",
+                  type: "item" as const,
+                  icon: <Server size={20} />,
+                  href: generatePath(environmentsOrgRoute.path, { orgId }),
+                  isActive: !!matchPath(
+                    environmentsOrgRoute.wildPath,
+                    pathname,
+                  ),
+                },
+                {
                   label: "Deployment Pipelines",
                   type: "item" as const,
                   icon: <ServerCrash size={20} />,
@@ -806,32 +871,41 @@ export function useNavigationItems(): Array<
                     pathname,
                   ),
                 },
-                {
-                  label: "Environments",
-                  type: "item" as const,
-                  icon: <Server size={20} />,
-                  href: generatePath(environmentsOrgRoute.path, { orgId }),
-                  isActive: !!matchPath(
-                    environmentsOrgRoute.wildPath,
-                    pathname,
-                  ),
-                },
-                {
-                  label: thunderInstancesMetadata.title,
-                  type: "item" as const,
-                  icon: <thunderInstancesMetadata.icon size={20} />,
-                  href: generatePath(
-                    absoluteRouteMap.children.org.children.thunderInstances
-                      .path,
-                    { orgId },
-                  ),
-                  isActive: !!matchPath(
-                    absoluteRouteMap.children.org.children.thunderInstances
-                      .wildPath,
-                    pathname,
-                  ),
-                },
               ],
+            },
+          ]
+        : []),
+      ...(agentIdEnabled &&
+      (navVisibility.identityGroups || navVisibility.identityRoles)
+        ? [
+            {
+              title: "Agent Identities",
+              type: "section" as const,
+              icon: <thunderInstancesMetadata.icon />,
+              items: (["groups", "roles"] as const)
+                .filter((key) =>
+                  key === "groups"
+                    ? navVisibility.identityGroups
+                    : navVisibility.identityRoles,
+                )
+                .map((key) => {
+                  const ChildIcon = thunderInstancesMetadata.children[key].icon;
+                  const thunderInstancesChildRoute =
+                    absoluteRouteMap.children.org.children.thunderInstances
+                      .children[key];
+                  return {
+                    label: thunderInstancesMetadata.children[key].title,
+                    type: "item" as const,
+                    icon: <ChildIcon size={20} />,
+                    href: generatePath(thunderInstancesChildRoute.path, {
+                      orgId,
+                    }),
+                    isActive: !!matchPath(
+                      thunderInstancesChildRoute.wildPath,
+                      pathname,
+                    ),
+                  };
+                }),
             },
           ]
         : []),

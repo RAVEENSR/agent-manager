@@ -116,12 +116,22 @@ const ConfigRow: React.FC<ConfigRowProps> = ({
         </Box>
 
         <Box sx={{ width: 180 }}>
+            {/* readonlyKey means this row came from an already-published version: its
+             * defaultValue is whatever the backend returned, which for a secret item is
+             * a placeholder that only signals whether a default exists, never the real
+             * value. A fresh "Create new version" row (readonlyKey unset) still gets a
+             * normal, fully-editable field so authors can type a real secret default. */}
             <TextInput
-                placeholder="Default value"
-                value={row.defaultValue ?? ""}
+                placeholder={
+                    readonlyKey && row.isSecret
+                        ? (row.defaultValue ? "•••••••• (hidden)" : "Not set")
+                        : "Default value"
+                }
+                value={readonlyKey && row.isSecret ? "" : (row.defaultValue ?? "")}
                 onChange={(e) => onUpdate("defaultValue", e.target.value)}
                 fullWidth
                 size="small"
+                disabled={readonlyKey && row.isSecret}
             />
         </Box>
         <Box display="flex" flexDirection="row" flexGrow={1} alignItems="start" pl={2} pt={0.5} gap={1}>

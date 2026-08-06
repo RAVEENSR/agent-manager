@@ -15,10 +15,10 @@
     "typecheck": "tsc"
   },
   "dependencies": {
-    "@docusaurus/core": "3.9.2",
-    "@docusaurus/plugin-client-redirects": "3.9.2",
-    "@docusaurus/preset-classic": "3.9.2",
-    "@docusaurus/theme-mermaid": "3.9.2",
+    "@docusaurus/core": "3.10.2",
+    "@docusaurus/plugin-client-redirects": "3.10.2",
+    "@docusaurus/preset-classic": "3.10.2",
+    "@docusaurus/theme-mermaid": "3.10.2",
     "@mdx-js/react": "^3.0.0",
     "@signalwire/docusaurus-plugin-llms-txt": "^1.2.2",
     "clsx": "^2.0.0",
@@ -30,9 +30,9 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
-    "@docusaurus/module-type-aliases": "3.9.2",
-    "@docusaurus/tsconfig": "3.9.2",
-    "@docusaurus/types": "3.9.2",
+    "@docusaurus/module-type-aliases": "3.10.2",
+    "@docusaurus/tsconfig": "3.10.2",
+    "@docusaurus/types": "3.10.2",
     "typescript": "~5.6.2"
   },
   "browserslist": {
@@ -54,6 +54,70 @@
     "minimatch": "^3.1.3",
     "serialize-javascript": "^7.0.4",
     "lodash-es": "^4.18.1",
-    "ws": "^8.18.0"
+    "ws": "^8.21.1",
+    "body-parser": "^1.20.6",
+    "brace-expansion": "^5.0.9",
+    "fast-uri": "^3.1.5",
+    "js-yaml": "^4.3.0",
+    "shell-quote": "^1.10.0",
+    "uuid": "^11.1.1",
+    "svgo": "^3.3.4",
+    "gray-matter": {
+      "js-yaml": "^3.15.0"
+    },
+    "@docusaurus/cssnano-preset": {
+      "postcss-selector-parser": "^6.1.4"
+    },
+    "cssnano": {
+      "postcss-selector-parser": "^6.1.4"
+    },
+    "css-loader": {
+      "postcss-selector-parser": "^7.1.4"
+    },
+    "@csstools/postcss-cascade-layers": {
+      "postcss-selector-parser": "^7.1.4"
+    },
+    "@csstools/postcss-is-pseudo-class": {
+      "postcss-selector-parser": "^7.1.4"
+    },
+    "@csstools/postcss-scope-pseudo-class": {
+      "postcss-selector-parser": "^7.1.4"
+    },
+    "@csstools/selector-specificity": {
+      "postcss-selector-parser": "^7.1.4"
+    },
+    "@csstools/selector-resolve-nested": {
+      "postcss-selector-parser": "^7.1.4"
+    },
+    "css-blank-pseudo": {
+      "postcss-selector-parser": "^7.1.4"
+    },
+    "css-has-pseudo": {
+      "postcss-selector-parser": "^7.1.4"
+    },
+    "postcss-attribute-case-insensitive": {
+      "postcss-selector-parser": "^7.1.4"
+    },
+    "postcss-custom-selectors": {
+      "postcss-selector-parser": "^7.1.4"
+    },
+    "postcss-dir-pseudo-class": {
+      "postcss-selector-parser": "^7.1.4"
+    },
+    "postcss-focus-visible": {
+      "postcss-selector-parser": "^7.1.4"
+    },
+    "postcss-focus-within": {
+      "postcss-selector-parser": "^7.1.4"
+    },
+    "postcss-nesting": {
+      "postcss-selector-parser": "^7.1.4"
+    },
+    "postcss-pseudo-class-any-link": {
+      "postcss-selector-parser": "^7.1.4"
+    },
+    "postcss-selector-not": {
+      "postcss-selector-parser": "^7.1.4"
+    }
   }
 }

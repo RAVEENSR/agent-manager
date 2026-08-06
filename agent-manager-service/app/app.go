@@ -70,7 +70,7 @@ type Options struct {
 	// credentials). encryptionKey is the platform ENCRYPTION_KEY, used to decrypt
 	// the env-Thunder system-client credential from AMS's own Postgres — that one
 	// is not read back from a key vault.
-	AgentThunderProvisioning func(db *gorm.DB, secretMgmtClient secretmanagersvc.SecretManagementClient, encryptionKey []byte) services.AgentThunderProvisioningService
+	AgentThunderProvisioning func(db *gorm.DB, secretMgmtClient secretmanagersvc.SecretManagementClient, ocClient occlient.OpenChoreoClient, encryptionKey []byte) services.AgentThunderProvisioningService
 	// BuildSecretProvisioner provisions the per-run git clone secret before a source
 	// build's WorkflowRun is created. nil (the open-source default) is a no-op: private
 	// repos are cloned via the PAT-backed git secret the user created (or public repos
@@ -84,7 +84,7 @@ type Options struct {
 // The authProvider parameter allows different deployments to inject their own
 // authentication mechanism (e.g., OAuth2 for open-source, workload identity for cloud).
 // The secretProvider parameter allows different deployments to inject their own
-// secret management backend (e.g., OpenBao for open-source, cloud-specific for cloud).
+// secret management backend (e.g., the OpenChoreo secret API for open-source, cloud-specific for cloud).
 func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Provider, opts Options) {
 	cfg := config.GetConfig()
 
@@ -139,7 +139,7 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 			slog.Error("failed to load encryption key for AgentID provisioning", "error", err)
 			os.Exit(1)
 		}
-		agentThunderProvisioning = opts.AgentThunderProvisioning(database, secretMgmtClientForProvisioning, encryptionKey)
+		agentThunderProvisioning = opts.AgentThunderProvisioning(database, secretMgmtClientForProvisioning, ocClientForProvisioning, encryptionKey)
 	}
 
 	dependencies, err := wiring.InitializeAppParams(cfg, database, authProvider, secretProvider, opts.GatewayConfigApplier, agentThunderProvisioning, opts.BuildSecretProvisioner)
@@ -159,6 +159,14 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 	// doesn't implement this optional interface.
 	if setter, ok := agentThunderProvisioning.(services.WorkloadInjectorSetter); ok {
 		setter.SetWorkloadInjector(dependencies.AgentIdentityInjectionService)
+	}
+
+	// So a rotated agent's deferred pod rollout (see RefreshAfterRotation)
+	// stops waiting, or aborts an in-flight roll, once shutdown starts below
+	// instead of firing an outbound update afterward.
+	agentIdentityRolloutCtx, agentIdentityRolloutCancel := context.WithCancel(context.Background())
+	if setter, ok := dependencies.AgentIdentityInjectionService.(services.AgentIdentityShutdownContextSetter); ok {
+		setter.SetShutdownContext(agentIdentityRolloutCtx)
 	}
 
 	// Start monitor scheduler with background context
@@ -207,6 +215,13 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 	wg.Go(func() {
 		<-stopCh
 		slog.Info("Shutdown signal received, stopping services...")
+
+		// Abort any AgentID pod rollout still waiting or in flight first —
+		// this is a plain context.CancelFunc, so there is no reason to run
+		// it after any of the synchronous shutdown steps below, some of
+		// which could otherwise delay it long enough for a still-waiting
+		// rollout to fire in the meantime.
+		agentIdentityRolloutCancel()
 
 		// Single timeout context for the entire shutdown sequence
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)

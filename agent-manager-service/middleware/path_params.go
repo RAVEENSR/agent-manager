@@ -66,10 +66,12 @@ func (rr *RouteRegistrar) HandleFuncWithValidationAndAuthz(pattern string, perm 
 }
 
 // HandleFuncWithValidationAndAuthzAllowRootOU is identical to
-// HandleFuncWithValidationAndAuthz except it also permits the configured
-// root OU (system clients) to access the route for any org, and bypasses
-// scope checks for that same root-OU token. Use only for system-client
-// bootstrap endpoints — see RequireOrgMatchAllowRootOU / RequirePermissionAllowRootOU.
+// HandleFuncWithValidationAndAuthz except it also bypasses the scope check for
+// a client-credentials token issued to the configured root/admin OU. Org
+// resolution is unchanged from the normal path: under the token-trust model
+// the org always comes from the token, so this does NOT let a root-OU token
+// act on a different org named in the path — see RequireOrgMatchAllowRootOU /
+// RequirePermissionAllowRootOU. Use only for system-client bootstrap endpoints.
 func (rr *RouteRegistrar) HandleFuncWithValidationAndAuthzAllowRootOU(pattern string, perm rbac.Permission, handler http.HandlerFunc) {
 	params := extractPathParams(pattern)
 	if len(params) > 0 {

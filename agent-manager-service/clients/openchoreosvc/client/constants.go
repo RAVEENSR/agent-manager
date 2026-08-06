@@ -149,6 +149,10 @@ const (
 	DeploymentStatusSuspended   = "suspended"
 )
 
+// resourceKindSandboxWarmPool is the kind of the dataplane resource that owns agent pods.
+// Its status carries the replica counts used to tell whether an agent can serve traffic.
+const resourceKindSandboxWarmPool = "SandboxWarmPool"
+
 // -----------------------------------------------------------------------------
 // OpenChoreo binding status values
 // -----------------------------------------------------------------------------

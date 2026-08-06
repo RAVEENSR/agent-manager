@@ -644,6 +644,44 @@ func (s *LLMProviderService) UpdateAndSync(ctx context.Context, providerID, ouID
 		currentGatewayMap[gwID] = true
 	}
 
+	// Validate egress placement for every requested gateway before the deploy/undeploy loops
+	// run below. placementAccumulator starts as the provider's current deployments and grows
+	// with each newly-validated gateway, so two new gateways sharing an environment in the
+	// same request are also caught, not just clashes against pre-existing deployments.
+	//
+	// This must hard-fail on the first placement error rather than skip-and-continue: the
+	// deploy/undeploy loops below compute removals from newGatewayMap, so silently dropping
+	// an invalid gateway from the desired set would shrink it and undeploy every
+	// currently-working gateway that isn't also named in this request. Naming an invalid
+	// gateway is caller error and must leave existing deployments untouched.
+	placementAccumulator := append([]string{}, currentGateways...)
+	for _, gatewayUUID := range gatewayUUIDs {
+		gatewayID := gatewayUUID.String()
+		if currentGatewayMap[gatewayID] {
+			// Already deployed here: idempotent, DeployLLMProvider re-validates anyway.
+			continue
+		}
+		gateway, err := s.gatewayRepo.GetByUUID(gatewayID)
+		if err != nil {
+			// Gateway-not-found is left to the deploy call below, unchanged from before this
+			// task: it already performs its own GetByUUID and records a deployment failure.
+			// Skip placement validation for it here; there's nothing to validate.
+			slog.Warn("LLMProviderService.UpdateAndSync: could not resolve gateway for placement check, deferring to deploy step", "providerID", providerID, "gatewayID", gatewayID, "error", err)
+			continue
+		}
+		if gateway == nil || gateway.OUID != ouID {
+			// Foreign-org gateway: never inspect or echo it here; the deploy step below
+			// enforces org ownership and records the per-gateway failure.
+			slog.Warn("LLMProviderService.UpdateAndSync: gateway not found in organization, deferring to deploy step", "providerID", providerID, "gatewayID", gatewayID)
+			continue
+		}
+		if err := validateEgressPlacement(s.gatewayRepo, gateway, placementAccumulator); err != nil {
+			slog.Error("LLMProviderService.UpdateAndSync: gateway failed egress placement check", "providerID", providerID, "gatewayID", gatewayID, "error", err)
+			return nil, fmt.Errorf("%w: %w", utils.ErrInvalidInput, err)
+		}
+		placementAccumulator = append(placementAccumulator, gatewayID)
+	}
+
 	newGatewayMap := make(map[string]bool)
 	for _, gw := range gatewayUUIDs {
 		newGatewayMap[gw.String()] = true
@@ -860,7 +898,7 @@ func (s *LLMProviderService) CreateAndDeploy(ctx context.Context, ouID, createdB
 			continue
 		}
 
-		_, err = s.gatewayRepo.GetByUUID(gatewayID)
+		gateway, err := s.gatewayRepo.GetByUUID(gatewayID)
 		if err != nil {
 			slog.Error("LLMProviderService.CreateAndDeploy: no gateway found for provided gateway", "ouID", ouID, "gatewayID", gatewayID, "error", err)
 			deploymentResults = append(deploymentResults, DeploymentResult{
@@ -869,6 +907,28 @@ func (s *LLMProviderService) CreateAndDeploy(ctx context.Context, ouID, createdB
 				Error:     fmt.Sprintf("Gateway not found: %v", err),
 			})
 			continue
+		}
+		if gateway == nil || gateway.OUID != ouID {
+			// Foreign-org gateway: treat as not found without inspecting or echoing it.
+			slog.Error("LLMProviderService.CreateAndDeploy: gateway not found in organization", "ouID", ouID, "gatewayID", gatewayID)
+			deploymentResults = append(deploymentResults, DeploymentResult{
+				GatewayID: gatewayID,
+				Success:   false,
+				Error:     "Gateway not found",
+			})
+			continue
+		}
+
+		// existingDeployments is validGatewayIDs-so-far: the provider doesn't exist yet, so the
+		// only clash to catch here is two gateways in this same request sharing an environment.
+		//
+		// Unlike malformed UUIDs / gateway-not-found above, a placement failure is a hard
+		// error, not a per-gateway skip: naming an invalid gateway is caller error, and
+		// nothing has been written yet (no provider, no deployment), so there is no partial
+		// state to leave behind by failing the whole request now.
+		if err := validateEgressPlacement(s.gatewayRepo, gateway, validGatewayIDs); err != nil {
+			slog.Error("LLMProviderService.CreateAndDeploy: gateway failed egress placement check", "ouID", ouID, "gatewayID", gatewayID, "error", err)
+			return nil, fmt.Errorf("%w: %w", utils.ErrInvalidInput, err)
 		}
 
 		validGatewayIDs = append(validGatewayIDs, gatewayID)

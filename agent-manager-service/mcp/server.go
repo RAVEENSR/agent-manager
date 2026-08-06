@@ -30,9 +30,10 @@ func NewHTTPServer(toolsets *tools.Toolsets) http.Handler {
 		Version: "0.1.0",
 	}, nil)
 
-	if toolsets != nil {
-		toolsets.Register(server)
-	}
+	// Register's nil-receiver path is safe — it still installs the fail-closed
+	// authz middleware even when toolsets is nil — so this always runs
+	// unconditionally.
+	toolsets.Register(server)
 
 	return gomcp.NewStreamableHTTPHandler(func(r *http.Request) *gomcp.Server {
 		return server

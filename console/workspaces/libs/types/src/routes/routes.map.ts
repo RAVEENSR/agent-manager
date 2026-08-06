@@ -39,52 +39,46 @@ export const rootRouteMap: AppRoute = {
                     path: 'thunder-instances',
                     index: true,
                     children: {
-                        view: {
-                            path: 'view/:envName',
+                        agents: {
+                            path: 'agents',
                             index: true,
                             children: {
-                                agents: {
-                                    path: 'agents',
+                                detail: {
+                                    path: ':projectName/:agentName',
                                     index: true,
-                                    children: {
-                                        detail: {
-                                            path: ':projectName/:agentName',
-                                            index: true,
-                                            children: {},
-                                        },
-                                    },
+                                    children: {},
                                 },
-                                groups: {
-                                    path: 'groups',
+                            },
+                        },
+                        roles: {
+                            path: 'roles',
+                            index: true,
+                            children: {
+                                create: {
+                                    path: 'create',
                                     index: true,
-                                    children: {
-                                        create: {
-                                            path: 'create',
-                                            index: true,
-                                            children: {},
-                                        },
-                                        detail: {
-                                            path: ':groupId',
-                                            index: true,
-                                            children: {},
-                                        },
-                                    },
+                                    children: {},
                                 },
-                                roles: {
-                                    path: 'roles',
+                                detail: {
+                                    path: ':roleId',
                                     index: true,
-                                    children: {
-                                        create: {
-                                            path: 'create',
-                                            index: true,
-                                            children: {},
-                                        },
-                                        detail: {
-                                            path: ':roleId',
-                                            index: true,
-                                            children: {},
-                                        },
-                                    },
+                                    children: {},
+                                },
+                            },
+                        },
+                        groups: {
+                            path: 'groups',
+                            index: true,
+                            children: {
+                                create: {
+                                    path: 'create',
+                                    index: true,
+                                    children: {},
+                                },
+                                detail: {
+                                    path: ':groupId',
+                                    index: true,
+                                    children: {},
                                 },
                             },
                         },
@@ -94,11 +88,6 @@ export const rootRouteMap: AppRoute = {
                     path: 'gateways',
                     index: true,
                     children: {
-                        add: {
-                            path: 'add',
-                            index: true,
-                            children: {},
-                        },
                         view: {
                             path: 'view/:gatewayId',
                             index: true,
@@ -176,17 +165,6 @@ export const rootRouteMap: AppRoute = {
                                 },
                             },
                         },
-                        appearance: {
-                            path: 'appearance',
-                            index: true,
-                            children: {
-                                theme: {
-                                    path: 'theme',
-                                    index: true,
-                                    children: {},
-                                },
-                            },
-                        },
                     },
                 },
                 mcpProxies: {
@@ -238,7 +216,13 @@ export const rootRouteMap: AppRoute = {
                         view: {
                             path: ':envName',
                             index: true,
-                            children: {},
+                            children: {
+                                identityProvider: {
+                                    path: 'identity-provider',
+                                    index: true,
+                                    children: {},
+                                },
+                            },
                         },
                     },
                 },
@@ -299,6 +283,11 @@ export const rootRouteMap: AppRoute = {
                             path: 'agents/:agentId',
                             index: true,
                             children: {
+                                agentId: {
+                                    path: 'agent-id',
+                                    index: true,
+                                    children: {},
+                                },
                                 configure: {
                                     path: 'configure',
                                     index: true,

@@ -18,16 +18,15 @@
 
 import { useState } from "react";
 import {
+  AdapterDateFns,
   Alert,
   Box,
   Button,
   Chip,
-  CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
+  DatePickers,
+  Form,
   IconButton,
+  ListingTable,
   Skeleton,
   Stack,
   TextField,
@@ -35,11 +34,15 @@ import {
   Typography,
 } from "@wso2/oxygen-ui";
 import {
-  Copy,
   Key,
   Plus,
   Trash2 as DeleteIcon,
 } from "@wso2/oxygen-ui-icons-react";
+import { endOfDay, format } from "date-fns";
+import { DrawerContent, DrawerHeader, DrawerWrapper, TextInput } from "@agent-management-platform/views";
+import { capitalize } from "../../utils/format";
+import { monospaceInputSx } from "../AgentIdentityCredentials/AgentIdentityCredentials";
+import { useConfirmationDialog } from "../ConfirmationDialog/ConfirmationDialogProvider";
 import type { APIKeyInfo, SecurityConfig } from "@agent-management-platform/types";
 
 /**
@@ -74,7 +77,7 @@ export interface APIKeysManagerProps {
   onRevoke: (keyName: string) => void;
 }
 
-function CreateAPIKeyDialog({
+function CreateAPIKeyDrawer({
   open,
   onClose,
   isCreating,
@@ -90,13 +93,14 @@ function CreateAPIKeyDialog({
   const defaultExpiry = () => {
     const d = new Date();
     d.setMonth(d.getMonth() + 1);
-    return d.toISOString().slice(0, 10);
+    return d;
   };
   const [displayName, setDisplayName] = useState("");
-  const [expiresAt, setExpiresAt] = useState(defaultExpiry);
+  const [expiresAt, setExpiresAt] = useState<Date | null>(defaultExpiry);
 
   const trimmedDisplayName = displayName.trim();
-  const canSubmit = trimmedDisplayName.length > 0 && expiresAt.length > 0;
+  const isValidExpiry = !!expiresAt && !Number.isNaN(expiresAt.getTime());
+  const canSubmit = trimmedDisplayName.length > 0 && isValidExpiry;
 
   const handleClose = () => {
     setDisplayName("");
@@ -105,20 +109,11 @@ function CreateAPIKeyDialog({
   };
 
   const handleCreate = async () => {
-    if (!canSubmit) return;
+    if (!canSubmit || !expiresAt) return;
     // Interpret the picked date as the end of that day in the user's local time
     // zone (not UTC), so the selected calendar day is preserved regardless of
     // the user's offset. toISOString() then yields the correct RFC3339 instant.
-    const [year, month, day] = expiresAt.split("-").map(Number);
-    const expiresAtRFC3339 = new Date(
-      year,
-      month - 1,
-      day,
-      23,
-      59,
-      59,
-      999,
-    ).toISOString();
+    const expiresAtRFC3339 = endOfDay(expiresAt).toISOString();
     try {
       const key = await onCreate({
         displayName: trimmedDisplayName,
@@ -133,47 +128,59 @@ function CreateAPIKeyDialog({
   };
 
   return (
-    <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Create API Key</DialogTitle>
-      <DialogContent>
-        <Stack spacing={2} sx={{ pt: 1 }}>
-          <TextField
-            label="Display name"
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-            fullWidth
-            required
-            size="small"
-            placeholder="production key"
-          />
-          <TextField
-            label="Expires"
-            type="date"
-            value={expiresAt}
-            onChange={(e) => setExpiresAt(e.target.value)}
-            fullWidth
-            required
-            size="small"
-            error={expiresAt.length === 0}
-            slotProps={{ inputLabel: { shrink: true } }}
-            helperText="Key expires at end of the selected day"
-          />
-        </Stack>
-      </DialogContent>
-      <DialogActions>
-        <Button variant="outlined" onClick={handleClose} disabled={isCreating}>
-          Cancel
-        </Button>
-        <Button
-          variant="contained"
-          onClick={() => void handleCreate()}
-          disabled={isCreating || !canSubmit}
-          startIcon={isCreating ? <CircularProgress size={16} /> : undefined}
-        >
-          {isCreating ? "Creating..." : "Create"}
-        </Button>
-      </DialogActions>
-    </Dialog>
+    <DrawerWrapper open={open} onClose={handleClose}>
+      <DrawerHeader icon={<Key size={24} />} title="Create API Key" onClose={handleClose} />
+      <DrawerContent>
+        <DatePickers.LocalizationProvider dateAdapter={AdapterDateFns}>
+          <Stack spacing={3}>
+            <Form.Section>
+              <Form.Stack spacing={2}>
+                <Form.ElementWrapper label="Display name" name="displayName">
+                  <TextField
+                    id="displayName"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    fullWidth
+                    size="small"
+                    placeholder="production key"
+                    disabled={isCreating}
+                  />
+                </Form.ElementWrapper>
+                <Form.ElementWrapper label="Expires" name="expiresAt">
+                  <DatePickers.DatePicker
+                    value={expiresAt}
+                    onChange={(value) => setExpiresAt(value)}
+                    minDate={new Date()}
+                    disabled={isCreating}
+                    slotProps={{
+                      textField: {
+                        size: "small",
+                        fullWidth: true,
+                        error: !isValidExpiry,
+                        helperText: "Key expires at the end of the selected day",
+                      },
+                    }}
+                  />
+                </Form.ElementWrapper>
+              </Form.Stack>
+            </Form.Section>
+
+            <Box display="flex" justifyContent="flex-end" gap={1}>
+              <Button variant="outlined" color="inherit" onClick={handleClose} disabled={isCreating}>
+                Cancel
+              </Button>
+              <Button
+                variant="contained"
+                onClick={() => void handleCreate()}
+                disabled={isCreating || !canSubmit}
+              >
+                {isCreating ? "Creating..." : "Create"}
+              </Button>
+            </Box>
+          </Stack>
+        </DatePickers.LocalizationProvider>
+      </DrawerContent>
+    </DrawerWrapper>
   );
 }
 
@@ -184,93 +191,25 @@ function NewKeyBanner({
   apiKey: string;
   onDismiss: () => void;
 }) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(apiKey).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  };
-
   return (
     <Alert
-      severity="success"
+      severity="info"
       onClose={onDismiss}
       sx={{ mb: 2, "& .MuiAlert-message": { flexGrow: 1 } }}
     >
-      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+      <Typography variant="subtitle2" sx={{ mb: 1 }}>
         You will only see this key once. Copy it now.
       </Typography>
-      <Box display="flex" alignItems="center" gap={1}>
-        <TextField
-          size="small"
-          fullWidth
-          value={apiKey}
-          slotProps={{ input: { readOnly: true } }}
-        />
-        <Tooltip title={copied ? "Copied!" : "Copy"}>
-          <IconButton size="small" onClick={handleCopy} aria-label="Copy API key">
-            <Copy size={16} />
-          </IconButton>
-        </Tooltip>
-      </Box>
+      <TextInput
+        size="small"
+        fullWidth
+        value={apiKey}
+        copyable
+        copyTooltipText="Copy API key"
+        slotProps={{ input: { readOnly: true } }}
+        sx={monospaceInputSx}
+      />
     </Alert>
-  );
-}
-
-function APIKeyRow({
-  apiKey,
-  onRevoke,
-  isRevoking,
-}: {
-  apiKey: APIKeyInfo;
-  onRevoke: (keyName: string) => void;
-  isRevoking?: boolean;
-}) {
-  return (
-    <Box
-      display="flex"
-      alignItems="center"
-      justifyContent="space-between"
-      px={2}
-      py={1.5}
-      sx={{ borderBottom: "1px solid", borderColor: "divider" }}
-    >
-      <Box display="flex" alignItems="center" gap={2}>
-        <Key size={18} />
-        <Box>
-          <Typography variant="body2" fontWeight={500}>
-            {apiKey.displayName || apiKey.name}
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            {apiKey.maskedApiKey}
-            {apiKey.expiresAt &&
-              ` · Expires ${new Date(apiKey.expiresAt).toLocaleDateString()}`}
-          </Typography>
-        </Box>
-      </Box>
-      <Box display="flex" alignItems="center" gap={1}>
-        <Chip
-          label={apiKey.status}
-          size="small"
-          color={apiKey.status === "active" ? "success" : "default"}
-        />
-        <Tooltip title="Revoke">
-          <span>
-            <IconButton
-              size="small"
-              color="error"
-              onClick={() => onRevoke(apiKey.name)}
-              disabled={isRevoking}
-              aria-label="Revoke API key"
-            >
-              <DeleteIcon size={16} />
-            </IconButton>
-          </span>
-        </Tooltip>
-      </Box>
-    </Box>
   );
 }
 
@@ -292,6 +231,7 @@ export function APIKeysManager({
 }: APIKeysManagerProps) {
   const [createOpen, setCreateOpen] = useState(false);
   const [newKeyValue, setNewKeyValue] = useState<string | null>(null);
+  const { addConfirmation } = useConfirmationDialog();
 
   if (isLoading) {
     return <Skeleton variant="rectangular" width="100%" height={200} />;
@@ -299,20 +239,29 @@ export function APIKeysManager({
 
   const hasKeys = !!keys && keys.length > 0;
 
+  const handleRevoke = (key: APIKeyInfo) => {
+    addConfirmation({
+      title: "Revoke API Key",
+      description: `Are you sure you want to revoke "${key.displayName || key.name}"? Any requests using this key will stop working immediately. This action cannot be undone.`,
+      confirmButtonText: "Revoke",
+      confirmButtonColor: "error",
+      confirmButtonIcon: <DeleteIcon size={16} />,
+      onConfirm: () => onRevoke(key.name),
+    });
+  };
+
+  const createButton = (
+    <Button
+      variant="contained"
+      startIcon={<Plus size={16} />}
+      onClick={() => setCreateOpen(true)}
+    >
+      Create API Key
+    </Button>
+  );
+
   return (
     <Box>
-      {hasKeys && (
-        <Stack direction="row" justifyContent="flex-end" sx={{ mb: 2 }}>
-          <Button
-            variant="contained"
-            startIcon={<Plus size={16} />}
-            onClick={() => setCreateOpen(true)}
-          >
-            Create
-          </Button>
-        </Stack>
-      )}
-
       {newKeyValue && (
         <NewKeyBanner
           apiKey={newKeyValue}
@@ -325,43 +274,84 @@ export function APIKeysManager({
           Failed to load API keys. Please refresh the page.
         </Alert>
       ) : hasKeys ? (
-        <Box
-          sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1 }}
-        >
-          {keys!.map((key) => (
-            <APIKeyRow
-              key={key.name}
-              apiKey={key}
-              onRevoke={onRevoke}
-              isRevoking={isRevoking}
-            />
-          ))}
-        </Box>
+        <ListingTable.Container>
+          <Box display="flex" justifyContent="flex-end" sx={{ p: 2 }}>
+            {createButton}
+          </Box>
+          <ListingTable>
+            <ListingTable.Head>
+              <ListingTable.Row>
+                <ListingTable.Cell width="25%">Name</ListingTable.Cell>
+                <ListingTable.Cell width="25%">Key</ListingTable.Cell>
+                <ListingTable.Cell width="120px">Status</ListingTable.Cell>
+                <ListingTable.Cell width="180px">Expires</ListingTable.Cell>
+                <ListingTable.Cell align="right" width="72px" />
+              </ListingTable.Row>
+            </ListingTable.Head>
+            <ListingTable.Body>
+              {keys!.map((key) => (
+                <ListingTable.Row key={key.name} hover>
+                  <ListingTable.Cell>
+                    <Typography noWrap variant="body2" color="text.primary">
+                      {key.displayName || key.name}
+                    </Typography>
+                  </ListingTable.Cell>
+                  <ListingTable.Cell>
+                    <Typography
+                      noWrap
+                      variant="caption"
+                      sx={{ fontFamily: "monospace", color: "text.secondary" }}
+                    >
+                      {key.maskedApiKey}
+                    </Typography>
+                  </ListingTable.Cell>
+                  <ListingTable.Cell>
+                    <Chip
+                      label={capitalize(key.status)}
+                      size="small"
+                      variant="outlined"
+                      color={key.status === "active" ? "success" : "default"}
+                    />
+                  </ListingTable.Cell>
+                  <ListingTable.Cell>
+                    <Typography noWrap variant="caption" color="text.secondary">
+                      {key.expiresAt
+                        ? format(new Date(key.expiresAt), "dd/MM/yyyy HH:mm:ss")
+                        : "Never expires"}
+                    </Typography>
+                  </ListingTable.Cell>
+                  <ListingTable.Cell align="right">
+                    <Tooltip title="Revoke">
+                      <span>
+                        <IconButton
+                          size="small"
+                          onClick={() => handleRevoke(key)}
+                          disabled={isRevoking}
+                          aria-label="Revoke API key"
+                          sx={{ color: "text.secondary" }}
+                        >
+                          <DeleteIcon size={16} />
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  </ListingTable.Cell>
+                </ListingTable.Row>
+              ))}
+            </ListingTable.Body>
+          </ListingTable>
+        </ListingTable.Container>
       ) : (
-        <Box
-          display="flex"
-          flexDirection="column"
-          alignItems="center"
-          justifyContent="center"
-          py={8}
-          gap={2}
-        >
-          <Key size={48} />
-          <Typography variant="h6">No API keys</Typography>
-          <Typography variant="body2" color="text.secondary">
-            {emptyDescription}
-          </Typography>
-          <Button
-            variant="contained"
-            startIcon={<Plus size={16} />}
-            onClick={() => setCreateOpen(true)}
-          >
-            Create API Key
-          </Button>
-        </Box>
+        <ListingTable.Container>
+          <ListingTable.EmptyState
+            illustration={<Key size={48} />}
+            title="No API keys"
+            description={emptyDescription}
+            action={createButton}
+          />
+        </ListingTable.Container>
       )}
 
-      <CreateAPIKeyDialog
+      <CreateAPIKeyDrawer
         open={createOpen}
         onClose={() => setCreateOpen(false)}
         isCreating={isCreating}

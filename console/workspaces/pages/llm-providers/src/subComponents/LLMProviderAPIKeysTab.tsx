@@ -27,7 +27,8 @@ import {
   type CreateAPIKeyInput,
 } from "@agent-management-platform/shared-component";
 import type { LLMProviderResponse } from "@agent-management-platform/types";
-import { Alert, Skeleton } from "@wso2/oxygen-ui";
+import { Alert, Button, ListingTable, Skeleton } from "@wso2/oxygen-ui";
+import { ShieldOff } from "@wso2/oxygen-ui-icons-react";
 
 export type LLMProviderAPIKeysTabProps = {
   providerData: LLMProviderResponse | null | undefined;
@@ -39,6 +40,8 @@ export type LLMProviderAPIKeysTabProps = {
    * provider with API keys disabled.
    */
   error?: Error | null;
+  /** Switches the parent tab view to the Security tab. */
+  onGoToSecurityTab?: () => void;
 };
 
 export function LLMProviderAPIKeysTab({
@@ -47,6 +50,7 @@ export function LLMProviderAPIKeysTab({
   providerId,
   isLoading = false,
   error: providerError = null,
+  onGoToSecurityTab,
 }: LLMProviderAPIKeysTabProps) {
   const apiKeyEnabled = isApiKeyAuthEnabled(providerData?.security);
 
@@ -101,9 +105,20 @@ export function LLMProviderAPIKeysTab({
 
   if (!apiKeyEnabled) {
     return (
-      <Alert severity="info">
-        Enable API key authentication from the Security tab to manage API keys.
-      </Alert>
+      <ListingTable.Container>
+        <ListingTable.EmptyState
+          illustration={<ShieldOff size={48} />}
+          title="API key authentication is disabled"
+          description="Enable API key authentication from the Security tab to manage API keys."
+          action={
+            onGoToSecurityTab ? (
+              <Button variant="outlined" onClick={onGoToSecurityTab}>
+                Go to Security Tab
+              </Button>
+            ) : undefined
+          }
+        />
+      </ListingTable.Container>
     );
   }
 

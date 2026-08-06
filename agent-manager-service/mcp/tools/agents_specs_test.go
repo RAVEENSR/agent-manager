@@ -19,6 +19,7 @@ package tools
 import (
 	"testing"
 
+	"github.com/wso2/agent-manager/agent-manager-service/rbac"
 	"github.com/wso2/agent-manager/agent-manager-service/spec"
 )
 
@@ -29,12 +30,12 @@ func agentToolSpecs() []toolTestSpec {
 		{
 			name:                "list_agents",
 			toolset:             "agent",
+			permissions:         []rbac.Permission{rbac.AgentRead},
 			descriptionKeywords: []string{"list", "agent"},
 			descriptionMinLen:   20,
 			requiredParams:      []string{"project_name"},
-			optionalParams:      []string{"org_name", "limit", "offset"},
+			optionalParams:      []string{"limit", "offset"},
 			testArgs: map[string]any{
-				"org_name":     testOrgName,
 				"project_name": testProjectName,
 			},
 			expectedMethod: "ListAgents",
@@ -50,15 +51,16 @@ func agentToolSpecs() []toolTestSpec {
 		{
 			name:                "list_project_agent_pairs",
 			toolset:             "agent",
+			permissions:         []rbac.Permission{rbac.AgentRead, rbac.ProjectRead},
 			descriptionKeywords: []string{"project", "agent"},
 			descriptionMinLen:   20,
 			requiredParams:      nil,
 			optionalParams: []string{
-				"org_name", "project_search", "agent_search",
+				"project_search", "agent_search",
 				"project_limit", "project_offset",
 				"agent_limit", "agent_offset",
 			},
-			testArgs:       map[string]any{"org_name": testOrgName},
+			testArgs:       map[string]any{},
 			expectedMethod: "ListProjects",
 			validateCall: func(t *testing.T, args []interface{}) {
 				if got, want := args[0], testOrgName; got != want {
@@ -69,16 +71,17 @@ func agentToolSpecs() []toolTestSpec {
 		{
 			name:                "create_external_agent",
 			toolset:             "agent",
+			permissions:         []rbac.Permission{rbac.AgentCreate, rbac.AgentTokenManage},
 			descriptionKeywords: []string{"external", "agent"},
 			descriptionMinLen:   20,
 			requiredParams:      []string{"project_name", "agent_name", "display_name", "language"},
-			optionalParams:      []string{"org_name", "description"},
+			optionalParams:      []string{"description", "environment"},
 			testArgs: map[string]any{
-				"org_name":     testOrgName,
 				"project_name": testProjectName,
 				"agent_name":   testAgentName,
 				"display_name": testDisplayName,
 				"language":     "python",
+				"environment":  testEnvName,
 			},
 			expectedMethod: "CreateAgent",
 			validateCall: func(t *testing.T, args []interface{}) {
@@ -103,6 +106,7 @@ func agentToolSpecs() []toolTestSpec {
 		{
 			name:                "create_internal_agent_python",
 			toolset:             "agent",
+			permissions:         []rbac.Permission{rbac.AgentCreate},
 			descriptionKeywords: []string{"internal", "python", "agent"},
 			descriptionMinLen:   20,
 			requiredParams: []string{
@@ -110,7 +114,7 @@ func agentToolSpecs() []toolTestSpec {
 				"branch", "app_path", "interface_type", "env",
 			},
 			optionalParams: []string{
-				"org_name", "description", "language_version",
+				"description", "language_version",
 				"run_command", "port", "base_path", "openapi_path",
 				"enable_auto_instrumentation", "instrumentation_version",
 			},

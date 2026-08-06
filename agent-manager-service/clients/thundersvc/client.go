@@ -55,6 +55,16 @@ type ThunderClient interface {
 	// Use this when the app exists but the secret has been lost (e.g. not in the local DB).
 	RegenerateClientSecret(ctx context.Context, orgName string) (clientSecret string, err error)
 
+	// EnsureApp generalizes EnsurePublisherApp for a differently-named app (e.g. amp-scheduler-<ouID>).
+	EnsureApp(ctx context.Context, appName, orgUUID string) (clientID, clientSecret string, created bool, err error)
+
+	// DeleteApp deletes the OAuth2 app named appName from Thunder.
+	// Returns true if the app was found and deleted, false if it didn't exist.
+	DeleteApp(ctx context.Context, appName string) (bool, error)
+
+	// RegenerateAppClientSecret regenerates the OAuth2 client secret for the app named appName.
+	RegenerateAppClientSecret(ctx context.Context, appName string) (clientSecret string, err error)
+
 	// CreateAgentIdentity creates a client_credentials AgentID via Thunder's /agents
 	// endpoint (a distinct resource from /applications — see agent_client.go).
 	// Idempotent: a 409 name conflict is resolved by looking up the existing agent;
@@ -247,12 +257,26 @@ func (c *thunderClient) getDefaultOUID(ctx context.Context, token string) (strin
 // EnsurePublisherApp creates or returns an existing OAuth2 app for the given org.
 // orgUUID is the Thunder organization unit UUID. If empty, the default OU is used.
 func (c *thunderClient) EnsurePublisherApp(ctx context.Context, orgName, orgUUID string) (clientID, clientSecret string, created bool, err error) {
+	return c.EnsureApp(ctx, "amp-publisher-"+orgName, orgUUID)
+}
+
+// DeletePublisherApp deletes the OAuth2 app named "amp-publisher-{orgName}" from Thunder.
+func (c *thunderClient) DeletePublisherApp(ctx context.Context, orgName string) (bool, error) {
+	return c.DeleteApp(ctx, "amp-publisher-"+orgName)
+}
+
+// RegenerateClientSecret regenerates the OAuth2 client secret for the publisher app.
+func (c *thunderClient) RegenerateClientSecret(ctx context.Context, orgName string) (string, error) {
+	return c.RegenerateAppClientSecret(ctx, "amp-publisher-"+orgName)
+}
+
+// EnsureApp creates or returns an existing OAuth2 app named appName in Thunder.
+// orgUUID is the Thunder organization unit UUID. If empty, the default OU is used.
+func (c *thunderClient) EnsureApp(ctx context.Context, appName, orgUUID string) (clientID, clientSecret string, created bool, err error) {
 	token, err := c.getSystemToken(ctx)
 	if err != nil {
 		return "", "", false, fmt.Errorf("failed to get system token: %w", err)
 	}
-
-	appName := "amp-publisher-" + orgName
 
 	// Check if app already exists
 	_, existingClientID, err := c.findApp(ctx, token, appName)
@@ -281,14 +305,12 @@ func (c *thunderClient) EnsurePublisherApp(ctx context.Context, orgName, orgUUID
 	return id, secret, true, nil
 }
 
-// DeletePublisherApp deletes the OAuth2 app named "amp-publisher-{orgName}" from Thunder.
-func (c *thunderClient) DeletePublisherApp(ctx context.Context, orgName string) (bool, error) {
+// DeleteApp deletes the OAuth2 app named appName from Thunder.
+func (c *thunderClient) DeleteApp(ctx context.Context, appName string) (bool, error) {
 	token, err := c.getSystemToken(ctx)
 	if err != nil {
 		return false, fmt.Errorf("failed to get system token: %w", err)
 	}
-
-	appName := "amp-publisher-" + orgName
 
 	internalID, _, err := c.findApp(ctx, token, appName)
 	if err != nil {
@@ -301,14 +323,12 @@ func (c *thunderClient) DeletePublisherApp(ctx context.Context, orgName string) 
 	return c.deleteApp(ctx, token, internalID)
 }
 
-// RegenerateClientSecret regenerates the OAuth2 client secret for the publisher app.
-func (c *thunderClient) RegenerateClientSecret(ctx context.Context, orgName string) (string, error) {
+// RegenerateAppClientSecret regenerates the OAuth2 client secret for the app named appName.
+func (c *thunderClient) RegenerateAppClientSecret(ctx context.Context, appName string) (string, error) {
 	token, err := c.getSystemToken(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to get system token: %w", err)
 	}
-
-	appName := "amp-publisher-" + orgName
 
 	internalID, _, err := c.findApp(ctx, token, appName)
 	if err != nil {

@@ -55,12 +55,14 @@ type AgentManagerService interface {
 	GetAgentEndpoints(ctx context.Context, ouID string, projectName string, agentName string, environmentName string) (map[string]models.EndpointsResponse, error)
 	GetAgentConfigurations(ctx context.Context, ouID string, projectName string, agentName string, environment string) ([]models.EnvVars, error)
 	GetAgentFileMounts(ctx context.Context, ouID string, projectName string, agentName string, environment string) ([]models.FileMountEntry, error)
+	GetAgentEnvConfig(ctx context.Context, ouID string, projectName string, agentName string, environment string) (*models.AgentConfig, error)
 	GenerateName(ctx context.Context, ouID string, payload spec.ResourceNameRequest) (string, error)
 	GetAgentResourceConfigs(ctx context.Context, ouID string, projectName string, agentName string, environment string) (*spec.AgentResourceConfigsResponse, error)
 	UpdateAgentResourceConfigs(ctx context.Context, ouID string, projectName string, agentName string, environment string, req *spec.UpdateAgentResourceConfigsRequest) (*spec.AgentResourceConfigsResponse, error)
 	PromoteAgent(ctx context.Context, ouID string, projectName string, agentName string, req *spec.PromoteAgentRequest) error
 	UpdateAgentDeploySettings(ctx context.Context, ouID string, projectName string, agentName string, req *spec.UpdateAgentDeploySettingsRequest) error
 	UpdateAgentConfigurations(ctx context.Context, ouID string, projectName string, agentName string, req *spec.UpdateAgentConfigurationsRequest) error
+	RegenerateAgentTracingToken(ctx context.Context, ouID string, projectName string, agentName string, environmentName string, expiresIn string) (*TracingTokenRotationResult, error)
 	GetAgentIdentity(ctx context.Context, ouID string, projectName string, agentName string) ([]models.AgentIdentityEnvironmentView, error)
 	RegenerateAgentIdentitySecret(ctx context.Context, ouID string, projectName string, agentName string, environmentName string) (*models.AgentRegenerateSecretResponse, error)
 	RevokeAgentIdentitySecret(ctx context.Context, ouID string, projectName string, agentName string, environmentName string) (models.AgentRevokeSecretResponse, error)
@@ -84,6 +86,7 @@ type agentManagerService struct {
 	agentThunderProvisioning  AgentThunderProvisioningService
 	monitorManagerService     MonitorManagerService
 	agentIdentityInjection    AgentIdentityInjectionService
+	identityClient            thundersvc.IdentityClient
 	buildSecretProvisioner    BuildSecretProvisioner
 	logger                    *slog.Logger
 }
@@ -103,6 +106,7 @@ func NewAgentManagerService(
 	agentThunderProvisioning AgentThunderProvisioningService,
 	monitorManagerService MonitorManagerService,
 	agentIdentityInjection AgentIdentityInjectionService,
+	identityClient thundersvc.IdentityClient,
 	buildSecretProvisioner BuildSecretProvisioner,
 	logger *slog.Logger,
 ) AgentManagerService {
@@ -118,6 +122,7 @@ func NewAgentManagerService(
 		agentThunderProvisioning:  agentThunderProvisioning,
 		monitorManagerService:     monitorManagerService,
 		agentIdentityInjection:    agentIdentityInjection,
+		identityClient:            identityClient,
 		buildSecretProvisioner:    buildSecretProvisioner,
 		artifactRepo:              artifactRepo,
 		aiApplicationService:      aiApplicationService,
@@ -329,6 +334,29 @@ func mapInputInterface(specInterface *spec.InputInterface) *client.InputInterfac
 	return config
 }
 
+// resolveResilienceTimeoutSeconds resolves the effective resilience timeout from
+// (in precedence order) an explicit request value, the persisted config, and the
+// default. An explicitly requested value outside [MinResilienceTimeoutSeconds,
+// MaxResilienceTimeoutSeconds] is rejected rather than silently discarded — unlike
+// an omitted (nil) request, which falls through to the existing/default value.
+func resolveResilienceTimeoutSeconds(existingConfig *models.AgentConfig, requested *int32, withDefaults bool) (int32, error) {
+	resolved := int32(0)
+	if withDefaults {
+		resolved = client.DefaultResilienceTimeoutSeconds
+	}
+	if existingConfig != nil && existingConfig.ResilienceTimeoutSeconds != nil {
+		resolved = *existingConfig.ResilienceTimeoutSeconds
+	}
+	if requested != nil {
+		if *requested < client.MinResilienceTimeoutSeconds || *requested > client.MaxResilienceTimeoutSeconds {
+			return 0, fmt.Errorf("%w: resilienceTimeoutSeconds must be between %d and %d seconds, got %d",
+				utils.ErrInvalidInput, client.MinResilienceTimeoutSeconds, client.MaxResilienceTimeoutSeconds, *requested)
+		}
+		resolved = *requested
+	}
+	return resolved, nil
+}
+
 // buildCreateTraitRequests collects all traits needed during agent creation into a single
 // list so they can be attached in one GET-UPDATE cycle, avoiding resource version conflicts.
 // artifactID is the UUID of the agent's artifact record (used for api-configuration trait).
@@ -499,7 +527,7 @@ func (s *agentManagerService) lookupAgentAutoInstrumentation(ctx context.Context
 	if lowestEnv == "" {
 		return true, nil
 	}
-	cfg, err := s.agentConfigRepo.Get(ouID, projectName, agentName, lowestEnv)
+	cfg, err := s.agentConfigRepo.Get(ctx, ouID, projectName, agentName, lowestEnv)
 	if errors.Is(err, repositories.ErrAgentConfigNotFound) {
 		return true, nil
 	}
@@ -528,7 +556,7 @@ func (s *agentManagerService) lookupAgentInstrumentationVersion(ctx context.Cont
 	if lowestEnv == "" {
 		return nil, ErrInstrumentationVersionNotPinned
 	}
-	cfg, err := s.agentConfigRepo.Get(ouID, projectName, agentName, lowestEnv)
+	cfg, err := s.agentConfigRepo.Get(ctx, ouID, projectName, agentName, lowestEnv)
 	if errors.Is(err, repositories.ErrAgentConfigNotFound) {
 		return nil, ErrInstrumentationVersionNotPinned
 	}
@@ -749,7 +777,7 @@ func (s *agentManagerService) persistInstrumentationConfig(ctx context.Context, 
 		OAuthAuthHeaderPrefix: models.DefaultOAuthAuthHeaderPrefix,
 	}
 
-	if err := s.agentConfigRepo.Upsert(agentConfig); err != nil {
+	if err := s.agentConfigRepo.Upsert(ctx, agentConfig); err != nil {
 		s.logger.Warn("Failed to persist instrumentation config to database", "agentName", agentName, "error", err)
 	} else {
 		s.logger.Debug("Persisted instrumentation config to database", "agentName", agentName, "environment", lowestEnv, "enableAutoInstrumentation", enableAutoInstrumentation, "instrumentationVersion", instrumentationVersion)
@@ -765,13 +793,14 @@ func (s *agentManagerService) generateAgentAPIKey(ctx context.Context, ouID, pro
 		s.logger.Error("GenerateToken: missing organization identity in caller token")
 		return "", utils.ErrForbidden
 	}
-	// Generate agent API key using token manager service with 1 year expiry
+	// Generate agent API key using the token manager service. Leaving ExpiresIn empty
+	// routes through the configured default (JWT_SIGNING_DEFAULT_EXPIRY) rather than a
+	// hardcoded value, so the deploy/create/promote expiry stays in sync with config.
 	tokenReq := GenerateTokenRequest{
 		OrgName:     ouID,
 		ProjectName: projectName,
 		AgentName:   agentName,
 		Environment: envName,
-		ExpiresIn:   "8760h", // 1 year (365 days * 24 hours)
 		OrgId:       callerClaims.OuId,
 	}
 	tokenResp, err := s.tokenManagerService.GenerateToken(ctx, tokenReq)
@@ -804,9 +833,9 @@ func agentAPIKeySecretLocation(ouID, projectName, agentName, envName string) sec
 //
 // The reference is resolved from the SecretReference CR rather than computed locally:
 // CreateSecret returns the SecretReference name, and only the SecretReference knows the
-// provider's real remote reference. (For OpenBao that happens to be the KV path, but for
-// the Secret Manager API it is the provider's own reference — location.KVPath() is wrong
-// there, so we must read it back from the SecretReference.)
+// provider's real remote reference. (The provider manages the SecretReference and its
+// remoteRef internally — location.KVPath() is not the real reference, so we must read
+// it back from the SecretReference.)
 func (s *agentManagerService) storeAgentAPIKey(ctx context.Context, ouID, projectName, agentName, envName, apiKey string) (key string, property string, err error) {
 	if s.secretMgmtClient == nil {
 		return "", "", fmt.Errorf("secret management is not initialized; cannot store agent API key")
@@ -825,12 +854,102 @@ func (s *agentManagerService) storeAgentAPIKey(ctx context.Context, ouID, projec
 	}
 	for _, ds := range secretRef.Data {
 		if ds.SecretKey == secretmanagersvc.SecretKeyAPIKey {
-			s.logger.Debug("Stored agent API key in secret store", "agentName", agentName, "environment", envName,
-				"secretRefName", secretRefName, "remoteKey", ds.RemoteRef.Key)
-			return ds.RemoteRef.Key, ds.RemoteRef.Property, nil
+			key, property = ds.RemoteRef.Key, ds.RemoteRef.Property
+			break
 		}
 	}
-	return "", "", fmt.Errorf("agent API key secret reference %q has no %q data source", secretRefName, secretmanagersvc.SecretKeyAPIKey)
+	if key == "" {
+		return "", "", fmt.Errorf("agent API key secret reference %q has no %q data source", secretRefName, secretmanagersvc.SecretKeyAPIKey)
+	}
+	s.logger.Debug("Stored agent API key in secret store", "agentName", agentName, "environment", envName,
+		"secretRefName", secretRefName, "remoteKey", key)
+	return key, property, nil
+}
+
+// injectAgentAPIKeySecretRef adds the env-injection trait's per-environment agentApiKeySecretRef
+// (and property) into a traitEnvConfigs map, preserving any config already set for that trait
+// instance. buildTraitEnvConfigs omits this field, and UpdateReleaseBindingTraitConfigs REPLACES
+// the binding's trait configs wholesale — so without re-injecting here, a promoted environment
+// loses its per-env key ref and the env-injection trait falls back to the base (lowest env's) ref.
+func injectAgentAPIKeySecretRef(traitEnvConfigs map[string]interface{}, agentName, secretRef, secretProperty string) {
+	if secretRef == "" {
+		return
+	}
+	envInjKey := agentName + "-" + string(client.TraitEnvInjection)
+	envInjCfg, _ := traitEnvConfigs[envInjKey].(map[string]interface{})
+	if envInjCfg == nil {
+		envInjCfg = map[string]interface{}{}
+	}
+	envInjCfg["agentApiKeySecretRef"] = secretRef
+	if secretProperty != "" {
+		envInjCfg["agentApiKeySecretProperty"] = secretProperty
+	}
+	traitEnvConfigs[envInjKey] = envInjCfg
+}
+
+// TracingTokenRotationResult is the outcome of a tracing-token regeneration. The raw JWT is never
+// returned — it reaches the agent only through the secret store.
+type TracingTokenRotationResult struct {
+	EnvironmentName string
+	ExpiresAt       int64
+	RotatedAt       int64
+}
+
+// RegenerateAgentTracingToken mints a fresh tracing API key and upserts it into the secret store
+// under the agent's stable secret reference. It does NOT restart the workload: the running pod
+// picks up the new key on the next rollout, which the caller triggers via the standard Apply
+// (UpdateAgentConfigurations) path — the same ExternalSecret + restartedAt mechanism used for every
+// other secret. Rotating the key never invalidates previously issued ones; they remain valid until
+// their own expiry.
+func (s *agentManagerService) RegenerateAgentTracingToken(ctx context.Context, ouID, projectName, agentName, environmentName, expiresIn string) (*TracingTokenRotationResult, error) {
+	s.logger.Info("Regenerating agent tracing token", "agentName", agentName, "ouID", ouID, "projectName", projectName, "environment", environmentName)
+
+	if environmentName == "" {
+		return nil, fmt.Errorf("%w: environmentName is required", utils.ErrInvalidInput)
+	}
+
+	// Org identity comes from the caller's JWT claims, same as generateAgentAPIKey.
+	callerClaims := jwtassertion.GetTokenClaims(ctx)
+	if callerClaims == nil || callerClaims.OuId == "" {
+		s.logger.Error("RegenerateAgentTracingToken: missing organization identity in caller token")
+		return nil, utils.ErrForbidden
+	}
+
+	// Validate org/agent/env exist. GetComponent resolves the OpenChoreo namespace from the OU id,
+	// so pass ouID (matching GenerateToken's GenerateTokenRequest{OrgName: ouID}), not org.Name.
+	if _, err := s.ocClient.GetOrganization(ctx, ouID); err != nil {
+		return nil, translateOrgError(err)
+	}
+	if _, err := s.ocClient.GetComponent(ctx, ouID, projectName, agentName); err != nil {
+		return nil, translateAgentError(err)
+	}
+	if _, err := s.ocClient.GetEnvironment(ctx, ouID, environmentName); err != nil {
+		return nil, translateEnvironmentError(err)
+	}
+
+	tokenResp, err := s.tokenManagerService.GenerateToken(ctx, GenerateTokenRequest{
+		OrgName:     ouID,
+		ProjectName: projectName,
+		AgentName:   agentName,
+		Environment: environmentName,
+		ExpiresIn:   expiresIn, // empty → configured default
+		OrgId:       callerClaims.OuId,
+	})
+	if err != nil {
+		s.logger.Error("Failed to generate agent tracing token", "agentName", agentName, "environment", environmentName, "error", err)
+		return nil, fmt.Errorf("failed to generate agent tracing token: %w", err)
+	}
+
+	if _, _, err := s.storeAgentAPIKey(ctx, ouID, projectName, agentName, environmentName, tokenResp.Token); err != nil {
+		s.logger.Error("Failed to store rotated agent tracing token", "agentName", agentName, "environment", environmentName, "error", err)
+		return nil, fmt.Errorf("failed to store agent tracing token: %w", err)
+	}
+
+	return &TracingTokenRotationResult{
+		EnvironmentName: environmentName,
+		ExpiresAt:       tokenResp.ExpiresAt,
+		RotatedAt:       time.Now().Unix(),
+	}, nil
 }
 
 func (s *agentManagerService) GetAgent(ctx context.Context, ouID string, projectName string, agentName string) (*models.AgentResponse, error) {
@@ -853,13 +972,14 @@ func (s *agentManagerService) GetAgent(ctx context.Context, ouID string, project
 	if pipelineErr == nil && len(pipeline.PromotionPaths) > 0 {
 		lowestEnv := findLowestEnvironment(pipeline.PromotionPaths)
 		if lowestEnv != "" {
-			agentConfig, configErr := s.agentConfigRepo.Get(ouID, projectName, agentName, lowestEnv)
+			agentConfig, configErr := s.agentConfigRepo.Get(ctx, ouID, projectName, agentName, lowestEnv)
 			if errors.Is(configErr, repositories.ErrAgentConfigNotFound) {
 				// No config in DB - use defaults for display purposes
 				defaultEnabled := true
 				defaultCORSEnabled := true
 				defaultOAuthDisabled := false
 				defCORS := config.GetAgentWorkloadConfig().CORS
+				defaultResilience := client.DefaultResilienceTimeoutSeconds
 				agent.Configurations = &models.Configurations{
 					EnableAutoInstrumentation: &defaultEnabled,
 					EnableApiKeySecurity:      &defaultEnabled,
@@ -870,10 +990,12 @@ func (s *agentManagerService) GetAgent(ctx context.Context, ouID string, project
 						AllowHeaders:     strings.Split(defCORS.AllowHeaders, ","),
 						AllowCredentials: &defCORS.AllowCredentials,
 					},
-					EnableOAuthSecurity: &defaultOAuthDisabled,
+					EnableOAuthSecurity:      &defaultOAuthDisabled,
+					ResilienceTimeoutSeconds: &defaultResilience,
 				}
 			} else if configErr != nil {
-				s.logger.Warn("Failed to read agent config from database", "agentName", agentName, "environment", lowestEnv, "error", configErr)
+				s.logger.Error("Failed to read agent config from database", "agentName", agentName, "environment", lowestEnv, "error", configErr)
+				return nil, fmt.Errorf("failed to read agent config for environment %q: %w", lowestEnv, configErr)
 			} else {
 				agent.Configurations = &models.Configurations{
 					EnableAutoInstrumentation: &agentConfig.EnableAutoInstrumentation,
@@ -886,8 +1008,9 @@ func (s *agentManagerService) GetAgent(ctx context.Context, ouID string, project
 						AllowHeaders:     agentConfig.CORSAllowHeaders,
 						AllowCredentials: &agentConfig.CORSAllowCredentials,
 					},
-					EnableOAuthSecurity: &agentConfig.EnableOAuthSecurity,
-					OAuthConfig:         oauthConfigFromAgentConfig(agentConfig),
+					EnableOAuthSecurity:      &agentConfig.EnableOAuthSecurity,
+					OAuthConfig:              oauthConfigFromAgentConfig(agentConfig),
+					ResilienceTimeoutSeconds: agentConfig.ResilienceTimeoutSeconds,
 				}
 			}
 
@@ -910,8 +1033,52 @@ func (s *agentManagerService) GetAgent(ctx context.Context, ouID string, project
 		}
 	}
 
+	s.populateCreatedBy(ctx, ouID, projectName, agentName, agent)
+
 	s.logger.Info("Fetched agent successfully from oc", "agentName", agent.Name, "ouID", ouID, "projectName", projectName, "provisioningType", agent.Provisioning.Type)
 	return agent, nil
+}
+
+// populateCreatedBy best-effort resolves and attaches who created this agent.
+func (s *agentManagerService) populateCreatedBy(ctx context.Context, ouID, projectName, agentName string, agent *models.AgentResponse) {
+	if s.agentThunderProvisioning == nil || s.identityClient == nil {
+		return
+	}
+	views, err := s.agentThunderProvisioning.GetIdentityViews(ctx, ouID, projectName, agentName)
+	if err != nil {
+		s.logger.Warn("Failed to fetch agent identity views for createdBy", "agentName", agentName, "ouID", ouID, "error", err)
+		return
+	}
+	// requestedBy is captured once at creation time and copied to every
+	// environment's binding, so any non-empty value is equivalent.
+	var requestedBy string
+	for _, v := range views {
+		if v.RequestedBy != "" {
+			requestedBy = v.RequestedBy
+			break
+		}
+	}
+	if requestedBy == "" {
+		return
+	}
+
+	createdBy := &models.AgentCreatedBy{ID: requestedBy}
+	user, err := s.identityClient.GetUser(ctx, requestedBy)
+	// A nil user with no error shouldn't happen, but this path is best-effort
+	// decoration of a GetAgent response — never let it panic the request.
+	if err != nil || user == nil {
+		if err != nil && !thundersvc.IsNotFound(err) {
+			s.logger.Warn("Failed to resolve agent creator", "agentName", agentName, "requestedBy", requestedBy, "error", err)
+		}
+		agent.CreatedBy = createdBy
+		return
+	}
+	if username, ok := user.Attributes["username"].(string); ok && username != "" {
+		createdBy.Display = username
+	} else {
+		createdBy.Display = user.Display
+	}
+	agent.CreatedBy = createdBy
 }
 
 func (s *agentManagerService) ListAgents(ctx context.Context, ouID string, projName string, labelFilter map[string]string, limit int32, offset int32) ([]*models.AgentResponse, int32, error) {
@@ -1046,9 +1213,21 @@ func (s *agentManagerService) CreateAgent(ctx context.Context, ouID string, proj
 		if req.Configurations != nil {
 			envVars = req.Configurations.Env
 		}
+		if err := RejectDuplicateEnvKeys(envVars); err != nil {
+			return err
+		}
 		if err := ValidateKindConfigValues(kindVersion.ConfigSchema, envVars); err != nil {
 			return err
 		}
+		// The kind's own config schema carries the authoritative default for each
+		// parameter, including secret ones, which a client is never shown once set.
+		// Applying it here — rather than expecting the client to send it back — is
+		// what lets someone accept a kind's defaults without retyping them.
+		envVars = ApplySecretConfigDefaults(kindVersion.ConfigSchema, envVars)
+		if req.Configurations == nil {
+			req.Configurations = &spec.Configurations{}
+		}
+		req.Configurations.Env = envVars
 		if kindVersion.ImageId == "" {
 			return fmt.Errorf("kind version %q has no stored image; re-publish the kind from a successfully built agent", req.Provisioning.AgentKind.Version)
 		}
@@ -1183,6 +1362,14 @@ func (s *agentManagerService) createComponentAgent(ctx context.Context, ouID, pr
 				ev.SetValue(f.GetValue())
 				ev.SetIsSensitive(true)
 				allSecretVars = append(allSecretVars, ev)
+			}
+		}
+		// A sensitive var with neither a value nor a secretRef would otherwise be
+		// silently persisted as an empty secret (e.g. if a kind-declared secret's
+		// default backfill above ever has a gap). Fail loudly instead.
+		for _, env := range allSecretVars {
+			if env.GetIsSensitive() && env.GetValue() == "" && !env.HasSecretRef() {
+				return fmt.Errorf("%w: sensitive environment variable %q requires either a value or secretRef", utils.ErrInvalidInput, env.Key)
 			}
 		}
 		secretReference, err = s.saveSecretsAndCreateReference(ctx, secretLocation, allSecretVars)
@@ -1592,7 +1779,8 @@ func (s *agentManagerService) toCreateAgentRequestWithSecrets(req *spec.CreateAg
 	return result
 }
 
-// saveSecretsAndCreateReference handles storing secrets in OpenBao and creating SecretReference CR
+// saveSecretsAndCreateReference stores secrets via the secret management client; the
+// provider stores the values and manages the associated SecretReference internally.
 func (s *agentManagerService) saveSecretsAndCreateReference(
 	ctx context.Context,
 	location secretmanagersvc.SecretLocation,
@@ -2259,7 +2447,7 @@ func (s *agentManagerService) DeleteAgent(ctx context.Context, ouID string, proj
 
 	// Step 2-4: For each secret reference, get its details, delete from KV, then delete the CR
 	for _, secretRefName := range secretRefNames {
-		s.cleanupSecretReference(ctx, ouID, projectName, agentName, secretRefName)
+		s.cleanupSecretReference(ctx, ouID, secretRefName)
 	}
 
 	// Resolve agent type before component deletion so LLM config cleanup does not need
@@ -2302,7 +2490,7 @@ func (s *agentManagerService) DeleteAgent(ctx context.Context, ouID string, proj
 		if errors.Is(translatedErr, utils.ErrAgentNotFound) {
 			s.logger.Warn("Agent not found during deletion, delete is idempotent", "agentName", agentName, "ouID", ouID, "projectName", projectName)
 			s.cleanupGitHubAppSource(ctx, ouID, projectName, agentName)
-			if configErr := s.agentConfigRepo.DeleteAllByAgent(ouID, projectName, agentName); configErr != nil {
+			if configErr := s.agentConfigRepo.DeleteAllByAgent(ctx, ouID, projectName, agentName); configErr != nil {
 				s.logger.Warn("Failed to delete agent configs from database", "agentName", agentName, "error", configErr)
 			}
 			s.deleteAgentAPIArtifact(ctx, ouID, projectName, agentName)
@@ -2327,7 +2515,7 @@ func (s *agentManagerService) DeleteAgent(ctx context.Context, ouID string, proj
 	s.cleanupGitHubAppSource(ctx, ouID, projectName, agentName)
 
 	// Cleanup agent configs from database
-	if configErr := s.agentConfigRepo.DeleteAllByAgent(ouID, projectName, agentName); configErr != nil {
+	if configErr := s.agentConfigRepo.DeleteAllByAgent(ctx, ouID, projectName, agentName); configErr != nil {
 		s.logger.Warn("Failed to delete agent configs from database", "agentName", agentName, "error", configErr)
 		// Don't fail the deletion - configs will be orphaned but harmless
 	}
@@ -2415,51 +2603,30 @@ func (s *agentManagerService) deleteAgentLLMConfigurations(ctx context.Context, 
 	}
 }
 
-// cleanupSecretReference deletes secrets from KV and the SecretReference CR.
-// It retrieves the SecretReference to get the actual KV path, parses it to a location,
-// then calls DeleteSecret which handles both KV and SecretReference deletion.
-func (s *agentManagerService) cleanupSecretReference(ctx context.Context, ouID, projectName, agentName, secretRefName string) {
-	if s.secretMgmtClient == nil {
-		s.logger.Warn("Secret management client not configured, skipping secret cleanup", "secretRefName", secretRefName)
-		return
-	}
-
-	// Get the SecretReference to find the actual KV path
-	secretRefInfo, err := s.ocClient.GetSecretReference(ctx, ouID, secretRefName)
+// cleanupSecretReference deletes an OpenChoreo-managed secret by name (the
+// secret name and its SecretReference name are the same); the API removes the
+// stored values and the SecretReference together. Only removes secrets owned
+// by this service (managed-by label).
+func (s *agentManagerService) cleanupSecretReference(ctx context.Context, ouID, secretRefName string) {
+	secret, err := s.ocClient.GetSecret(ctx, ouID, secretRefName)
 	if err != nil {
 		if errors.Is(err, utils.ErrNotFound) {
-			s.logger.Debug("SecretReference not found, skipping cleanup", "secretRefName", secretRefName)
+			s.logger.Debug("Secret not found, skipping cleanup", "secretRefName", secretRefName)
 			return
 		}
-		s.logger.Warn("Failed to get SecretReference, skipping cleanup", "secretRefName", secretRefName, "error", err)
+		s.logger.Warn("Failed to get secret, skipping cleanup", "secretRefName", secretRefName, "error", err)
 		return
 	}
 
-	if len(secretRefInfo.Data) == 0 {
-		s.logger.Warn("SecretReference has no data sources, skipping cleanup", "secretRefName", secretRefName)
+	if secret.Labels[secretmanagersvc.LabelKeyManagedBy] != secretmanagersvc.DefaultManagedBy {
+		s.logger.Warn("Secret not managed by this service, skipping cleanup", "secretRefName", secretRefName)
 		return
 	}
 
-	// Parse the KV path to get the correct location
-	kvPath := secretRefInfo.Data[0].RemoteRef.Key
-	if kvPath == "" {
-		s.logger.Warn("SecretReference has empty KV path, skipping cleanup", "secretRefName", secretRefName)
-		return
-	}
-
-	location, parseErr := secretmanagersvc.ParseKVPath(kvPath)
-	if parseErr != nil {
-		s.logger.Warn("Failed to parse KV path from SecretReference, skipping cleanup",
-			"kvPath", kvPath, "secretRefName", secretRefName, "error", parseErr)
-		return
-	}
-
-	// DeleteSecret handles both KV deletion and SecretReference CR deletion
-	if err := s.secretMgmtClient.DeleteSecret(ctx, location, secretRefName); err != nil {
-		s.logger.Warn("Failed to delete secret during cleanup",
-			"kvPath", kvPath, "secretRefName", secretRefName, "error", err)
+	if err := s.ocClient.DeleteSecret(ctx, ouID, secretRefName); err != nil && !errors.Is(err, utils.ErrNotFound) {
+		s.logger.Warn("Failed to delete secret during cleanup", "secretRefName", secretRefName, "error", err)
 	} else {
-		s.logger.Debug("Deleted secret during cleanup", "kvPath", kvPath, "secretRefName", secretRefName)
+		s.logger.Debug("Deleted secret during cleanup", "secretRefName", secretRefName)
 	}
 }
 
@@ -2657,12 +2824,12 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 	// fields from DB and preserve pinned instrumentation_version during Upsert.
 	var existingConfig *models.AgentConfig
 	if targetEnv != nil {
-		cfg, configErr := s.agentConfigRepo.Get(ouID, projectName, agentName, targetEnv.Name)
+		cfg, configErr := s.agentConfigRepo.Get(ctx, ouID, projectName, agentName, targetEnv.Name)
 		switch {
 		case errors.Is(configErr, repositories.ErrAgentConfigNotFound):
 			s.logger.Debug("No config in database, using defaults", "agentName", agentName, "environment", targetEnv.Name)
 		case configErr != nil:
-			s.logger.Warn("Failed to read config from database", "agentName", agentName, "environment", targetEnv.Name, "error", configErr)
+			return "", fmt.Errorf("failed to read agent config for environment %q: %w", targetEnv.Name, configErr)
 		default:
 			existingConfig = cfg
 			s.logger.Debug("Read config from database", "agentName", agentName, "environment", targetEnv.Name,
@@ -2675,6 +2842,10 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 	// Resolve config values: request > DB > defaults
 	tracingCfg := resolveTracingConfig(existingConfig, req.EnableAutoInstrumentation, true)
 	apiCfg := resolveAPIConfig(existingConfig, req.EnableApiKeySecurity, req.CorsConfig, req.EnableOAuthSecurity, req.OauthConfig, true)
+	resilienceTimeoutSeconds, err := resolveResilienceTimeoutSeconds(existingConfig, nil, true)
+	if err != nil {
+		return "", err
+	}
 	if err := validateAuthExclusivity(apiCfg); err != nil {
 		return "", err
 	}
@@ -2740,7 +2911,7 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 	if err != nil {
 		return "", err
 	}
-	deployTraitEnvConfigs := buildTraitEnvConfigs(agentName, policies, "", isPythonBuildpack, isBallerinaBuildpack, enableAutoInstrumentation, deployInstrumentationImage)
+	deployTraitEnvConfigs := buildTraitEnvConfigs(agentName, policies, "", resilienceTimeoutSeconds, isPythonBuildpack, isBallerinaBuildpack, enableAutoInstrumentation, deployInstrumentationImage)
 
 	// Replace Component CR workflow parameters with env vars and file mounts from deploy request
 	// This replaces all existing env vars to ensure the component CR matches the deploy request
@@ -2779,6 +2950,9 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 			traitOpts = append(traitOpts, client.WithUpstreamBasePath(agent.InputInterface.BasePath))
 		} else {
 			traitOpts = append(traitOpts, client.WithUpstreamBasePath(config.GetConfig().DefaultChatAPI.DefaultBasePath))
+		}
+		if resilienceTimeoutSeconds > 0 {
+			traitOpts = append(traitOpts, client.WithResilienceTimeout(resilienceTimeoutSeconds))
 		}
 		traitOpts = append(traitOpts, client.WithPolicies(policies))
 
@@ -2833,6 +3007,10 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 	// Upsert — the repo's DoUpdates map includes that column, so omitting
 	// the value would NULL out a customer's pin on every redeploy.
 	if targetEnv != nil {
+		var deployResilienceTimeoutSeconds *int32
+		if resilienceTimeoutSeconds > 0 {
+			deployResilienceTimeoutSeconds = &resilienceTimeoutSeconds
+		}
 		agentConfig := &models.AgentConfig{
 			OUID:                      ouID,
 			ProjectName:               projectName,
@@ -2852,12 +3030,13 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 			OAuthHeaderName:           apiCfg.OAuthHeaderName,
 			OAuthAuthHeaderPrefix:     apiCfg.OAuthAuthHeaderPrefix,
 			OAuthForwardToken:         apiCfg.OAuthForwardToken,
+			ResilienceTimeoutSeconds:  deployResilienceTimeoutSeconds,
 		}
-		if configErr := s.agentConfigRepo.Upsert(agentConfig); configErr != nil {
-			s.logger.Error("Failed to persist instrumentation config to database", "agentName", agentName, "environment", lowestEnv, "error", configErr)
-		} else {
-			s.logger.Debug("Persisted instrumentation config to database", "agentName", agentName, "environment", lowestEnv, "enableAutoInstrumentation", enableAutoInstrumentation, "instrumentationVersion", existingInstrumentationVersion)
+		if configErr := s.agentConfigRepo.Upsert(ctx, agentConfig); configErr != nil {
+			s.logger.Error("Failed to persist agent config after deploy", "agentName", agentName, "environment", lowestEnv, "error", configErr)
+			return "", fmt.Errorf("agent deployed to %q but failed to persist its config (retry to reconcile): %w", lowestEnv, configErr)
 		}
+		s.logger.Debug("Persisted instrumentation config to database", "agentName", agentName, "environment", lowestEnv, "enableAutoInstrumentation", enableAutoInstrumentation, "instrumentationVersion", existingInstrumentationVersion)
 	}
 
 	s.logger.Info("Agent deployed successfully to "+lowestEnv, "agentName", agentName, "ouID", org.Name, "projectName", projectName, "environment", lowestEnv)
@@ -3133,7 +3312,7 @@ func buildComponentTypeEnvConfigs(env *models.EnvironmentResponse) map[string]in
 // instrumentationImage, when non-empty, pins the OTEL init-container image for this environment
 // (overriding the Component's create-time default) so the AMP instrumentation version can be
 // changed per-environment on deploy/promote without re-attaching the Component trait.
-func buildTraitEnvConfigs(agentName string, policies []map[string]interface{}, artifactID string, isPythonBuildpack, isBallerinaBuildpack bool, autoInstrumentation bool, instrumentationImage string) map[string]interface{} {
+func buildTraitEnvConfigs(agentName string, policies []map[string]interface{}, artifactID string, resilienceTimeoutSeconds int32, isPythonBuildpack, isBallerinaBuildpack bool, autoInstrumentation bool, instrumentationImage string) map[string]interface{} {
 	instanceName := func(traitType client.TraitType) string {
 		return agentName + "-" + string(traitType)
 	}
@@ -3142,6 +3321,9 @@ func buildTraitEnvConfigs(agentName string, policies []map[string]interface{}, a
 	}
 	if artifactID != "" {
 		apiTraitCfg["artifactId"] = artifactID
+	}
+	if resilienceTimeoutSeconds > 0 {
+		apiTraitCfg["resilienceTimeout"] = client.FormatResilienceTimeout(resilienceTimeoutSeconds)
 	}
 	traitEnvConfigs := map[string]interface{}{
 		instanceName(client.TraitAPIManagement): apiTraitCfg,
@@ -3611,6 +3793,15 @@ func (s *agentManagerService) PromoteAgent(ctx context.Context, ouID string, pro
 			}
 		}
 		fileOverrides = srcFileVars
+
+		// The cloned overrides reference the SOURCE environment's secret by name.
+		// Give the target environment its own copy and re-point the references,
+		// so a later secret edit in one environment cannot break the other.
+		envOverrides, fileOverrides, err = s.cloneEnvSecretForPromotion(ctx, ouID, projectName, agentName, req.SourceEnvironment, req.TargetEnvironment, envOverrides, fileOverrides)
+		if err != nil {
+			s.logger.Error("Failed to clone env secret for promotion", "agentName", agentName, "error", err)
+			return fmt.Errorf("failed to clone environment secret for promotion: %w", err)
+		}
 	} else {
 		// User-driven overrides: only what the request carries (plus target system vars
 		// appended below). Source env's user-managed env/files are NOT inherited.
@@ -3659,19 +3850,28 @@ func (s *agentManagerService) PromoteAgent(ctx context.Context, ouID string, pro
 	if isAPIAgent {
 		// Resolve config values: request > source env DB > defaults
 		var existingConfig *models.AgentConfig
-		cfg, configErr := s.agentConfigRepo.Get(ouID, projectName, agentName, req.SourceEnvironment)
-		if configErr == nil {
+		cfg, configErr := s.agentConfigRepo.Get(ctx, ouID, projectName, agentName, req.SourceEnvironment)
+		switch {
+		case errors.Is(configErr, repositories.ErrAgentConfigNotFound):
+			// No saved config for the source env — fall back to request/defaults.
+		case configErr != nil:
+			return fmt.Errorf("failed to read source environment %q config: %w", req.SourceEnvironment, configErr)
+		default:
 			existingConfig = cfg
 		}
 
-		// Deploy-settings precedence (CORS, API key security, auto instrumentation):
-		//   request fields → source env's saved AgentConfig → off.
+		// Deploy-settings precedence (CORS, API key security, auto instrumentation,
+		// resilience timeout): request fields → source env's saved AgentConfig → off.
 		// When useConfigFromSourceEnv=true, the validator guarantees the request fields
 		// are nil, so the resolved settings fall through to the source env's saved
 		// AgentConfig. When useConfigFromSourceEnv=false the request takes precedence
 		// where set; any unset field falls back to the source env's values.
 		tracingCfg := resolveTracingConfig(existingConfig, req.EnableAutoInstrumentation, false)
 		apiCfg := resolveAPIConfig(existingConfig, req.EnableApiKeySecurity, req.CorsConfig, req.EnableOAuthSecurity, req.OauthConfig, false)
+		resilienceTimeoutSeconds, err := resolveResilienceTimeoutSeconds(existingConfig, req.ResilienceTimeoutSeconds, false)
+		if err != nil {
+			return err
+		}
 		if err := validateAuthExclusivity(apiCfg); err != nil {
 			return err
 		}
@@ -3716,7 +3916,7 @@ func (s *agentManagerService) PromoteAgent(ctx context.Context, ouID string, pro
 		if resolveErr != nil {
 			return resolveErr
 		}
-		traitEnvConfigs = buildTraitEnvConfigs(agentName, policies, targetArtifactID, promotePythonBuildpack, promoteBallerinaBuildpack, tracingCfg.EnableAutoInstrumentation, promoteInstrumentationImage)
+		traitEnvConfigs = buildTraitEnvConfigs(agentName, policies, targetArtifactID, resilienceTimeoutSeconds, promotePythonBuildpack, promoteBallerinaBuildpack, tracingCfg.EnableAutoInstrumentation, promoteInstrumentationImage)
 		promoteCTConfigs = buildComponentTypeEnvConfigs(targetEnv)
 
 		apiKey, apiKeyErr := s.generateAgentAPIKey(ctx, ouID, projectName, agentName, req.TargetEnvironment)
@@ -3725,20 +3925,13 @@ func (s *agentManagerService) PromoteAgent(ctx context.Context, ouID string, pro
 		} else if apiKeySecretRef, apiKeySecretProperty, storeErr := s.storeAgentAPIKey(ctx, ouID, projectName, agentName, req.TargetEnvironment, apiKey); storeErr != nil {
 			s.logger.Warn("Failed to store agent API key for promotion", "agentName", agentName, "environment", req.TargetEnvironment, "error", storeErr)
 		} else {
-			envInjKey := agentName + "-" + string(client.TraitEnvInjection)
-			// Preserve any env config buildTraitEnvConfigs already set (e.g.
-			// envInjectionEnabled for Ballerina) instead of overwriting it.
-			envInjCfg, _ := traitEnvConfigs[envInjKey].(map[string]interface{})
-			if envInjCfg == nil {
-				envInjCfg = map[string]interface{}{}
-			}
-			envInjCfg["agentApiKeySecretRef"] = apiKeySecretRef
-			if apiKeySecretProperty != "" {
-				envInjCfg["agentApiKeySecretProperty"] = apiKeySecretProperty
-			}
-			traitEnvConfigs[envInjKey] = envInjCfg
+			injectAgentAPIKeySecretRef(traitEnvConfigs, agentName, apiKeySecretRef, apiKeySecretProperty)
 		}
 
+		var promoteResilienceTimeoutSeconds *int32
+		if resilienceTimeoutSeconds > 0 {
+			promoteResilienceTimeoutSeconds = &resilienceTimeoutSeconds
+		}
 		// Persist config for the target environment
 		agentConfig := &models.AgentConfig{
 			OUID:                      ouID,
@@ -3759,9 +3952,11 @@ func (s *agentManagerService) PromoteAgent(ctx context.Context, ouID string, pro
 			OAuthHeaderName:           apiCfg.OAuthHeaderName,
 			OAuthAuthHeaderPrefix:     apiCfg.OAuthAuthHeaderPrefix,
 			OAuthForwardToken:         apiCfg.OAuthForwardToken,
+			ResilienceTimeoutSeconds:  promoteResilienceTimeoutSeconds,
 		}
-		if upsertErr := s.agentConfigRepo.Upsert(agentConfig); upsertErr != nil {
+		if upsertErr := s.agentConfigRepo.Upsert(ctx, agentConfig); upsertErr != nil {
 			s.logger.Error("Failed to persist agent config for target environment", "agentName", agentName, "environment", req.TargetEnvironment, "error", upsertErr)
+			return fmt.Errorf("failed to persist agent config for target environment %q: %w", req.TargetEnvironment, upsertErr)
 		}
 	}
 
@@ -3910,11 +4105,20 @@ func (s *agentManagerService) UpdateAgentDeploySettings(ctx context.Context, ouI
 
 	// Resolve final settings: precedence is request → existing DB
 	var existingConfig *models.AgentConfig
-	if cfg, getErr := s.agentConfigRepo.Get(ouID, projectName, agentName, req.EnvironmentName); getErr == nil {
+	switch cfg, getErr := s.agentConfigRepo.Get(ctx, ouID, projectName, agentName, req.EnvironmentName); {
+	case errors.Is(getErr, repositories.ErrAgentConfigNotFound):
+		// No existing config for this env — request values / defaults apply.
+	case getErr != nil:
+		return fmt.Errorf("failed to read agent config for environment %q: %w", req.EnvironmentName, getErr)
+	default:
 		existingConfig = cfg
 	}
 	tracingCfg := resolveTracingConfig(existingConfig, req.EnableAutoInstrumentation, false)
 	apiCfg := resolveAPIConfig(existingConfig, req.EnableApiKeySecurity, req.CorsConfig, req.EnableOAuthSecurity, req.OauthConfig, false)
+	resilienceTimeoutSeconds, err := resolveResilienceTimeoutSeconds(existingConfig, req.ResilienceTimeoutSeconds, false)
+	if err != nil {
+		return err
+	}
 	if err := validateAuthExclusivity(apiCfg); err != nil {
 		return err
 	}
@@ -3954,7 +4158,7 @@ func (s *agentManagerService) UpdateAgentDeploySettings(ctx context.Context, ouI
 	if resolveErr != nil {
 		return resolveErr
 	}
-	traitEnvConfigs := buildTraitEnvConfigs(agentName, policies, artifact.UUID.String(), isPythonBuildpack, isBallerinaBuildpack, tracingCfg.EnableAutoInstrumentation, instrumentationImage)
+	traitEnvConfigs := buildTraitEnvConfigs(agentName, policies, artifact.UUID.String(), resilienceTimeoutSeconds, isPythonBuildpack, isBallerinaBuildpack, tracingCfg.EnableAutoInstrumentation, instrumentationImage)
 
 	// Apply to the release binding (atomic: trait configs + component-type configs + restartedAt in a single update).
 	settingsCTConfigs := buildComponentTypeEnvConfigs(targetEnv)
@@ -3963,6 +4167,10 @@ func (s *agentManagerService) UpdateAgentDeploySettings(ctx context.Context, ouI
 		return fmt.Errorf("failed to update deploy settings: %w", updateErr)
 	}
 
+	var settingsResilienceTimeoutSeconds *int32
+	if resilienceTimeoutSeconds > 0 {
+		settingsResilienceTimeoutSeconds = &resilienceTimeoutSeconds
+	}
 	// Persist resolved config so subsequent deploy/promote calls see the current values.
 	agentConfig := &models.AgentConfig{
 		OUID:                      ouID,
@@ -3983,8 +4191,9 @@ func (s *agentManagerService) UpdateAgentDeploySettings(ctx context.Context, ouI
 		OAuthHeaderName:           apiCfg.OAuthHeaderName,
 		OAuthAuthHeaderPrefix:     apiCfg.OAuthAuthHeaderPrefix,
 		OAuthForwardToken:         apiCfg.OAuthForwardToken,
+		ResilienceTimeoutSeconds:  settingsResilienceTimeoutSeconds,
 	}
-	if upsertErr := s.agentConfigRepo.Upsert(agentConfig); upsertErr != nil {
+	if upsertErr := s.agentConfigRepo.Upsert(ctx, agentConfig); upsertErr != nil {
 		s.logger.Error("Failed to persist agent deploy settings", "agentName", agentName, "environment", req.EnvironmentName, "error", upsertErr)
 		return fmt.Errorf("failed to persist agent deploy settings: %w", upsertErr)
 	}
@@ -4118,8 +4327,8 @@ func isValidPromotionPath(promotionPaths []models.PromotionPath, source, target 
 //
 // System-managed env vars are identified by looking up the secretRef in the DB: if it is
 // recorded in agent_env_config_variables_mapping for this agent's LLM configurations, it is
-// system-managed. This is provider-agnostic — it works for both OpenBao and the Secret Manager
-// API without relying on secret reference name patterns.
+// system-managed. This is provider-agnostic — it does not rely on secret reference name
+// patterns.
 //
 // These must be handled separately from processEnvVars because processEnvVars would use the
 // env var name (e.g., "CUSTOM_API_KEY") as the SecretKeyRef.Key, but the actual key in the
@@ -4185,6 +4394,86 @@ func (s *agentManagerService) getSystemManagedEnvVars(
 	return result, keySet, nil
 }
 
+// cloneEnvSecretForPromotion gives the target environment its own copy of the
+// source environment's agent secret. Workload overrides cloned from the source
+// environment reference the source secret by name; without a copy, both
+// environments would share one secret and a later secret edit in either
+// environment could break the other's rendering. Env var and file mount
+// references to the source secret are re-pointed at the target copy.
+// No-op when the cloned overrides don't reference the source env secret.
+func (s *agentManagerService) cloneEnvSecretForPromotion(
+	ctx context.Context,
+	ouID, projectName, agentName, sourceEnv, targetEnv string,
+	envVars []client.EnvVar,
+	fileVars []client.FileVar,
+) ([]client.EnvVar, []client.FileVar, error) {
+	srcLocation := secretmanagersvc.SecretLocation{
+		OrgName:         ouID,
+		ProjectName:     projectName,
+		EnvironmentName: sourceEnv,
+		EntityName:      agentName,
+	}
+	srcSecretName := srcLocation.SecretRefName()
+
+	refersToSrc := func(vf *client.EnvVarValueFrom) bool {
+		return vf != nil && vf.SecretKeyRef != nil && vf.SecretKeyRef.Name == srcSecretName
+	}
+	referenced := false
+	for _, ev := range envVars {
+		if refersToSrc(ev.ValueFrom) {
+			referenced = true
+			break
+		}
+	}
+	if !referenced {
+		for _, fv := range fileVars {
+			if refersToSrc(fv.ValueFrom) {
+				referenced = true
+				break
+			}
+		}
+	}
+	if !referenced {
+		return envVars, fileVars, nil
+	}
+
+	if s.secretMgmtClient == nil {
+		return nil, nil, fmt.Errorf("secret management is not initialized; cannot clone secret for promotion")
+	}
+
+	srcSecret, err := s.ocClient.GetSecret(ctx, ouID, srcSecretName)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read source environment secret %q: %w", srcSecretName, err)
+	}
+	data := make(map[string]string, len(srcSecret.Data))
+	for k, v := range srcSecret.Data {
+		data[k] = string(v)
+	}
+
+	tgtLocation := srcLocation
+	tgtLocation.EnvironmentName = targetEnv
+	tgtSecretName, err := s.secretMgmtClient.CreateSecret(ctx, tgtLocation, data)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create target environment secret: %w", err)
+	}
+
+	for i := range envVars {
+		if refersToSrc(envVars[i].ValueFrom) {
+			envVars[i].ValueFrom.SecretKeyRef.Name = tgtSecretName
+		}
+	}
+	for i := range fileVars {
+		if refersToSrc(fileVars[i].ValueFrom) {
+			fileVars[i].ValueFrom.SecretKeyRef.Name = tgtSecretName
+		}
+	}
+
+	s.logger.Info("Cloned environment secret for promotion",
+		"agentName", agentName, "sourceSecret", srcSecretName, "targetSecret", tgtSecretName,
+		"sourceEnv", sourceEnv, "targetEnv", targetEnv)
+	return envVars, fileVars, nil
+}
+
 // processEnvVars handles environment variables, separating secrets from plain values.
 // This function handles configuration updates including:
 //   - Adding new secret keys to KV and SecretReference
@@ -4194,7 +4483,7 @@ func (s *agentManagerService) getSystemManagedEnvVars(
 //
 // For sensitive env vars (isSensitive=true):
 //   - If secretRef is provided and value is empty: preserves existing secret (no KV update)
-//   - If value is provided: stores/updates the secret value in OpenBao
+//   - If value is provided: stores/updates the secret value in the secret store
 //   - Returns env var with secretKeyRef (Name=K8s Secret name, Key=property)
 //
 // For plain env vars:
@@ -4754,6 +5043,21 @@ func (s *agentManagerService) GetAgentFileMounts(ctx context.Context, ouID strin
 
 	s.logger.Info("Fetched file mounts successfully", "agentName", agentName, "count", len(fileMounts))
 	return fileMounts, nil
+}
+
+// GetAgentEnvConfig returns the full per-environment agent_configs row for (agent, environment)
+// — tracing/instrumentation plus CORS and endpoint-authentication settings — or nil when none is
+// persisted yet. Unlike GetAgent (which reads only the lowest environment's config), this is scoped
+// to the requested environment so the console seeds the correct per-env values.
+func (s *agentManagerService) GetAgentEnvConfig(ctx context.Context, ouID, projectName, agentName, environment string) (*models.AgentConfig, error) {
+	cfg, err := s.agentConfigRepo.Get(ctx, ouID, projectName, agentName, environment)
+	if errors.Is(err, repositories.ErrAgentConfigNotFound) {
+		return nil, nil //nolint:nilnil // "no config yet" is a valid, expected state distinct from an error
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get agent env config: %w", err)
+	}
+	return cfg, nil
 }
 
 // modelBuildToSpecBuild converts a models.Build (from GetComponent) into a spec.Build for CreateAgent enrichment.

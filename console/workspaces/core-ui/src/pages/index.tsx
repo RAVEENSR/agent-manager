@@ -57,6 +57,13 @@ export const LazyConfigureComponent = lazy(() =>
     default: m.metaData.component as ComponentType,
   }))
 );
+
+// Agent ID
+export const LazyAgentIdComponent = lazy(() =>
+  import("@agent-management-platform/env-thunders").then((m) => ({
+    default: m.agentIdMetaData.component as ComponentType,
+  }))
+);
 export const LazyAddLLMProvidersComponent = lazy(() =>
   import("@agent-management-platform/configure-agent").then((m) => ({
     default: m.AddLLMProviderComponent as ComponentType,

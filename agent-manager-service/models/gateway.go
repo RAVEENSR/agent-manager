@@ -33,6 +33,7 @@ type Gateway struct {
 	Properties               map[string]interface{} `gorm:"column:properties;type:jsonb;serializer:json" json:"properties,omitempty"`
 	Manifest                 map[string]interface{} `gorm:"column:manifest;type:jsonb;serializer:json" json:"manifest,omitempty"`
 	Vhost                    string                 `gorm:"column:vhost" json:"vhost"`
+	RuntimeURL               string                 `gorm:"column:runtime_url" json:"runtimeUrl,omitempty"`
 	IsCritical               bool                   `gorm:"column:is_critical" json:"isCritical"`
 	GatewayFunctionalityType string                 `gorm:"column:gateway_functionality_type" json:"functionalityType"`
 	IsActive                 bool                   `gorm:"column:is_active" json:"isActive"`
@@ -44,6 +45,36 @@ type Gateway struct {
 // TableName returns the table name for the Gateway model
 func (Gateway) TableName() string {
 	return "gateways"
+}
+
+// Gateway placement roles. Stored lowercase in gateways.gateway_functionality_type;
+// emitted uppercase on the wire. Roles are naming and placement policy, not capability:
+// every gateway has identical runtime capabilities regardless of role.
+const (
+	// GatewayRoleIngress handles inbound agent traffic. At most one per environment.
+	GatewayRoleIngress = "ingress"
+	// GatewayRoleEgress hosts outbound LLM/MCP artifacts. Uncapped per environment.
+	GatewayRoleEgress = "egress"
+	// GatewayRoleBoth does both. Counts against the ingress cap.
+	GatewayRoleBoth = "both"
+)
+
+// IngressGatewayRoles are the roles that occupy an environment's single ingress slot.
+var IngressGatewayRoles = []string{GatewayRoleIngress, GatewayRoleBoth}
+
+// EgressGatewayRoles are the roles eligible to host LLM/MCP artifacts. Not capped:
+// "both" plus "egress" in one environment is the supported shape for an existing
+// environment that gains egress separation.
+var EgressGatewayRoles = []string{GatewayRoleEgress, GatewayRoleBoth}
+
+// IsIngressCapable reports whether this gateway occupies its environment's ingress slot.
+func (g *Gateway) IsIngressCapable() bool {
+	return g.GatewayFunctionalityType == GatewayRoleIngress || g.GatewayFunctionalityType == GatewayRoleBoth
+}
+
+// IsEgressCapable reports whether this gateway is a legal target for LLM/MCP placement.
+func (g *Gateway) IsEgressCapable() bool {
+	return g.GatewayFunctionalityType == GatewayRoleEgress || g.GatewayFunctionalityType == GatewayRoleBoth
 }
 
 // GatewayToken represents an authentication token for an API Platform gateway

@@ -37,8 +37,20 @@ else
 fi
 
 # WSO2 API Platform / Gateway Operator versions
-GATEWAY_OPERATOR_VERSION="0.7.0"
-GATEWAY_CHART_VERSION="1.1.0"
+GATEWAY_OPERATOR_VERSION="0.10.1"
+# gateway-controller/gateway-runtime 1.1.x reject every RestApi/LlmProvider
+# deployment with a bare 404 despite correctly-configured basic auth (confirmed
+# via a live tcpdump of the operator's request — same 404 across 1.1.0 and
+# 1.1.5). 1.2.0-alpha2 does not have this bug (verified end-to-end: RestApi
+# reaches Programmed=True). Chart *version* and container *image tag* are
+# pinned separately below — setting chartVersion alone still runs an older
+# default image, so GATEWAY_IMAGE_VERSION must also be threaded through.
+GATEWAY_CHART_VERSION="1.2.0-beta"
+GATEWAY_IMAGE_VERSION="1.2.0-beta"
+
+# The 1.2.0-beta gateway chart requires an encryption key to be mounted from a Kubernetes Secret
+GATEWAY_ENCRYPTION_SECRET_NAME="gateway-encryption-keys"
+GATEWAY_ENCRYPTION_SECRET_KEY="default-aesgcm256-v1.bin"
 
 # OpenChoreo community module versions compatible with OpenChoreo ${OPENCHOREO_VERSION}
 OBSERVABILITY_LOGS_OPENSEARCH_VERSION="0.4.1"
@@ -1342,11 +1354,33 @@ fi
 # ThunderID v0.45: the observer resolves service accounts from its own config
 # (observer-auth-config), still keyed on 'claim: sub'. Patch to client_id, else
 # agent build-log / observability queries return 403.
+#
+# The observability plane populates observer-auth-config asynchronously: the
+# configmap can exist for a while before its service-account 'claim: sub' is
+# written. Patching too early sees no 'sub', silently skips, and leaves the
+# observer on 'sub' (403 on every log/trace query). Wait for the claim to
+# surface (either 'sub' to patch, or 'client_id' if a prior run already did).
 log_info "Patching observer-auth-config: service_account entitlement claim -> client_id..."
-if kubectl get configmap observer-auth-config -n openchoreo-observability-plane &>/dev/null; then
+obs_auth_claim=""
+for _ in $(seq 1 30); do
+    obs_auth_claim=$(kubectl get configmap observer-auth-config -n openchoreo-observability-plane -o yaml 2>/dev/null \
+        | grep -oE "claim:[[:space:]]*['\"]?(sub|client_id)['\"]?" | head -1)
+    [ -n "$obs_auth_claim" ] && break
+    sleep 4
+done
+if [ -z "$obs_auth_claim" ]; then
+    # Distinguish a genuinely-absent configmap from one that is present but whose
+    # service-account claim never surfaced (or kubectl kept failing) so the message
+    # is not misleading.
+    if kubectl get configmap observer-auth-config -n openchoreo-observability-plane &>/dev/null; then
+        log_warning "observer-auth-config present but its service-account claim never surfaced after waiting - skipping (observer log/trace queries will 403 until it is patched)"
+    else
+        log_warning "observer-auth-config not found - skipping observer claim patch"
+    fi
+else
     patched_obs_yaml=$(kubectl get configmap observer-auth-config -n openchoreo-observability-plane -o yaml \
         | sed -E "s/claim:[[:space:]]*['\"]?sub['\"]?/claim: client_id/g")
-    if echo "$patched_obs_yaml" | grep -q "claim: client_id"; then
+    if echo "$patched_obs_yaml" | grep -qE "claim:[[:space:]]*['\"]?client_id['\"]?"; then
         echo "$patched_obs_yaml" | kubectl apply --server-side --field-manager=helm --force-conflicts -f -
         kubectl rollout restart deployment/observer -n openchoreo-observability-plane
         kubectl rollout status deployment/observer -n openchoreo-observability-plane --timeout=120s
@@ -1354,8 +1388,6 @@ if kubectl get configmap observer-auth-config -n openchoreo-observability-plane 
     else
         log_warning "observer-auth-config has no 'sub' claim to patch - skipping"
     fi
-else
-    log_warning "observer-auth-config not found - skipping observer claim patch"
 fi
 
 # Register Observability Plane with Control Plane
@@ -1424,6 +1456,15 @@ fi
 
 log_step "Step 11/13: Installing Gateway Operator"
 log_info "Installing Gateway Operator..."
+# Pinning gateway.helm.chartVersion alone is NOT enough: the chart's own
+# default values.yaml can still reference an older gateway-controller/
+# gateway-runtime image tag independent of the chart version, so the image
+# tag/repo must be set explicitly here too (confirmed by inspecting the
+# actual running pod images — chartVersion=1.2.0-alpha alone still ran an
+# older image until these were added).
+# Admin API on this image is served under /api/admin/v1 on the "admin" named
+# port — GET /health on the "rest" port goes through Gin + basic auth and
+# returns 401 for kube-probe (see gateway-controller admin OpenAPI spec).
 helm_install_idempotent \
     "gateway-operator" \
     "oci://ghcr.io/wso2/api-platform/helm-charts/gateway-operator" \
@@ -1432,7 +1473,17 @@ helm_install_idempotent \
     --version "${GATEWAY_OPERATOR_VERSION}" \
     --set "logging.level=debug" \
     --set gatewayApi.installStandardCRDs=false \
-    --set "gateway.helm.chartVersion=${GATEWAY_CHART_VERSION}"
+    --set "gateway.helm.chartVersion=${GATEWAY_CHART_VERSION}" \
+    --set "gateway.values.gateway.controller.image.tag=${GATEWAY_IMAGE_VERSION}" \
+    --set gateway.values.gateway.controller.image.repository=ghcr.io/wso2/api-platform/gateway-controller \
+    --set "gateway.values.gateway.gatewayRuntime.image.tag=${GATEWAY_IMAGE_VERSION}" \
+    --set gateway.values.gateway.gatewayRuntime.image.repository=ghcr.io/wso2/api-platform/gateway-runtime \
+    --set gateway.values.gateway.controller.encryptionKeys.enabled=true \
+    --set "gateway.values.gateway.controller.encryptionKeys.secretName=${GATEWAY_ENCRYPTION_SECRET_NAME}" \
+    --set gateway.values.gateway.controller.deployment.livenessProbe.httpGet.path=/api/admin/v1/health \
+    --set gateway.values.gateway.controller.deployment.livenessProbe.httpGet.port=admin \
+    --set gateway.values.gateway.controller.deployment.readinessProbe.httpGet.path=/api/admin/v1/health \
+    --set gateway.values.gateway.controller.deployment.readinessProbe.httpGet.port=admin
 
 log_success "Gateway Operator installed"
 
@@ -1555,16 +1606,35 @@ echo ""
 
 log_info "Provisioning Thunder identity provider for the default environment..."
 ENV_THUNDER_PROVISIONED=false
+# Fatal: without env-Thunder the gateway extension silently skips its
+# ThunderKeyManager identity provider (install_gateway_extension only sets
+# bootstrap.identityProviders when this release exists), so the gateway keeps a
+# keymanager that Agent Manager has no mirror row for. That drift surfaces much
+# later as an empty Identity Providers page, long after the installer claimed
+# success — fail here instead, while the cause is still on screen.
 if ! install_default_env_thunder; then
-    log_warning "Default environment Thunder provisioning failed (non-fatal)"
+    log_error "Default environment Thunder provisioning failed"
     echo "Re-run manually once the platform is ready:"
     echo "  ENV_NAME=default DISPLAY_NAME=Default ORG_NAME=default \\"
-    echo "  AMP_API_URL=http://api.amp.localhost:8080/api/v1 \\"
-    echo "  bash ${DEPLOYMENTS_DIR}/scripts/add-environment-thunder.sh"
-else
-    log_success "Default environment Thunder identity provider provisioned"
-    ENV_THUNDER_PROVISIONED=true
+    echo "  AMP_API_URL=${AMP_API_URL:-http://api.amp.localhost:8080/api/v1} \\"
+    echo "  IDP_TOKEN_URL=${IDP_TOKEN_URL:-http://thunder.amp.localhost:8080/oauth2/token} \\"
+    # install_default_env_thunder() prefers the bundled script and falls back to
+    # downloading it; a standalone (curl-piped) install has no scripts/ directory,
+    # so pointing at the bundled path there would send the operator to a file that
+    # does not exist. Name the release copy instead, and pass SCRIPT_BASE_URL so
+    # the script fetches its own siblings from that same release rather than main.
+    env_thunder_script="${DEPLOYMENTS_DIR}/scripts/add-environment-thunder.sh"
+    if [[ -f "${env_thunder_script}" ]]; then
+        echo "  bash ${env_thunder_script}"
+    else
+        env_thunder_base="https://raw.githubusercontent.com/wso2/agent-manager/amp/v${VERSION}/deployments/scripts"
+        echo "  SCRIPT_BASE_URL=${env_thunder_base} \\"
+        echo "  bash <(curl -fsSL ${env_thunder_base}/add-environment-thunder.sh)"
+    fi
+    exit 1
 fi
+log_success "Default environment Thunder identity provider provisioned"
+ENV_THUNDER_PROVISIONED=true
 echo ""
 
 # Install observability extension
@@ -1639,6 +1709,7 @@ log_info "Cluster: ${CLUSTER_CONTEXT}"
 # print their own reachable URLs instead.
 if [[ "${SHOW_LOCALHOST_URLS:-true}" == "true" ]]; then
   log_info "Agent Management Platform Console: http://console.amp.localhost:8080"
+  log_info "Agent Management Platform API: http://api.amp.localhost:8080"
   log_info "Observability Gateway (for traces): http://default-default.gateway.localhost:19080/otel"
 fi
 

@@ -19,23 +19,15 @@
 import React from "react";
 import {
     Box,
-    Button,
     Card,
-    CardContent,
     Chip,
     CircularProgress,
-    Divider,
     IconButton,
     Skeleton,
+    Tooltip,
     Typography,
 } from "@wso2/oxygen-ui";
-import {
-    ChevronRight,
-    CheckCircle,
-    ExternalLink,
-    GitHub,
-    XCircle,
-} from "@wso2/oxygen-ui-icons-react";
+import { CheckCircle, ExternalLink, GitHub, XCircle } from "@wso2/oxygen-ui-icons-react";
 import {
     BUILD_STATUS_COLOR_MAP,
     type Build,
@@ -44,8 +36,10 @@ import {
     type RepositoryConfig,
     absoluteRouteMap,
 } from "@agent-management-platform/types";
-import { format } from "date-fns";
+import { parseGitHubUrl } from "@agent-management-platform/shared-component";
+import { formatDistanceToNow } from "date-fns";
 import { generatePath, Link } from "react-router-dom";
+import { UppercaseCaptionLabel } from "./SectionHeader";
 
 interface AgentInfoCardProps {
     orgId: string;
@@ -57,6 +51,140 @@ interface AgentInfoCardProps {
     framework?: string;
     model?: string;
     build?: Build;
+}
+
+/** Builds a link to the exact branch/path in the repository, when possible. */
+function buildRepoTreeUrl(url: string, branch: string, appPath: string | null): string {
+    if (!branch) return url;
+    if (appPath) {
+        const normalized = appPath.startsWith("/") ? appPath.substring(1) : appPath;
+        return `${url}/tree/${branch}/${normalized}`;
+    }
+    return `${url}/tree/${branch}`;
+}
+
+function statusTextColor(status?: BuildStatus): string {
+    const color = status ? BUILD_STATUS_COLOR_MAP[status] : undefined;
+    return color && color !== "default" ? `${color}.main` : "text.secondary";
+}
+
+function BuildStatusIcon({ status }: { status?: BuildStatus }) {
+    if (!status) return null;
+    if (status === "Running" || status === "Pending") {
+        return <CircularProgress size={12} color="inherit" />;
+    }
+    if (status === "Failed") return <XCircle size={14} />;
+    return <CheckCircle size={14} />;
+}
+
+interface SourceInfoProps {
+    repoLabel: string | null;
+    appPath: string | null;
+    repoTreeUrl: string | null;
+    branch?: string;
+    buildpackLabel: string | null;
+    agentTypeLabel: string | null;
+}
+
+function SourceInfo({
+    repoLabel,
+    appPath,
+    repoTreeUrl,
+    branch,
+    buildpackLabel,
+    agentTypeLabel,
+}: SourceInfoProps) {
+    return (
+        <>
+            <UppercaseCaptionLabel sx={{ flexShrink: 0 }}>Source</UppercaseCaptionLabel>
+
+            <GitHub size={14} style={{ flexShrink: 0 }} />
+
+            <Box display="flex" alignItems="center" gap={0} sx={{ flexShrink: 0 }}>
+                <Typography variant="body2" noWrap>
+                    {repoLabel ?? "—"}
+                </Typography>
+
+                {appPath && (
+                    <Typography variant="body2" color="text.disabled" noWrap>
+                        {appPath}
+                    </Typography>
+                )}
+            </Box>
+
+            {repoTreeUrl && (
+                <IconButton
+                    size="small"
+                    component="a"
+                    href={repoTreeUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    sx={{ p: 0.25, flexShrink: 0 }}
+                    aria-label="Open source repository"
+                >
+                    <ExternalLink size={13} />
+                </IconButton>
+            )}
+
+            {branch && (
+                <Chip label={branch} size="small" variant="outlined" sx={{ flexShrink: 0 }} />
+            )}
+            {buildpackLabel && (
+                <Chip
+                    label={buildpackLabel}
+                    size="small"
+                    variant="outlined"
+                    sx={{ flexShrink: 0, display: { xs: "none", lg: "inline-flex" } }}
+                />
+            )}
+            {agentTypeLabel && (
+                <Chip
+                    label={agentTypeLabel}
+                    size="small"
+                    variant="outlined"
+                    sx={{ flexShrink: 0, display: { xs: "none", lg: "inline-flex" } }}
+                />
+            )}
+        </>
+    );
+}
+
+interface BuildStatusInfoProps {
+    isBuildsLoading?: boolean;
+    latestBuild?: BuildResponse;
+}
+
+function BuildStatusInfo({ isBuildsLoading, latestBuild }: BuildStatusInfoProps) {
+    if (isBuildsLoading) {
+        return <Skeleton variant="text" width={100} sx={{ flexShrink: 0 }} />;
+    }
+
+    if (!latestBuild) {
+        return (
+            <Typography variant="body2" color="text.secondary" sx={{ flexShrink: 0 }}>
+                No builds yet
+            </Typography>
+        );
+    }
+
+    return (
+        <Tooltip
+            title={`Triggered ${formatDistanceToNow(new Date(latestBuild.startedAt), { addSuffix: true })}`}
+        >
+            <Box
+                display="flex"
+                alignItems="center"
+                gap={0.5}
+                sx={{ flexShrink: 0, color: statusTextColor(latestBuild.status) }}
+            >
+                <BuildStatusIcon status={latestBuild.status} />
+                <Typography variant="body2" fontWeight={600} color="inherit">
+                    {latestBuild.status}
+                </Typography>
+            </Box>
+        </Tooltip>
+    );
 }
 
 export const AgentInfoCard: React.FC<AgentInfoCardProps> = ({
@@ -78,124 +206,57 @@ export const AgentInfoCard: React.FC<AgentInfoCardProps> = ({
         }
         return "Docker";
     })();
+
+    const agentTypeLabel = [framework, model].filter(Boolean).join("/") || null;
+
     const buildsPath = generatePath(
         absoluteRouteMap.children.org.children.projects.children.agents.children.build.path,
         { orgId, projectId, agentId },
     );
 
-    const repoUrl = repository
-        ? (() => {
-              const { url, branch, appPath } = repository;
-              if (appPath && appPath !== "/") {
-                  const normalized = appPath.startsWith("/") ? appPath.substring(1) : appPath;
-                  return `${url}/tree/${branch}/${normalized}`;
-              }
-              return `${url}/tree/${branch}`;
-          })()
+    const parsedRepo = repository?.url ? parseGitHubUrl(repository.url) : null;
+    const repoLabel = parsedRepo ? `${parsedRepo.owner}/${parsedRepo.repo}` : null;
+    const appPath = repository?.appPath && repository.appPath !== "/" ? repository.appPath : null;
+    const repoTreeUrl = repository?.url
+        ? buildRepoTreeUrl(repository.url, repository.branch, appPath)
         : null;
-
-    const buildStatusIcon = (status?: BuildStatus) => {
-        if (!status) return undefined;
-        if (status === "Running" || status === "Pending") return <CircularProgress size={12} color="inherit" />;
-        if (status === "Failed") return <XCircle size={14} />;
-        return <CheckCircle size={14} />;
-    };
 
     return (
         <Card variant="outlined">
-            <CardContent sx={{ py: 1.5, "&:last-child": { pb: 1.5 } }}>
-                <Box pb={1}>
-                    <Typography variant="h6">Source & Build</Typography>
+            <Box display="flex" alignItems="center" gap={1.5} minWidth={0} sx={{ px: 2, py: 1.25 }}>
+                <Box display="flex" overflow="hidden" alignItems="center" gap={1.5} minWidth={0} flexGrow={1}>
+                    <SourceInfo
+                        repoLabel={repoLabel}
+                        appPath={appPath}
+                        repoTreeUrl={repoTreeUrl}
+                        branch={repository?.branch}
+                        buildpackLabel={buildpackLabel}
+                        agentTypeLabel={agentTypeLabel}
+                    />
                 </Box>
-                <Divider sx={{ mb: 1.5 }} />
-                <Box display="flex" gap={2} minWidth={0}>
 
-                    <Box flex={1} minWidth={0}>
-                        <Typography variant="caption" color="text.secondary" fontWeight={600}
-                            sx={{ textTransform: "uppercase", letterSpacing: "0.05em", display: "block", mb: 0.75 }}>
-                            Repository
-                        </Typography>
-                        <Box display="flex" alignItems="center" gap={0.5} minWidth={0}>
-                            <GitHub size={14} style={{ flexShrink: 0 }} />
-                            <Typography
-                                variant="body2"
-                                noWrap
-                              
-                            >
-                                {repoUrl ?? "—"}
-                            </Typography>
-                            {repoUrl && (
-                                <IconButton
-                                    size="small"
-                                    component="a"
-                                    href={repoUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    sx={{ p: 0.25, flexShrink: 0 }}
-                                >
-                                    <ExternalLink size={12} />
-                                </IconButton>
-                            )}
-                        </Box>
-                        {(framework || model || buildpackLabel) && (
-                            <Typography variant="caption" color="text.secondary" noWrap display="block" mt={0.25}>
-                                {[
-                                    (framework || model) && `Agent Type: ${[framework, model].filter(Boolean).join("/")}`,
-                                    buildpackLabel && `Language: ${buildpackLabel}`,
-                                ]
-                                    .filter(Boolean)
-                                    .join("  ·  ")}
-                            </Typography>
-                        )}
-                    </Box>
+                <Typography variant="body2" color="text.secondary" sx={{ flexShrink: 0 }}>
+                    Latest Build:
+                </Typography>
 
-                    <Divider orientation="vertical" flexItem />
-
-                    <Box flex={1} minWidth={0}>
-                        <Box display="flex" justifyContent="space-between" alignItems="center" mb={0.75}>
-                            <Typography variant="caption" color="text.secondary" fontWeight={600}
-                                sx={{ textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                                Latest Build
-                            </Typography>
-                            <Button
-                                size="small"
-                                variant="text"
-                                endIcon={<ChevronRight size={12} />}
-                                component={Link}
-                                to={buildsPath}
-                            >
-                                View all
-                            </Button>
-                        </Box>
-                        {isBuildsLoading ? (
-                            <Skeleton variant="rounded" height={28} />
-                        ) : !latestBuild ? (
-                            <Typography variant="body2" color="text.secondary">No builds yet.</Typography>
-                        ) : (
-                            <Box display="flex" alignItems="center" gap={1.5} minWidth={0}>
-                                <Typography variant="body2" color="text.secondary" noWrap sx={{ flexShrink: 0 }}>
-                                    {latestBuild.buildParameters?.branch} :
-                                </Typography>
-                                <Typography variant="body2" noWrap flex={1}>
-                                    {latestBuild.buildName}
-                                </Typography>
-                                <Typography variant="body2" color="text.secondary" noWrap sx={{ flexShrink: 0 }}>
-                                    {format(new Date(latestBuild.startedAt), "dd/MM/yyyy HH:mm:ss")}
-                                </Typography>
-                                <Chip
-                                    label={latestBuild.status}
-                                    size="small"
-                                    color={BUILD_STATUS_COLOR_MAP[latestBuild.status as BuildStatus] ?? "default"}
-                                    variant="outlined"
-                                    icon={buildStatusIcon(latestBuild.status as BuildStatus)}
-                                    sx={{ flexShrink: 0 }}
-                                />
-                            </Box>
-                        )}
-                    </Box>
-
+                <Box
+                    component={Link}
+                    to={buildsPath}
+                    sx={{
+                        display: "flex",
+                        alignItems: "center",
+                        flexShrink: 0,
+                        textDecoration: "none",
+                        color: "inherit",
+                        px: 1,
+                        py: 0.5,
+                        borderRadius: 1,
+                        "&:hover": { bgcolor: "action.hover" },
+                    }}
+                >
+                    <BuildStatusInfo isBuildsLoading={isBuildsLoading} latestBuild={latestBuild} />
                 </Box>
-            </CardContent>
+            </Box>
         </Card>
     );
 };

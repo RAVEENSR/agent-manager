@@ -26,9 +26,10 @@ import {
   Typography,
 } from "@wso2/oxygen-ui";
 import { AlertTriangle, Search, Users } from "@wso2/oxygen-ui-icons-react";
-import { generatePath, useNavigate, useParams } from "react-router-dom";
+import { generatePath, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useListAgentIdentityAgents } from "@agent-management-platform/api-client";
 import { absoluteRouteMap, type AgentIdentityAgentResponse } from "@agent-management-platform/types";
+import { withSearchParams } from "../../utils/withSearchParams";
 
 const AVATAR_SX = { width: 28, height: 28, fontSize: 12 } as const;
 const MONO_SX = { fontFamily: "monospace" } as const;
@@ -49,27 +50,31 @@ const matchesQuery = (agent: AgentIdentityAgentResponse, query: string) =>
     .includes(query);
 
 export const AgentsTab: React.FC = () => {
-  const { orgId, envName } = useParams<{ orgId: string; envName: string }>();
+  const { orgId } = useParams<{ orgId: string }>();
+  const [searchParams] = useSearchParams();
+  const envName = searchParams.get("envName") ?? "";
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
 
   const { data, isLoading, error } = useListAgentIdentityAgents({
     orgName: orgId,
-    envName: envName ?? "",
+    envName,
   });
 
   const agents = useMemo(() => data?.agents ?? [], [data]);
 
   const agentsNode =
-    absoluteRouteMap.children.org.children.thunderInstances.children.view.children.agents;
+    absoluteRouteMap.children.org.children.thunderInstances.children.agents;
   const agentDetailPath = (agent: AgentIdentityAgentResponse) =>
-    orgId && envName
-      ? generatePath(agentsNode.children.detail.path, {
-          orgId,
-          envName,
-          projectName: agent.projectName,
-          agentName: agent.agentName,
-        })
+    orgId
+      ? withSearchParams(
+          generatePath(agentsNode.children.detail.path, {
+            orgId,
+            projectName: agent.projectName,
+            agentName: agent.agentName,
+          }),
+          searchParams,
+        )
       : "#";
 
   const filteredAgents = useMemo(() => {
@@ -89,18 +94,20 @@ export const AgentsTab: React.FC = () => {
     <ListingTable.Provider searchValue={search} onSearchChange={setSearch}>
       <ListingTable.Container>
         <ListingTable.Toolbar showSearch searchPlaceholder="Search agents..." />
-        {!isLoading && agents.length === 0 ? (
-          <ListingTable.EmptyState
-            illustration={<Users size={64} />}
-            title="No agents yet"
-            description="Agents provisioned in this environment will appear here."
-          />
-        ) : !isLoading && filteredAgents.length === 0 ? (
-          <ListingTable.EmptyState
-            illustration={<Search size={64} />}
-            title="No agents found"
-            description={`No agents match "${search}". Try a different search term.`}
-          />
+        {!isLoading && filteredAgents.length === 0 ? (
+          search ? (
+            <ListingTable.EmptyState
+              illustration={<Search size={64} />}
+              title="No agents found"
+              description={`No agents match "${search}". Try a different search term.`}
+            />
+          ) : (
+            <ListingTable.EmptyState
+              illustration={<Users size={64} />}
+              title="No agents yet"
+              description="Agents provisioned in this environment will appear here."
+            />
+          )
         ) : (
           <ListingTable variant="table">
             <ListingTable.Head>

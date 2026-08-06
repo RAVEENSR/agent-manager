@@ -328,10 +328,16 @@ func (a *GatewayTokensAPIService) RevokeGatewayTokenExecute(r ApiRevokeGatewayTo
 }
 
 type ApiRotateGatewayTokenRequest struct {
-	ctx        context.Context
-	ApiService *GatewayTokensAPIService
-	orgName    string
-	gatewayID  string
+	ctx                       context.Context
+	ApiService                *GatewayTokensAPIService
+	orgName                   string
+	gatewayID                 string
+	rotateGatewayTokenRequest *RotateGatewayTokenRequest
+}
+
+func (r ApiRotateGatewayTokenRequest) RotateGatewayTokenRequest(rotateGatewayTokenRequest RotateGatewayTokenRequest) ApiRotateGatewayTokenRequest {
+	r.rotateGatewayTokenRequest = &rotateGatewayTokenRequest
+	return r
 }
 
 func (r ApiRotateGatewayTokenRequest) Execute() (*GatewayTokenResponse, *http.Response, error) {
@@ -399,7 +405,7 @@ func (a *GatewayTokensAPIService) RotateGatewayTokenExecute(r ApiRotateGatewayTo
 	}
 
 	// to determine the Content-Type header
-	localVarHTTPContentTypes := []string{}
+	localVarHTTPContentTypes := []string{"application/json"}
 
 	// set Content-Type header
 	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
@@ -415,6 +421,8 @@ func (a *GatewayTokensAPIService) RotateGatewayTokenExecute(r ApiRotateGatewayTo
 	if localVarHTTPHeaderAccept != "" {
 		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
 	}
+	// body params
+	localVarPostBody = r.rotateGatewayTokenRequest
 	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
 	if err != nil {
 		return localVarReturnValue, nil, err

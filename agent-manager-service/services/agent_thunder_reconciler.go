@@ -194,7 +194,7 @@ const identityInjectionReconcileWindow = 2 * time.Hour
 // lock; concurrent instances converge on the same desired state, so the worst
 // case is a duplicate content-identical write.
 func (s *agentThunderReconcilerService) runIdentityInjectionReconcile(ctx context.Context) {
-	s.pageIdentityInjectionReconcile(ctx, time.Now().Add(-identityInjectionReconcileWindow))
+	s.pageIdentityInjectionReconcile(ctx, time.Now().Add(-identityInjectionReconcileWindow), false)
 }
 
 // runInitialIdentityInjectionBackfill runs once per process start (see Start)
@@ -217,7 +217,7 @@ func (s *agentThunderReconcilerService) runIdentityInjectionReconcile(ctx contex
 // on every one-minute tick forever, not just once (or a few times) per
 // restart.
 func (s *agentThunderReconcilerService) runInitialIdentityInjectionBackfill(ctx context.Context) {
-	s.pageIdentityInjectionReconcile(ctx, time.Time{})
+	s.pageIdentityInjectionReconcile(ctx, time.Time{}, true)
 }
 
 // pageIdentityInjectionReconcile reconciles every COMPLETED internal binding
@@ -229,7 +229,13 @@ func (s *agentThunderReconcilerService) runInitialIdentityInjectionBackfill(ctx 
 // newest ones — the same oldest page would be reselected every call until
 // enough of them aged out of the (periodic caller's) window, and a newer
 // binding could miss its entire window without ever being reconciled.
-func (s *agentThunderReconcilerService) pageIdentityInjectionReconcile(ctx context.Context, createdAfter time.Time) {
+//
+// healSecretRefs is true only for the unbounded startup pass
+// (runInitialIdentityInjectionBackfill): HealSecretRef is cheap (one bounded
+// OpenChoreo read) and idempotent (a no-op once a binding's SecretRefPath
+// already matches), but there is no reason to re-run it against every
+// already-healed row on every one-minute periodic tick too.
+func (s *agentThunderReconcilerService) pageIdentityInjectionReconcile(ctx context.Context, createdAfter time.Time, healSecretRefs bool) {
 	var cursor *repositories.ReconcileCursor
 	for {
 		recent, err := s.repo.FindRecentlyCompletedInternal(ctx, createdAfter, cursor, reconcilerBatchSize)
@@ -238,6 +244,11 @@ func (s *agentThunderReconcilerService) pageIdentityInjectionReconcile(ctx conte
 			return
 		}
 		for _, binding := range recent {
+			if healSecretRefs {
+				if err := s.provisioning.HealSecretRef(ctx, binding); err != nil {
+					s.logger.Warn("Failed to heal agent thunder binding secret ref", "ouID", binding.OUID, "bindingID", binding.ID, "agentName", binding.AgentName, "envName", binding.EnvironmentName, "error", err)
+				}
+			}
 			reconcileWorkloadInjection(ctx, s.injector, binding, s.logger)
 		}
 		if len(recent) < reconcilerBatchSize {

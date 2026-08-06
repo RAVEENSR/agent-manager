@@ -17,9 +17,6 @@
  */
 
 import {
-  useAgentBuildOptions,
-  useDeployAgent,
-  useUpdateAgentDeploySettings,
   useGetAgent,
   useGetAgentConfigurations,
   useGetAgentMetrics,
@@ -31,7 +28,7 @@ import {
 } from "@agent-management-platform/api-client";
 import { NoDataFound, TextInput } from "@agent-management-platform/views";
 import {
-  ArrowUpFromLine,
+  ArrowRightFromLine,
   Clock,
   Cpu,
   ExternalLink,
@@ -64,10 +61,8 @@ import {
   IconButton,
   Menu,
   MenuItem,
-  Select,
   Skeleton,
   Stack,
-  Switch,
   Tooltip,
   Typography,
   useTheme,
@@ -80,7 +75,6 @@ import {
   formatUsagePercent,
   getUsagePercentVariant,
 } from "@agent-management-platform/shared-component";
-import { EditSecurityConfigDrawer } from "./EditSecurityConfigDrawer";
 import { EditDeployConfigDrawer } from "./EditDeployConfigDrawer";
 import {
   absoluteRouteMap,
@@ -91,13 +85,9 @@ import {
   TraceListTimeRange,
 } from "@agent-management-platform/types";
 import { extractBuildIdFromImageId } from "../utils/extractBuildIdFromImageId";
-import {
-  compatibleInstrumentationVersions,
-  normalizePythonMinor,
-  pickInstrumentationVersion,
-} from "../utils/instrumentation";
+import { normalizePythonMinor } from "../utils/instrumentation";
 import { formatDistanceToNow } from "date-fns";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { EditResourceConfigsDrawer } from "./EditResourceConfigsDrawer";
 import { PromoteAgentDrawer } from "./PromoteAgentDrawer";
 
@@ -253,7 +243,6 @@ const ENV_ID_PARAM = "envId";
 const OPEN_RES_CONFIG_PARAM = "openResConfig";
 const OPEN_PROMOTE_PARAM = "openPromote";
 const OPEN_CONFIGURE_PARAM = "openConfigure";
-const OPEN_CORS_PARAM = "openCors";
 
 export function DeployCard(props: DeployCardProps) {
   const { currentEnvironment } = props;
@@ -314,23 +303,6 @@ export function DeployCard(props: DeployCardProps) {
     setSearchParams(next);
   }, [searchParams, setSearchParams]);
 
-  const corsDrawerOpen =
-    searchParams.get(OPEN_CORS_PARAM) === "open" &&
-    searchParams.get(ENV_ID_PARAM) === currentEnvironment.name;
-
-  const handleOpenCorsDrawer = useCallback(() => {
-    const next = new URLSearchParams(searchParams);
-    next.set(ENV_ID_PARAM, currentEnvironment.name);
-    next.set(OPEN_CORS_PARAM, "open");
-    setSearchParams(next);
-  }, [currentEnvironment.name, searchParams, setSearchParams]);
-
-  const handleCloseCorsDrawer = useCallback(() => {
-    const next = new URLSearchParams(searchParams);
-    next.delete(OPEN_CORS_PARAM);
-    next.delete(ENV_ID_PARAM);
-    setSearchParams(next);
-  }, [searchParams, setSearchParams]);
 
   const { data: deployments, isLoading: isDeploymentsLoading } =
     useListAgentDeployments({
@@ -410,70 +382,22 @@ export function DeployCard(props: DeployCardProps) {
       ?.buildpack?.languageVersion,
   );
 
-  // Inline toggle: tracing. Endpoint authentication (none/api-key/oauth) is
-  // managed in the security drawer since it spans three mutually-exclusive
-  // modes plus OAuth config fields.
-  const [tracingEnabled, setTracingEnabled] = useState(false);
-  const [isSavingConfig, setIsSavingConfig] = useState(false);
+  // Endpoint authentication (none/api-key/oauth) is managed in the security drawer since it
+  // spans three mutually-exclusive modes plus OAuth config fields. Auto-instrumentation, the
+  // instrumentation version, and tracing-token regeneration are managed in the
+  // "Configurations and Secrets" drawer (EditDeployConfigDrawer).
   const [actionsMenuAnchor, setActionsMenuAnchor] = useState<null | HTMLElement>(null);
-  // AMP instrumentation version shown for this environment. Seeded for display
-  // from the agent's current config; it is only PERSISTED when the user
-  // explicitly changes it (versionDirty), so merely toggling tracing never
-  // converts an unpinned agent into an explicit pin.
-  const [instrumentationVersion, setInstrumentationVersion] = useState<string>("");
-  const [versionDirty, setVersionDirty] = useState(false);
 
-  // Server instrumentation catalog (Python runtimes + version→SDK mapping),
-  // shared with the create wizard.
-  const { data: buildOptions } = useAgentBuildOptions({ orgName: orgId ?? "" });
-  // Instrumentation versions compatible with this agent's Python runtime.
-  const compatibleInstrumentation = useMemo(
-    () => compatibleInstrumentationVersions(buildOptions, agentPythonVersion),
-    [buildOptions, agentPythonVersion],
+  // Per-environment config drives the overview chips. GetAgent returns only the lowest
+  // environment's values, so every env's card would otherwise show the same CORS/Auth/Tracing.
+  const { data: envConfig } = useGetAgentConfigurations(
+    { orgName: orgId, projName: projectId, agentName: agentId },
+    { environment: currentEnvironment.name },
   );
 
-  useEffect(() => {
-    if (agent?.configurations?.enableAutoInstrumentation !== undefined) {
-      setTracingEnabled(agent.configurations.enableAutoInstrumentation);
-    }
-  }, [agent?.configurations?.enableAutoInstrumentation]);
-
-  // Reset per-agent selector state when the viewed agent changes, so a version
-  // from a previously-viewed agent never leaks onto (or gets persisted for) a
-  // different agent when this card instance is reused across navigation.
-  useEffect(() => {
-    setInstrumentationVersion("");
-    setVersionDirty(false);
-  }, [agentId, currentEnvironment.name]);
-
-  // Seed the selector for DISPLAY once BOTH the agent (for its Python version)
-  // and the catalog have loaded — waiting avoids seeding from the all-versions
-  // set while agentPythonVersion is still undefined. Re-seed whenever the
-  // current value is not in the compatible set (self-corrects a stale seed);
-  // a valid user selection is always in the set, so this never clobbers it.
-  useEffect(() => {
-    if (!buildOptions || !agent) return;
-    const inSet = compatibleInstrumentation.some(
-      (v) => v.version === instrumentationVersion,
-    );
-    if (inSet) return;
-    const seed = pickInstrumentationVersion(
-      compatibleInstrumentation,
-      agent?.configurations?.instrumentationVersion,
-      buildOptions.instrumentation.defaultVersion,
-    );
-    setInstrumentationVersion(seed);
-  }, [
-    buildOptions,
-    agent,
-    compatibleInstrumentation,
-    instrumentationVersion,
-  ]);
-
-  const authMode: "none" | "apikey" | "oauth" = agent?.configurations
-    ?.enableOAuthSecurity
+  const authMode: "none" | "apikey" | "oauth" = envConfig?.enableOAuthSecurity
     ? "oauth"
-    : agent?.configurations?.enableApiKeySecurity
+    : envConfig?.enableApiKeySecurity
       ? "apikey"
       : "none";
   const authLabel =
@@ -483,101 +407,17 @@ export function DeployCard(props: DeployCardProps) {
         ? "API key"
         : "None";
 
-  // Keep the configurations query mounted so its cache invalidates after
-  // deploy-settings / configuration mutations finish.
-  useGetAgentConfigurations(
-    { orgName: orgId, projName: projectId, agentName: agentId },
-    { environment: currentEnvironment.name },
-  );
-
-  const { mutate: deployAgentMutate } = useDeployAgent();
-  const { mutate: updateDeploySettingsMutate } = useUpdateAgentDeploySettings();
-
-  // Stable debounced redeploy — reads latest values via ref at fire time.
-  // `versionInSet` gates whether the selected version is safe to send (it must
-  // be compatible with the agent's Python), and `versionDirty` whether the user
-  // actually changed it (vs. a display-only seed).
-  const versionInCompatibleSet = compatibleInstrumentation.some(
-    (v) => v.version === instrumentationVersion,
-  );
-  const latestToggleRef = useRef({
-    tracing: tracingEnabled,
-    instrumentationVersion,
-    versionDirty,
-    versionInCompatibleSet,
-  });
-  latestToggleRef.current = {
-    tracing: tracingEnabled,
-    instrumentationVersion,
-    versionDirty,
-    versionInCompatibleSet,
-  };
-
-  const redeployContextRef = useRef({
-    orgId, projectId, agentId, currentEnvironment, isApiAgent, isPythonBuildpack,
-  });
-  redeployContextRef.current = {
-    orgId, projectId, agentId, currentEnvironment, isApiAgent, isPythonBuildpack,
-  };
-
-  const deployAgentRef = useRef(deployAgentMutate);
-  deployAgentRef.current = deployAgentMutate;
-  const updateDeploySettingsRef = useRef(updateDeploySettingsMutate);
-  updateDeploySettingsRef.current = updateDeploySettingsMutate;
-
-  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  useEffect(() => {
-    return () => {
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
-      }
-    };
-  }, []);
-
-  const debouncedRedeploy = useCallback(() => {
-    clearTimeout(debounceTimerRef.current);
-    debounceTimerRef.current = setTimeout(() => {
-      const {
-        orgId: o, projectId: p, agentId: a,
-        currentEnvironment: env,
-        isPythonBuildpack: isPy,
-      } = redeployContextRef.current;
-      if (!o || !p || !a || !env?.name) return;
-      const {
-        tracing,
-        instrumentationVersion: version,
-        versionDirty: dirty,
-        versionInCompatibleSet: inSet,
-      } = latestToggleRef.current;
-      setIsSavingConfig(true);
-      // Auth + CORS are omitted so resolveAPIConfig preserves them from the
-      // existing DB config; only the tracing toggle and instrumentation version
-      // are changed here. The version is sent only when the user actually
-      // changed it to a compatible value while tracing is on — otherwise it is
-      // omitted so the backend preserves the existing pin (and an unpinned agent
-      // keeps floating with the platform default rather than being frozen).
-      updateDeploySettingsRef.current(
-        {
-          params: { orgName: o, projName: p, agentName: a },
-          body: {
-            environmentName: env.name,
-            ...(isPy && { enableAutoInstrumentation: tracing }),
-            ...(isPy && tracing && dirty && inSet && version
-              ? { instrumentationVersion: version }
-              : {}),
-          },
-        },
-        { onSuccess: () => setIsSavingConfig(false), onError: () => setIsSavingConfig(false) },
-      );
-    }, 800);
-  }, []);
-
-  const corsEnabled = agent?.configurations?.corsConfig?.enabled ?? false;
-  const corsOrigins = agent?.configurations?.corsConfig?.allowOrigin ?? [];
+  const corsEnabled = envConfig?.corsConfig?.enabled ?? false;
+  const corsOrigins = envConfig?.corsConfig?.allowOrigin ?? [];
   const corsDetail = corsEnabled
     ? corsOrigins.includes("*") ? "All origins" : `${corsOrigins.length} origin${corsOrigins.length !== 1 ? "s" : ""}`
     : "Disabled";
+
+  const resilienceTimeoutSeconds = envConfig?.resilienceTimeoutSeconds ?? 30;
+  const isWholeMinutes = resilienceTimeoutSeconds >= 60 && resilienceTimeoutSeconds % 60 === 0;
+  const resilienceTimeoutLabel = isWholeMinutes
+    ? `${resilienceTimeoutSeconds / 60}m`
+    : `${resilienceTimeoutSeconds}s`;
 
   const kindName = agent?.kindName;
 
@@ -790,131 +630,100 @@ export function DeployCard(props: DeployCardProps) {
 
               <Card variant="outlined" sx={{ padding: 1.4 }}>
                 <Stack gap={1.5}>
+                  {/* One Configure opens the unified drawer (CORS, Authentication, Tracing,
+                      Environment Variables, File Mounts). Rows below are read-only overviews. */}
                   <Stack direction="row" gap={1} alignItems="center" justifyContent="space-between">
-                    <Typography variant="h6">Security & Observability</Typography>
-                    {isSavingConfig && <CircularProgress size={14} />}
+                    <Typography variant="h6">Configurations and Secrets</Typography>
+                    <Button
+                      variant="text"
+                      size="small"
+                      color="inherit"
+                      sx={{ padding: 0.5 }}
+                      startIcon={<SlidersVertical size={16} />}
+                      onClick={handleOpenConfigureDrawer}
+                      disabled={currentDeployment?.status === DeploymentStatus.DEPLOYING}
+                    >
+                      Configure
+                    </Button>
                   </Stack>
 
-                  {/* CORS — status + configure button */}
+                  {/* CORS overview */}
                   {isApiAgent && (
-                    <Box display="flex" alignItems="center" justifyContent="space-between">
-                      <Box display="flex" alignItems="center" gap={1}>
-                        <Globe size={14} style={{ opacity: 0.6 }} />
-                        <Typography variant="body2">CORS</Typography>
-                        <Tooltip title={corsDetail}>
-                          <Chip
-                            size="small"
-                            label={corsEnabled ? "On" : "Off"}
-                            color={corsEnabled ? "success" : "default"}
-                            variant="outlined"
-                            sx={{ height: 18, fontSize: "0.65rem", cursor: "default" }}
-                          />
-                        </Tooltip>
-                      </Box>
-                      <Button
-                        variant="text"
-                        size="small"
-                        color="inherit"
-                        sx={{ minWidth: 0, px: 0.5 }}
-                        startIcon={<SlidersVertical size={16} />}
-                        onClick={handleOpenCorsDrawer}
-                      >
-                        Configure
-                      </Button>
+                    <Box display="flex" alignItems="center" gap={1}>
+                      <Globe size={14} style={{ opacity: 0.6 }} />
+                      <Typography variant="body2">CORS</Typography>
+                      <Tooltip title={corsDetail}>
+                        <Chip
+                          size="small"
+                          label={corsEnabled ? "On" : "Off"}
+                          color={corsEnabled ? "success" : "default"}
+                          variant="outlined"
+                          sx={{ height: 18, fontSize: "0.65rem", cursor: "default" }}
+                        />
+                      </Tooltip>
                     </Box>
                   )}
 
-                  {/* Endpoint Authentication */}
+                  {/* Endpoint Authentication overview */}
                   {isApiAgent && (
-                    <Box display="flex" alignItems="center" justifyContent="space-between">
-                      <Box display="flex" alignItems="center" gap={1}>
-                        <Key size={14} style={{ opacity: 0.6 }} />
-                        <Typography variant="body2">Authentication</Typography>
-                        <Tooltip
-                          title={
-                            authMode === "oauth"
-                              ? "Callers send an Authorization: Bearer <token> header validated by the gateway"
-                              : authMode === "apikey"
-                                ? "Requests must include the header: x-api-key: <your-key>"
-                                : "Endpoint is publicly accessible without authentication"
-                          }
-                        >
-                          <Chip
-                            size="small"
-                            label={authLabel}
-                            color={authMode === "none" ? "default" : "success"}
-                            variant="outlined"
-                            sx={{ height: 18, fontSize: "0.65rem", cursor: "default" }}
-                          />
-                        </Tooltip>
-                      </Box>
-                      <Button
-                        variant="text"
-                        size="small"
-                        color="inherit"
-                        sx={{ minWidth: 0, px: 0.5 }}
-                        startIcon={<SlidersVertical size={16} />}
-                        onClick={handleOpenCorsDrawer}
+                    <Box display="flex" alignItems="center" gap={1}>
+                      <Key size={14} style={{ opacity: 0.6 }} />
+                      <Typography variant="body2">Authentication</Typography>
+                      <Tooltip
+                        title={
+                          authMode === "oauth"
+                            ? "Callers send an Authorization: Bearer <token> header validated by the gateway"
+                            : authMode === "apikey"
+                              ? "Requests must include the header: x-api-key: <your-key>"
+                              : "Endpoint is publicly accessible without authentication"
+                        }
                       >
-                        Configure
-                      </Button>
+                        <Chip
+                          size="small"
+                          label={authLabel}
+                          color={authMode === "none" ? "default" : "success"}
+                          variant="outlined"
+                          sx={{ height: 18, fontSize: "0.65rem", cursor: "default" }}
+                        />
+                      </Tooltip>
+                    </Box>
+                  )}
+                  {isApiAgent && (
+                    <Box display="flex" alignItems="center" gap={1}>
+                      <Clock size={14} style={{ opacity: 0.6 }} />
+                      <Typography variant="body2">Gateway Timeout</Typography>
+                      <Tooltip title="Max duration the gateway keeps a response open between this agent and the client before cutting it off">
+                        <Chip
+                          size="small"
+                          label={resilienceTimeoutLabel}
+                          color="default"
+                          variant="outlined"
+                          sx={{ height: 18, fontSize: "0.65rem", cursor: "default" }}
+                        />
+                      </Tooltip>
                     </Box>
                   )}
 
-                  {/* Auto-Instrumentation */}
+                  {/* Tracing - Instrumentation overview */}
                   {isPythonBuildpack && (
-                    <Box display="flex" alignItems="center" justifyContent="space-between">
-                      <Box display="flex" alignItems="center" gap={1}>
-                        <Workflow size={14} style={{ opacity: 0.6 }} />
-                        <Typography variant="body2">Auto-Instrumentation</Typography>
-                      </Box>
-                      <Switch
+                    <Box display="flex" alignItems="center" gap={1}>
+                      <Workflow size={14} style={{ opacity: 0.6 }} />
+                      <Typography variant="body2">Tracing - Instrumentation</Typography>
+                      <Chip
                         size="small"
-                        checked={tracingEnabled}
-                        disabled={isSavingConfig}
-                        onChange={(_, checked) => {
-                          setTracingEnabled(checked);
-                          debouncedRedeploy();
-                        }}
+                        label={envConfig?.enableAutoInstrumentation ? "On" : "Off"}
+                        color={envConfig?.enableAutoInstrumentation ? "success" : "default"}
+                        variant="outlined"
+                        sx={{ height: 18, fontSize: "0.65rem", cursor: "default" }}
                       />
                     </Box>
                   )}
 
-                  {/* AMP Instrumentation Version — pins the init-container image
-                      + bundled OpenLLMetry SDK for this environment. */}
-                  {isPythonBuildpack && tracingEnabled && (
-                    <Box display="flex" alignItems="center" justifyContent="space-between">
-                      <Box display="flex" alignItems="center" gap={1}>
-                        <Info size={14} style={{ opacity: 0.6 }} />
-                        <Typography variant="body2">Instrumentation Version</Typography>
-                      </Box>
-                      {compatibleInstrumentation.length === 0 && buildOptions ? (
-                        <Typography variant="caption" color="text.secondary">
-                          None available for Python {agentPythonVersion ?? "runtime"}
-                        </Typography>
-                      ) : (
-                        <Select
-                          size="small"
-                          value={versionInCompatibleSet ? instrumentationVersion : ""}
-                          disabled={isSavingConfig || !buildOptions}
-                          onChange={(e) => {
-                            setInstrumentationVersion(e.target.value as string);
-                            setVersionDirty(true);
-                            debouncedRedeploy();
-                          }}
-                          sx={{ minWidth: 200 }}
-                        >
-                          {compatibleInstrumentation.map((v) => (
-                            <MenuItem key={v.version} value={v.version}>
-                              {v.traceloopSdk
-                                ? `${v.version} (OpenLLMetry v${v.traceloopSdk})`
-                                : v.version}
-                            </MenuItem>
-                          ))}
-                        </Select>
-                      )}
-                    </Box>
-                  )}
+                  {/* Environment variables & file mounts (secrets) overview */}
+                  <Box display="flex" alignItems="center" gap={1}>
+                    <SlidersVertical size={14} style={{ opacity: 0.6 }} />
+                    <Typography variant="body2">Environment & Secrets</Typography>
+                  </Box>
                 </Stack>
               </Card>
             </Stack>
@@ -939,17 +748,10 @@ export function DeployCard(props: DeployCardProps) {
               projName={projectId ?? ""}
               agentName={agentId}
               environment={currentEnvironment.name}
-              title={`Update ${currentEnvironment.displayName ?? currentEnvironment.name} Environment Configuration`}
-            />
-          )}
-          {agentId && (
-            <EditSecurityConfigDrawer
-              open={corsDrawerOpen}
-              onClose={handleCloseCorsDrawer}
-              orgName={orgId ?? ""}
-              projName={projectId ?? ""}
-              agentName={agentId}
-              environment={currentEnvironment.name}
+              title="Configurations and Secrets"
+              isApiAgent={isApiAgent}
+              isPythonBuildpack={isPythonBuildpack}
+              agentPythonVersion={agentPythonVersion}
             />
           )}
           {agentId && orgId && projectId && (
@@ -971,17 +773,7 @@ export function DeployCard(props: DeployCardProps) {
                     <MoreHorizontal size={18} />
                   </IconButton>
                 </Tooltip>
-                <Stack direction="row" justifyContent="right" spacing={1} alignItems="center"> 
-                <Button
-                  variant="text"
-                  size="small"
-                  startIcon={<SlidersVertical size={16} />}
-                  onClick={handleOpenConfigureDrawer}
-                  disabled={currentDeployment?.status === DeploymentStatus.DEPLOYING}
-                >
-                  Configure
-                </Button>
-                <Divider orientation="vertical" flexItem />
+                <Stack direction="row" justifyContent="right" spacing={1} alignItems="center">
                 {currentDeployment?.status !== DeploymentStatus.SUSPENDED && (
                   <Button
                     startIcon={<PauseCircle size={16} />}
@@ -1020,7 +812,7 @@ export function DeployCard(props: DeployCardProps) {
                     <Button
                       variant="contained"
                       size="small"
-                      startIcon={<ArrowUpFromLine size={16} />}
+                      startIcon={<ArrowRightFromLine size={16} />}
                       onClick={handleOpenPromoteDrawer}
                       disabled={!isEnvironmentActive}
                     >

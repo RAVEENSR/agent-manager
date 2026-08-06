@@ -17,16 +17,29 @@
  */
 
 import { httpGET, SERVICE_BASE } from "../utils";
-import type { ConfigResponse } from "@agent-management-platform/types";
+import { globalConfig, type ConfigResponse } from "@agent-management-platform/types";
 
 // The whole app renders a full-page loader until this resolves, so bound the
 // request: a hung config endpoint must surface as an error (via AbortError)
 // rather than trapping the user on the loader forever.
 const CONFIG_FETCH_TIMEOUT_MS = 5000;
 
-/** Unauthenticated discovery endpoint served by agent-manager. */
+/**
+ * Unauthenticated discovery endpoint served by agent-manager.
+ *
+ * Targets configDiscoveryBaseUrl when set (the public …-agent-manager-config-api
+ * host on gateway deployments), else falls back to apiBaseUrl (direct
+ * deployments with no gateway). Trailing slashes are stripped so httpGET's
+ * `${baseUrl}${context}` join yields exactly one separator rather than
+ * "…//api/v1/config".
+ */
 export async function getRuntimeConfig(): Promise<ConfigResponse> {
-  const res = await httpGET(`${SERVICE_BASE}/config`, { timeoutMs: CONFIG_FETCH_TIMEOUT_MS });
-  if (!res.ok) throw await res.json();
+  const baseUrl = (
+    globalConfig.configDiscoveryBaseUrl?.trim() || globalConfig.apiBaseUrl
+  ).replace(/\/+$/, "");
+  const res = await httpGET(`${SERVICE_BASE}/config`, {
+    baseUrl,
+    timeoutMs: CONFIG_FETCH_TIMEOUT_MS,
+  });
   return res.json();
 }

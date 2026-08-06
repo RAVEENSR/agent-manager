@@ -293,7 +293,7 @@ export function MCPProxyManageToolsTab({
           No Capabilities Available
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          This MCP proxy has no tools, resources, or prompts. Access control
+          This MCP Server has no tools, resources, or prompts. Access control
           rules require at least one capability.
         </Typography>
       </Stack>

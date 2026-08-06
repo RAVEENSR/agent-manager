@@ -29,6 +29,7 @@ import { useEffect, useMemo, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { debounce } from "lodash";
 import { useGenerateResourceName, useListDeploymentPipelines, useListEnvironments } from "@agent-management-platform/api-client";
+import { MarkdownEditor } from "@agent-management-platform/shared-component";
 import { AddProjectFormValues } from "../form/schema";
 import type { DeploymentPipelineResponse } from "@agent-management-platform/types";
 
@@ -223,17 +224,13 @@ export const ProjectForm = ({
             label="Description (optional)"
             name="description"
           >
-            <TextField
+            <MarkdownEditor
               id="description"
-              value={formData.description}
-              onChange={(e) => handleFieldChange("description", e.target.value)}
-              placeholder="Short description of this project"
-              multiline
-              minRows={2}
-              maxRows={6}
+              value={formData.description || ""}
+              onChange={(value) => handleFieldChange("description", value)}
+              placeholder="Short description of this project. Markdown is supported."
               error={!!errors.description}
               helperText={errors.description}
-              fullWidth
             />
           </Form.ElementWrapper>
 

@@ -11,9 +11,6 @@ data:
   # (console bootstrap, CLI) via /api/v1/config. No internal fallback:
   # unset means clients surface "observer not configured".
   AM_OBSERVER_PUBLIC_URL: {{ .Values.agentManagerService.config.amObserverPublicURL | default "" | quote }}
-  GATEWAY_RUNTIME_NAME_PREFIX: {{ .Values.agentManagerService.config.gatewayRuntime.namePrefix | default "api-platform-" | quote }}
-  GATEWAY_RUNTIME_SERVICE_SUFFIX: {{ .Values.agentManagerService.config.gatewayRuntime.serviceSuffix | default "-gateway-gateway-runtime" | quote }}
-  GATEWAY_RUNTIME_PORT: {{ .Values.agentManagerService.config.gatewayRuntime.port | default 22893 | quote }}
   SERVER_HOST: {{ .Values.agentManagerService.config.serverHost | quote }}
   SERVER_PORT: {{ .Values.agentManagerService.service.targetPort | quote }}
   LOG_LEVEL: {{ .Values.agentManagerService.config.logLevel | quote }}
@@ -33,10 +30,10 @@ data:
   OTEL_DEFAULT_INSTRUMENTATION_VERSION: {{ .Values.agentManagerService.config.otel.defaultInstrumentationVersion | quote }}
   INSTRUMENTATION_EXTENSION_PATH: "/etc/amp/instrumentation-extension.yaml"
   KEY_MANAGER_ISSUER: {{ .Values.agentManagerService.config.keyManager.issuer | quote }}                                         
-  KEY_MANAGER_AUDIENCE: {{ .Values.agentManagerService.config.keyManager.audience | quote }}                                   
+  KEY_MANAGER_AUDIENCE: {{ include "agent-management-platform.agentManagerService.audience" . | quote }}
   KEY_MANAGER_JWKS_URL: {{ .Values.agentManagerService.config.keyManager.jwksUrl | quote }}                                         
   SERVER_PUBLIC_URL: {{ .Values.agentManagerService.config.serverPublicURL | default "" | quote }}
-  OAUTH_AUTHORIZATION_SERVERS: {{ .Values.agentManagerService.config.oauthAuthorizationServers | default "" | quote }}
+  OAUTH_AUTHORIZATION_SERVERS: {{ .Values.agentManagerService.config.oauthAuthorizationServers | default .Values.agentManagerService.config.keyManager.issuer | quote }}
   # Domain suffix env-Thunder's developer-facing hostnames are built from:
   # "<org>-<env>.thunder.<THUNDER_HOST_BASE_DOMAIN>". Must match the value the
   # deployment-wide provisioning uses, or the identity-provider endpoints the API
@@ -51,7 +48,7 @@ data:
   JWT_SIGNING_PRIVATE_KEY_PATH: {{ .Values.agentManagerService.config.jwtSigning.privateKeyPath | default "/app/keys/private.pem" | quote }}
   JWT_SIGNING_PUBLIC_KEYS_CONFIG: {{ .Values.agentManagerService.config.jwtSigning.publicKeysConfig | default "/app/keys/public-keys-config.json" | quote }}
   JWT_SIGNING_ACTIVE_KEY_ID: {{ .Values.agentManagerService.config.jwtSigning.activeKeyId | default "key-1" | quote }}
-  JWT_SIGNING_DEFAULT_EXPIRY: {{ .Values.agentManagerService.config.jwtSigning.defaultExpiry | default "8760h" | quote }}
+  JWT_SIGNING_DEFAULT_EXPIRY: {{ .Values.agentManagerService.config.jwtSigning.defaultExpiry | default "2160h" | quote }}
   JWT_SIGNING_ISSUER: {{ .Values.agentManagerService.config.jwtSigning.issuer | default "agent-manager-service" | quote }}
   JWT_SIGNING_DEFAULT_ENVIRONMENT: {{ .Values.agentManagerService.config.jwtSigning.defaultEnvironment | default "default" | quote }}
   INTERNAL_SERVER_TLS_ENABLED: {{ .Values.agentManagerService.internalServer.tlsEnabled | quote }}

@@ -21,28 +21,23 @@ import {
     Box,
     Card,
     CardContent,
-    Divider,
     Grid,
     Skeleton,
-    Stack,
     Typography,
     useTheme,
 } from "@wso2/oxygen-ui";
 import { AreaChart } from "@wso2/oxygen-ui-charts-react";
-import { PauseCircle } from "@wso2/oxygen-ui-icons-react";
 import {
-    useGetAgentMetrics,
     useListAgentDeployments,
     useTraceList,
 } from "@agent-management-platform/api-client";
-import { NoDataFound } from "@agent-management-platform/views";
 import {
     absoluteRouteMap,
     TraceListTimeRange,
 } from "@agent-management-platform/types";
 import { format } from "date-fns";
 import { generatePath } from "react-router-dom";
-import { DonutIcon, DonutColor } from "./DonutIcon";
+import { DonutIcon, DonutColor, getDonutColorForPercent } from "./DonutIcon";
 import { SectionHeader } from "./SectionHeader";
 
 interface EnvObservabilitySectionProps {
@@ -50,20 +45,8 @@ interface EnvObservabilitySectionProps {
     projectId: string;
     agentId: string;
     envId: string;
-    hideMetrics?: boolean;
     external?: boolean;
 }
-
-const formatCpu = (cores: number): string => {
-    const milli = Math.round(cores * 1000);
-    return milli >= 1000 ? `${(milli / 1000).toFixed(2)} cores` : `${milli}m`;
-};
-
-const formatMemory = (bytes: number): string => {
-    if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
-    if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(0)} MB`;
-    return `${Math.round(bytes / 1024)} KB`;
-};
 
 const formatTokens = (n: number): string =>
     n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
@@ -151,71 +134,8 @@ const DonutMetricCard: React.FC<DonutMetricCardProps> =
         </Card>
     );
 
-interface SimpleMetricCardProps {
-    label: string;
-    value: string;
-    limit: string | null;
-    percent: number | null;
-    isLoading?: boolean;
-}
-
-const SimpleMetricCard: React.FC<SimpleMetricCardProps> =
-    ({ label, value, limit, percent, isLoading }) => {
-        const theme = useTheme();
-        const pct = Math.min(percent ?? 0, 100);
-        const barColor = pct >= 85
-            ? theme.vars?.palette?.error?.main
-            : pct >= 60
-                ? theme.vars?.palette?.warning?.main
-                : theme.vars?.palette?.success?.main;
-
-        return (
-            <Card variant="outlined" sx={{ width: "100%" }}>
-                <CardContent sx={{ py: 0.75, px: 1.5, "&:last-child": { pb: 0.75 } }}>
-                    <Box display="flex" justifyContent="space-between" alignItems="baseline" mb={0.5}>
-                        <Typography variant="caption" color="text.secondary">{label}</Typography>
-                        {isLoading
-                            ? <Skeleton variant="text" width={60} height={18} />
-                            : (
-                                <Box display="flex" alignItems="baseline" gap={0.5}>
-                                    <Typography variant="caption" fontWeight={600} color="text.primary">
-                                        {value}
-                                    </Typography>
-                                    {limit && (
-                                        <Typography variant="caption" color="text.disabled">
-                                            / {limit}
-                                        </Typography>
-                                    )}
-                                    {percent !== null && (
-                                        <Typography variant="caption" fontWeight={600} sx={{ color: barColor }}>
-                                            {Math.round(percent)}%
-                                        </Typography>
-                                    )}
-                                </Box>
-                            )
-                        }
-                    </Box>
-                    {isLoading
-                        ? <Skeleton variant="rounded" height={4} />
-                        : (
-                            <Box sx={{ height: 4, borderRadius: 2, bgcolor: "action.selected", overflow: "hidden" }}>
-                                <Box sx={{
-                                    height: "100%",
-                                    width: `${pct}%`,
-                                    bgcolor: barColor,
-                                    borderRadius: 2,
-                                    transition: "width 0.4s ease",
-                                }} />
-                            </Box>
-                        )
-                    }
-                </CardContent>
-            </Card>
-        );
-    };
-
 export const EnvObservabilitySection: React.FC<EnvObservabilitySectionProps> = ({
-    orgId, projectId, agentId, envId, hideMetrics = false, external = false,
+    orgId, projectId, agentId, envId, external = false,
 }) => {
     const theme = useTheme();
     const { data: deployments } = useListAgentDeployments(
@@ -223,7 +143,6 @@ export const EnvObservabilitySection: React.FC<EnvObservabilitySectionProps> = (
         { enabled: !external },
     );
     const deploymentStatus = deployments?.[envId]?.status;
-    const isSuspended = !external && deploymentStatus === "suspended";
 
     // Observability is only meaningful once a deployment exists in a running,
     // failed, or suspended state — there are no metrics or traces to show while
@@ -236,34 +155,10 @@ export const EnvObservabilitySection: React.FC<EnvObservabilitySectionProps> = (
         deploymentStatus === "suspended";
     const hideObservability = !external && !hasObservableDeployment;
 
-    const { data: metrics, isLoading: isMetricsLoading } = useGetAgentMetrics(
-        { agentName: agentId, orgName: orgId, projName: projectId },
-        { environmentName: envId },
-        {
-            enabled: !hideMetrics && !isSuspended && !hideObservability,
-            enableAutoRefresh: true,
-            timeRange: TraceListTimeRange.ONE_HOUR,
-        },
-    );
-
     const { traceList, isLoading: isTracesLoading } = useTraceList(
         orgId, projectId, agentId, envId, TraceListTimeRange.ONE_DAY, 10, "desc",
         undefined, undefined, { enableAutoRefresh: true, enabled: !hideObservability },
     );
-
-    const cpuPts = metrics?.cpuUsage ?? [];
-    const latestCpu = cpuPts.length ? cpuPts[cpuPts.length - 1].value : null;
-    const cpuLimitPts = metrics?.cpuLimits ?? [];
-    const latestCpuLimit = cpuLimitPts.length ? cpuLimitPts[cpuLimitPts.length - 1].value : null;
-    const cpuPercent = latestCpu !== null && latestCpuLimit ?
-        (latestCpu / latestCpuLimit) * 100 : null;
-
-    const memPts = metrics?.memory ?? [];
-    const latestMemory = memPts.length ? memPts[memPts.length - 1].value : null;
-    const memLimitPts = metrics?.memoryLimits ?? [];
-    const latestMemoryLimit = memLimitPts.length ? memLimitPts[memLimitPts.length - 1].value : null;
-    const memoryPercent = latestMemory !== null && latestMemoryLimit ?
-        (latestMemory / latestMemoryLimit) * 100 : null;
 
     const traces = useMemo(() => traceList?.traces ?? [], [traceList]);
 
@@ -317,20 +212,19 @@ export const EnvObservabilitySection: React.FC<EnvObservabilitySectionProps> = (
     const successRate = traces.length
         ? (traces.filter((t) => (t.status?.errorCount ?? 0) === 0).length / traces.length) * 100
         : null;
-    const successRateColor: DonutColor = successRate === null ? "primary"
-        : successRate >= 70 ? "success"
-            : successRate >= 40 ? "warning"
-                : "error";
+    const successRateColor: DonutColor = getDonutColorForPercent(successRate);
+
+    // The list is capped at 10 (see the useTraceList call below) — once the
+    // environment has more than that in the last 24h, the tooltip should say
+    // so instead of implying these stats cover everything in the window.
+    const isTraceListTruncated = (traceList?.totalCount ?? 0) > traces.length;
+    const tracesInfoTooltip = isTraceListTruncated
+        ? "Showing the last 10 traces from the last 24 hours."
+        : "Showing traces from the last 24 hours.";
 
     const tracesHref = generatePath(
         absoluteRouteMap.children.org.children.projects.children.agents
             .children.environment.children.observability.children.traces.path,
-        { orgId, projectId, agentId, envId },
-    );
-
-    const metricsHref = generatePath(
-        absoluteRouteMap.children.org.children.projects.children.agents
-            .children.environment.children.observability.children.metrics.path,
         { orgId, projectId, agentId, envId },
     );
 
@@ -341,38 +235,17 @@ export const EnvObservabilitySection: React.FC<EnvObservabilitySectionProps> = (
 
     return (
         <>
-            <Divider sx={{ mt: 2, mb: 1 }} />
-            <SectionHeader title="Recent Traces" viewAllHref={tracesHref} />
+            <SectionHeader title="Recent Traces" titleInfo={tracesInfoTooltip} viewAllHref={tracesHref} />
             <Grid container spacing={1.5}>
                 <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
                     <MetricCard
-                        label="Avg Latency"
-                        value={avgLatencyNanos !== null ? formatDuration(avgLatencyNanos) : "—"}
-                        points={latencyPoints}
-                        color={theme.vars?.palette?.info?.main}
-                        isLoading={isTracesLoading}
-                    />
-                </Grid>
-                <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
-                    <MetricCard
-                        label="Avg Tokens"
+                        label="Average Tokens"
                         value={avgTokens !== null ? formatTokens(avgTokens) : "—"}
                         points={tokenPoints}
                         color={theme.vars?.palette?.warning?.main}
                         isLoading={isTracesLoading}
                     />
                 </Grid>
-                {avgScore !== null && (
-                    <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
-                        <MetricCard
-                            label="Avg Score"
-                            value={`${(avgScore * 100).toFixed(1)}%`}
-                            points={scorePoints}
-                            color={theme.vars?.palette?.success?.main}
-                            isLoading={isTracesLoading}
-                        />
-                    </Grid>
-                )}
                 <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
                     <DonutMetricCard
                         label="Success Rate"
@@ -382,37 +255,27 @@ export const EnvObservabilitySection: React.FC<EnvObservabilitySectionProps> = (
                         isLoading={isTracesLoading}
                     />
                 </Grid>
+                <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
+                    <MetricCard
+                        label="Average Latency"
+                        value={avgLatencyNanos !== null ? formatDuration(avgLatencyNanos) : "—"}
+                        points={latencyPoints}
+                        color={theme.vars?.palette?.info?.main}
+                        isLoading={isTracesLoading}
+                    />
+                </Grid>
+                {avgScore !== null && (
+                    <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
+                        <MetricCard
+                            label="Average Score"
+                            value={`${(avgScore * 100).toFixed(1)}%`}
+                            points={scorePoints}
+                            color={theme.vars?.palette?.success?.main}
+                            isLoading={isTracesLoading}
+                        />
+                    </Grid>
+                )}
             </Grid>
-            {!hideMetrics && (isSuspended ? (
-                <NoDataFound
-                    icon={<PauseCircle size={32}/>}
-                    message="Environment Suspended"
-                    subtitle="Metrics are unavailable while the environment is suspended."
-                    disableBackground
-                />
-            ) : (
-                <>
-                    <Divider sx={{ mt: 1.5, mb: 1 }} />
-                    <SectionHeader title="System Metrics" viewAllHref={metricsHref} mb={1} />
-                    <Stack direction="row" spacing={0.75} sx={{ maxWidth: 400 }}>
-                        <SimpleMetricCard
-                            label="CPU"
-                            value={latestCpu !== null ? formatCpu(latestCpu) : "—"}
-                            limit={latestCpuLimit !== null ? formatCpu(latestCpuLimit) : null}
-                            percent={cpuPercent}
-                            isLoading={isMetricsLoading}
-                        />
-                        <SimpleMetricCard
-                            label="Memory"
-                            value={latestMemory !== null ? formatMemory(latestMemory) : "—"}
-                            limit={latestMemoryLimit !== null ?
-                                formatMemory(latestMemoryLimit) : null}
-                            percent={memoryPercent}
-                            isLoading={isMetricsLoading}
-                        />
-                    </Stack>
-                </>
-            ))}
         </>
     );
 };

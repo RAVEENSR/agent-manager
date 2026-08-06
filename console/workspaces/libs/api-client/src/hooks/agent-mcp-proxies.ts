@@ -44,7 +44,7 @@ export function useAddAgentMCPProxy() {
     unknown,
     { params: AddAgentMCPProxyPathParams; body: AddAgentMCPProxyRequest }
   >({
-    action: { verb: "create", target: "MCP proxy" },
+    action: { verb: "create", target: "MCP server" },
     mutationFn: ({ params, body }) => addAgentMCPProxy(params, body, getToken),
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({

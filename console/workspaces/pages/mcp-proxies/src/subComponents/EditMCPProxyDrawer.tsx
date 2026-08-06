@@ -170,7 +170,7 @@ export function EditMCPProxyDrawer({
 
   const errorMessage = useMemo(() => {
     if (!updateError) return null;
-    return (updateError as Error)?.message ?? "Failed to update MCP proxy";
+    return (updateError as Error)?.message ?? "Failed to update MCP Server";
   }, [updateError]);
 
   const isValid =
@@ -183,7 +183,7 @@ export function EditMCPProxyDrawer({
     <DrawerWrapper open={open} onClose={onClose}>
       <DrawerHeader
         icon={<Edit size={24} />}
-        title="Edit MCP Proxy"
+        title="Edit MCP Server"
         onClose={onClose}
       />
       <DrawerContent>
@@ -196,7 +196,7 @@ export function EditMCPProxyDrawer({
             )}
 
             <Form.Section>
-              <Form.Header>MCP Proxy Details</Form.Header>
+              <Form.Header>MCP Server Details</Form.Header>
               <Form.Stack spacing={2}>
                 <FormControl fullWidth error={Boolean(errors.name)}>
                   <FormLabel required>Name</FormLabel>
@@ -262,10 +262,9 @@ export function EditMCPProxyDrawer({
               <Form.Header>Endpoints</Form.Header>
               <Form.Stack spacing={2}>
                 <Typography variant="body2" color="text.secondary">
-                  Endpoints map backend MCP servers to environments. Editing an
-                  endpoint updates the upstream URL, authentication, and
-                  capabilities for the environments it serves. Environments left
-                  without an endpoint become unconfigured.
+                  {environments.length > 1
+                    ? "Endpoints map backend MCP servers to environments. Editing an endpoint updates the upstream URL, authentication, and capabilities for the environments it serves. Environments left without an endpoint become unconfigured."
+                    : "Editing an endpoint updates the upstream URL, authentication, and capabilities for this MCP Server."}
                 </Typography>
 
                 <EndpointsEditorSection

@@ -18,14 +18,13 @@ package middleware
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
 // signToken creates a throwaway HS256-signed token carrying the given
-// audience claim. RejectPublisherAudience only re-parses tokens without
+// audience claim. ParseUnverifiedClaims only re-parses tokens without
 // verifying the signature, so an arbitrary signing key is fine here.
 func signToken(t *testing.T, aud string) string {
 	t.Helper()
@@ -44,93 +43,32 @@ func passThroughHandler(called *bool) http.Handler {
 	})
 }
 
-func TestRejectPublisherAudience_PublisherTokenRejected(t *testing.T) {
-	called := false
-	guard := RejectPublisherAudience()(passThroughHandler(&called))
-
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/logs", nil)
-	r.Header.Set("Authorization", "Bearer "+signToken(t, "amp-publisher-x"))
-	rec := httptest.NewRecorder()
-
-	guard.ServeHTTP(rec, r)
-
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("expected 403, got %d (body: %s)", rec.Code, rec.Body.String())
-	}
-	if called {
-		t.Error("expected next handler not to be called for publisher audience")
-	}
-}
-
-func TestRejectPublisherAudience_NormalAudiencePassesThrough(t *testing.T) {
-	called := false
-	guard := RejectPublisherAudience()(passThroughHandler(&called))
-
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/logs", nil)
-	r.Header.Set("Authorization", "Bearer "+signToken(t, "amp"))
-	rec := httptest.NewRecorder()
-
-	guard.ServeHTTP(rec, r)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d (body: %s)", rec.Code, rec.Body.String())
-	}
-	if !called {
-		t.Error("expected next handler to be called for non-publisher audience")
-	}
-}
-
-func TestRejectPublisherAudience_MissingTokenPassesThrough(t *testing.T) {
-	called := false
-	guard := RejectPublisherAudience()(passThroughHandler(&called))
-
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/logs", nil)
-	rec := httptest.NewRecorder()
-
-	guard.ServeHTTP(rec, r)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d (body: %s)", rec.Code, rec.Body.String())
-	}
-	if !called {
-		t.Error("expected next handler to be called when Authorization header is missing (JWTAuth handles this)")
-	}
-}
-
-func TestRejectPublisherAudience_GarbledTokenPassesThrough(t *testing.T) {
-	called := false
-	guard := RejectPublisherAudience()(passThroughHandler(&called))
-
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/logs", nil)
-	r.Header.Set("Authorization", "Bearer not-a-valid-jwt")
-	rec := httptest.NewRecorder()
-
-	guard.ServeHTTP(rec, r)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d (body: %s)", rec.Code, rec.Body.String())
-	}
-	if !called {
-		t.Error("expected next handler to be called when the token can't be parsed (JWTAuth handles this)")
-	}
-}
-
-func TestIsPublisherAudience(t *testing.T) {
+func TestParseUnverifiedClaims(t *testing.T) {
 	tests := []struct {
 		name       string
 		authHeader string
-		want       bool
+		wantAud    string // empty means nil claims expected
 	}{
-		{name: "publisher audience", authHeader: "Bearer " + signToken(t, "amp-publisher-acme"), want: true},
-		{name: "normal audience", authHeader: "Bearer " + signToken(t, "localhost"), want: false},
-		{name: "empty header", authHeader: "", want: false},
-		{name: "non-bearer scheme", authHeader: "Basic dXNlcjpwYXNz", want: false},
-		{name: "garbled token", authHeader: "Bearer not-a-valid-jwt", want: false},
+		{name: "publisher audience", authHeader: "Bearer " + signToken(t, "amp-publisher-acme"), wantAud: "amp-publisher-acme"},
+		{name: "normal audience", authHeader: "Bearer " + signToken(t, "localhost"), wantAud: "localhost"},
+		{name: "empty header", authHeader: ""},
+		{name: "non-bearer scheme", authHeader: "Basic dXNlcjpwYXNz"},
+		{name: "garbled token", authHeader: "Bearer not-a-valid-jwt"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := IsPublisherAudience(tc.authHeader); got != tc.want {
-				t.Errorf("IsPublisherAudience(%q) = %v, want %v", tc.authHeader, got, tc.want)
+			claims := ParseUnverifiedClaims(tc.authHeader)
+			if tc.wantAud == "" {
+				if claims != nil {
+					t.Errorf("ParseUnverifiedClaims(%q) = %+v, want nil", tc.authHeader, claims)
+				}
+				return
+			}
+			if claims == nil {
+				t.Fatalf("ParseUnverifiedClaims(%q) = nil, want audience %q", tc.authHeader, tc.wantAud)
+			}
+			if len(claims.Audience) != 1 || claims.Audience[0] != tc.wantAud {
+				t.Errorf("ParseUnverifiedClaims(%q) audience = %v, want [%s]", tc.authHeader, claims.Audience, tc.wantAud)
 			}
 		})
 	}

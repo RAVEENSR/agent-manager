@@ -49,29 +49,32 @@ func NewResolverForbiddenError(msg string) *ResolverError {
 }
 
 // RequireOrgMatch returns a middleware that:
-//  1. Validates token carries ouId (required for both cloud and on-prem).
-//  2. Injects ResolvedOrg into the request context. The token is the single
-//     source of truth for org identity: the {orgName} URL segment exists for
-//     routing only and is never read — handlers take the OU ID from the
-//     context (OUIDFromRequest) and the data layer scopes rows by ou_id.
-func RequireOrgMatch(resolver OrgResolver) func(http.HandlerFunc) http.HandlerFunc {
-	return requireOrgMatch(resolver, false)
+//  1. Validates the token carries ouId and ouHandle (required for both cloud and on-prem).
+//  2. Injects ResolvedOrg (from the token) into the request context for handlers.
+//
+// Token-trust model: the token is the single source of truth for org identity.
+// The {orgName} URL path segment is routing only and is NOT read here or used
+// for tenant selection — handlers derive the org from the context
+// (OUIDFromRequest / OrgHandleFromRequest), never from the path. A token used on
+// another org's path therefore operates on its OWN org, not the path's.
+//
+// The resolver argument is kept for route-registrar signature compatibility but
+// is no longer consulted (path-based org resolution has been removed).
+func RequireOrgMatch(_ OrgResolver) func(http.HandlerFunc) http.HandlerFunc {
+	return resolveOrgFromToken()
 }
 
-// RequireOrgMatchAllowRootOU behaves like RequireOrgMatch but additionally allows
-// a client-credentials token issued to the configured root/admin OU
-// (config.RootOUHandle) to access any org's route, for any path org — this is a
-// system client, not scoped to a specific tenant, so its OUID is not resolved.
-// ResolvedOrg.OuHandle is set to the PATH org (not the token's admin OU) so
-// downstream handlers operate on the correct tenant; ResolvedOrg.OUID is left
-// empty since gateway registration does not consume it. Use only for
-// system-client endpoints (currently: gateway registration during org
-// bootstrap) — do not apply broadly to user-facing routes.
-func RequireOrgMatchAllowRootOU(resolver OrgResolver) func(http.HandlerFunc) http.HandlerFunc {
-	return requireOrgMatch(resolver, true)
+// RequireOrgMatchAllowRootOU is retained for the route registrar's system-client
+// variant. Path-based (root-OU cross-org) resolution has been removed, so it now
+// behaves identically to RequireOrgMatch: the org is always taken from the token.
+func RequireOrgMatchAllowRootOU(_ OrgResolver) func(http.HandlerFunc) http.HandlerFunc {
+	return resolveOrgFromToken()
 }
 
-func requireOrgMatch(resolver OrgResolver, allowRootOU bool) func(http.HandlerFunc) http.HandlerFunc {
+// resolveOrgFromToken validates the token's org identity and injects ResolvedOrg
+// (taken from the token) into the request context. It never reads the {orgName}
+// path segment.
+func resolveOrgFromToken() func(http.HandlerFunc) http.HandlerFunc {
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			claims := jwtassertion.GetTokenClaims(r.Context())
@@ -86,6 +89,7 @@ func requireOrgMatch(resolver OrgResolver, allowRootOU bool) func(http.HandlerFu
 				return
 			}
 
+			// Trust the token as the sole source of org identity.
 			ctx := WithResolvedOrg(r.Context(), ResolvedOrg{
 				OuHandle: claims.OuHandle,
 				OUID:     claims.OuId,

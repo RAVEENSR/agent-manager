@@ -1,0 +1,323 @@
+{/* Shared partial: Agent Manager installation (Phase 2).
+     Imported by on-k3d.mdx and on-your-environment.mdx.
+     Props expected from parent:
+       - props.version            — release version string (e.g. "1.0.0-alpha1", "0.12.0")
+       - props.rewriteJwksForK3d  — (boolean, optional) if true, rewrites the JWKS URI
+         so the gateway reaches the AMP API via the Docker host network (k3d only)
+       - props.expandRegistryConfig — (boolean, optional) if true, shows registry config
+         expanded instead of collapsed (for non-k3d environments)
+*/}
+
+The Agent Manager installs as a set of Helm charts on top of OpenChoreo. The components fall into two groups based on install order:
+
+1. **Agent Manager Core :** Gateway Operator, Agent Manager, Agent Sandbox Module and Platform Resources (agent component types, workflow templates etc). Each depends on the one before it.
+2. **Extensions :** Secret Management, Observability, Evaluation extensions and the API Platform Gateway Extension.
+
+:::info Prerequisites
+Thunder (identity provider) must be installed before proceeding — see the Thunder installation step in Phase 1. The variables `THUNDER_PUBLIC_URL`, `THUNDER_INTERNAL_URL`, `CONSOLE_PUBLIC_URL`, `API_PUBLIC_URL`, `OBS_API_PUBLIC_URL`, `CONSOLE_PUBLIC_HOST`, `API_PUBLIC_HOST`, `OBS_API_PUBLIC_HOST`, and `INSTRUMENTATION_URL` must be set from the Configuration Variables section. The `*_PUBLIC_HOST` variables carry the bare hostname (no scheme or port) and become the HTTPRoute hostnames on the plane gateways.
+:::
+
+---
+
+### Core Components
+
+Install these in order — each depends on the one before it.
+
+#### Step 1: Gateway Operator
+
+Manages API Gateway resources and enables secure, authenticated trace ingestion into the Observability Plane.
+
+```bash
+helm install gateway-operator \
+  oci://ghcr.io/wso2/api-platform/helm-charts/gateway-operator \
+  --version 0.6.0 \
+  --namespace ${DATA_PLANE_NS} \
+  --set logging.level=debug \
+  --set gatewayApi.installStandardCRDs=false \
+  --set gateway.helm.chartVersion=1.1.1 \
+  --timeout 600s
+```
+
+Wait for the operator to be ready:
+
+```bash
+kubectl wait --for=condition=Available \
+  deployment -l app.kubernetes.io/name=gateway-operator \
+  -n ${DATA_PLANE_NS} --timeout=300s
+```
+
+Grant RBAC for WSO2 API Platform CRDs to the Data Plane cluster-agent:
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: wso2-api-platform-gateway-module
+rules:
+  - apiGroups: ["gateway.api-platform.wso2.com"]
+    resources: ["restapis", "apigateways"]
+    verbs: ["*"]
+  - apiGroups: ["gateway.kgateway.dev"]
+    resources: ["backends"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: wso2-api-platform-gateway-module
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: wso2-api-platform-gateway-module
+subjects:
+  - kind: ServiceAccount
+    name: cluster-agent-dataplane
+    namespace: ${DATA_PLANE_NS}
+EOF
+```
+
+:::info
+The API Platform Gateway is deployed as an extension after Agent Manager is running — see Step 7 below.
+:::
+
+#### Step 2: Agent Manager (API + Console + PostgreSQL)
+
+The core platform: a Go API server, a React web console, and a PostgreSQL database.
+
+```bash
+helm install amp \
+  oci://${HELM_CHART_REGISTRY}/wso2-agent-manager \
+  --version ${VERSION} \
+  --namespace ${AMP_NS} \
+  --create-namespace \
+  --set console.config.instrumentationUrl="${INSTRUMENTATION_URL}" \
+  --set console.config.auth.baseUrl="${THUNDER_PUBLIC_URL}" \
+  --set console.config.auth.signInRedirectURL="${CONSOLE_PUBLIC_URL}/login" \
+  --set console.config.auth.signOutRedirectURL="${CONSOLE_PUBLIC_URL}/login" \
+  --set console.config.apiBaseUrl="${API_PUBLIC_URL}" \
+  --set agentManagerService.config.amObserverPublicURL="${OBS_API_PUBLIC_URL}" \
+  --set console.ocIngress.hostname="${CONSOLE_PUBLIC_HOST}" \
+  --set agentManagerService.ocIngress.hostname="${API_PUBLIC_HOST}" \
+  --set agentManagerService.config.serverPublicURL="${API_PUBLIC_URL}" \
+  --set agentManagerService.config.keyManager.issuer="${THUNDER_PUBLIC_URL}" \
+  --set agentManagerService.config.oauthAuthorizationServers="${THUNDER_PUBLIC_URL}" \
+  --set agentManagerService.config.keyManager.jwksUrl="${THUNDER_INTERNAL_URL}/oauth2/jwks" \
+  --set agentManagerService.config.oidc.tokenUrl="${THUNDER_INTERNAL_URL}/oauth2/token" \
+  --set agentManagerService.config.openChoreo.baseURL="http://openchoreo-api.openchoreo-control-plane.svc.cluster.local:8080" \
+  --timeout 1800s
+```
+
+:::info
+Both are the public Thunder URL, and the chart defaults are the k3d hostname:
+`keyManager.issuer` is what the API validates user tokens against, and
+`oauthAuthorizationServers` is the authorization server it advertises in its RFC
+9728 protected resource metadata. Startup validation only checks that the
+advertised URLs are well-formed, so a stale value here fails silently.
+:::
+
+Wait for all components:
+
+```bash
+# PostgreSQL
+kubectl wait --for=jsonpath='{.status.readyReplicas}'=1 \
+  statefulset/amp-postgresql -n ${AMP_NS} --timeout=600s
+
+# API server
+kubectl wait --for=condition=Available \
+  deployment/amp-api -n ${AMP_NS} --timeout=600s
+
+# Console
+kubectl wait --for=condition=Available \
+  deployment/amp-console -n ${AMP_NS} --timeout=600s
+```
+
+:::tip Verify
+```bash
+kubectl get pods -n ${AMP_NS}
+# Expected: amp-postgresql-0 (Running), amp-api-xxx (Running), amp-console-xxx (Running)
+```
+:::
+
+#### Step 3: Agent Sandbox Module
+
+Agents run as **sandboxed pods** managed by the [Agent Sandbox](https://agent-sandbox.sigs.k8s.io/) controller (`SandboxTemplate` / `SandboxWarmPool` resources) instead of plain Deployments. This module is **required** — without it, agent deployments cannot be rendered.
+
+```bash
+helm upgrade --install agent-sandbox \
+  oci://ghcr.io/openchoreo/helm-charts/agent-sandbox \
+  --version 0.1.1 \
+  --namespace ${DATA_PLANE_NS} \
+  --create-namespace \
+  --wait \
+  --timeout 10m \
+  --set namespace=openchoreo-control-plane \
+  --set dataPlaneNamespace=${DATA_PLANE_NS} \
+  --set dataPlaneServiceAccount=cluster-agent-dataplane \
+  --set upstream.version=v0.4.6
+```
+
+Wait for the controller:
+
+```bash
+kubectl wait -n agent-sandbox-system \
+  --for=condition=available \
+  --timeout=180s \
+  deployment/agent-sandbox-controller
+```
+
+:::tip Verify
+```bash
+kubectl get crd \
+  sandboxtemplates.extensions.agents.x-k8s.io \
+  sandboxwarmpools.extensions.agents.x-k8s.io \
+  sandboxclaims.extensions.agents.x-k8s.io
+# All three CRDs should be listed
+
+kubectl get clusterrole openchoreo-agent-sandbox-access
+# RBAC granting the data-plane agent access to sandbox resources
+```
+:::
+
+:::info Stronger isolation tiers
+With this module, agents run sandboxed under the standard **runc** runtime. Optionally, individual environments can run agents under **gVisor** or **Kata Containers** for stronger isolation — these have hardware/OS requirements and need a dedicated node. See the [gVisor](../../administration/isolation-tiers/gvisor.mdx) and [Kata Containers](../../administration/isolation-tiers/kata.mdx) isolation tier guides.
+:::
+
+#### Step 4: Platform Resources
+
+Creates the default Organization, Project, Environment, DeploymentPipeline, and workflow template resources that the console needs on first login. This chart also configures the **container registry endpoint** used by build workflows to push agent images.
+
+```bash
+helm install amp-platform-resources \
+  oci://${HELM_CHART_REGISTRY}/wso2-amp-platform-resources-extension \
+  --version ${VERSION} \
+  --namespace ${DEFAULT_NS} \
+  --timeout 1800s
+```
+
+export const RegistryConfig = ({expanded}) => {
+  const content = (
+    <>
+      <p>The chart defaults are configured for a local k3d cluster with an in-cluster registry at <code>host.k3d.internal:10082</code>. For other environments, override the registry settings:</p>
+      <pre><code className="language-bash">{`# Example: external registry with a base domain
+helm install amp-platform-resources \\
+  oci://\${HELM_CHART_REGISTRY}/wso2-amp-platform-resources-extension \\
+  --version \${VERSION} \\
+  --namespace \${DEFAULT_NS} \\
+  --set global.baseDomain="yourdomain.com" \\
+  --set global.defaultResources.registry.tlsVerify=true \\
+  --timeout 1800s
+# Registry endpoint will be: registry.yourdomain.com
+
+# Example: explicit registry endpoint
+helm install amp-platform-resources \\
+  oci://\${HELM_CHART_REGISTRY}/wso2-amp-platform-resources-extension \\
+  --version \${VERSION} \\
+  --namespace \${DEFAULT_NS} \\
+  --set global.registry.endpoint="your-registry.example.com:5000" \\
+  --set global.defaultResources.registry.tlsVerify=true \\
+  --timeout 1800s`}</code></pre>
+      <table>
+        <thead><tr><th>Value</th><th>Default</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>global.registry.endpoint</code></td><td><code>host.k3d.internal:10082</code></td><td>Registry endpoint for pushing images</td></tr>
+          <tr><td><code>global.baseDomain</code></td><td><code>""</code></td><td>When set, registry endpoint becomes <code>registry.&lt;baseDomain&gt;</code></td></tr>
+          <tr><td><code>global.defaultResources.registry.tlsVerify</code></td><td><code>false</code></td><td>Enable TLS verification for registry connections</td></tr>
+        </tbody>
+      </table>
+    </>
+  );
+  if (expanded) {
+    return (<><h5>Container registry configuration</h5>{content}</>);
+  }
+  return (<details><summary>Container registry configuration</summary>{content}</details>);
+};
+
+<RegistryConfig expanded={props.expandRegistryConfig} />
+
+---
+
+### Extensions
+
+These can be installed in any order after Core is ready.
+
+#### Step 5: Observability Extension (Agent Manager Observer)
+
+Deploys the observer service that queries and serves trace, log, and metrics data to the console and CLI.
+
+```bash
+helm install amp-observability-traces \
+  oci://${HELM_CHART_REGISTRY}/wso2-amp-observability-extension \
+  --version ${VERSION} \
+  --namespace ${OBSERVABILITY_NS} \
+  --set amObserver.ocIngress.hostname="${OBS_API_PUBLIC_HOST}" \
+  --set amObserver.publicUrl="${OBS_API_PUBLIC_URL}" \
+  --set amObserver.auth.issuer="${THUNDER_PUBLIC_URL}" \
+  --set amObserver.oauth.authorizationServers="${THUNDER_PUBLIC_URL}" \
+  --timeout 1800s
+
+kubectl wait --for=condition=Available \
+  deployment/amp-observer -n ${OBSERVABILITY_NS} --timeout=600s
+```
+
+:::warning
+Both values must be set, and both are the **public** Thunder URL — not the
+in-cluster service URL used for `jwksUrl`. `amObserver.auth.issuer` has to match
+`agentManagerService.config.keyManager.issuer` from Step 2, because the observer
+validates the same user token the console and `amctl` send to the Agent Manager
+API. Leave it at the chart default on a custom-domain install and the traces
+page stays empty while the observer logs
+`JWT validation failed ... invalid issuer`.
+`amObserver.oauth.authorizationServers` is the authorization server advertised in
+this service's RFC 9728 protected resource metadata and must name the same
+Thunder deployment as the issuer.
+:::
+
+#### Step 6: Evaluation Extension
+
+Installs workflow templates for running automated evaluations (accuracy, safety, reasoning, tool usage) against agent traces.
+
+```bash
+helm install amp-evaluation-extension \
+  oci://${HELM_CHART_REGISTRY}/wso2-amp-evaluation-extension \
+  --version ${VERSION} \
+  --namespace ${BUILD_CI_NS} \
+  --timeout 1800s
+```
+
+:::info
+The default `publisher.apiKey` must match `publisherApiKey.value` in the Agent Manager chart. Both default to `amp-internal-api-key`.
+:::
+
+#### Step 7: API Platform Gateway Extension
+
+Registers the API Platform Gateway with the Agent Manager and deploys the gateway stack. **Install this last** — it requires the Agent Manager API to be healthy and Thunder to be ready for token exchange.
+
+```bash
+helm install api-platform-default-default \
+  oci://${HELM_CHART_REGISTRY}/wso2-amp-api-platform-gateway-extension \
+  --version ${VERSION} \
+  --namespace ${DATA_PLANE_NS} \
+  --set agentManager.orgName=default \
+  --set gateway.environment=default \
+  --timeout 1800s
+
+kubectl wait --for=condition=complete job/api-platform-default-default-bootstrap \
+  -n ${DATA_PLANE_NS} --timeout=300s
+```
+
+After the gateway is running, apply the OTEL trace collection RestApi:
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/wso2/agent-manager/amp/v${VERSION}/deployments/values/otel-collector-rest-api.yaml
+```
+
+:::tip Verify
+```bash
+kubectl get apigateway api-platform-default-default -n ${DATA_PLANE_NS}
+# STATUS should show "Programmed"
+
+kubectl get jobs -n ${DATA_PLANE_NS} | grep api-platform-default-default-bootstrap
+# STATUS should show "Complete"
+```
+:::

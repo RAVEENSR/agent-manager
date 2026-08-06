@@ -26,18 +26,22 @@ import {
   Tooltip,
 } from "@wso2/oxygen-ui";
 import { Folder, Plus, Trash } from "@wso2/oxygen-ui-icons-react";
-import { generatePath, useNavigate, useParams } from "react-router-dom";
+import { generatePath, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   useDeleteAgentIdentityGroup,
   useListAgentIdentityGroups,
 } from "@agent-management-platform/api-client";
 import { ListingSkeletonRows, useConfirmationDialog } from "@agent-management-platform/shared-component";
 import { absoluteRouteMap, type ThunderGroup } from "@agent-management-platform/types";
+import { withSearchParams } from "../../utils/withSearchParams";
+import { AgentIdentityEnvironmentTabs } from "./AgentIdentityEnvironmentTabs";
 
 const AVATAR_SX = { width: 28, height: 28, fontSize: 12 } as const;
 
 export const GroupsPage: React.FC = () => {
-  const { orgId, envName } = useParams<{ orgId: string; envName: string }>();
+  const { orgId } = useParams<{ orgId: string }>();
+  const [searchParams] = useSearchParams();
+  const envName = searchParams.get("envName") ?? "";
   const navigate = useNavigate();
 
   const [page, setPage] = useState(0);
@@ -45,7 +49,7 @@ export const GroupsPage: React.FC = () => {
   const [search, setSearch] = useState("");
 
   const { data, isLoading, error } = useListAgentIdentityGroups(
-    { orgName: orgId, envName: envName ?? "" },
+    { orgName: orgId, envName },
     { offset: page * rowsPerPage, limit: rowsPerPage },
   );
   const { mutateAsync: deleteGroup } = useDeleteAgentIdentityGroup();
@@ -64,16 +68,18 @@ export const GroupsPage: React.FC = () => {
   }, [groups.length, total, page, rowsPerPage]);
 
   const groupsNode =
-    absoluteRouteMap.children.org.children.thunderInstances.children.view.children.groups;
+    absoluteRouteMap.children.org.children.thunderInstances.children.groups;
 
-  const createPath =
-    orgId && envName
-      ? generatePath(groupsNode.children.create.path, { orgId, envName })
-      : "#";
+  const createPath = orgId
+    ? withSearchParams(generatePath(groupsNode.children.create.path, { orgId }), searchParams)
+    : "#";
 
   const editGroupPath = (groupId: string) =>
-    orgId && envName
-      ? generatePath(groupsNode.children.detail.path, { orgId, envName, groupId })
+    orgId
+      ? withSearchParams(
+          generatePath(groupsNode.children.detail.path, { orgId, groupId }),
+          searchParams,
+        )
       : "#";
 
   const filteredGroups = useMemo(() => {
@@ -108,6 +114,7 @@ export const GroupsPage: React.FC = () => {
 
       <ListingTable.Provider searchValue={search} onSearchChange={setSearch}>
         <ListingTable.Container>
+          <AgentIdentityEnvironmentTabs />
           <ListingTable.Toolbar
             showSearch
             searchPlaceholder="Search groups..."
@@ -121,18 +128,20 @@ export const GroupsPage: React.FC = () => {
               </Button>
             }
           />
-          {!isLoading && total === 0 ? (
-            <ListingTable.EmptyState
-              illustration={<Folder size={64} />}
-              title="No groups yet"
-              description='Click "Create Group" to add one.'
-            />
-          ) : !isLoading && filteredGroups.length === 0 ? (
-            <ListingTable.EmptyState
-              illustration={<Folder size={64} />}
-              title="No groups found"
-              description={`No groups match "${search}". Try a different search term.`}
-            />
+          {!isLoading && filteredGroups.length === 0 ? (
+            search ? (
+              <ListingTable.EmptyState
+                illustration={<Folder size={64} />}
+                title="No groups found"
+                description={`No groups match "${search}". Try a different search term.`}
+              />
+            ) : (
+              <ListingTable.EmptyState
+                illustration={<Folder size={64} />}
+                title="No groups yet"
+                description='Click "Create Group" to add one.'
+              />
+            )
           ) : (
             <ListingTable variant="table">
               <ListingTable.Head>

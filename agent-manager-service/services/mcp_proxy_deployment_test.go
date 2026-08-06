@@ -135,15 +135,16 @@ func TestGenerateMCPProxyDeploymentYAML_WithContextAndVhost(t *testing.T) {
 	}
 }
 
-// TestGenerateMCPProxyDeploymentYAML_StripsMCPSuffix verifies the trailing
-// "/mcp" path segment is stripped from the upstream URL during deployment.
-func TestGenerateMCPProxyDeploymentYAML_StripsMCPSuffix(t *testing.T) {
+// TestGenerateMCPProxyDeploymentYAML_PreservesUpstreamPath verifies the
+// trailing "/mcp" path segment survives to the deployed upstream URL
+// unchanged, since the gateway no longer re-appends it itself.
+func TestGenerateMCPProxyDeploymentYAML_PreservesUpstreamPath(t *testing.T) {
 	service := &MCPProxyService{}
 
 	proxy := &models.MCPProxy{
-		Handle: "strip-proxy",
+		Handle: "preserve-proxy",
 		Configuration: models.MCPProxyConfig{
-			Name:    "Strip Proxy",
+			Name:    "Preserve Proxy",
 			Version: "v1",
 			Upstream: models.UpstreamConfig{
 				Main: &models.UpstreamEndpoint{URL: "https://host.example.com/godzilla/server/v1.0/mcp"},
@@ -161,9 +162,11 @@ func TestGenerateMCPProxyDeploymentYAML_StripsMCPSuffix(t *testing.T) {
 		t.Fatalf("failed to unmarshal YAML: %v", err)
 	}
 
-	want := "https://host.example.com/godzilla/server/v1.0"
+	// The gateway no longer re-appends "/mcp" itself, so the full upstream URL,
+	// including the "/mcp" suffix, must reach it unchanged.
+	want := "https://host.example.com/godzilla/server/v1.0/mcp"
 	if deployment.Spec.Upstream.URL != want {
-		t.Errorf("expected upstream url %q (\"/mcp\" stripped), got %q", want, deployment.Spec.Upstream.URL)
+		t.Errorf("expected upstream url %q unchanged, got %q", want, deployment.Spec.Upstream.URL)
 	}
 }
 
@@ -643,25 +646,48 @@ func TestMergeMCPPoliciesForDeployment(t *testing.T) {
 	})
 }
 
-// TestNormalizeMCPUpstreamURLForDeployment covers URL normalization edge cases.
-func TestNormalizeMCPUpstreamURLForDeployment(t *testing.T) {
+// TestGenerateMCPProxyDeploymentYAML_UpstreamURLPassthrough covers the URL edge
+// cases the old normalizer used to special-case: none of them should be
+// altered now, only whitespace-trimmed.
+func TestGenerateMCPProxyDeploymentYAML_UpstreamURLPassthrough(t *testing.T) {
 	tests := []struct {
 		name string
 		in   string
 		want string
 	}{
-		{name: "strips trailing /mcp", in: "https://host.example.com/api/mcp", want: "https://host.example.com/api"},
-		{name: "strips trailing /mcp with trailing slash", in: "https://host.example.com/api/mcp/", want: "https://host.example.com/api"},
-		{name: "leaves non-mcp path untouched", in: "https://host.example.com/api/v1", want: "https://host.example.com/api/v1"},
-		{name: "root mcp collapses to root", in: "https://host.example.com/mcp", want: "https://host.example.com/"},
+		{name: "url ending in /mcp is kept as-is", in: "https://host.example.com/api/mcp", want: "https://host.example.com/api/mcp"},
+		{name: "trailing slash after /mcp is kept as-is", in: "https://host.example.com/api/mcp/", want: "https://host.example.com/api/mcp/"},
+		{name: "non-mcp path untouched", in: "https://host.example.com/api/v1", want: "https://host.example.com/api/v1"},
+		{name: "bare host with /mcp kept as-is", in: "https://host.example.com/mcp", want: "https://host.example.com/mcp"},
 		{name: "non-url passthrough", in: "not a url", want: "not a url"},
 		{name: "trims whitespace", in: "  https://host.example.com/x  ", want: "https://host.example.com/x"},
 	}
 
+	service := &MCPProxyService{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := normalizeMCPUpstreamURLForDeployment(tt.in); got != tt.want {
-				t.Errorf("normalizeMCPUpstreamURLForDeployment(%q) = %q, want %q", tt.in, got, tt.want)
+			proxy := &models.MCPProxy{
+				Handle: "passthrough-proxy",
+				Configuration: models.MCPProxyConfig{
+					Name:    "Passthrough Proxy",
+					Version: "v1",
+					Upstream: models.UpstreamConfig{
+						Main: &models.UpstreamEndpoint{URL: tt.in},
+					},
+				},
+			}
+
+			yamlStr, err := service.generateMCPProxyDeploymentYAML(proxy, "x", nil)
+			if err != nil {
+				t.Fatalf("expected no error, got: %v", err)
+			}
+
+			var deployment MCPProxyDeploymentYAML
+			if err := yaml.Unmarshal([]byte(yamlStr), &deployment); err != nil {
+				t.Fatalf("failed to unmarshal YAML: %v", err)
+			}
+			if deployment.Spec.Upstream.URL != tt.want {
+				t.Errorf("upstream url = %q, want %q", deployment.Spec.Upstream.URL, tt.want)
 			}
 		})
 	}

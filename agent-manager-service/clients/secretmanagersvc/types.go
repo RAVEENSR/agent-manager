@@ -16,7 +16,11 @@
 
 package secretmanagersvc
 
-import "errors"
+import (
+	"errors"
+
+	occlient "github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
+)
 
 // ErrSecretNotFound is returned when a secret does not exist.
 var ErrSecretNotFound = errors.New("secret not found")
@@ -60,28 +64,23 @@ type SecretInfo struct {
 
 // StoreConfig holds configuration for secret store backends.
 type StoreConfig struct {
-	// Provider is the name of the provider to use (e.g., "openbao", "vault", "aws").
+	// Provider is the name of the provider to use (e.g., "openchoreo").
 	Provider string `json:"provider"`
 
-	// OpenBao contains OpenBao/Vault-specific configuration.
-	OpenBao *OpenBaoConfig `json:"openbao,omitempty"`
+	// OpenChoreo contains configuration for the OpenChoreo secret API provider.
+	OpenChoreo *OpenChoreoConfig `json:"openchoreo,omitempty"`
 }
 
-// OpenBaoConfig contains configuration for OpenBao/Vault.
-// Only KV v2 secrets engine is supported.
-type OpenBaoConfig struct {
-	// Server is the OpenBao server address (e.g., "https://openbao.example.com").
-	Server string `json:"server"`
+// OpenChoreoConfig contains configuration for the OpenChoreo secret API provider.
+type OpenChoreoConfig struct {
+	// Client is the OpenChoreo API client used for secret operations.
+	Client occlient.OpenChoreoClient `json:"-"`
 
-	// Path is the mount path for the KV secrets engine (e.g., "secret").
-	Path string `json:"path"`
+	// TargetPlaneKind is the kind of the plane hosting the secret data
+	// (e.g. "ClusterDataPlane"). Defaults to the client's default when empty.
+	TargetPlaneKind string `json:"targetPlaneKind,omitempty"`
 
-	// Auth contains authentication configuration.
-	Auth *OpenBaoAuth `json:"auth"`
-}
-
-// OpenBaoAuth contains authentication configuration for OpenBao.
-type OpenBaoAuth struct {
-	// Token is a static token for authentication.
-	Token string `json:"token,omitempty"`
+	// TargetPlaneName is the name of the plane hosting the secret data.
+	// Defaults to the client's default when empty.
+	TargetPlaneName string `json:"targetPlaneName,omitempty"`
 }

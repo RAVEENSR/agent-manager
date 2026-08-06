@@ -16,6 +16,7 @@
  * under the License.
  */
 
+import { memo } from "react";
 import { Box } from "@wso2/oxygen-ui";
 import Markdown from "react-markdown";
 
@@ -23,7 +24,7 @@ interface MarkdownViewProps {
   content: string;
 }
 
-export function MarkdownView({ content }: MarkdownViewProps) {
+function MarkdownViewComponent({ content }: MarkdownViewProps) {
   return (
     <Box
       sx={{
@@ -138,3 +139,5 @@ export function MarkdownView({ content }: MarkdownViewProps) {
     </Box>
   );
 }
+
+export const MarkdownView = memo(MarkdownViewComponent);

@@ -30,8 +30,6 @@ import {
   FormControl,
   FormLabel,
   Grid,
-  IconButton,
-  InputAdornment,
   Skeleton,
   Stack,
   TextField,
@@ -39,8 +37,9 @@ import {
   Typography,
   useTheme,
 } from "@wso2/oxygen-ui";
-import { ChevronDown, Eye, EyeOff, HelpCircle } from "@wso2/oxygen-ui-icons-react";
+import { ChevronDown, HelpCircle } from "@wso2/oxygen-ui-icons-react";
 import { validateEndpointUrl } from "@agent-management-platform/shared-component";
+import { AuthHeaderRow } from "./AuthHeaderRow";
 
 const MASKED_CREDENTIAL_VALUE = "••••••••••••";
 
@@ -64,6 +63,9 @@ export function MCPProxyConnectionTab({
 
   const [endpoint, setEndpoint] = useState("");
   const [authHeader, setAuthHeader] = useState("");
+  // Mirrors Postman's per-header checkbox: unchecking excludes the header from
+  // save without losing the typed key/value.
+  const [authEnabled, setAuthEnabled] = useState(true);
   const [credentialValue, setCredentialValue] = useState("");
   const [isCredentialMasked, setIsCredentialMasked] = useState(false);
   const [showCredential, setShowCredential] = useState(false);
@@ -83,6 +85,7 @@ export function MCPProxyConnectionTab({
   const resetFromConfig = useCallback(() => {
     setEndpoint(config?.upstream?.main?.url ?? "");
     setAuthHeader(config?.upstream?.main?.auth?.header ?? "");
+    setAuthEnabled(true);
     const hasCredential = Boolean(config?.upstream?.main?.auth?.header);
     setCredentialValue(hasCredential ? MASKED_CREDENTIAL_VALUE : "");
     setIsCredentialMasked(hasCredential);
@@ -99,24 +102,27 @@ export function MCPProxyConnectionTab({
 
   const validateEndpoint = useCallback((value: string): string | null => {
     const err = validateEndpointUrl(value, {
-      requiredMessage: "MCP Proxy Endpoint URL is required",
+      requiredMessage: "MCP Server Endpoint URL is required",
     });
     setEndpointError(err);
     return err;
   }, []);
 
   const credentialChanged =
-    !isCredentialMasked && credentialValue.trim() !== MASKED_CREDENTIAL_VALUE;
+    authEnabled &&
+    !isCredentialMasked &&
+    credentialValue.trim() !== MASKED_CREDENTIAL_VALUE;
+  const effectiveAuthHeader = authEnabled ? authHeader.trim() : "";
 
   const isDirty = useMemo(() => {
     if (!config) return false;
     const savedUrl = (config.upstream?.main?.url ?? "").trim();
     const savedHeader = (config.upstream?.main?.auth?.header ?? "").trim();
     if (endpoint.trim() !== savedUrl) return true;
-    if (authHeader.trim() !== savedHeader) return true;
+    if (effectiveAuthHeader !== savedHeader) return true;
     if (credentialChanged) return true;
     return false;
-  }, [config, endpoint, authHeader, credentialChanged]);
+  }, [config, endpoint, effectiveAuthHeader, credentialChanged]);
 
   const handleDiscard = useCallback(() => {
     resetFromConfig();
@@ -132,16 +138,15 @@ export function MCPProxyConnectionTab({
       return;
     }
 
-    const trimmedHeader = authHeader.trim();
     const existingAuth = config.upstream?.main?.auth;
     // Preserve any existing auth (including its type); only override header,
     // and value when the user typed a new one — otherwise the backend keeps
-    // the stored credential.
-    const auth = trimmedHeader
+    // the stored credential. Unchecking the header excludes it entirely.
+    const auth = effectiveAuthHeader
       ? {
           type: "api-key" as const,
           ...existingAuth,
-          header: trimmedHeader,
+          header: effectiveAuthHeader,
           ...(credentialChanged ? { value: credentialValue.trim() } : {}),
         }
       : undefined;
@@ -171,7 +176,7 @@ export function MCPProxyConnectionTab({
   }, [
     config,
     endpoint,
-    authHeader,
+    effectiveAuthHeader,
     credentialChanged,
     credentialValue,
     onUpdate,
@@ -200,7 +205,7 @@ export function MCPProxyConnectionTab({
       <Grid container spacing={3}>
         <Grid size={{ xs: 12 }}>
           <FormControl fullWidth>
-            <FormLabel required>MCP Proxy Endpoint URL</FormLabel>
+            <FormLabel required>MCP Server Endpoint URL</FormLabel>
             <TextField
               size="small"
               value={endpoint}
@@ -211,7 +216,7 @@ export function MCPProxyConnectionTab({
               onBlur={() => validateEndpoint(endpoint)}
               error={!!endpointError}
               helperText={endpointError}
-              placeholder="Enter URL of your MCP Proxy"
+              placeholder="Enter URL of your MCP Server"
               sx={{
                 "& .MuiInputBase-input": {
                   fontFamily: "monospace",
@@ -229,79 +234,35 @@ export function MCPProxyConnectionTab({
                 <Typography variant="subtitle2" fontWeight={600}>
                   Advanced Configurations
                 </Typography>
-                <Tooltip title="Configure an optional authentication header sent to the MCP proxy endpoint.">
+                <Tooltip title="Configure an optional authentication header sent to the MCP Server endpoint.">
                   <HelpCircle size={16} />
                 </Tooltip>
               </Stack>
             </AccordionSummary>
             <AccordionDetails>
-              <Stack spacing={2}>
-                <Typography variant="subtitle2" fontWeight={600}>
-                  Configure Authentication Header
-                </Typography>
-                <Grid container spacing={2}>
-                  <Grid size={{ xs: 12, md: 6 }}>
-                    <FormControl fullWidth>
-                      <FormLabel>Header</FormLabel>
-                      <TextField
-                        size="small"
-                        value={authHeader}
-                        onChange={(e) => setAuthHeader(e.target.value)}
-                        placeholder="Header"
-                      />
-                    </FormControl>
-                  </Grid>
-                  <Grid size={{ xs: 12, md: 6 }}>
-                    <FormControl fullWidth>
-                      <FormLabel>Value</FormLabel>
-                      <TextField
-                        size="small"
-                        type={showCredential ? "text" : "password"}
-                        value={credentialValue}
-                        placeholder="Value"
-                        onFocus={() => {
-                          if (isCredentialMasked) {
-                            setCredentialValue("");
-                            setIsCredentialMasked(false);
-                          }
-                        }}
-                        onChange={(e) => setCredentialValue(e.target.value)}
-                        slotProps={{
-                          input: {
-                            endAdornment: (
-                              <InputAdornment position="end">
-                                <IconButton
-                                  size="small"
-                                  onClick={() => setShowCredential((p) => !p)}
-                                  aria-label={
-                                    showCredential
-                                      ? "Hide header value"
-                                      : "Show header value"
-                                  }
-                                  edge="end"
-                                >
-                                  {showCredential ? (
-                                    <EyeOff size={18} />
-                                  ) : (
-                                    <Eye size={18} />
-                                  )}
-                                </IconButton>
-                              </InputAdornment>
-                            ),
-                          },
-                        }}
-                        sx={{ "& .MuiInputBase-input": { fontFamily: "monospace" } }}
-                      />
-                    </FormControl>
-                  </Grid>
-                </Grid>
-                {hasStoredCredential && (
-                  <Typography variant="caption" color="text.secondary">
-                    The stored value is hidden. Leave it unchanged to keep the
-                    current credential, or enter a new value to replace it.
-                  </Typography>
-                )}
-              </Stack>
+              <AuthHeaderRow
+                enabled={authEnabled}
+                onEnabledChange={setAuthEnabled}
+                headerValue={authHeader}
+                onHeaderChange={setAuthHeader}
+                valueValue={credentialValue}
+                onValueFocus={() => {
+                  if (isCredentialMasked) {
+                    setCredentialValue("");
+                    setIsCredentialMasked(false);
+                  }
+                }}
+                onValueChange={setCredentialValue}
+                showValue={showCredential}
+                onToggleShowValue={() => setShowCredential((p) => !p)}
+                caption={
+                  hasStoredCredential
+                    ? "The stored value is hidden. Leave it unchanged to keep the current credential, or enter a new value to replace it."
+                    : null
+                }
+                monospaceValue
+                iconButtonSize="small"
+              />
             </AccordionDetails>
           </Accordion>
         </Grid>

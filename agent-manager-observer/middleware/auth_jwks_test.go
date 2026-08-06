@@ -98,7 +98,7 @@ func TestValidateWithJWKS_RequiresExpiration(t *testing.T) {
 		// deliberately no "exp"
 	})
 
-	if err := validateWithJWKS(context.Background(), token, cfg); err == nil {
+	if _, err := validateWithJWKS(context.Background(), token, cfg); err == nil {
 		t.Fatal("expected token without exp to be rejected, got nil error")
 	}
 }
@@ -114,7 +114,7 @@ func TestValidateWithJWKS_AcceptsValidToken(t *testing.T) {
 		"iat": time.Now().Add(-time.Minute).Unix(),
 	})
 
-	if err := validateWithJWKS(context.Background(), token, cfg); err != nil {
+	if _, err := validateWithJWKS(context.Background(), token, cfg); err != nil {
 		t.Fatalf("expected valid token to pass, got error: %v", err)
 	}
 }
@@ -129,7 +129,7 @@ func TestValidateWithJWKS_RejectsExpiredToken(t *testing.T) {
 		"exp": time.Now().Add(-time.Hour).Unix(),
 	})
 
-	if err := validateWithJWKS(context.Background(), token, cfg); err == nil {
+	if _, err := validateWithJWKS(context.Background(), token, cfg); err == nil {
 		t.Fatal("expected expired token to be rejected, got nil error")
 	}
 }

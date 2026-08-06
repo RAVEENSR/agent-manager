@@ -99,69 +99,6 @@ func TestValidateOAuthAuthorizationServers(t *testing.T) {
 	}
 }
 
-func TestValidateGatewayRuntimeConfig(t *testing.T) {
-	tests := []struct {
-		name        string
-		config      GatewayRuntimeConfig
-		wantErrors  int
-		errContains string
-	}{
-		{
-			name: "valid configuration",
-			config: GatewayRuntimeConfig{
-				NamePrefix:    "api-platform-",
-				ServiceSuffix: "-gateway-gateway-runtime",
-				Port:          22893,
-			},
-		},
-		{
-			name: "empty prefix",
-			config: GatewayRuntimeConfig{
-				NamePrefix:    " ",
-				ServiceSuffix: "-runtime",
-				Port:          22893,
-			},
-			wantErrors:  1,
-			errContains: "GATEWAY_RUNTIME_NAME_PREFIX",
-		},
-		{
-			name: "empty suffix",
-			config: GatewayRuntimeConfig{
-				NamePrefix:    "gateway-",
-				ServiceSuffix: " ",
-				Port:          22893,
-			},
-			wantErrors:  1,
-			errContains: "GATEWAY_RUNTIME_SERVICE_SUFFIX",
-		},
-		{
-			name: "invalid port",
-			config: GatewayRuntimeConfig{
-				NamePrefix:    "gateway-",
-				ServiceSuffix: "-runtime",
-				Port:          70000,
-			},
-			wantErrors:  1,
-			errContains: "GATEWAY_RUNTIME_PORT",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := &Config{GatewayRuntime: tc.config}
-			r := &configReader{}
-			validateGatewayRuntimeConfig(cfg, r)
-
-			if len(r.errors) != tc.wantErrors {
-				t.Fatalf("expected %d errors, got %d: %v", tc.wantErrors, len(r.errors), r.errors)
-			}
-			if tc.errContains != "" && !strings.Contains(r.errors[0].Error(), tc.errContains) {
-				t.Errorf("expected an error containing %q, got %v", tc.errContains, r.errors)
-			}
-		})
-	}
-}
-
 func TestValidateServerPublicURL(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -289,6 +226,139 @@ func TestValidateObserverURLs(t *testing.T) {
 			cfg := &Config{Observer: ObserverConfig{URL: tc.url, PublicURL: tc.publicURL}}
 			r := &configReader{}
 			validateObserverURLs(cfg, r)
+
+			if len(r.errors) != tc.wantErrors {
+				t.Fatalf("expected %d errors, got %d: %v", tc.wantErrors, len(r.errors), r.errors)
+			}
+			if tc.errContains != "" {
+				found := false
+				for _, e := range r.errors {
+					if strings.Contains(e.Error(), tc.errContains) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected an error containing %q, got %v", tc.errContains, r.errors)
+				}
+			}
+		})
+	}
+}
+
+func TestValidatePostgresTLSConfig(t *testing.T) {
+	tests := []struct {
+		name        string
+		sslMode     string
+		wantErrors  int
+		errContains string
+	}{
+		{
+			name:       "empty is allowed and leaves the driver default in place",
+			sslMode:    "",
+			wantErrors: 0,
+		},
+		{
+			name:       "whitespace-only is treated as unset",
+			sslMode:    "   ",
+			wantErrors: 0,
+		},
+		{
+			name:       "require accepted",
+			sslMode:    "require",
+			wantErrors: 0,
+		},
+		{
+			name:       "disable accepted",
+			sslMode:    "disable",
+			wantErrors: 0,
+		},
+		{
+			name:       "verify-full accepted",
+			sslMode:    "verify-full",
+			wantErrors: 0,
+		},
+		{
+			name:        "typo rejected",
+			sslMode:     "requrie",
+			wantErrors:  1,
+			errContains: "DB_SSL_MODE",
+		},
+		{
+			name:        "uppercase rejected because libpq is case sensitive",
+			sslMode:     "REQUIRE",
+			wantErrors:  1,
+			errContains: "is not a valid PostgreSQL sslmode",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{POSTGRESQL: POSTGRESQL{SSLMode: tc.sslMode}}
+			r := &configReader{}
+			validatePostgresTLSConfig(cfg, r)
+
+			if len(r.errors) != tc.wantErrors {
+				t.Fatalf("expected %d errors, got %d: %v", tc.wantErrors, len(r.errors), r.errors)
+			}
+			if tc.errContains != "" {
+				found := false
+				for _, e := range r.errors {
+					if strings.Contains(e.Error(), tc.errContains) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected an error containing %q, got %v", tc.errContains, r.errors)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateSecretManagerConfig(t *testing.T) {
+	tests := []struct {
+		name        string
+		interval    string
+		wantErrors  int
+		errContains string
+	}{
+		{
+			name:       "documented default accepted",
+			interval:   "15s",
+			wantErrors: 0,
+		},
+		{
+			name:       "other valid positive duration accepted",
+			interval:   "1h",
+			wantErrors: 0,
+		},
+		{
+			name:        "malformed duration rejected",
+			interval:    "not-a-duration",
+			wantErrors:  1,
+			errContains: "AGENT_IDENTITY_REFRESH_INTERVAL",
+		},
+		{
+			name:        "zero rejected",
+			interval:    "0s",
+			wantErrors:  1,
+			errContains: "must be a positive duration",
+		},
+		{
+			name:        "negative rejected",
+			interval:    "-15s",
+			wantErrors:  1,
+			errContains: "must be a positive duration",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{SecretManager: SecretManagerConfig{AgentIdentityRefreshInterval: tc.interval}}
+			r := &configReader{}
+			validateSecretManagerConfig(cfg, r)
 
 			if len(r.errors) != tc.wantErrors {
 				t.Fatalf("expected %d errors, got %d: %v", tc.wantErrors, len(r.errors), r.errors)

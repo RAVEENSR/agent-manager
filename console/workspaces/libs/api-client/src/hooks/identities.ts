@@ -17,6 +17,7 @@
  */
 
 import { useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import {
   listUsers,
   getUser,
@@ -157,13 +158,64 @@ export function useDeleteUser() {
   });
 }
 
-export function useGetUserProfile(params: UserPathParams) {
-  const { getToken } = useAuthHooks();
-  return useApiQuery<ThunderUser>({
-    queryKey: ['identity-user-profile', params],
+/** Shared by the two hooks below so they hit one cache entry, one way. */
+function userProfileQuery(params: UserPathParams, getToken: () => Promise<string>) {
+  return {
+    queryKey: ['identity-user-profile', params] as const,
     queryFn: () => getUserProfile(params, getToken),
     enabled: !!params.orgName && !!params.userId,
+  };
+}
+
+export function useGetUserProfile(params: UserPathParams) {
+  const { getToken } = useAuthHooks();
+  return useApiQuery<ThunderUser>(userProfileQuery(params, getToken));
+}
+
+/** Reads a name out of a user's profile attributes, if it has one. */
+function readAttribute(attributes: ThunderUser['attributes'], key: string): string {
+  const value = attributes?.[key];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+/**
+ * Resolves a user id to "First Last" for display, falling back to the profile's
+ * username. Returns undefined until (or unless) the profile resolves, so the
+ * caller decides what to show in the meantime.
+ *
+ * Queried with `silent` so a caller without permission to read user profiles
+ * just keeps the fallback, rather than getting an error snackbar on a page whose
+ * own content loaded fine — auth handling still applies.
+ */
+export function useUserDisplayName(params: UserPathParams): string | undefined {
+  const { getToken } = useAuthHooks();
+  const { data, error } = useApiQuery<ThunderUser>({
+    ...userProfileQuery(params, getToken),
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+    silent: true,
   });
+
+  // A deleted user (404) or a caller without user-read permission (403) are
+  // expected outcomes here and just leave the fallback in place. Anything else
+  // means the identity service itself is unhealthy: still no toast for a
+  // decoration, but don't let an outage disappear without a trace.
+  useEffect(() => {
+    if (!error) return;
+    const status = (error as { status?: number })?.status;
+    if (status === 403 || status === 404) return;
+    // eslint-disable-next-line no-console
+    console.warn('Failed to resolve user display name', { userId: params.userId, status }, error);
+  }, [error, params.userId]);
+
+  const fullName = [
+    readAttribute(data?.attributes, 'given_name'),
+    readAttribute(data?.attributes, 'family_name'),
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  return fullName || readAttribute(data?.attributes, 'username') || undefined;
 }
 
 export function useUpdateUserProfile() {

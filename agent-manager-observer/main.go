@@ -34,6 +34,7 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-observer/middleware"
 	"github.com/wso2/agent-manager/agent-manager-observer/middleware/logger"
 	"github.com/wso2/agent-manager/agent-manager-observer/observer"
+	"github.com/wso2/agent-manager/agent-manager-observer/rbac"
 )
 
 func setupLogger(cfg *config.Config) {
@@ -104,23 +105,28 @@ func main() {
 	obsController := controllers.NewObservabilityController(observerClient)
 	handler := handlers.NewHandler(controller, obsController)
 
-	apiMux.HandleFunc("/api/v1/traces", handler.GetTraceOverviews)
-	apiMux.HandleFunc("/api/v1/traces/export", handler.ExportTraces)
-	apiMux.HandleFunc("/api/v1/traces/", func(w http.ResponseWriter, r *http.Request) {
+	requireTrace := middleware.RequirePermission(cfg.Auth.RBACEnabled, rbac.TraceRead)
+	requireLog := middleware.RequirePermission(cfg.Auth.RBACEnabled, rbac.LogRead)
+	requireBuildLog := middleware.RequirePermission(cfg.Auth.RBACEnabled, rbac.BuildLogRead)
+	requireMetric := middleware.RequirePermission(cfg.Auth.RBACEnabled, rbac.MetricRead)
+
+	apiMux.Handle("/api/v1/traces", requireTrace(http.HandlerFunc(handler.GetTraceOverviews)))
+	apiMux.Handle("/api/v1/traces/export", requireTrace(http.HandlerFunc(handler.ExportTraces)))
+	apiMux.Handle("/api/v1/traces/", requireTrace(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Route /api/v1/traces/{traceId}/spans and /api/v1/traces/{traceId}/spans/{spanId}
 		if isSpanDetailPath(r.URL.Path) {
 			handler.GetSpanDetail(w, r)
 		} else {
 			handler.GetTraceSpans(w, r)
 		}
-	})
+	})))
 
-	// logs/build-logs/metrics reject publisher-audience tokens: those routes
-	// are for the console/CLI, not the amp-publisher-* service-to-service carve-out.
-	noPublisher := middleware.RejectPublisherAudience()
-	apiMux.Handle("/api/v1/logs", noPublisher(http.HandlerFunc(handler.GetLogs)))
-	apiMux.Handle("/api/v1/build-logs", noPublisher(http.HandlerFunc(handler.GetBuildLogs)))
-	apiMux.Handle("/api/v1/metrics", noPublisher(http.HandlerFunc(handler.GetMetrics)))
+	// Data routes carry per-route scope requirements. Publisher-audience
+	// tokens are confined to trace-read by RequirePermission (replacing the
+	// former RejectPublisherAudience guard).
+	apiMux.Handle("/api/v1/logs", requireLog(http.HandlerFunc(handler.GetLogs)))
+	apiMux.Handle("/api/v1/build-logs", requireBuildLog(http.HandlerFunc(handler.GetBuildLogs)))
+	apiMux.Handle("/api/v1/metrics", requireMetric(http.HandlerFunc(handler.GetMetrics)))
 
 	slog.Info("v1 observer-backed routes registered", "observerBaseURL", cfg.Observer.BaseURL)
 
@@ -129,12 +135,14 @@ func main() {
 	mux.Handle("/api/v1/", authenticatedHandler)
 
 	// am-obs-mcp: streamable-HTTP MCP server on the root mux (not under
-	// /api/v1/). Behind the same JWTAuth middleware, but — unlike the REST
-	// logs/metrics/build-logs routes — deliberately not gated by
-	// RejectPublisherAudience: publisher-audience tokens may call it.
+	// /api/v1/). Behind the same JWTAuth middleware, with per-tool guards
+	// applying the same scope policy as the REST routes: each tool requires
+	// its amp:observability:* scope when RBAC is enabled, and publisher-
+	// audience tokens are confined to their implicit trace-read permission.
 	mcp.RegisterRoute(mux, mcp.Dependencies{
 		Tracing:       controller,
 		Observability: obsController,
+		RBACEnabled:   cfg.Auth.RBACEnabled,
 	}, middleware.JWTAuth(cfg.Auth))
 	slog.Info("am-obs-mcp registered", "path", "/mcp")
 

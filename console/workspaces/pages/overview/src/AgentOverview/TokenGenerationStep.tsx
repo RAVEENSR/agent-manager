@@ -16,11 +16,13 @@
  * under the License.
  */
 
-import { useState, useEffect } from "react";
-import { Box, Typography, Button, Select, MenuItem, CircularProgress } from "@wso2/oxygen-ui";
+import { useState, useEffect, useRef } from "react";
+import { Box, Typography, Button, CircularProgress } from "@wso2/oxygen-ui";
 import { KeyRound } from "@wso2/oxygen-ui-icons-react";
-import { CodeBlock } from "@agent-management-platform/shared-component";
+import { CodeBlock, useConfirmationDialog } from "@agent-management-platform/shared-component";
+import { TokenExpirySelector, DEFAULT_TOKEN_EXPIRY } from "@agent-management-platform/views";
 import { useGenerateAgentToken } from "@agent-management-platform/api-client";
+import { StepNumberBadge } from "./StepNumberBadge";
 
 interface TokenGenerationStepProps {
   stepNumber: number;
@@ -29,15 +31,10 @@ interface TokenGenerationStepProps {
   agentName: string;
   environment?: string;
   onTokenGenerated: (token: string) => void;
+  // When true, mint a token once automatically on first open (right after agent creation).
+  // Subsequent opens require an explicit Generate click.
+  autoGenerate?: boolean;
 }
-
-const DURATION_OPTIONS = [
-  { label: "30 days", value: "720h" },
-  { label: "90 days", value: "2160h" },
-  { label: "6 months", value: "4320h" },
-  { label: "1 year", value: "8760h" },
-  { label: "2 years", value: "17520h" },
-];
 
 export const TokenGenerationStep = ({
   stepNumber,
@@ -46,53 +43,88 @@ export const TokenGenerationStep = ({
   agentName,
   environment,
   onTokenGenerated,
+  autoGenerate = false,
 }: TokenGenerationStepProps) => {
-  const [duration, setDuration] = useState<string>("8760h"); // Default to 1 year
+  const [duration, setDuration] = useState<string>(DEFAULT_TOKEN_EXPIRY);
+  const [enabled, setEnabled] = useState(false);
+  const autoGenFired = useRef(false);
+  const { addConfirmation } = useConfirmationDialog();
+
+  // Session-scoped guard so a reopen never silently re-mints (#1140). Scoped per
+  // (org, project, agent, environment).
+  const sessionKey = `amp-token-generated:${orgName}:${projName}:${agentName}:${environment ?? ""}`;
 
   const { data, isFetching, error, refetch } = useGenerateAgentToken(
-    {
-      agentName,
-      projName,
-      orgName,
-    },
-    {
-      expires_in: duration,
-    },
-    environment ? { environment } : undefined
+    { agentName, projName, orgName },
+    { expires_in: duration },
+    environment ? { environment } : undefined,
+    enabled,
   );
+  const token = data?.token ?? null;
 
-  // Call the callback when token is generated
   useEffect(() => {
-    if (data?.token) {
-      onTokenGenerated(data.token);
-    }
+    if (data?.token) onTokenGenerated(data.token);
   }, [data?.token, onTokenGenerated]);
 
-  const displayToken = data?.token || "ey***";
-  const codeSnippet = `${displayToken}`;
+  // Mints once: setEnabled(true) triggers the first fetch; a later regenerate uses refetch().
+  const generate = () => {
+    try {
+      sessionStorage.setItem(sessionKey, "1");
+    } catch {
+      // sessionStorage may be unavailable (private mode); the query still works.
+    }
+    if (enabled) {
+      refetch();
+    } else {
+      setEnabled(true);
+    }
+  };
+
+  // Auto-generate exactly once on first open after creation.
+  useEffect(() => {
+    if (!autoGenerate || autoGenFired.current) return;
+    let alreadyGenerated = false;
+    try {
+      alreadyGenerated = sessionStorage.getItem(sessionKey) === "1";
+    } catch {
+      alreadyGenerated = false;
+    }
+    if (!alreadyGenerated) {
+      autoGenFired.current = true;
+      generate();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoGenerate, sessionKey]);
+
+  const handleGenerateClick = () => {
+    let alreadyGenerated = false;
+    try {
+      alreadyGenerated = sessionStorage.getItem(sessionKey) === "1";
+    } catch {
+      alreadyGenerated = false;
+    }
+    // Confirm whenever a token was already minted this session (in-state token or session flag).
+    if (token || alreadyGenerated) {
+      // Regenerating: confirm first, since a new token must be reconfigured wherever it is used.
+      addConfirmation({
+        title: "Regenerate API key?",
+        description:
+          "A new API key will be generated. Previously configured keys remain valid until they expire.",
+        confirmButtonText: "Regenerate",
+        onConfirm: generate,
+      });
+      return;
+    }
+    generate();
+  };
+
+  const displayToken = token || "ey***";
 
   return (
     <Box display="flex" gap={1} flexDirection="column">
       <Box display="flex" alignItems="center" gap={1} justifyContent="space-between">
         <Box display="flex" alignItems="center" gap={1}>
-          <Box
-            sx={{
-              gap: 2,
-              width: 20,
-              height: 20,
-              borderRadius: "50%",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              bgcolor: (theme) => theme.palette.primary.main,
-              color: "primary.contrastText",
-              fontWeight: 600,
-            }}
-          >
-            <Typography variant="body2" fontWeight={600}>
-              {stepNumber}
-            </Typography>
-          </Box>
+          <StepNumberBadge stepNumber={stepNumber} />
           <Typography variant="body1">Generate API Key</Typography>
         </Box>
 
@@ -100,28 +132,16 @@ export const TokenGenerationStep = ({
           <Typography variant="body2" color="textSecondary">
             Token Duration
           </Typography>
-          <Select
-            value={duration}
-            onChange={(e) => setDuration(e.target.value as string)}
-            size="small"
-            disabled={ isFetching}
-            sx={{ minWidth: 100 }}
-          >
-            {DURATION_OPTIONS.map((option) => (
-              <MenuItem key={option.value} value={option.value}>
-                {option.label}
-              </MenuItem>
-            ))}
-          </Select>
+          <TokenExpirySelector value={duration} onChange={setDuration} disabled={isFetching} />
 
           <Button
             variant="text"
-            onClick={()=>refetch()}
-            disabled={ isFetching}
+            onClick={handleGenerateClick}
+            disabled={isFetching}
             startIcon={isFetching ? <CircularProgress size={16} /> : <KeyRound size={16} />}
             size="small"
           >
-            {isFetching ? "Generating..." : data?.token ? "Generated" : "Generate"}
+            {isFetching ? "Generating..." : token ? "Regenerate" : "Generate"}
           </Button>
         </Box>
       </Box>
@@ -133,10 +153,10 @@ export const TokenGenerationStep = ({
           </Typography>
         ) : null}
 
-        <CodeBlock code={codeSnippet} language="bash" fieldId="api-key" />
+        <CodeBlock code={displayToken} language="bash" fieldId="api-key" />
 
         <Typography variant="body2" color="textSecondary">
-          {data?.token
+          {token
             ? "Token generated successfully. Copy it now as you won't be able to see it again."
             : "Generate a token to authenticate your traces."}
         </Typography>

@@ -18,18 +18,17 @@ package secretmanagersvc
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
-
-	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
-	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
 
 const (
 	// DefaultManagedBy is the default ownership tag used by the secret management client.
 	DefaultManagedBy = "amp-agent-manager"
+
+	// LabelKeyManagedBy is the label/metadata key providers use to record the
+	// ownership tag on stored secrets.
+	LabelKeyManagedBy = "managed-by"
 
 	// SecretKeyAPIKey is the key name used when storing and retrieving API keys in the KV store.
 	SecretKeyAPIKey = "api-key"
@@ -252,50 +251,38 @@ func ParseKVPath(kvPath string) (SecretLocation, error) {
 type SecretManagementClient interface {
 	// CreateSecret creates or updates a secret at the location derived from SecretLocation.
 	// This REPLACES all secret data at the location.
-	// The SecretReference name is derived from location using SecretRefName().
+	// The secret name is derived from location using SecretRefName().
 	// Returns the openchoreo secretRefName
 	CreateSecret(ctx context.Context, location SecretLocation, data map[string]string) (string, error)
 
 	// PatchSecret merges data with an existing secret (server-side merge).
 	// Keys in data are added/updated, keys in keysToDelete are removed.
-	// The SecretReference name is derived from location using SecretRefName().
+	// The secret name is derived from location using SecretRefName().
 	// Returns the openchoreo secretRefName
 	PatchSecret(ctx context.Context, location SecretLocation, data map[string]string, keysToDelete []string) (string, error)
 
-	// DeleteSecret deletes a secret and its associated SecretReference CRD.
-	// secretRefName is the name of the SecretReference CR to delete.
-	// When ocClient is configured (OpenBao provider), also deletes the SecretReference.
+	// DeleteSecret deletes a secret and its associated SecretReference.
+	// secretRefName is retained for interface compatibility; providers derive
+	// the secret name from location and manage SecretReferences internally.
 	DeleteSecret(ctx context.Context, location SecretLocation, secretRefName string) error
 
 	// GetSecret retrieves secret metadata without values.
 	// Returns SecretInfo containing ID, keys list, and labels.
 	GetSecret(ctx context.Context, kvPath string) (*SecretInfo, error)
-
-	// GetSecretWithValue retrieves a secret by its full KV path including actual values.
-	// Returns the secret data as a key-value map.
-	// Returns ErrNotSupported if the provider doesn't support value retrieval.
-	GetSecretWithValue(ctx context.Context, kvPath string) (map[string]string, error)
 }
 
 // secretManagementClient implements SecretManagementClient using the low-level SecretsClient.
 type secretManagementClient struct {
-	lowLevelClient  SecretsClient
-	managedBy       string
-	ocClient        client.OpenChoreoClient // Optional: for SecretReference operations (nil for Secret Manager API)
-	refreshInterval string                  // SecretReference refresh interval (e.g., "1h")
+	lowLevelClient SecretsClient
+	managedBy      string
 }
 
 // SecretManagementClientConfig holds configuration for creating a SecretManagementClient.
 type SecretManagementClientConfig struct {
 	// StoreConfig is the secret store configuration.
 	StoreConfig *StoreConfig
-	// Provider is the secrets provider (e.g., OpenBao, Secret Manager API).
+	// Provider is the secrets provider (e.g., the OpenChoreo secret API).
 	Provider Provider
-	// OCClient is the OpenChoreo client for SecretReference operations.
-	// Set to nil for Secret Manager API (which handles SecretReferences internally).
-	OCClient client.OpenChoreoClient
-	// RefreshInterval is how often SecretReferences should refresh from KV (e.g., "1h").
-	RefreshInterval string
 }
 
 // NewSecretManagementClient creates a new SecretManagementClient with the given provider.
@@ -322,92 +309,22 @@ func NewSecretManagementClientWithConfig(cfg SecretManagementClientConfig) (Secr
 	}
 
 	return &secretManagementClient{
-		lowLevelClient:  lowLevelClient,
-		managedBy:       DefaultManagedBy,
-		ocClient:        cfg.OCClient,
-		refreshInterval: cfg.RefreshInterval,
+		lowLevelClient: lowLevelClient,
+		managedBy:      DefaultManagedBy,
 	}, nil
 }
 
-// upsertSecretReference creates or updates a SecretReference CRD for the given location.
-// The secretRefName is derived from location using SecretRefName().
-// Returns the secretRefName on success.
-func (c *secretManagementClient) upsertSecretReference(ctx context.Context, location SecretLocation, kvPath string, secretKeys []string) (string, error) {
-	secretRefName := location.SecretRefName()
-	secretRefReq := client.CreateSecretReferenceRequest{
-		Namespace:       location.OrgName,
-		Name:            secretRefName,
-		ProjectName:     location.ProjectName,
-		ComponentName:   location.EntityName,
-		KVPath:          kvPath,
-		SecretKeys:      secretKeys,
-		RefreshInterval: c.refreshInterval,
-	}
-
-	// Check if SecretReference already exists
-	_, getErr := c.ocClient.GetSecretReference(ctx, location.OrgName, secretRefName)
-	if getErr != nil {
-		// Only create if SecretReference doesn't exist (NotFound); other errors should be surfaced
-		if !errors.Is(getErr, utils.ErrNotFound) {
-			return "", fmt.Errorf("failed to check SecretReference existence: %w", getErr)
-		}
-		// SecretReference doesn't exist, create it
-		if _, createErr := c.ocClient.CreateSecretReference(ctx, location.OrgName, secretRefReq); createErr != nil {
-			// Handle race condition: another caller may have created it between our Get and Create
-			if errors.Is(createErr, utils.ErrConflict) {
-				if _, updateErr := c.ocClient.UpdateSecretReference(ctx, location.OrgName, secretRefName, secretRefReq); updateErr != nil {
-					return "", fmt.Errorf("failed to update SecretReference after create conflict: %w", updateErr)
-				}
-			} else {
-				return "", fmt.Errorf("failed to create SecretReference: %w", createErr)
-			}
-		}
-	} else {
-		// SecretReference exists, update it
-		if _, updateErr := c.ocClient.UpdateSecretReference(ctx, location.OrgName, secretRefName, secretRefReq); updateErr != nil {
-			return "", fmt.Errorf("failed to update SecretReference: %w", updateErr)
-		}
-	}
-
-	return secretRefName, nil
-}
-
 // CreateSecret creates a new secret at the location derived from SecretLocation.
-// Returns the secret reference identifier:
-//   - OpenBao with ocClient: the SecretReference CR name (via upsertSecretReference)
-//   - Secret Manager API: the SecretReferenceName from the API response
+// Returns the secret reference identifier from the provider (the name of the
+// secret, which is also the name of its provider-managed SecretReference).
 func (c *secretManagementClient) CreateSecret(ctx context.Context, location SecretLocation, secretData map[string]string) (string, error) {
-	// Convert map to JSON bytes
-	data, err := json.Marshal(secretData)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal secret data: %w", err)
-	}
-
-	// Push the secret - provider derives path/labels from location
+	// Push the secret - provider derives name/labels from location
 	metadata := &SecretMetadata{
 		ManagedBy: c.managedBy,
 	}
-	// secretRef is the provider's return value:
-	// - OpenBao: the KV path
-	// - Secret Manager API: the SecretReferenceName
-	secretRef, err := c.lowLevelClient.PushSecret(ctx, location, data, metadata)
+	secretRef, err := c.lowLevelClient.PushSecret(ctx, location, secretData, metadata)
 	if err != nil {
 		return "", fmt.Errorf("failed to upsert secret: %w", err)
-	}
-
-	// If ocClient is configured, handle SecretReference creation/update
-	// (Secret Manager API handles this internally, so ocClient will be nil)
-	if c.ocClient != nil {
-		// Extract secret keys from the data
-		secretKeys := make([]string, 0, len(secretData))
-		for key := range secretData {
-			secretKeys = append(secretKeys, key)
-		}
-		secretRefName, err := c.upsertSecretReference(ctx, location, secretRef, secretKeys)
-		if err != nil {
-			return "", err
-		}
-		return secretRefName, nil
 	}
 
 	return secretRef, nil
@@ -417,69 +334,26 @@ func (c *secretManagementClient) CreateSecret(ctx context.Context, location Secr
 // Keys in data are added/updated, keys in keysToDelete are removed.
 // Returns the secret reference identifier (same semantics as CreateSecret).
 func (c *secretManagementClient) PatchSecret(ctx context.Context, location SecretLocation, secretData map[string]string, keysToDelete []string) (string, error) {
-	// Build patch data: include updates and set deleted keys to null
-	patchData := make(map[string]any)
-	for k, v := range secretData {
-		patchData[k] = v
-	}
-	for _, k := range keysToDelete {
-		patchData[k] = nil // null signals deletion in JSON Merge Patch
-	}
-
-	// Convert to JSON bytes
-	data, err := json.Marshal(patchData)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal patch data: %w", err)
-	}
-
 	metadata := &SecretMetadata{
 		ManagedBy: c.managedBy,
 	}
-	// secretRef is the provider's return value:
-	// - OpenBao: the KV path
-	// - Secret Manager API: the SecretReferenceName
-	secretRef, err := c.lowLevelClient.PatchSecret(ctx, location, data, metadata)
+	secretRef, err := c.lowLevelClient.PatchSecret(ctx, location, secretData, keysToDelete, metadata)
 	if err != nil {
 		return "", fmt.Errorf("failed to patch secret: %w", err)
-	}
-
-	// If ocClient is configured, update the SecretReference with current keys
-	if c.ocClient != nil {
-		// Get the updated secret info to retrieve all current keys
-		secretInfo, infoErr := c.lowLevelClient.GetSecret(ctx, location)
-		if infoErr != nil {
-			return "", fmt.Errorf("failed to get secret keys after patch: %w", infoErr)
-		}
-		secretRefName, err := c.upsertSecretReference(ctx, location, secretRef, secretInfo.Keys)
-		if err != nil {
-			return "", err
-		}
-		return secretRefName, nil
 	}
 
 	return secretRef, nil
 }
 
-// DeleteSecret deletes a secret and its associated SecretReference CRD.
-// secretRefName is the name of the SecretReference CR to delete.
-// When ocClient is configured (OpenBao provider), also deletes the SecretReference.
-func (c *secretManagementClient) DeleteSecret(ctx context.Context, location SecretLocation, secretRefName string) error {
-	// Delete the KV secret - provider derives path from location
+// DeleteSecret deletes a secret and its provider-managed SecretReference.
+// secretRefName is retained for interface compatibility; the provider derives
+// the secret name from location.
+func (c *secretManagementClient) DeleteSecret(ctx context.Context, location SecretLocation, _ string) error {
 	metadata := &SecretMetadata{
 		ManagedBy: c.managedBy,
 	}
 	if err := c.lowLevelClient.DeleteSecret(ctx, location, metadata); err != nil {
 		return fmt.Errorf("failed to delete secret: %w", err)
-	}
-
-	// If ocClient is configured, also delete the SecretReference
-	if c.ocClient != nil {
-		if err := c.ocClient.DeleteSecretReference(ctx, location.OrgName, secretRefName); err != nil {
-			// Ignore not found errors - the SecretReference may not exist
-			if !errors.Is(err, utils.ErrNotFound) {
-				return fmt.Errorf("failed to delete SecretReference: %w", err)
-			}
-		}
 	}
 
 	return nil
@@ -497,25 +371,4 @@ func (c *secretManagementClient) GetSecret(ctx context.Context, kvPath string) (
 		return nil, fmt.Errorf("failed to get secret info at path %q: %w", kvPath, err)
 	}
 	return info, nil
-}
-
-// GetSecretWithValue retrieves a secret by its KV path including actual values.
-// Returns the secret data as a key-value map.
-// Returns ErrNotSupported if the provider doesn't support value retrieval.
-func (c *secretManagementClient) GetSecretWithValue(ctx context.Context, kvPath string) (map[string]string, error) {
-	location, err := ParseKVPath(kvPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse KV path %q: %w", kvPath, err)
-	}
-	raw, err := c.lowLevelClient.GetSecretWithValue(ctx, location)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get secret at path %q: %w", kvPath, err)
-	}
-
-	var data map[string]string
-	if err := json.Unmarshal(raw, &data); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal secret data: %w", err)
-	}
-
-	return data, nil
 }

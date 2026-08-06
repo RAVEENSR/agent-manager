@@ -74,6 +74,35 @@ ISOLATION_TIER=gvisor \
 
 Agents deployed or promoted to that environment automatically run under the tier's runtime — no agent-side changes are needed.
 
+### Gateway topology
+
+Every environment gets an API Platform Gateway. Its **topology** decides whether one gateway handles both directions of traffic, or two gateways split the roles — an *ingress* gateway for traffic arriving at the agents deployed in the environment, and an *egress* gateway for the calls those agents make out to LLMs, MCP servers, and other APIs.
+
+| Topology | Helm releases installed | Namespaces | Registered gateway type |
+|---|---|---|---|
+| `single` (default) | `api-platform-<org>-<env>` | `<org>-<env>` | `BOTH` |
+| `split` | `api-platform-<org>-<env>` and `api-platform-<org>-<env>-egress` | `<org>-<env>` and `<org>-<env>-egress` | `INGRESS` and `EGRESS` |
+
+In split topology each release is a complete gateway of its own — its own `APIGateway` resource, its own runtime, its own routing hostname (`<env>-<org>.gateway.localhost` for ingress, `<env>-<org>-egress.gateway.localhost` for egress) — and each registers with Agent Manager separately, with its own cluster-local runtime URL.
+
+A gateway's type is fixed when it first registers and cannot be changed afterward, so an environment's topology cannot be switched in place. To move an existing environment to split topology, delete it and create it again.
+
+:::warning
+Split topology shortens the maximum `ENV_NAME` by 7 characters, to leave room for the `-egress` suffix on the second release's Kubernetes resource names. The limit is `22 - len(ORG_NAME)` characters, minus a further 7 in split topology — for the default organization `default` that leaves **8 characters**, so `ENV_NAME=production` is rejected. Use a shorter name such as `prod`.
+
+The name the Console generates for you is not bounded by the split limit, so shorten it if you are creating a split environment.
+:::
+
+The **Create Environment** drawer has no topology option, and the command it generates always creates a single-topology environment. If you script environment creation directly instead of using the Console, set the variable yourself:
+
+```bash
+GATEWAY_TOPOLOGY=split \
+  ENV_NAME=... DISPLAY_NAME=... AGENT_MANAGER_TOKEN=... \
+  bash add-environment.sh
+```
+
+Deletion needs no equivalent flag: the delete command detects the egress release and namespace and removes them along with the ingress gateway, and does nothing extra for a single-topology environment.
+
 ### Delete an environment
 
 1. On the Environments page, open the **Delete** action for the environment you want to remove.
@@ -86,6 +115,51 @@ Agents deployed or promoted to that environment automatically run under the tier
 :::note
 An environment cannot be deleted while it is still referenced by a deployment pipeline. Remove it from any pipeline first.
 :::
+
+### Access the Environment ThunderID Console
+
+Creating an environment does more than register it in Agent Manager. The same command also
+provisions a dedicated ThunderID instance for that environment, which is what issues
+[AgentID](../concepts/agentid.mdx) credentials to every agent deployed there.
+
+The command's terminal output ends with the console details for the new instance:
+
+```text
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Thunder ID Console - production
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  URL:      http://default-production.thunder.amp.localhost:8080/console
+  Username: admin
+  Password: <a freshly generated password>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+Save the password before you close the terminal. It is generated once when the environment is
+created, and is not displayed again.
+
+| Field | Where it comes from |
+|---|---|
+| **URL** | `http://<org>-<env>.thunder.<base domain>:8080/console` for a local installation, or an `https://` address on a VM or cluster with TLS enabled. |
+| **Username** | Always `admin`, scoped to this environment's ThunderID instance only. |
+| **Password** | Randomly generated the first time the environment is provisioned, then reused on every re-run of the same command. |
+
+:::tip
+If you lose the password, you do not need to recreate the environment. It is stored in a
+Kubernetes secret named `amp-thunder-<org>-<env>-admin-credentials`, in the namespace of the
+same name, and can be read again with:
+
+```bash
+kubectl get secret amp-thunder-<org>-<env>-admin-credentials \
+  -n amp-thunder-<org>-<env> \
+  -o jsonpath="{.data.password}" | base64 -d
+```
+:::
+
+Log in to this console to inspect the environment's ThunderID instance directly, for example to
+look up an agent's OAuth application by name. Day-to-day AgentID operations such as
+provisioning, viewing, rotating, and revoking a credential are done through Agent Manager
+instead, as described in [AgentID](../concepts/agentid.mdx), so you do not need to work in this
+console for routine tasks.
 
 ---
 

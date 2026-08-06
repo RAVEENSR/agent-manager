@@ -30,18 +30,11 @@ import { ProfileDrawer } from "./ProfileDrawer";
 import { useAuthHooks } from "@agent-management-platform/auth";
 import { Logo, useExternalComponentModules } from "@agent-management-platform/views";
 import { globalConfig, absoluteRouteMap } from "@agent-management-platform/types";
-import { LeftNavigation, type NavigationItem, type NavigationSection } from "./LeftNavigation";
+import { LeftNavigation, combineNavItems, flattenWithChildren } from "./LeftNavigation";
 import { useNavigationItems } from "./navigationItems";
 import { TopNavigation } from "./TopNavigation";
 import { useListOrganizations } from "@agent-management-platform/api-client";
 import { MountPoints } from "../../types";
-
-const getFlattenedItems = (
-  mainItems: NavigationItem[],
-  groupedItems: NavigationSection[],
-) => {
-  return [...mainItems, ...groupedItems.flatMap((item) => item.items)];
-};
 
 export function OxygenLayout() {
   const [collapsed, setCollapsed] = useState(false);
@@ -78,7 +71,7 @@ export function OxygenLayout() {
   );
 
   const activeItem = useMemo(() => {
-    const flattenedItems = getFlattenedItems(mainItems, groupedItems);
+    const flattenedItems = flattenWithChildren(combineNavItems(mainItems, groupedItems));
     return flattenedItems.find((item) => item.isActive)?.label ?? "";
   }, [mainItems, groupedItems]);
 

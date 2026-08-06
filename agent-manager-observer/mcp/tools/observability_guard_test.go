@@ -25,6 +25,7 @@ import (
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/wso2/agent-manager/agent-manager-observer/controllers"
+	"github.com/wso2/agent-manager/agent-manager-observer/rbac"
 )
 
 // tokenWithAudience builds a throwaway HS256-signed token carrying aud. The
@@ -48,9 +49,10 @@ func requestWithAuth(authHeader string) *gomcp.CallToolRequest {
 	return req
 }
 
-// The three observability tools must reject publisher-audience tokens, mirroring
-// the REST RejectPublisherAudience guard, so the /mcp trace-tool carve-out can't
-// be used to read logs/build-logs/metrics.
+// The three observability tools must reject publisher-audience tokens even
+// with RBAC disabled — publishers are confined to their implicit trace-read
+// permission, so the /mcp trace-tool carve-out can't be used to read
+// logs/build-logs/metrics.
 func TestObservabilityTools_RejectPublisherToken(t *testing.T) {
 	validLogsInput := runtimeLogsInput{
 		Organization: testOrgName,
@@ -76,7 +78,7 @@ func TestObservabilityTools_RejectPublisherToken(t *testing.T) {
 		{
 			name: "get_runtime_logs",
 			call: func(fake *fakeObserverClient, req *gomcp.CallToolRequest) error {
-				_, _, err := getRuntimeLogs(controllers.NewObservabilityController(fake))(context.Background(), req, validLogsInput)
+				_, _, err := getRuntimeLogs(controllers.NewObservabilityController(fake), requireToolPermission(false, rbac.LogRead))(context.Background(), req, validLogsInput)
 				return err
 			},
 			upstreamMethod: "QueryLogs",
@@ -84,7 +86,7 @@ func TestObservabilityTools_RejectPublisherToken(t *testing.T) {
 		{
 			name: "get_build_logs",
 			call: func(fake *fakeObserverClient, req *gomcp.CallToolRequest) error {
-				_, _, err := getBuildLogs(controllers.NewObservabilityController(fake))(context.Background(), req, validBuildLogsInput)
+				_, _, err := getBuildLogs(controllers.NewObservabilityController(fake), requireToolPermission(false, rbac.BuildLogRead))(context.Background(), req, validBuildLogsInput)
 				return err
 			},
 			upstreamMethod: "QueryLogs",
@@ -92,7 +94,7 @@ func TestObservabilityTools_RejectPublisherToken(t *testing.T) {
 		{
 			name: "get_metrics",
 			call: func(fake *fakeObserverClient, req *gomcp.CallToolRequest) error {
-				_, _, err := getMetrics(controllers.NewObservabilityController(fake))(context.Background(), req, validMetricsInput)
+				_, _, err := getMetrics(controllers.NewObservabilityController(fake), requireToolPermission(false, rbac.MetricRead))(context.Background(), req, validMetricsInput)
 				return err
 			},
 			upstreamMethod: "QueryMetrics",

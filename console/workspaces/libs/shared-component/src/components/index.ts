@@ -20,14 +20,17 @@ export * from "./BuildLogs";
 export * from "./BuildPanel";
 export * from "./BuildSteps";
 export * from "./CodeBlock";
-export * from "./DeploymentConfig";
+export * from "./CollapsibleSection";
 export * from "./EnvironmentVariable";
 export * from "./LabelsEditor";
+export * from "./MarkdownEditor";
 export * from "./LabelChips";
 export * from "./FileMountSection";
 export * from "./ResourceMetricChip";
 export * from "./GatewayTypeChip";
+export * from "./InfoCard";
 export * from "./EnvironmentCard";
+export * from "./OverviewSectionCard";
 export * from "./IsolationTierIndicator";
 export * from "./InvokeEndpoints";
 export * from "./ConfirmationDialog";
@@ -83,3 +86,8 @@ export {
   SingleAPIKeyManager,
   type SingleAPIKeyManagerProps,
 } from "./APIKeysManager/SingleAPIKeyManager";
+export {
+  PermissionTree,
+  type PermissionTreeItem,
+  type PermissionTreeProps,
+} from "./PermissionTree/PermissionTree";

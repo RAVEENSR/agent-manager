@@ -15,13 +15,15 @@
  * under the License.
  */
 
+import { ShieldCheck } from "@wso2/oxygen-ui-icons-react";
 import type { PageMetadata } from "@agent-management-platform/types";
 import { ThunderInstancesOrganization } from "./ThunderInstances.Organization";
 import { thunderInstancesMetadata } from "./metadata";
+import { AgentIdComponent } from "./agentId/AgentId.Component";
 
 export const thunderInstancesMetaData: PageMetadata = {
   title: thunderInstancesMetadata.title,
-  description: "Environment-scoped agent identity providers for agent authentication",
+  description: "Environment-scoped agent identities for agent authentication",
   icon: thunderInstancesMetadata.icon,
   path: "/thunder-instances",
   component: ThunderInstancesOrganization,
@@ -30,6 +32,14 @@ export const thunderInstancesMetaData: PageMetadata = {
   },
 };
 
-export { ThunderInstancesOrganization, thunderInstancesMetadata };
+export const agentIdMetaData: PageMetadata = {
+  title: "Agent ID",
+  description: "Client credentials, roles & groups, and OAuth2 endpoints for an agent's identity",
+  icon: ShieldCheck,
+  path: "/agent-id",
+  component: AgentIdComponent,
+};
+
+export { ThunderInstancesOrganization, thunderInstancesMetadata, AgentIdComponent };
 
 export default ThunderInstancesOrganization;

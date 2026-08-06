@@ -16,31 +16,45 @@
  * under the License.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Button,
-  Card,
-  CardContent,
   CircularProgress,
+  Form,
+  MenuItem,
+  Select,
   Stack,
+  Switch,
   Typography,
 } from "@wso2/oxygen-ui";
-import { Plus, SlidersVertical } from "@wso2/oxygen-ui-icons-react";
+import { Plus, RefreshCw, SlidersVertical } from "@wso2/oxygen-ui-icons-react";
 import {
   DrawerContent,
   DrawerHeader,
   DrawerWrapper,
   EnvVariableEditor,
   FileMountEditor,
+  TokenExpirySelector,
+  DEFAULT_TOKEN_EXPIRY,
   useSnackBar,
 } from "@agent-management-platform/views";
+import { useConfirmationDialog } from "@agent-management-platform/shared-component";
 import {
+  useAgentBuildOptions,
   useDeployAgent,
   useGetAgentConfigurations,
+  useRegenerateTracingToken,
   useUpdateAgentConfigurations,
+  useUpdateAgentDeploySettings,
 } from "@agent-management-platform/api-client";
-import type { EnvironmentVariable, FileMount } from "@agent-management-platform/types";
+import type {
+  EnvironmentVariable,
+  FileMount,
+  UpdateAgentDeploySettingsRequest,
+} from "@agent-management-platform/types";
+import { compatibleInstrumentationVersions, pickInstrumentationVersion } from "../utils/instrumentation";
+import { SecurityConfigSections, type SecurityConfigHandle } from "./SecurityConfigSections";
 
 export interface EditDeployConfigDrawerProps {
   open: boolean;
@@ -59,6 +73,14 @@ export interface EditDeployConfigDrawerProps {
   mode: "update" | "deploy";
   /** Required when mode === "deploy". */
   imageId?: string;
+  // Tracing/instrumentation context — supplied by DeployCard for deployed Python agents so the
+  // "Tracing - Instrumentation" section can render. Omitted by BuildCard (initial deploy) and
+  // non-Python agents, which hides the section entirely.
+  isPythonBuildpack?: boolean;
+  agentPythonVersion?: string;
+  // When true (API agents, update mode), the CORS + Endpoint Authentication sections render at the
+  // top of the drawer. Omitted by BuildCard (initial deploy) and non-API agents.
+  isApiAgent?: boolean;
 }
 
 export function EditDeployConfigDrawer({
@@ -71,8 +93,18 @@ export function EditDeployConfigDrawer({
   environment,
   title,
   mode,
+  isPythonBuildpack,
+  agentPythonVersion,
+  isApiAgent,
 }: EditDeployConfigDrawerProps) {
   const { pushSnackBar } = useSnackBar();
+  const { addConfirmation } = useConfirmationDialog();
+
+  // CORS + Endpoint Authentication live in a child component that owns its own state; we collect
+  // its payload on Apply via the imperative handle.
+  const showSecurity = mode === "update" && !!isApiAgent;
+  const securityRef = useRef<SecurityConfigHandle>(null);
+  const [securityValid, setSecurityValid] = useState(true);
 
   const { data: configurations } = useGetAgentConfigurations(
     { orgName, projName, agentName },
@@ -82,18 +114,71 @@ export function EditDeployConfigDrawer({
   const [env, setEnv] = useState<EnvironmentVariable[]>([]);
   const [files, setFiles] = useState<FileMount[]>([]);
 
+  // Tracing section (mode === "update" && Python agent only).
+  const showTracing = mode === "update" && !!isPythonBuildpack;
+  const [tracingEnabled, setTracingEnabled] = useState(false);
+  const [instrumentationVersion, setInstrumentationVersion] = useState<string>("");
+  const [versionDirty, setVersionDirty] = useState(false);
+  const [tokenExpiry, setTokenExpiry] = useState<string>(DEFAULT_TOKEN_EXPIRY);
+
+  const { data: buildOptions } = useAgentBuildOptions({ orgName });
+  const compatibleInstrumentation = useMemo(
+    () => compatibleInstrumentationVersions(buildOptions, agentPythonVersion),
+    [buildOptions, agentPythonVersion],
+  );
+  const versionInCompatibleSet = compatibleInstrumentation.some(
+    (v) => v.version === instrumentationVersion,
+  );
+
+  // Seed edit state once per open cycle. Guarding with a ref prevents a background refetch of
+  // configurations (window-focus / stale-time) from wiping unsaved edits while the drawer is open.
+  const seededRef = useRef(false);
   useEffect(() => {
-    if (!open) return;
-    const cfg = configurations?.configurations;
+    if (!open) {
+      seededRef.current = false;
+      return;
+    }
+    if (seededRef.current || !configurations) return;
+    const cfg = configurations.configurations;
     setEnv(cfg?.env?.map(
       (e) => ({ key: e.key, value: e.value ?? "", isSensitive: e.isSensitive, secretRef: e.secretRef }),
     ) ?? []);
     setFiles(cfg?.files ?? []);
+    setTracingEnabled(configurations.enableAutoInstrumentation ?? false);
+    setInstrumentationVersion("");
+    setVersionDirty(false);
+    setTokenExpiry(DEFAULT_TOKEN_EXPIRY);
+    seededRef.current = true;
   }, [open, configurations]);
+
+  // Seed the version selector for display once the catalog has loaded; re-seed while the current
+  // value is not compatible (self-corrects a stale seed without clobbering a valid user choice).
+  useEffect(() => {
+    if (!open || !showTracing || !buildOptions) return;
+    if (versionInCompatibleSet) return;
+    setInstrumentationVersion(
+      pickInstrumentationVersion(
+        compatibleInstrumentation,
+        configurations?.instrumentationVersion,
+        buildOptions.instrumentation.defaultVersion,
+      ),
+    );
+  }, [
+    open, showTracing, buildOptions, compatibleInstrumentation, configurations,
+    versionInCompatibleSet,
+  ]);
 
   const { mutate: deployAgent, isPending: isDeploying } = useDeployAgent();
   const { mutate: updateConfigs, isPending: isUpdating } = useUpdateAgentConfigurations();
-  const isPending = isDeploying || isUpdating;
+  const { mutate: updateDeploySettings, isPending: isUpdatingSettings } =
+    useUpdateAgentDeploySettings();
+  const { mutate: regenerateToken, isPending: isRegenerating } = useRegenerateTracingToken();
+  const isPending = isDeploying || isUpdating || isUpdatingSettings;
+
+  const errorHandler = useCallback((error: unknown) => {
+    const body = (error as { body?: { message?: string } })?.body;
+    pushSnackBar({ message: body?.message ?? "Failed to apply configuration", type: "error" });
+  }, [pushSnackBar]);
 
   const handleSave = useCallback(() => {
     const validEnv = env.filter((e) => e.key).map(({ key, value, isSensitive, secretRef }) => {
@@ -104,22 +189,44 @@ export function EditDeployConfigDrawer({
       return { key, value, isSensitive };
     });
     const validFiles = files.filter((f) => f.key && f.mountPath);
-    const errorHandler = (error: unknown) => {
-      const body = (error as { body?: { message?: string } })?.body;
-      pushSnackBar({ message: body?.message ?? "Failed to apply configuration", type: "error" });
-    };
 
     if (mode === "update") {
-      // Replace per-env env/files on the existing release binding. Sending an empty
-      // array clears user-managed entries (system-managed env vars are re-injected
-      // server-side and don't need to appear in this payload).
-      updateConfigs(
-        {
-          params: { orgName, projName, agentName },
-          body: { environmentName: environment, env: validEnv, files: validFiles },
-        },
-        { onSuccess: () => onClose(), onError: errorHandler },
-      );
+      if (showSecurity && securityRef.current && !securityRef.current.validate()) {
+        pushSnackBar({ message: "Fix the highlighted security settings before applying", type: "error" });
+        return;
+      }
+
+      const applyConfigs = () =>
+        updateConfigs(
+          {
+            params: { orgName, projName, agentName },
+            body: { environmentName: environment, env: validEnv, files: validFiles },
+          },
+          { onSuccess: () => onClose(), onError: errorHandler },
+        );
+
+      // Combine CORS/Auth (security) and tracing into a single deploy-settings call. The version is
+      // sent only when the user changed it to a compatible value while tracing is on — otherwise
+      // omitted so the backend preserves the existing pin (an unpinned agent keeps the default).
+      const deploySettingsBody: UpdateAgentDeploySettingsRequest = {
+        environmentName: environment,
+        ...(showSecurity && securityRef.current ? securityRef.current.buildBody() : {}),
+        ...(showTracing && {
+          enableAutoInstrumentation: tracingEnabled,
+          ...(tracingEnabled && versionDirty && versionInCompatibleSet && instrumentationVersion
+            ? { instrumentationVersion }
+            : {}),
+        }),
+      };
+
+      if (showSecurity || showTracing) {
+        updateDeploySettings(
+          { params: { orgName, projName, agentName }, body: deploySettingsBody },
+          { onSuccess: applyConfigs, onError: errorHandler },
+        );
+      } else {
+        applyConfigs();
+      }
       return;
     }
 
@@ -140,7 +247,40 @@ export function EditDeployConfigDrawer({
     );
   }, [
     mode, env, files, environment, imageId, orgName, projName, agentName,
-    deployAgent, updateConfigs, onClose, pushSnackBar,
+    showSecurity, showTracing, tracingEnabled, instrumentationVersion, versionDirty,
+    versionInCompatibleSet,
+    deployAgent, updateConfigs, updateDeploySettings, onClose, pushSnackBar, errorHandler,
+  ]);
+
+  // Regenerate mints + stores the new key immediately (no pre-confirm). The key only takes effect
+  // once the workload restarts, so on success we prompt to Apply — confirming runs the same
+  // Apply as the button (handleSave), which restarts the agent via the standard config path.
+  const handleRegenerateToken = useCallback(() => {
+    regenerateToken(
+      {
+        params: { orgName, projName, agentName },
+        body: { environmentName: environment, expiresIn: tokenExpiry },
+      },
+      {
+        onSuccess: (res) => {
+          const expires = new Date(res.expiresAt * 1000).toLocaleDateString();
+          addConfirmation({
+            title: "Apply to restart the agent?",
+            description:
+              `Tracing API key regenerated (expires ${expires}). Apply the configuration to ` +
+              `restart the agent in ${environment} so the new key takes effect. Previously issued ` +
+              "keys remain valid until they expire.",
+            confirmButtonText: "Apply",
+            confirmButtonColor: "warning",
+            onConfirm: () => handleSave(),
+          });
+        },
+        onError: errorHandler,
+      },
+    );
+  }, [
+    regenerateToken, orgName, projName, agentName, environment, tokenExpiry,
+    addConfirmation, handleSave, errorHandler,
   ]);
 
   // ── Env handlers ─────────────────────────────────────────────────────────
@@ -184,87 +324,168 @@ export function EditDeployConfigDrawer({
     <DrawerWrapper open={open} onClose={onClose}>
       <DrawerHeader icon={<SlidersVertical size={24} />} title={title} onClose={onClose} />
       <DrawerContent>
-        <Stack spacing={3}>
-          <Card variant="outlined">
-            <CardContent>
-              <Stack spacing={1.5}>
-                <Stack direction="row" justifyContent="space-between" alignItems="center">
-                  <Typography variant="h6">Environment Variables</Typography>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    startIcon={<Plus size={14} />}
-                    onClick={handleAddEnv}
-                    disabled={isPending}
-                  >
-                    Add
-                  </Button>
-                </Stack>
-                {env.length === 0 ? (
-                  <Typography variant="body2" color="text.secondary">
-                    No environment variables. Click Add to define them.
-                  </Typography>
-                ) : (
-                  <Stack spacing={1}>
-                    {env.map((item, index) => (
-                      <EnvVariableEditor
-                        key={index}
-                        index={index}
-                        keyValue={item.key}
-                        valueValue={item.value}
-                        isSensitive={item.isSensitive ?? false}
-                        isExistingSecret={!!(item.secretRef && item.isSensitive)}
-                        onKeyChange={(v) => handleEnvChange(index, "key", v)}
-                        onValueChange={(v) => handleEnvChange(index, "value", v)}
-                        onSensitiveChange={(v) => handleEnvChange(index, "isSensitive", v)}
-                        onRemove={() => handleRemoveEnv(index)}
-                      />
-                    ))}
-                  </Stack>
-                )}
-              </Stack>
-            </CardContent>
-          </Card>
+        <Form.Stack spacing={3}>
+          {showSecurity && (
+            <SecurityConfigSections
+              ref={securityRef}
+              orgName={orgName}
+              projName={projName}
+              agentName={agentName}
+              environment={environment}
+              open={open}
+              disabled={isPending}
+              configurations={configurations}
+              onValidityChange={setSecurityValid}
+            />
+          )}
 
-          <Card variant="outlined">
-            <CardContent>
-              <Stack spacing={1.5}>
+          {showTracing && (
+            <Form.Section>
+              <Form.Header>Tracing - Instrumentation</Form.Header>
+              <Stack spacing={2}>
                 <Stack direction="row" justifyContent="space-between" alignItems="center">
-                  <Typography variant="h6">File Mounts</Typography>
-                  <Button
+                  <Typography variant="body2">Auto-Instrumentation</Typography>
+                  <Switch
                     size="small"
-                    variant="outlined"
-                    startIcon={<Plus size={14} />}
-                    onClick={handleAddFile}
+                    checked={tracingEnabled}
                     disabled={isPending}
-                  >
-                    Add
-                  </Button>
+                    onChange={(_, checked) => setTracingEnabled(checked)}
+                  />
                 </Stack>
-                {files.length === 0 ? (
-                  <Typography variant="body2" color="text.secondary">
-                    No file mounts. Click Add to define them.
-                  </Typography>
-                ) : (
-                  <Stack spacing={1}>
-                    {files.map((file, index) => (
-                      <FileMountEditor
-                        key={index}
-                        index={index}
-                        keyValue={file.key}
-                        mountPathValue={file.mountPath}
-                        contentValue={file.value}
-                        onKeyChange={(v) => handleFileChange(index, "key", v)}
-                        onMountPathChange={(v) => handleFileChange(index, "mountPath", v)}
-                        onContentChange={(v) => handleFileChange(index, "value", v)}
-                        onRemove={() => handleRemoveFile(index)}
-                      />
-                    ))}
+
+                {tracingEnabled && (
+                  <Stack direction="row" justifyContent="space-between" alignItems="center">
+                    <Typography variant="body2">Instrumentation Version</Typography>
+                    {compatibleInstrumentation.length === 0 && buildOptions ? (
+                      <Typography variant="caption" color="text.secondary">
+                        None available for Python {agentPythonVersion ?? "runtime"}
+                      </Typography>
+                    ) : (
+                      <Select
+                        size="small"
+                        value={versionInCompatibleSet ? instrumentationVersion : ""}
+                        disabled={isPending || !buildOptions}
+                        onChange={(e) => {
+                          setInstrumentationVersion(e.target.value as string);
+                          setVersionDirty(true);
+                        }}
+                        sx={{ minWidth: 200 }}
+                      >
+                        {compatibleInstrumentation.map((v) => (
+                          <MenuItem key={v.version} value={v.version}>
+                            {v.traceloopSdk
+                              ? `${v.version} (OpenLLMetry v${v.traceloopSdk})`
+                              : v.version}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                    )}
                   </Stack>
                 )}
+
+                <Stack direction="row" justifyContent="space-between" alignItems="center">
+                  <Stack>
+                    <Typography variant="body2">Tracing API Key</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      The API key the agent uses to authenticate trace ingestion
+                    </Typography>
+                  </Stack>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <TokenExpirySelector
+                      value={tokenExpiry}
+                      onChange={setTokenExpiry}
+                      disabled={isRegenerating}
+                    />
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      color="warning"
+                      startIcon={
+                        isRegenerating ? <CircularProgress size={14} /> : <RefreshCw size={14} />
+                      }
+                      onClick={handleRegenerateToken}
+                      disabled={isRegenerating || isPending}
+                    >
+                      Regenerate
+                    </Button>
+                  </Stack>
+                </Stack>
               </Stack>
-            </CardContent>
-          </Card>
+            </Form.Section>
+          )}
+
+          <Form.Section>
+            <Stack direction="row" justifyContent="space-between" alignItems="center">
+              <Form.Header>Environment Variables</Form.Header>
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<Plus size={14} />}
+                onClick={handleAddEnv}
+                disabled={isPending}
+              >
+                Add
+              </Button>
+            </Stack>
+            {env.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                No environment variables. Click Add to define them.
+              </Typography>
+            ) : (
+              <Stack spacing={1}>
+                {env.map((item, index) => (
+                  <EnvVariableEditor
+                    key={index}
+                    index={index}
+                    keyValue={item.key}
+                    valueValue={item.value}
+                    isSensitive={item.isSensitive ?? false}
+                    isExistingSecret={!!(item.secretRef && item.isSensitive)}
+                    onKeyChange={(v) => handleEnvChange(index, "key", v)}
+                    onValueChange={(v) => handleEnvChange(index, "value", v)}
+                    onSensitiveChange={(v) => handleEnvChange(index, "isSensitive", v)}
+                    onRemove={() => handleRemoveEnv(index)}
+                  />
+                ))}
+              </Stack>
+            )}
+          </Form.Section>
+
+          <Form.Section>
+            <Stack direction="row" justifyContent="space-between" alignItems="center">
+              <Form.Header>File Mounts</Form.Header>
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<Plus size={14} />}
+                onClick={handleAddFile}
+                disabled={isPending}
+              >
+                Add
+              </Button>
+            </Stack>
+            {files.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                No file mounts. Click Add to define them.
+              </Typography>
+            ) : (
+              <Stack spacing={1}>
+                {files.map((file, index) => (
+                  <FileMountEditor
+                    key={index}
+                    index={index}
+                    keyValue={file.key}
+                    mountPathValue={file.mountPath}
+                    contentValue={file.value}
+                    onKeyChange={(v) => handleFileChange(index, "key", v)}
+                    onMountPathChange={(v) => handleFileChange(index, "mountPath", v)}
+                    onContentChange={(v) => handleFileChange(index, "value", v)}
+                    onRemove={() => handleRemoveFile(index)}
+                  />
+                ))}
+              </Stack>
+            )}
+          </Form.Section>
 
           <Box display="flex" justifyContent="flex-end" gap={1}>
             <Button variant="outlined" onClick={onClose} disabled={isPending}>
@@ -274,13 +495,13 @@ export function EditDeployConfigDrawer({
               variant="contained"
               color="primary"
               onClick={handleSave}
-              disabled={isPending}
+              disabled={isPending || isRegenerating || (showSecurity && !securityValid)}
               startIcon={isPending ? <CircularProgress size={16} /> : undefined}
             >
               {isPending ? "Applying..." : mode === "deploy" ? "Apply & Deploy" : "Apply"}
             </Button>
           </Box>
-        </Stack>
+        </Form.Stack>
       </DrawerContent>
     </DrawerWrapper>
   );

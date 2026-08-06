@@ -21,7 +21,7 @@ import { useCallback, useEffect, useMemo } from "react";
 import { useParams } from "react-router-dom";
 import { debounce } from "lodash";
 import { useGenerateResourceName } from "@agent-management-platform/api-client";
-import { LabelsEditor } from "@agent-management-platform/shared-component";
+import { LabelsEditor, MarkdownEditor } from "@agent-management-platform/shared-component";
 import type { CreateAgentFormValues } from "../form/schema";
 
 interface CatalogAgentFormProps {
@@ -132,17 +132,13 @@ export const CatalogAgentForm = ({
           />
         </Form.ElementWrapper>
         <Form.ElementWrapper label="Description (optional)" name="description">
-          <TextField
+          <MarkdownEditor
             id="description"
-            placeholder="Short description of what this agent does"
-            multiline
-            minRows={2}
-            maxRows={6}
+            placeholder="Short description of what this agent does. Markdown is supported."
             value={formData.description || ""}
-            onChange={(e) => handleFieldChange("description", e.target.value)}
+            onChange={(value) => handleFieldChange("description", value)}
             error={!!errors.description}
             helperText={errors.description}
-            fullWidth
           />
         </Form.ElementWrapper>
         <Form.ElementWrapper label="Labels (optional)" name="labels">

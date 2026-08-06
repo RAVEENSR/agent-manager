@@ -22,12 +22,14 @@ import {
   DrawerWrapper,
   DrawerHeader,
   DrawerContent,
+  useDirtyState,
+  useDrawerFullscreen,
   useFormValidation,
-  useDirtyState
 } from "@agent-management-platform/views";
 import { z } from "zod";
 import { useListDeploymentPipelines, useListEnvironments, useUpdateProject } from "@agent-management-platform/api-client";
 import { type DeploymentPipelineResponse, ProjectResponse, UpdateProjectRequest } from "@agent-management-platform/types";
+import { MarkdownEditor } from "@agent-management-platform/shared-component";
 import { useEffect, useState, useCallback, useMemo } from "react";
 
 function pipelineChainLabel(
@@ -114,8 +116,9 @@ export function EditProjectDrawer({ open, onClose, project, orgId }: EditProject
     description: project.description || '',
     deploymentPipeline: project.deploymentPipeline || '',
   });
+  const { isFullscreen, toggle: toggleFullscreen, reset: resetFullscreen } = useDrawerFullscreen();
 
-  const { 
+  const {
     errors, 
     validateField,
     validateForm, 
@@ -176,8 +179,9 @@ export function EditProjectDrawer({ open, onClose, project, orgId }: EditProject
       });
       clearErrors();
       resetDirty();
+      resetFullscreen();
     }
-  }, [project, open, clearErrors, resetDirty]);
+  }, [project, open, clearErrors, resetDirty, resetFullscreen]);
 
   const handleSubmit = useCallback((e: React.FormEvent) => {
     e.preventDefault();
@@ -211,11 +215,13 @@ export function EditProjectDrawer({ open, onClose, project, orgId }: EditProject
   }, [formData.displayName, formData.name, errors]);
 
   return (
-    <DrawerWrapper open={open} onClose={onClose}>
+    <DrawerWrapper open={open} onClose={onClose} fullscreen={isFullscreen}>
       <DrawerHeader
         icon={<Edit size={24} />}
         title="Edit Project"
         onClose={onClose}
+        isFullscreen={isFullscreen}
+        onToggleFullscreen={toggleFullscreen}
       />
       <DrawerContent>
         <form onSubmit={handleSubmit}>
@@ -240,17 +246,12 @@ export function EditProjectDrawer({ open, onClose, project, orgId }: EditProject
                     />
                   </Form.ElementWrapper>
                   <Form.ElementWrapper label="Description (optional)" name="description">
-                    <TextField
+                    <MarkdownEditor
                       id="description"
-                      placeholder="Short description of this project"
-                      fullWidth
-                      size="small"
-                      multiline
-                      minRows={2}
-                      maxRows={6}
+                      placeholder="Short description of this project. Markdown is supported."
                       disabled={isPending}
-                      value={formData.description}
-                      onChange={(e) => handleFieldChange('description', e.target.value)}
+                      value={formData.description || ''}
+                      onChange={(value) => handleFieldChange('description', value)}
                       error={!!errors.description}
                       helperText={errors.description}
                     />

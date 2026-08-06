@@ -39,6 +39,9 @@ import (
 type Toolsets struct {
 	Tracing       *controllers.TracingController
 	Observability *controllers.ObservabilityController
+	// RBACEnabled mirrors the REST routes' RBAC_ENABLED kill-switch: when set,
+	// every tool requires its amp:observability:* scope on the per-call token.
+	RBACEnabled bool
 }
 
 // Register wires every tool onto server. Toolsets left nil are skipped, so

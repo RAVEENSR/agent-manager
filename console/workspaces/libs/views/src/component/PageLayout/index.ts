@@ -17,3 +17,4 @@
  */
 
 export * from './PageLayout';
+export * from './PageHeader';

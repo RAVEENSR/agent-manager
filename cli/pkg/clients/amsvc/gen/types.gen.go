@@ -635,16 +635,46 @@ func (e GatewayTokenInfoStatus) Valid() bool {
 
 // Defines values for GatewayType.
 const (
-	GatewayTypeAI      GatewayType = "AI"
-	GatewayTypeREGULAR GatewayType = "REGULAR"
+	GatewayTypeBOTH    GatewayType = "BOTH"
+	GatewayTypeEGRESS  GatewayType = "EGRESS"
+	GatewayTypeINGRESS GatewayType = "INGRESS"
 )
 
 // Valid indicates whether the value is a known member of the GatewayType enum.
 func (e GatewayType) Valid() bool {
 	switch e {
-	case GatewayTypeAI:
+	case GatewayTypeBOTH:
 		return true
-	case GatewayTypeREGULAR:
+	case GatewayTypeEGRESS:
+		return true
+	case GatewayTypeINGRESS:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GatewayTypeInput.
+const (
+	GatewayTypeInputAI      GatewayTypeInput = "AI"
+	GatewayTypeInputBOTH    GatewayTypeInput = "BOTH"
+	GatewayTypeInputEGRESS  GatewayTypeInput = "EGRESS"
+	GatewayTypeInputINGRESS GatewayTypeInput = "INGRESS"
+	GatewayTypeInputREGULAR GatewayTypeInput = "REGULAR"
+)
+
+// Valid indicates whether the value is a known member of the GatewayTypeInput enum.
+func (e GatewayTypeInput) Valid() bool {
+	switch e {
+	case GatewayTypeInputAI:
+		return true
+	case GatewayTypeInputBOTH:
+		return true
+	case GatewayTypeInputEGRESS:
+		return true
+	case GatewayTypeInputINGRESS:
+		return true
+	case GatewayTypeInputREGULAR:
 		return true
 	default:
 		return false
@@ -1041,24 +1071,6 @@ func (e ListCatalogResourcesParamsKind) Valid() bool {
 	}
 }
 
-// Defines values for ListGatewaysParamsType.
-const (
-	ListGatewaysParamsTypeAI      ListGatewaysParamsType = "AI"
-	ListGatewaysParamsTypeREGULAR ListGatewaysParamsType = "REGULAR"
-)
-
-// Valid indicates whether the value is a known member of the ListGatewaysParamsType enum.
-func (e ListGatewaysParamsType) Valid() bool {
-	switch e {
-	case ListGatewaysParamsTypeAI:
-		return true
-	case ListGatewaysParamsTypeREGULAR:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ListGatewaysParamsStatus.
 const (
 	ACTIVE       ListGatewaysParamsStatus = "ACTIVE"
@@ -1260,6 +1272,19 @@ type AgentBuildOptionsResponse struct {
 	Python          AgentBuildOptionsPython          `json:"python"`
 }
 
+// AgentCreatedBy The user who created this agent. Resolved from an audit-only
+// requester id captured at creation time, so it is best-effort and
+// omitted entirely when unknown (e.g. agents created before this was
+// tracked, or where the creating user could not be resolved).
+type AgentCreatedBy struct {
+	// Display Display name/username of the creator, when resolvable. Omitted
+	// if the user has since been deleted.
+	Display *string `json:"display,omitempty"`
+
+	// Id User ID of the creator
+	Id string `json:"id"`
+}
+
 // AgentIdentityActionRequest Request body for regenerating an AgentID secret
 type AgentIdentityActionRequest struct {
 	// Environment Environment name to regenerate the AgentID secret in
@@ -1377,7 +1402,7 @@ type AgentIdentityScopeListResponse struct {
 
 // AgentKindConfigSchemaItem defines model for AgentKindConfigSchemaItem.
 type AgentKindConfigSchemaItem struct {
-	// DefaultValue Default value if not provided by the user
+	// DefaultValue Default value if not provided by the user (plain text for input; for a secret item, responses never carry the real value, only a masked placeholder if a default exists, or nothing if it doesn't)
 	DefaultValue *string `json:"defaultValue,omitempty"`
 
 	// Description Description of the configuration item
@@ -1569,8 +1594,14 @@ type AgentResponse struct {
 	Build          *Build          `json:"build,omitempty"`
 	Configurations *Configurations `json:"configurations,omitempty"`
 	CreatedAt      time.Time       `json:"createdAt"`
-	Description    string          `json:"description"`
-	DisplayName    string          `json:"displayName"`
+
+	// CreatedBy The user who created this agent. Resolved from an audit-only
+	// requester id captured at creation time, so it is best-effort and
+	// omitted entirely when unknown (e.g. agents created before this was
+	// tracked, or where the creating user could not be resolved).
+	CreatedBy   *AgentCreatedBy `json:"createdBy,omitempty"`
+	Description string          `json:"description"`
+	DisplayName string          `json:"displayName"`
 
 	// InputInterface Endpoint configurations
 	InputInterface *InputInterface `json:"inputInterface,omitempty"`
@@ -2018,12 +2049,31 @@ type ConfigurationResponse struct {
 		// Files List of file mount configurations
 		Files []FileMount `json:"files"`
 	} `json:"configurations"`
+	CorsConfig *CORSConfig `json:"corsConfig,omitempty"`
+
+	// EnableApiKeySecurity Whether API key security is enabled for this environment's agent endpoint
+	EnableApiKeySecurity *bool `json:"enableApiKeySecurity,omitempty"`
+
+	// EnableAutoInstrumentation Whether auto-instrumentation (tracing) is enabled for this environment
+	EnableAutoInstrumentation *bool `json:"enableAutoInstrumentation,omitempty"`
+
+	// EnableOAuthSecurity Whether OAuth security is enabled for this environment's agent endpoint
+	EnableOAuthSecurity *bool `json:"enableOAuthSecurity,omitempty"`
 
 	// Environment Environment name
 	Environment string `json:"environment"`
 
+	// InstrumentationVersion AMP instrumentation version pinned for this environment, if any
+	InstrumentationVersion *string `json:"instrumentationVersion,omitempty"`
+
+	// OauthConfig OAuth security configuration for the agent endpoint. Callers authenticate with a standard Authorization Bearer token validated by the gateway.
+	OauthConfig *OAuthConfig `json:"oauthConfig,omitempty"`
+
 	// ProjectName Name of the project
 	ProjectName string `json:"projectName"`
+
+	// ResilienceTimeoutSeconds Max duration (seconds) the gateway keeps a response open between the agent and the client before cutting it off, for this agent's endpoint in this environment. Defaults to 30 seconds when unset.
+	ResilienceTimeoutSeconds *int `json:"resilienceTimeoutSeconds,omitempty"`
 }
 
 // Configurations defines model for Configurations.
@@ -2055,6 +2105,9 @@ type Configurations struct {
 
 	// OauthConfig OAuth security configuration for the agent endpoint. Callers authenticate with a standard Authorization Bearer token validated by the gateway.
 	OauthConfig *OAuthConfig `json:"oauthConfig,omitempty"`
+
+	// ResilienceTimeoutSeconds Max duration (seconds) the gateway keeps a response open between the agent and the client before cutting it off, for this agent's endpoint in this environment. Defaults to 30 seconds when unset.
+	ResilienceTimeoutSeconds *int `json:"resilienceTimeoutSeconds,omitempty"`
 }
 
 // CostRateLimit defines model for CostRateLimit.
@@ -2203,10 +2256,11 @@ type CreateGatewayRequest struct {
 	// EnvironmentIds List of environment UUIDs to assign the gateway to during creation
 	EnvironmentIds *[]string `json:"environmentIds,omitempty"`
 
-	// GatewayType Gateway type:
-	// - REGULAR: Handles incoming API traffic
-	// - AI: Handles outgoing LLM/MCP traffic (used for AI agents)
-	GatewayType GatewayType `json:"gatewayType"`
+	// GatewayType Gateway placement role accepted on input. `REGULAR` and `AI` are deprecated
+	// aliases kept for gateway charts pinned to an older version (REGULAR -> BOTH,
+	// AI -> EGRESS); prefer INGRESS/EGRESS/BOTH. Responses and the canonical
+	// `GatewayType` schema never emit REGULAR/AI.
+	GatewayType GatewayTypeInput `json:"gatewayType"`
 
 	// IsCritical Flag indicating if this is a critical production gateway
 	IsCritical *bool `json:"isCritical,omitempty"`
@@ -2219,6 +2273,9 @@ type CreateGatewayRequest struct {
 
 	// Region Deployment region (optional)
 	Region *string `json:"region,omitempty"`
+
+	// RuntimeUrl In-cluster base URL of the gateway runtime, used by sandboxed platform-hosted agents. Empty means no internal address is registered and the vhost is used instead. Must carry an explicit port other than 80 or 443 and a cluster-local host.
+	RuntimeUrl *string `json:"runtimeUrl,omitempty"`
 
 	// Vhost Virtual host for the gateway (FQDN or IP)
 	Vhost string `json:"vhost"`
@@ -2958,9 +3015,15 @@ type GatewayResponse struct {
 	// Environments List of environments mapped to this gateway
 	Environments *[]GatewayEnvironmentResponse `json:"environments,omitempty"`
 
-	// GatewayType Gateway type:
-	// - REGULAR: Handles incoming API traffic
-	// - AI: Handles outgoing LLM/MCP traffic (used for AI agents)
+	// GatewayType Gateway placement role. Naming and placement policy, not capability — every
+	// gateway has identical runtime capabilities regardless of role.
+	// - INGRESS: handles inbound agent traffic. At most one per environment.
+	// - EGRESS: hosts outbound LLM/MCP artifacts. Uncapped per environment.
+	// - BOTH: does both. Counts against the ingress cap.
+	//
+	// Immutable once registered. `REGULAR` and `AI` are accepted on input as
+	// deprecated aliases (REGULAR -> BOTH, AI -> EGRESS) so gateway charts pinned to
+	// an older version keep registering; responses always emit canonical values.
 	GatewayType GatewayType `json:"gatewayType"`
 
 	// IsCritical Flag indicating if this is a critical production gateway
@@ -2971,6 +3034,9 @@ type GatewayResponse struct {
 
 	// Region Deployment region
 	Region *string `json:"region,omitempty"`
+
+	// RuntimeUrl In-cluster base URL of the gateway runtime, used by sandboxed platform-hosted agents. Empty means no internal address is registered and the vhost is used instead. Must carry an explicit port other than 80 or 443 and a cluster-local host.
+	RuntimeUrl *string `json:"runtimeUrl,omitempty"`
 
 	// Status Gateway operational status:
 	// - ACTIVE: Gateway is operational and ready
@@ -3050,10 +3116,22 @@ type GatewayTokenResponse struct {
 	TokenId string `json:"tokenId"`
 }
 
-// GatewayType Gateway type:
-// - REGULAR: Handles incoming API traffic
-// - AI: Handles outgoing LLM/MCP traffic (used for AI agents)
+// GatewayType Gateway placement role. Naming and placement policy, not capability — every
+// gateway has identical runtime capabilities regardless of role.
+// - INGRESS: handles inbound agent traffic. At most one per environment.
+// - EGRESS: hosts outbound LLM/MCP artifacts. Uncapped per environment.
+// - BOTH: does both. Counts against the ingress cap.
+//
+// Immutable once registered. `REGULAR` and `AI` are accepted on input as
+// deprecated aliases (REGULAR -> BOTH, AI -> EGRESS) so gateway charts pinned to
+// an older version keep registering; responses always emit canonical values.
 type GatewayType string
+
+// GatewayTypeInput Gateway placement role accepted on input. `REGULAR` and `AI` are deprecated
+// aliases kept for gateway charts pinned to an older version (REGULAR -> BOTH,
+// AI -> EGRESS); prefer INGRESS/EGRESS/BOTH. Responses and the canonical
+// `GatewayType` schema never emit REGULAR/AI.
+type GatewayTypeInput string
 
 // GitCredentials Authentication credentials for a git secret.
 type GitCredentials struct {
@@ -3764,6 +3842,13 @@ type MCPEndpointEnvironment struct {
 
 	// EnvironmentUuid Target environment UUID.
 	EnvironmentUuid openapi_types.UUID `json:"environmentUuid"`
+
+	// GatewayId Egress gateway to deploy this endpoint→environment binding to. Optional:
+	// inferred when the environment has exactly one egress gateway, and required
+	// when it has more than one. Placement is fixed once deployed — supplying a
+	// different gateway on update is rejected. Emitted on read as the gateway the
+	// binding is actually deployed to.
+	GatewayId *openapi_types.UUID `json:"gatewayId,omitempty"`
 }
 
 // MCPEndpointEnvironmentDeploymentStatus Per-environment deployment status.
@@ -3879,7 +3964,10 @@ type MCPProxyRequest struct {
 	// Endpoints Deployable endpoint definitions of the MCP proxy. Each endpoint is deployed to one or more environments; within a proxy an environment maps to at most one endpoint. At least one endpoint is required.
 	Endpoints *[]MCPProxyEndpoint `json:"endpoints,omitempty"`
 
-	// Gateways Gateway UUIDs to deploy the MCP proxy to after creation
+	// Gateways Deprecated and never implemented. Deployment is per (endpoint, environment),
+	// so this proxy-wide field is at the wrong granularity — use
+	// MCPEndpointEnvironment.gatewayId. Populated on read only.
+	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 	Gateways *[]openapi_types.UUID `json:"gateways,omitempty"`
 
 	// Id Unique handle for the MCP proxy
@@ -4327,6 +4415,9 @@ type PromoteAgentRequest struct {
 	// OauthConfig OAuth security configuration for the agent endpoint. Callers authenticate with a standard Authorization Bearer token validated by the gateway.
 	OauthConfig *OAuthConfig `json:"oauthConfig,omitempty"`
 
+	// ResilienceTimeoutSeconds Max duration (seconds) the gateway keeps a response open between the agent and the client before cutting it off, for this agent's endpoint in the target environment. Omit to inherit the source environment's value.
+	ResilienceTimeoutSeconds *int `json:"resilienceTimeoutSeconds,omitempty"`
+
 	// SourceEnvironment Source environment to promote from
 	SourceEnvironment string `json:"sourceEnvironment"`
 
@@ -4631,6 +4722,12 @@ type RoleResponse struct {
 	} `json:"permissions,omitempty"`
 }
 
+// RotateGatewayTokenRequest defines model for RotateGatewayTokenRequest.
+type RotateGatewayTokenRequest struct {
+	// OrgId OU ID of the organization the gateway belongs to.
+	OrgId *string `json:"orgId,omitempty"`
+}
+
 // RotateLLMAPIKeyRequest defines model for RotateLLMAPIKeyRequest.
 type RotateLLMAPIKeyRequest struct {
 	// DisplayName Updated display name for the API key.
@@ -4863,6 +4960,28 @@ type TraceSpanGroup struct {
 	SpanLabel *string `json:"spanLabel,omitempty"`
 }
 
+// TracingTokenRegenerateRequest defines model for TracingTokenRegenerateRequest.
+type TracingTokenRegenerateRequest struct {
+	// EnvironmentName Environment in which to rotate the agent's tracing token
+	EnvironmentName string `json:"environmentName"`
+
+	// ExpiresIn Optional token expiry duration in Go duration format (e.g., "2160h" for 90 days).
+	// If not provided, the default expiry from configuration is used.
+	ExpiresIn *string `json:"expiresIn,omitempty"`
+}
+
+// TracingTokenRegenerateResponse defines model for TracingTokenRegenerateResponse.
+type TracingTokenRegenerateResponse struct {
+	// EnvironmentName Environment in which the tracing API key was rotated
+	EnvironmentName string `json:"environmentName"`
+
+	// ExpiresAt Unix timestamp when the new API key expires
+	ExpiresAt int64 `json:"expiresAt"`
+
+	// RotatedAt Unix timestamp when the API key was rotated
+	RotatedAt int64 `json:"rotatedAt"`
+}
+
 // UpdateAgentBasicInfoRequest defines model for UpdateAgentBasicInfoRequest.
 type UpdateAgentBasicInfoRequest struct {
 	// Description Description of the agent
@@ -4925,6 +5044,9 @@ type UpdateAgentDeploySettingsRequest struct {
 
 	// OauthConfig OAuth security configuration for the agent endpoint. Callers authenticate with a standard Authorization Bearer token validated by the gateway.
 	OauthConfig *OAuthConfig `json:"oauthConfig,omitempty"`
+
+	// ResilienceTimeoutSeconds Max duration (seconds) the gateway keeps a response open between the agent and the client before cutting it off, for this agent's endpoint in this environment. Omit to keep the current value.
+	ResilienceTimeoutSeconds *int `json:"resilienceTimeoutSeconds,omitempty"`
 }
 
 // UpdateAgentKindRequest defines model for UpdateAgentKindRequest.
@@ -5036,6 +5158,9 @@ type UpdateGatewayRequest struct {
 
 	// IsCritical Updated critical flag
 	IsCritical *bool `json:"isCritical,omitempty"`
+
+	// RuntimeUrl In-cluster base URL of the gateway runtime, used by sandboxed platform-hosted agents. Empty means no internal address is registered and the vhost is used instead. Must carry an explicit port other than 80 or 443 and a cluster-local host.
+	RuntimeUrl *string `json:"runtimeUrl,omitempty"`
 
 	// Status Gateway operational status:
 	// - ACTIVE: Gateway is operational and ready
@@ -5362,8 +5487,9 @@ type ListGatewaysParams struct {
 	// Offset Number of results to skip
 	Offset *int32 `form:"offset,omitempty" json:"offset,omitempty"`
 
-	// Type Filter by gateway type
-	Type *ListGatewaysParamsType `form:"type,omitempty" json:"type,omitempty"`
+	// Type Filter by gateway type. `REGULAR` and `AI` are deprecated aliases
+	// (REGULAR -> BOTH, AI -> EGRESS) kept for backward compatibility.
+	Type *GatewayTypeInput `form:"type,omitempty" json:"type,omitempty"`
 
 	// Status Filter by gateway status
 	Status *ListGatewaysParamsStatus `form:"status,omitempty" json:"status,omitempty"`
@@ -5371,9 +5497,6 @@ type ListGatewaysParams struct {
 	// Environment Filter by environment name
 	Environment *string `form:"environment,omitempty" json:"environment,omitempty"`
 }
-
-// ListGatewaysParamsType defines parameters for ListGateways.
-type ListGatewaysParamsType string
 
 // ListGatewaysParamsStatus defines parameters for ListGateways.
 type ListGatewaysParamsStatus string
@@ -5773,6 +5896,9 @@ type UpdateGatewayJSONRequestBody = UpdateGatewayRequest
 // UpsertGatewayIdentityProviderJSONRequestBody defines body for UpsertGatewayIdentityProvider for application/json ContentType.
 type UpsertGatewayIdentityProviderJSONRequestBody = UpsertIdentityProviderRequest
 
+// RotateGatewayTokenJSONRequestBody defines body for RotateGatewayToken for application/json ContentType.
+type RotateGatewayTokenJSONRequestBody = RotateGatewayTokenRequest
+
 // CreateGitSecretJSONRequestBody defines body for CreateGitSecret for application/json ContentType.
 type CreateGitSecretJSONRequestBody = CreateGitSecretRequest
 
@@ -5913,6 +6039,9 @@ type UpdateAgentResourceConfigsJSONRequestBody = UpdateAgentResourceConfigsReque
 
 // GenerateAgentTokenJSONRequestBody defines body for GenerateAgentToken for application/json ContentType.
 type GenerateAgentTokenJSONRequestBody = TokenRequest
+
+// RegenerateAgentTracingTokenJSONRequestBody defines body for RegenerateAgentTracingToken for application/json ContentType.
+type RegenerateAgentTracingTokenJSONRequestBody = TracingTokenRegenerateRequest
 
 // CreateLLMProxyJSONRequestBody defines body for CreateLLMProxy for application/json ContentType.
 type CreateLLMProxyJSONRequestBody = CreateLLMProxyRequest

@@ -41,6 +41,8 @@ interface InstrumentationDrawerProps {
   apiKey?: string;
   componentUid?: string;
   environmentUid?: string;
+  // Mint a token automatically on first open (post-creation convenience). Guarded per session.
+  autoGenerate?: boolean;
 }
 
 export const InstrumentationDrawer = ({
@@ -52,12 +54,14 @@ export const InstrumentationDrawer = ({
   environment,
   instrumentationUrl,
   apiKey,
+  autoGenerate = false,
 }: InstrumentationDrawerProps) => {
   const [generatedApiKey, setGeneratedApiKey] = useState<string | null>(null);
   const [selectedLanguage, setSelectedLanguage] = useState<Language>("python");
   
-  // Use generated key if available, otherwise use the passed apiKey
-  const effectiveApiKey = generatedApiKey || apiKey;
+  // Use generated key if available, otherwise the passed apiKey. Fall back to a masked placeholder
+  // so the env-var examples never render the literal string "undefined" before a key is generated.
+  const effectiveApiKey = generatedApiKey || apiKey || "ey***";
 
   const handleLanguageChange = (event: SelectChangeEvent<Language>) => {
     setSelectedLanguage(event.target.value as Language);
@@ -110,6 +114,7 @@ export const InstrumentationDrawer = ({
                 agentName={agentName}
                 environment={environment}
                 onTokenGenerated={setGeneratedApiKey}
+                autoGenerate={autoGenerate}
               />
               <SetupStep
                 stepNumber={3}
@@ -165,6 +170,7 @@ tracingProvider = "amp"`}
                 agentName={agentName}
                 environment={environment}
                 onTokenGenerated={setGeneratedApiKey}
+                autoGenerate={autoGenerate}
               />
               <SetupStep
                 stepNumber={5}

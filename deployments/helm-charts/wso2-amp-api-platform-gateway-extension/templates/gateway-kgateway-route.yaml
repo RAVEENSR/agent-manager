@@ -25,7 +25,7 @@ spec:
     - {{ include "wso2-amp-gateway-extension.gatewayHostname" . | quote }}
   rules:
     - backendRefs:
-        - name: {{ include "wso2-amp-gateway-extension.apiGatewayName" . }}-gateway-gateway-runtime
+        - name: {{ include "wso2-amp-gateway-extension.apiGatewayName" . }}-gw-gateway-gateway-runtime
           namespace: {{ .Values.apiGateway.namespace }}
           port: 22893
       timeouts:

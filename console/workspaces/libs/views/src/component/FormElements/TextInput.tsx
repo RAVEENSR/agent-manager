@@ -17,6 +17,7 @@
  */
 
 import {
+  Box,
   FormControl,
   FormLabel,
   TextField,
@@ -110,7 +111,14 @@ export const TextInput = ({
 
   return (
     <FormControl fullWidth>
-      {label && <FormLabel htmlFor={label} required={required}>{label}{labelAction}</FormLabel>}
+      {label && (
+        <FormLabel htmlFor={label} required={required}>
+          <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
+            {label}
+            {labelAction}
+          </Box>
+        </FormLabel>
+      )}
       <TextField
         id={label}
         sx={{

@@ -660,3 +660,145 @@ func TestAgentIdentityRemoveRoleAssignees_NativeAdministratorAllowed(t *testing.
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.True(t, removed, "cleanup removal must pass through to Thunder")
 }
+
+// adminGroupEnvClient returns an env client whose GetGroup always resolves the
+// native Administrators group. Every other func is left nil, so any read or
+// write that slips past the guard and reaches Thunder panics the test.
+func adminGroupEnvClient() *clientmocks.EnvIdentityClientMock {
+	return &clientmocks.EnvIdentityClientMock{
+		GetGroupFunc: func(_ context.Context, groupID string) (*thundersvc.ThunderGroup, error) {
+			return &thundersvc.ThunderGroup{ID: groupID, OuID: "ou-env", Name: thundersvc.NativeAdministratorsGroupName}, nil
+		},
+	}
+}
+
+// adminGroupRequest builds a request with the org/env/group path values shared
+// by every native-Administrators guard test.
+func adminGroupRequest(method, url, body string) *http.Request {
+	req := httptest.NewRequest(method, url, strings.NewReader(body))
+	req.SetPathValue("orgName", "o1")
+	req.SetPathValue("envName", "dev")
+	req.SetPathValue("groupID", "g-admin")
+	return req
+}
+
+// TestAgentIdentityGroupHandlers_NativeAdministratorsHidden proves the native
+// Administrators group is invisible and immutable through every agent-identity
+// group operation. Its members inherit the native Administrator role and with it
+// Thunder's "system" scope, so AddGroupMembers in particular is a route to
+// env-Thunder admin that walks around the managedRole guard.
+//
+// Unlike RemoveRoleAssignees on the role side, RemoveGroupMembers is guarded
+// too: this is the deliberate asymmetry documented on managedGroup, matching the
+// org-identity controller. Cleanup of a pre-existing mis-membership needs direct
+// Thunder access.
+func TestAgentIdentityGroupHandlers_NativeAdministratorsHidden(t *testing.T) {
+	const base = "/orgs/o1/environments/dev/agent-identities/groups/g-admin"
+	cases := []struct {
+		name   string
+		method string
+		url    string
+		body   string
+		invoke func(AgentIdentityController, http.ResponseWriter, *http.Request)
+	}{
+		{
+			"GetGroup", http.MethodGet, base, "",
+			func(c AgentIdentityController, w http.ResponseWriter, r *http.Request) { c.GetGroup(w, r) },
+		},
+		{
+			"UpdateGroup", http.MethodPut, base, `{"description":"x"}`,
+			func(c AgentIdentityController, w http.ResponseWriter, r *http.Request) { c.UpdateGroup(w, r) },
+		},
+		{
+			"DeleteGroup", http.MethodDelete, base, "",
+			func(c AgentIdentityController, w http.ResponseWriter, r *http.Request) { c.DeleteGroup(w, r) },
+		},
+		{
+			"GetGroupMembers", http.MethodGet, base + "/members", "",
+			func(c AgentIdentityController, w http.ResponseWriter, r *http.Request) { c.GetGroupMembers(w, r) },
+		},
+		{
+			"AddGroupMembers", http.MethodPost, base + "/members/add", `{"agentIds":["thunder-1"]}`,
+			func(c AgentIdentityController, w http.ResponseWriter, r *http.Request) { c.AddGroupMembers(w, r) },
+		},
+		{
+			"RemoveGroupMembers", http.MethodPost, base + "/members/remove", `{"agentIds":["thunder-1"]}`,
+			func(c AgentIdentityController, w http.ResponseWriter, r *http.Request) { c.RemoveGroupMembers(w, r) },
+		},
+		{
+			"GetGroupRoles", http.MethodGet, base + "/roles", "",
+			func(c AgentIdentityController, w http.ResponseWriter, r *http.Request) { c.GetGroupRoles(w, r) },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := adminRoleController(adminGroupEnvClient())
+			w := httptest.NewRecorder()
+
+			tc.invoke(ctrl, w, adminGroupRequest(tc.method, tc.url, tc.body))
+
+			assert.Equal(t, http.StatusNotFound, w.Code)
+		})
+	}
+}
+
+// TestAgentIdentityCreateGroup_ReservedNameRejected proves a second group cannot
+// be created under the native Administrators name, which would shadow the hidden
+// system group. CreateGroupFunc is nil, so any write reaching Thunder panics.
+func TestAgentIdentityCreateGroup_ReservedNameRejected(t *testing.T) {
+	ctrl := adminRoleController(&clientmocks.EnvIdentityClientMock{})
+
+	req := adminGroupRequest(http.MethodPost, "/orgs/o1/environments/dev/agent-identities/groups",
+		`{"name":"`+thundersvc.NativeAdministratorsGroupName+`"}`)
+	w := httptest.NewRecorder()
+
+	ctrl.CreateGroup(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestAgentIdentityUpdateGroup_ReservedRenameRejected proves an ordinary group
+// cannot be renamed into the native Administrators name. The guard runs before
+// the group is fetched, so GetGroupFunc is nil here too.
+func TestAgentIdentityUpdateGroup_ReservedRenameRejected(t *testing.T) {
+	ctrl := adminRoleController(&clientmocks.EnvIdentityClientMock{})
+
+	req := adminGroupRequest(http.MethodPut, "/orgs/o1/environments/dev/agent-identities/groups/g-1",
+		`{"name":"`+thundersvc.NativeAdministratorsGroupName+`"}`)
+	w := httptest.NewRecorder()
+
+	ctrl.UpdateGroup(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestAgentIdentityCreateRole_ReservedNameRejected proves a role cannot be
+// created under the native Administrator name. CreateRoleFunc is nil, so any
+// write reaching Thunder panics.
+func TestAgentIdentityCreateRole_ReservedNameRejected(t *testing.T) {
+	ctrl := adminRoleController(&clientmocks.EnvIdentityClientMock{})
+
+	req := adminRoleRequest(http.MethodPost, "/orgs/o1/environments/dev/agent-identities/roles",
+		`{"name":"`+thundersvc.NativeAdministratorRoleName+`"}`)
+	w := httptest.NewRecorder()
+
+	ctrl.CreateRole(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestAgentIdentityUpdateRole_ReservedRenameRejected proves an ordinary role
+// cannot be renamed into the native Administrator name. managedRole already
+// blocks editing the native role itself; this closes the other direction.
+func TestAgentIdentityUpdateRole_ReservedRenameRejected(t *testing.T) {
+	ctrl := adminRoleController(&clientmocks.EnvIdentityClientMock{})
+
+	req := adminRoleRequest(http.MethodPut, "/orgs/o1/environments/dev/agent-identities/roles/r-1",
+		`{"name":"`+thundersvc.NativeAdministratorRoleName+`"}`)
+	w := httptest.NewRecorder()
+
+	ctrl.UpdateRole(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}

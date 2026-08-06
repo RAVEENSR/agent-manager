@@ -17,8 +17,8 @@
  */
 
 import { Sidebar } from "@wso2/oxygen-ui";
-import type { ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Link, useNavigate } from "react-router-dom";
 
 export interface NavigationItem {
   label: string;
@@ -27,6 +27,7 @@ export interface NavigationItem {
   isActive?: boolean;
   pinBottom?: boolean;
   type: 'item';
+  children?: NavigationItem[];
 }
 export interface NavigationSection {
   title: string;
@@ -44,19 +45,46 @@ interface LeftNavigationProps {
 
 // Render each item as a real anchor (`<a>`) so clicking opens the link —
 // enabling middle-click / open-in-new-tab and proper link semantics, rather
-// than navigating from the Sidebar's onSelect callback.
+// than navigating from the Sidebar's onSelect callback. Items with `children`
+// render without a link — the Sidebar.Item then acts purely as an
+// expand/collapse toggle for the nested items.
 function renderItem(item: NavigationItem) {
+  const isLeaf = !item.children?.length;
   return (
     <Sidebar.Item
       id={item.label}
       key={item.label}
-      link={item.href ? <Link to={item.href} /> : undefined}
+      link={isLeaf && item.href ? <Link to={item.href} /> : undefined}
     >
       <Sidebar.ItemIcon>{item.icon}</Sidebar.ItemIcon>
       <Sidebar.ItemLabel>{item.label}</Sidebar.ItemLabel>
+      {item.children?.map(renderItem)}
     </Sidebar.Item>
   );
 }
+
+function findParentLabel(items: NavigationItem[], childLabel: string): string | undefined {
+  for (const item of items) {
+    if (item.children?.some((child) => child.label === childLabel)) {
+      return item.label;
+    }
+    if (item.children) {
+      const nestedParentLabel = findParentLabel(item.children, childLabel);
+      if (nestedParentLabel) {
+        return nestedParentLabel;
+      }
+    }
+  }
+  return undefined;
+}
+
+export const flattenWithChildren = (items: NavigationItem[]): NavigationItem[] =>
+  items.flatMap((item) => [item, ...flattenWithChildren(item.children ?? [])]);
+
+export const combineNavItems = (
+  mainItems: NavigationItem[],
+  groupedItems: NavigationSection[],
+): NavigationItem[] => [...mainItems, ...groupedItems.flatMap((group) => group.items)];
 
 export function LeftNavigation({
   collapsed,
@@ -66,9 +94,46 @@ export function LeftNavigation({
 }: LeftNavigationProps) {
   const topItems = mainItems.filter((item) => !item.pinBottom);
   const bottomItems = mainItems.filter((item) => item.pinBottom);
+  const [expandedMenus, setExpandedMenus] = useState<Record<string, boolean>>({});
+  const navigate = useNavigate();
+
+  const allItems = useMemo(
+    () => combineNavItems(mainItems, groupedItems),
+    [mainItems, groupedItems],
+  );
+  const flatItems = useMemo(() => flattenWithChildren(allItems), [allItems]);
+
+  useEffect(() => {
+    const parentLabel = findParentLabel(allItems, activeItem);
+    if (parentLabel) {
+      setExpandedMenus((prev) => (prev[parentLabel] ? prev : { ...prev, [parentLabel]: true }));
+    }
+  }, [activeItem, allItems]);
+
+  const handleToggleExpand = (id: string) => {
+    setExpandedMenus((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  // Collapsed sidebars show a child item's siblings in a hover popover instead
+  // of the inline expansion used when expanded, and that popover only reports
+  // the clicked item's id (its label) via onSelect rather than reusing its
+  // `link` element — so route it to that item's href ourselves.
+  const handleSelect = (id: string) => {
+    const item = flatItems.find((i) => i.label === id);
+    if (item?.href) {
+      navigate(item.href);
+    }
+  };
 
   return (
-    <Sidebar collapsed={collapsed} activeItem={activeItem} width={280}>
+    <Sidebar
+      collapsed={collapsed}
+      activeItem={activeItem}
+      expandedMenus={expandedMenus}
+      onSelect={handleSelect}
+      onToggleExpand={handleToggleExpand}
+      width={280}
+    >
       <Sidebar.Nav
         sx={{
           "& .MuiButtonBase-root": {

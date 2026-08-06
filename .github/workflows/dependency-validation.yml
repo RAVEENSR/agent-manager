@@ -25,6 +25,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
+          allow-unsafe-pr-checkout: true
 
       - name: Detect modified go.mod files
         id: detect-changes

@@ -556,7 +556,7 @@ export function MCPProxyRewriteTab({
           No Capabilities Available
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          This MCP proxy has no tools, resources, or prompts to rewrite.
+          This MCP Server has no tools, resources, or prompts to rewrite.
         </Typography>
       </Stack>
     );
@@ -578,7 +578,7 @@ export function MCPProxyRewriteTab({
           </Typography>
           <Typography variant="body2" color="text.secondary">
             Rewrite the user-facing names of tools, resources, and prompts
-            exposed by this MCP proxy.
+            exposed by this MCP Server.
           </Typography>
         </Stack>
         <Stack direction="row" alignItems="center" spacing={1}>

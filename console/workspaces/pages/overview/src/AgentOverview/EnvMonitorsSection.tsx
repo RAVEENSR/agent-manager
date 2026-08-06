@@ -21,7 +21,6 @@ import {
     Box,
     Card,
     CardContent,
-    Divider,
     IconButton,
     Skeleton,
     Typography,
@@ -39,7 +38,7 @@ import {
 } from "@agent-management-platform/types";
 import { formatTraceWindow } from "@agent-management-platform/views";
 import { generatePath, Link } from "react-router-dom";
-import { DonutIcon, type DonutColor } from "./DonutIcon";
+import { DonutIcon, getDonutColorForPercent } from "./DonutIcon";
 import { SectionHeader } from "./SectionHeader";
 
 interface EnvMonitorsSectionProps {
@@ -69,13 +68,6 @@ const formatRunInterval = (minutes?: number): string | null => {
     return `Runs every ${hours}h ${minutes % 60}m`;
 };
 
-const getScoreColor = (p: number | null): DonutColor => {
-    if (p === null) return "primary";
-    if (p >= 70) return "success";
-    if (p >= 40) return "warning";
-    return "error";
-};
-
 interface MonitorTileProps {
     monitor: MonitorResponse;
     orgId: string;
@@ -103,7 +95,7 @@ const MonitorTile: React.FC<MonitorTileProps> = ({ monitor, orgId, projectId, ag
     );
 
     const evaluatorNames = monitor.evaluators.map((e) => e.displayName).join(" · ");
-    const color = getScoreColor(scorePercent);
+    const color = getDonutColorForPercent(scorePercent);
 
     // Surface a low-priority schedule hint so users understand the score's
     // cadence: a fixed window for historical monitors, an interval for
@@ -198,8 +190,7 @@ export const EnvMonitorsSection: React.FC<EnvMonitorsSectionProps> = ({
 
     return (
         <>
-            <Divider sx={{ mt: 2, mb: 1 }} />
-            <SectionHeader title="Agent Performance" viewAllHref={allMonitorsHref} />
+            <SectionHeader title="Evaluations" viewAllHref={allMonitorsHref} />
             {isLoading ? (
                 <Box sx={gridSx}>
                     {[1, 2, 3].map((i) => <Skeleton key={i} variant="rounded" height={96} />)}

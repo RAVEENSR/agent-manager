@@ -55,6 +55,15 @@ assert_eq "amp oauthAuthorizationServers (service key)" \
 assert_eq "amp keyManager.issuer (service key)" \
   "agentManagerService.config.keyManager.issuer=https://thunder.amp.203.0.113.10.sslip.io" \
   "$(grep -F 'agentManagerService.config.keyManager.issuer' <<<"$amp")"
+# An MCP token's aud is serverPublicURL plus a trailing slash, so the audience
+# has to follow it off the chart's localhost default. Assert only that entry —
+# pinning the whole list would break on any unrelated audience change.
+assert_eq "amp keyManager.audience carries the public API URL (service key)" "yes" \
+  "$(has "$amp" 'agentManagerService.config.keyManager.audience=amp\,')"
+assert_eq "amp keyManager.audience ends with the public API URL (service key)" "yes" \
+  "$(has "$amp" 'am-mcp\,https://api.amp.203.0.113.10.sslip.io/')"
+assert_eq "amp keyManager.audience carries the public API URL (legacy key)" "yes" \
+  "$(has "$amp" 'agentManager.config.keyManager.audience=amp\,')"
 # tlsEnabled=true makes amp-api advertise the https deployed-agent endpoint variant;
 # emitted under both keys (old agentManager + new agentManagerService).
 assert_eq "amp tlsEnabled (service key)" \
@@ -128,6 +137,12 @@ assert_eq "observability publicUrl -> public observer host" \
 assert_eq "observability oauth authorizationServers -> public thunder" \
   "amObserver.oauth.authorizationServers=https://thunder.amp.203.0.113.10.sslip.io" \
   "$(grep -F 'amObserver.oauth.authorizationServers' <<<"$obs")"
+# The observer mints MCP tokens whose aud is its own public URL plus a trailing
+# slash, so the audience list has to follow publicUrl off the chart's localhost
+# default. Commas stay escaped or helm splits the value into a list.
+assert_eq "observability audience carries the public observer URL" \
+  'amObserver.auth.audience=amp\,amp-api-client\,am-obs-mcp\,https://observer.amp.203.0.113.10.sslip.io/' \
+  "$(grep -F 'amObserver.auth.audience' <<<"$obs")"
 
 # --- render_dataplane_external_ingress: public host on :443, both http+https entries
 #     bound to the internal http listener (amp-api advertises the https variant) ---
@@ -175,6 +190,20 @@ assert_eq "thunder console redirectUri (bootstrap key)" \
 assert_eq "thunder console redirectUri (legacy setup key)" \
   "thunder.setup.ampConsoleClient.redirectUris[0]=https://console.amp.203.0.113.10.sslip.io/login" \
   "$(grep -F 'thunder.setup.ampConsoleClient.redirectUris' <<<"$th")"
+# RFC 8707 resource indicators. Thunder compares the authorize request's
+# `resource` verbatim, so these must name the hosts an MCP client dials, with the
+# trailing slash the client sends. Index 0 is agent-manager, index 1 the observer.
+# MCP base URLs are set as mergeable scalars (not list-element overrides, which
+# helm --set would replace whole, dropping name/handle/permissionSet). No trailing
+# slash — the bootstrap template appends it.
+assert_eq "thunder MCP base URL (agent-manager)" \
+  "thunder.bootstrap.agentManagerMcpBaseUrl=https://api.amp.203.0.113.10.sslip.io" \
+  "$(grep -F 'agentManagerMcpBaseUrl' <<<"$th")"
+assert_eq "thunder MCP base URL (observer)" \
+  "thunder.bootstrap.observerMcpBaseUrl=https://observer.amp.203.0.113.10.sslip.io" \
+  "$(grep -F 'observerMcpBaseUrl' <<<"$th")"
+assert_eq "thunder no fragile mcpResourceServers list override" "no" \
+  "$(has "$th" 'mcpResourceServers[')"
 
 # --- render_k3d_vm_config ---
 k3d_in="$(printf '%s\n' \
@@ -271,9 +300,12 @@ assert_eq "caddy cp no direct 9243" "" "$(grep -F '127.0.0.1:9243' <<<"$cf_cp")"
   AMP_AGENTS_BASE=agents.amp.example.com
   AMP_HOST_GATEWAY=gateway.amp.example.com
   pr="$(build_platform_resources_helm_args)"
-  assert_eq "platform-resources agent OTEL endpoint override (public gateway)" \
-    "apiPlatformGatewayVhost.otelEndpointOverride=https://gateway.amp.example.com/otel" \
-    "$(grep -F 'apiPlatformGatewayVhost.otelEndpointOverride' <<<"$pr")"
+  # Agents run in-cluster and must use the chart's default in-cluster runtime
+  # endpoint. Overriding it with the public gateway host breaks trace export on a
+  # private-network VM, where that hostname resolves into an RFC-1918 range the
+  # sandbox NetworkPolicy blocks on :443.
+  assert_eq "platform-resources leaves agent OTEL endpoint in-cluster" "no" \
+    "$(has "$pr" 'apiPlatformGatewayVhost.otelEndpointOverride')"
   assert_eq "platform-resources oauth tokenUrl (direct svc)" \
     "global.oauth.tokenUrl=http://amp-thunder-extension-service.amp-thunder.svc.cluster.local:8090/oauth2/token" \
     "$(grep -F 'global.oauth.tokenUrl' <<<"$pr")"
@@ -345,11 +377,32 @@ assert_eq "agent site on_demand + disable_http_challenge" "yes" \
   assert_eq "core amp cp url present" \
     "console.config.gatewayControlPlaneUrl=https://cp.amp.example.com" \
     "$(grep -F 'gatewayControlPlaneUrl' <<<"$core_amp")"
+  # The audience must land on the same host as serverPublicURL above and as
+  # thunder.bootstrap.agentManagerMcpBaseUrl below.
+  assert_eq "core amp keyManager.audience carries the public API URL" "yes" \
+    "$(has "$core_amp" 'am-mcp\,https://api.amp.example.com/')"
 
   core_th="$(thunder_helm_args)"
   assert_eq "core thunder jwt.issuer" \
     "thunder.configuration.jwt.issuer=https://thunder.amp.example.com" \
     "$(grep -F 'jwt.issuer' <<<"$core_th")"
+  # The advanced path reaches the same core, so the MCP resource indicators must
+  # follow the configured domain here too.
+  assert_eq "core thunder MCP base URL (agent-manager)" \
+    "thunder.bootstrap.agentManagerMcpBaseUrl=https://api.amp.example.com" \
+    "$(grep -F 'agentManagerMcpBaseUrl' <<<"$core_th")"
+  assert_eq "core thunder MCP base URL (observer)" \
+    "thunder.bootstrap.observerMcpBaseUrl=https://observer.amp.example.com" \
+    "$(grep -F 'observerMcpBaseUrl' <<<"$core_th")"
+  # The dev origin is opt-in (empty chart default), so a VM install must not
+  # register it at all.
+  assert_eq "core thunder leaves the dev MCP origin unset" "" \
+    "$(grep -F 'agentManagerMcpDevBaseUrl' <<<"$core_th")"
+
+  core_obs="$(observability_helm_args)"
+  assert_eq "core observability audience carries the public observer URL" \
+    'amObserver.auth.audience=amp\,amp-api-client\,am-obs-mcp\,https://observer.amp.example.com/' \
+    "$(grep -F 'amObserver.auth.audience' <<<"$core_obs")"
 
   core_gw="$(gateway_helm_args)"
   assert_eq "core gateway vhost" \

@@ -20,9 +20,14 @@
 // need the sidebar icon/label (e.g. navigationItems.tsx) don't pull the page's
 // component tree into their bundle. Route.tsx gets the component separately
 // via a dynamic import() of the package root, which keeps it in its own chunk.
-import { KeyRound } from "@wso2/oxygen-ui-icons-react";
+import { Folder, IdCard, Shield, Bot } from "@wso2/oxygen-ui-icons-react";
 
 export const thunderInstancesMetadata = {
-  title: "Identity Providers",
-  icon: KeyRound,
+  title: "Agent ID",
+  icon: IdCard,
+  children: {
+    agents: { title: "Agents", icon: Bot },
+    groups: { title: "Groups", icon: Folder },
+    roles: { title: "Roles", icon: Shield },
+  },
 };

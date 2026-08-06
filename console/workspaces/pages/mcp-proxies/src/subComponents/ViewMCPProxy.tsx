@@ -29,8 +29,8 @@ import {
 } from "@agent-management-platform/api-client";
 import {
   absoluteRouteMap,
+  type Environment,
   type MCPEndpointConfig,
-  type MCPProxy,
   type MCPProxyEndpoint,
 } from "@agent-management-platform/types";
 import {
@@ -52,14 +52,14 @@ import {
   Tooltip,
   Typography,
 } from "@wso2/oxygen-ui";
-import { AlertTriangle, Clock, Copy, Edit } from "@wso2/oxygen-ui-icons-react";
+import { AlertTriangle, Copy, Edit } from "@wso2/oxygen-ui-icons-react";
 import { generatePath, useParams, useSearchParams } from "react-router-dom";
+import { normalizeVersion } from "@agent-management-platform/shared-component";
 import {
-  formatRelativeTime,
-  normalizeVersion,
-} from "@agent-management-platform/shared-component";
-import { PageLayout } from "@agent-management-platform/views";
-import { MCPCapabilitiesView } from "../components/MCPCapabilitiesView";
+  CreatedMetadata,
+  PageLayout,
+  UpdatedMetadata,
+} from "@agent-management-platform/views";
 import { MCPProxyManageToolsTab } from "./MCPProxyManageToolsTab";
 import { MCPProxyConnectionTab } from "./MCPProxyConnectionTab";
 import { MCPProxyOverviewTab } from "./MCPProxyOverviewTab";
@@ -74,7 +74,6 @@ import { useCopyWithFeedback } from "./useCopyWithFeedback";
 // instead of resetting to Overview/first-environment.
 const TAB_DEFS = [
   { label: "Overview", slug: "overview" },
-  { label: "Capabilities", slug: "capabilities" },
   { label: "Connection", slug: "connection" },
   { label: "Manage Tools", slug: "manage-tools" },
   { label: "Security", slug: "security" },
@@ -91,6 +90,9 @@ export function ViewMCPProxy() {
   const tabIndex = tabSlug
     ? Math.max(0, TAB_DEFS.findIndex((tab) => tab.slug === tabSlug))
     : 0;
+  // Render blocks below key off the slug, not the raw index, so reordering or
+  // removing a tab in TAB_DEFS doesn't require manually renumbering every block.
+  const activeTabSlug = TAB_DEFS[tabIndex]?.slug;
   const selectedEndpointId = searchParams.get("endpoint") ?? "";
 
   const setSelectedEndpointId = useCallback(
@@ -171,20 +173,39 @@ export function ViewMCPProxy() {
   // bindings and per-env deployment status are surfaced separately as chips.
   const selectedConfig: MCPEndpointConfig | undefined = selectedEndpoint;
 
+  // Joins the selected endpoint's environment bindings against the org's full
+  // environment list once — chips and the resolved Environment objects below
+  // both derive from this instead of each re-doing the same lookup.
+  const selectedEnvironmentBindings = useMemo(() => {
+    return (selectedEndpoint?.environments ?? []).map((binding) => ({
+      binding,
+      env: environments.find((item) => item.id === binding.environmentUuid),
+    }));
+  }, [selectedEndpoint, environments]);
+
   // Chips describing each environment the selected endpoint is bound to, with its
   // per-environment deployment status.
-  const selectedEnvChips = useMemo(() => {
-    return (selectedEndpoint?.environments ?? []).map((binding) => {
-      const env = environments.find(
-        (item) => item.id === binding.environmentUuid,
-      );
-      return {
+  const selectedEnvChips = useMemo(
+    () =>
+      selectedEnvironmentBindings.map(({ binding, env }) => ({
         id: binding.environmentUuid,
         label: env?.displayName ?? env?.name ?? binding.environmentUuid,
         status: binding.deploymentStatus,
-      };
-    });
-  }, [selectedEndpoint, environments]);
+      })),
+    [selectedEnvironmentBindings],
+  );
+
+  // The full Environment objects (name/displayName) the selected endpoint is
+  // bound to — used by the Security tab's Create Scope panel to offer roles
+  // from every environment this MCP Server is actually reachable from.
+  const selectedEnvironments = useMemo(
+    () =>
+      selectedEnvironmentBindings
+        .filter(({ binding }) => binding.deploymentStatus === "Deployed")
+        .map(({ env }) => env)
+        .filter((env): env is Environment => !!env),
+    [selectedEnvironmentBindings],
+  );
 
   // Merge-and-save callback used by every config tab. It merges a partial into the
   // selected endpoint's flat config and PUTs the whole proxy with that one endpoint
@@ -207,7 +228,7 @@ export function ViewMCPProxy() {
     [orgId, proxy, selectedEndpointId, updateMCPProxy],
   );
 
-  const displayName = proxy?.name ?? proxy?.id ?? proxyId ?? "MCP Proxy";
+  const displayName = proxy?.name ?? proxy?.id ?? proxyId ?? "MCP Server";
   const hasEndpoints = endpoints.length > 0;
   // The proxy fetch's own isLoading flips to false as soon as `proxy` arrives,
   // but selecting the first endpoint (when the URL doesn't already name one)
@@ -227,9 +248,10 @@ export function ViewMCPProxy() {
   return (
     <>
       <PageLayout
+        variant="card"
         title={displayName}
         backHref={backHref}
-        backLabel="Back to MCP Proxies"
+        backLabel="Back to MCP Servers"
         isLoading={isLoading}
         titleTail={
           proxy?.version ? (
@@ -241,7 +263,19 @@ export function ViewMCPProxy() {
             />
           ) : undefined
         }
-        description={proxy ? <MCPProxyDescription proxy={proxy} /> : undefined}
+        description={
+          proxy?.description ? (
+            <Typography variant="body2" color="text.secondary">
+              {proxy.description}
+            </Typography>
+          ) : undefined
+        }
+        meta={
+          <>
+            <CreatedMetadata createdAt={proxy?.createdAt} />
+            <UpdatedMetadata updatedAt={proxy?.updatedAt} />
+          </>
+        }
         actions={
           proxy ? (
             <Button
@@ -250,7 +284,7 @@ export function ViewMCPProxy() {
               startIcon={<Edit size={16} />}
               onClick={() => setEditDrawerOpen(true)}
             >
-              Edit MCP Proxy
+              Edit MCP Server
             </Button>
           ) : undefined
         }
@@ -266,7 +300,7 @@ export function ViewMCPProxy() {
           <Alert severity="error" icon={<AlertTriangle size={18} />}>
             {error instanceof Error
               ? error.message
-              : "Failed to load MCP proxy. Please try again."}
+              : "Failed to load MCP Server. Please try again."}
           </Alert>
         ) : null}
 
@@ -332,7 +366,7 @@ export function ViewMCPProxy() {
               </Grid>
             </Grid>
 
-            {hasEndpoints && (
+            {endpoints.length > 1 && (
               <Stack
                 direction="row"
                 spacing={1}
@@ -394,7 +428,7 @@ export function ViewMCPProxy() {
                 </Stack>
                 <Divider />
                 <Box sx={{ p: 3 }}>
-                  {tabIndex === 0 && (
+                  {activeTabSlug === "overview" && (
                     <MCPProxyOverviewTab
                       proxy={proxy}
                       config={selectedConfig}
@@ -402,15 +436,7 @@ export function ViewMCPProxy() {
                       isLoading={isTabContentLoading}
                     />
                   )}
-                  {tabIndex === 1 && (
-                    <MCPCapabilitiesView
-                      tools={selectedConfig?.capabilities?.tools}
-                      resources={selectedConfig?.capabilities?.resources}
-                      prompts={selectedConfig?.capabilities?.prompts}
-                      sectionTitleVariant="h6"
-                    />
-                  )}
-                  {tabIndex === 2 && (
+                  {activeTabSlug === "connection" && (
                     <MCPProxyConnectionTab
                       config={selectedConfig}
                       selectedEndpointId={selectedEndpointId}
@@ -419,7 +445,7 @@ export function ViewMCPProxy() {
                       isUpdating={updateMCPProxy.isPending}
                     />
                   )}
-                  {tabIndex === 3 && (
+                  {activeTabSlug === "manage-tools" && (
                     <MCPProxyManageToolsTab
                       config={selectedConfig}
                       selectedEndpointId={selectedEndpointId}
@@ -429,18 +455,19 @@ export function ViewMCPProxy() {
                       isUpdating={updateMCPProxy.isPending}
                     />
                   )}
-                  {tabIndex === 4 && (
+                  {activeTabSlug === "security" && (
                     <MCPProxySecurityTab
                       config={selectedConfig}
                       selectedEndpointId={selectedEndpointId}
                       orgName={orgId}
                       proxyId={routeProxyId}
+                      environments={selectedEnvironments}
                       isLoading={isTabContentLoading}
                       onUpdate={updateSelectedEndpointConfig}
                       isUpdating={updateMCPProxy.isPending}
                     />
                   )}
-                  {tabIndex === 5 && (
+                  {activeTabSlug === "rewrite" && (
                     <MCPProxyRewriteTab
                       config={selectedConfig}
                       selectedEndpointId={selectedEndpointId}
@@ -450,7 +477,7 @@ export function ViewMCPProxy() {
                       isUpdating={updateMCPProxy.isPending}
                     />
                   )}
-                  {tabIndex === 6 && (
+                  {activeTabSlug === "policies" && (
                     <MCPProxyPoliciesTab
                       config={selectedConfig}
                       selectedEndpointId={selectedEndpointId}
@@ -464,8 +491,8 @@ export function ViewMCPProxy() {
             ) : (
               <Card variant="outlined" sx={{ p: 3 }}>
                 <Alert severity="info">
-                  This MCP proxy has no endpoints configured. Use &quot;Edit MCP
-                  Proxy&quot; above to add one.
+                  This MCP Server has no endpoints configured. Use &quot;Edit MCP
+                  Server&quot; above to add one.
                 </Alert>
               </Card>
             )}
@@ -483,27 +510,6 @@ export function ViewMCPProxy() {
         />
       )}
     </>
-  );
-}
-
-function MCPProxyDescription({ proxy }: { proxy: MCPProxy }) {
-  return (
-    <Stack spacing={0.75}>
-      <Typography variant="body2" color="text.secondary">
-        {proxy.description || "No description provided."}
-      </Typography>
-      {!proxy.description && (
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Typography variant="body2" color="text.secondary">
-            Last updated:
-          </Typography>
-          <Clock size={16} />
-          <Typography variant="body2">
-            {formatRelativeTime(proxy.updatedAt)}
-          </Typography>
-        </Stack>
-      )}
-    </Stack>
   );
 }
 

@@ -15,32 +15,19 @@
  * under the License.
  */
 
+import { useMemo } from "react";
 import type {
   MCPEndpointConfig,
   MCPProxy,
 } from "@agent-management-platform/types";
-import {
-  Card,
-  Chip,
-  FormControl,
-  FormLabel,
-  Grid,
-  IconButton,
-  InputAdornment,
-  Skeleton,
-  Stack,
-  TextField,
-  Tooltip,
-  Typography,
-} from "@wso2/oxygen-ui";
-import { Copy } from "@wso2/oxygen-ui-icons-react";
+import { Card, Chip, Grid, Skeleton, Stack, Typography } from "@wso2/oxygen-ui";
+import { MCPCapabilitiesView } from "../components/MCPCapabilitiesView";
 import {
   getAuthenticationTypeLabel,
   getCapabilityId,
   isToolBlockedByAcl,
   resolveAuthenticationType,
 } from "./mcpEndpoints";
-import { useCopyWithFeedback } from "./useCopyWithFeedback";
 
 // One chip per environment the selected endpoint is bound to, with its deployment
 // status — the same shape ViewMCPProxy already derives for the chips shown next to
@@ -64,7 +51,32 @@ export function MCPProxyOverviewTab({
   envChips = [],
   isLoading = false,
 }: MCPProxyOverviewTabProps) {
-  const handleCopy = useCopyWithFeedback();
+  const toolCapabilities = config?.capabilities?.tools ?? [];
+
+  // Tool identifiers found on this endpoint, extracted once per capabilities
+  // change rather than on every filter/lookup below.
+  const toolEntries = useMemo(() => {
+    const identifiers: string[] = [];
+    for (const raw of config?.capabilities?.tools ?? []) {
+      const identifier = getCapabilityId("tool", raw);
+      if (identifier) identifiers.push(identifier);
+    }
+    return identifiers;
+  }, [config?.capabilities?.tools]);
+
+  // Computed once per tool list / ACL policy change rather than per tool and
+  // per render — isToolBlockedByAcl re-parses the ACL policy's params each
+  // call. Mirrors the same memoized-Set pattern in MCPProxySecurityTab.tsx.
+  const blockedToolIds = useMemo(
+    () =>
+      new Set(
+        toolEntries.filter((identifier) =>
+          isToolBlockedByAcl(config, identifier),
+        ),
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only reads config.policies
+    [toolEntries, config?.policies],
+  );
 
   if (isLoading) {
     return (
@@ -89,13 +101,20 @@ export function MCPProxyOverviewTab({
     return null;
   }
 
-  const toolCapabilities = config?.capabilities?.tools ?? [];
   const totalToolsCount = toolCapabilities.length;
   const disabledToolsCount = toolCapabilities.filter((raw) => {
     const id = getCapabilityId("tool", raw);
-    return id ? isToolBlockedByAcl(config, id) : false;
+    return id ? blockedToolIds.has(id) : false;
   }).length;
   const allowedToolsCount = totalToolsCount - disabledToolsCount;
+
+  const getToolStatus = (
+    raw: Record<string, unknown>,
+  ): "allowed" | "denied" | undefined => {
+    const id = getCapabilityId("tool", raw);
+    if (!id) return undefined;
+    return blockedToolIds.has(id) ? "denied" : "allowed";
+  };
 
   // Auth Type reflects the proxy's inbound security (the Security tab) — which
   // method clients must authenticate with — not the upstream auth used to reach
@@ -103,8 +122,6 @@ export function MCPProxyOverviewTab({
   const authTypeLabel = getAuthenticationTypeLabel(
     resolveAuthenticationType(config),
   );
-
-  const upstreamUrl = config?.upstream?.main?.url;
 
   return (
     <Stack spacing={3}>
@@ -176,37 +193,13 @@ export function MCPProxyOverviewTab({
           </Card>
         </Grid>
       </Grid>
-      {upstreamUrl && (
-        <FormControl fullWidth>
-          <FormLabel sx={{ fontSize: "0.75rem", fontWeight: 500, mb: 0.5 }}>
-            Upstream URL
-          </FormLabel>
-          <TextField
-            value={upstreamUrl}
-            size="small"
-            fullWidth
-            slotProps={{
-              input: {
-                readOnly: true,
-                sx: { fontFamily: "monospace", fontSize: "0.8125rem" },
-                endAdornment: (
-                  <InputAdornment position="end">
-                    <Tooltip title="Copy Upstream URL">
-                      <IconButton
-                        size="small"
-                        aria-label="Copy Upstream URL"
-                        onClick={() => handleCopy(upstreamUrl, "Upstream URL")}
-                      >
-                        <Copy size={14} />
-                      </IconButton>
-                    </Tooltip>
-                  </InputAdornment>
-                ),
-              },
-            }}
-          />
-        </FormControl>
-      )}
+      <MCPCapabilitiesView
+        tools={config?.capabilities?.tools}
+        resources={config?.capabilities?.resources}
+        prompts={config?.capabilities?.prompts}
+        sectionTitleVariant="h6"
+        getToolStatus={getToolStatus}
+      />
     </Stack>
   );
 }

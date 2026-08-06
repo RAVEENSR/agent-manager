@@ -29,10 +29,12 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
 	"github.com/wso2/agent-manager/agent-manager-service/config"
@@ -254,11 +256,21 @@ func (s *agentTokenManagerService) GenerateToken(ctx context.Context, req Genera
 		return nil, fmt.Errorf("org id is required: %w", utils.ErrInvalidInput)
 	}
 
-	// Fetch component UID from OpenChoreo
+	// Fetch component UID from OpenChoreo. Agent names are unique organization-wide,
+	// not per-project, so this resolves by name alone regardless of req.ProjectName.
 	component, err := s.ocClient.GetComponent(ctx, req.OrgName, req.ProjectName, req.AgentName)
 	if err != nil {
 		s.logger.Error("Failed to get agent component", "agentName", req.AgentName, "error", err)
-		return nil, fmt.Errorf("failed to get agent component: %w", err)
+		return nil, translateAgentError(err)
+	}
+
+	// The request path names both a project and an agent; reject the request if
+	// they don't actually belong together rather than silently using the agent's
+	// real project. This isn't an access-control check — org membership already
+	// grants access to every project and every agent in it — it's input validation:
+	// a path that names an agent under a project it doesn't belong to is malformed.
+	if !strings.EqualFold(component.ProjectName, req.ProjectName) {
+		return nil, fmt.Errorf("agent %q does not belong to project %q: %w", req.AgentName, req.ProjectName, utils.ErrInvalidInput)
 	}
 
 	// Determine which environment to use
@@ -305,6 +317,7 @@ func (s *agentTokenManagerService) GenerateToken(ctx context.Context, req Genera
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    s.config.Issuer,
 			Subject:   req.AgentName,
+			ID:        uuid.NewString(),
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			NotBefore: jwt.NewNumericDate(now),

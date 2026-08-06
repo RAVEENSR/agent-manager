@@ -216,6 +216,15 @@ run_advanced_install() {
   export SKIP_CA_BUNDLE_TRUST=true
   export PLATFORM_THUNDER_ISSUER="https://${AMP_HOST_THUNDER}"
   export PLATFORM_THUNDER_JWKS_URL="https://${AMP_HOST_THUNDER}/oauth2/jwks"
+  # install_default_env_thunder() runs off-cluster and calls both the AMP API and
+  # platform Thunder's token endpoint. Its *.amp.localhost defaults 404 here, since
+  # this install binds those routes to the custom-domain hosts. Address them by
+  # their real hostnames on the control-plane kgateway's loopback port: the
+  # consolidated :443 listener does not exist yet (apply_advanced_tls runs only
+  # after the base installer returns), so an HTTPS URL would refuse the connection.
+  ensure_loopback_alias "$AMP_HOST_API" "$AMP_HOST_THUNDER"
+  export AMP_API_URL="http://${AMP_HOST_API}:8080/api/v1"
+  export IDP_TOKEN_URL="http://${AMP_HOST_THUNDER}:8080/oauth2/token"
 
   # k3d: publish :443 (the consolidated gateway) to the host; keep the plane ports
   # loopback-bound (only :443 faces the network). Render to mktemp files, not fixed

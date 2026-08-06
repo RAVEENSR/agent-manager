@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -437,44 +438,10 @@ func (c *identityController) ListGroups(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// Check if Administrators group exists (first check current page, then early fetch if needed)
-	administratorsExists := false
-	for _, group := range groups {
-		if group.Name == "Administrators" {
-			administratorsExists = true
-			break
-		}
-	}
-
-	// If Administrators not in current page but might exist elsewhere, fetch first page to check
-	// (Administrators is typically a system group that appears early in listings)
-	if !administratorsExists && offset > 0 {
-		earlyGroups, _, err := c.client.ListGroupsByOUId(ctx, resolvedOrg.OUID, 0, limit)
-		if err == nil {
-			for _, group := range earlyGroups {
-				if group.Name == "Administrators" {
-					administratorsExists = true
-					break
-				}
-			}
-		}
-	}
-
-	// Filter out the Administrators group from public visibility
-	filteredGroups := make([]thundersvc.ThunderGroup, 0, len(groups))
-	for _, group := range groups {
-		if group.Name != "Administrators" {
-			filteredGroups = append(filteredGroups, group)
-		}
-	}
-
-	// Calculate adjusted total: consistently decrement by 1 if Administrators exists in the OU
-	adjustedTotal := total
-	if administratorsExists {
-		adjustedTotal = total - 1
-	}
-
-	utils.WriteSuccessResponse(w, http.StatusOK, map[string]any{"groups": filteredGroups, "total": adjustedTotal, "offset": offset, "limit": limit})
+	// The OU-scoped group listing already hides Thunder's native Administrators
+	// group (thundersvc.NativeAdministratorsGroupName) and paginates after that
+	// exclusion, so offset/limit/total need no adjustment here.
+	utils.WriteSuccessResponse(w, http.StatusOK, map[string]any{"groups": groups, "total": total, "offset": offset, "limit": limit})
 }
 
 func (c *identityController) GetGroup(w http.ResponseWriter, r *http.Request) {
@@ -527,6 +494,9 @@ func (c *identityController) CreateGroup(w http.ResponseWriter, r *http.Request)
 	}
 	if body.Name == "" {
 		utils.WriteErrorResponse(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if !validateReservedGroupName(w, body.Name) {
 		return
 	}
 
@@ -588,6 +558,9 @@ func (c *identityController) UpdateGroup(w http.ResponseWriter, r *http.Request)
 	var body spec.UpdateGroupRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		utils.WriteErrorResponse(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if !validateReservedGroupName(w, derefString(body.Name)) {
 		return
 	}
 
@@ -922,6 +895,9 @@ func (c *identityController) CreateRole(w http.ResponseWriter, r *http.Request) 
 		utils.WriteErrorResponse(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	if !validateReservedRoleName(w, body.Name) {
+		return
+	}
 
 	ouID := resolvedOrg.OUID
 	if body.OuId != nil && *body.OuId != "" {
@@ -982,6 +958,9 @@ func (c *identityController) UpdateRole(w http.ResponseWriter, r *http.Request) 
 	var body spec.UpdateRoleRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		utils.WriteErrorResponse(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if !validateReservedRoleName(w, derefString(body.Name)) {
 		return
 	}
 
@@ -1487,9 +1466,36 @@ func validatePredefinedRole(w http.ResponseWriter, roleName string) bool {
 
 // validateSystemGroup checks if a group is a system group and blocks access if so
 func validateSystemGroup(w http.ResponseWriter, groupName string) bool {
-	if groupName == "Administrators" {
+	if groupName == thundersvc.NativeAdministratorsGroupName {
 		utils.WriteErrorResponse(w, http.StatusNotFound, "Group not found")
 		return false
 	}
 	return true
+}
+
+// validateReservedName rejects a request that would claim a name Thunder
+// reserves for one of its seeded principals, which would shadow the hidden
+// system resource and confuse an operator about which one grants admin.
+//
+// Callers pass the *requested* name, never the resource's current one — that is
+// validateSystemGroup/validatePredefinedRole's job. An absent name means the
+// caller is not renaming, and passes.
+func validateReservedName(w http.ResponseWriter, requested, reserved, kind string) bool {
+	if requested == reserved {
+		utils.WriteErrorResponse(w, http.StatusBadRequest,
+			fmt.Sprintf("%q is a reserved %s name", reserved, kind))
+		return false
+	}
+	return true
+}
+
+func validateReservedGroupName(w http.ResponseWriter, groupName string) bool {
+	return validateReservedName(w, groupName, thundersvc.NativeAdministratorsGroupName, "group")
+}
+
+// validateReservedRoleName complements validatePredefinedRole, which only
+// inspects a role's current name — without this an ordinary role could be
+// renamed to Administrator.
+func validateReservedRoleName(w http.ResponseWriter, roleName string) bool {
+	return validateReservedName(w, roleName, thundersvc.NativeAdministratorRoleName, "role")
 }

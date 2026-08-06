@@ -20,7 +20,7 @@ export const MCPProxiesOrganization = () => {
       <Route
         index
         element={
-          <PageLayout title="MCP Proxies" disableIcon>
+          <PageLayout title="MCP Servers" disableIcon>
             <MCPProxyTable />
           </PageLayout>
         }

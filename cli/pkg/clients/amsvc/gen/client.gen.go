@@ -333,8 +333,10 @@ type ClientInterface interface {
 	// ListGatewayTokens request
 	ListGatewayTokens(ctx context.Context, orgName string, gatewayID string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// RotateGatewayToken request
-	RotateGatewayToken(ctx context.Context, orgName string, gatewayID string, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// RotateGatewayTokenWithBody request with any body
+	RotateGatewayTokenWithBody(ctx context.Context, orgName string, gatewayID string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	RotateGatewayToken(ctx context.Context, orgName string, gatewayID string, body RotateGatewayTokenJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// RevokeGatewayToken request
 	RevokeGatewayToken(ctx context.Context, orgName string, gatewayID string, tokenID string, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -816,6 +818,11 @@ type ClientInterface interface {
 
 	// GetTraceScores request
 	GetTraceScores(ctx context.Context, orgName string, projName string, agentName string, traceId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RegenerateAgentTracingTokenWithBody request with any body
+	RegenerateAgentTracingTokenWithBody(ctx context.Context, orgName string, projName string, agentName string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	RegenerateAgentTracingToken(ctx context.Context, orgName string, projName string, agentName string, body RegenerateAgentTracingTokenJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetDeploymentPipeline request
 	GetDeploymentPipeline(ctx context.Context, orgName string, projName string, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1927,8 +1934,20 @@ func (c *Client) ListGatewayTokens(ctx context.Context, orgName string, gatewayI
 	return c.Client.Do(req)
 }
 
-func (c *Client) RotateGatewayToken(ctx context.Context, orgName string, gatewayID string, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewRotateGatewayTokenRequest(c.Server, orgName, gatewayID)
+func (c *Client) RotateGatewayTokenWithBody(ctx context.Context, orgName string, gatewayID string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRotateGatewayTokenRequestWithBody(c.Server, orgName, gatewayID, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RotateGatewayToken(ctx context.Context, orgName string, gatewayID string, body RotateGatewayTokenJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRotateGatewayTokenRequest(c.Server, orgName, gatewayID, body)
 	if err != nil {
 		return nil, err
 	}
@@ -4041,6 +4060,30 @@ func (c *Client) GenerateAgentToken(ctx context.Context, orgName string, projNam
 
 func (c *Client) GetTraceScores(ctx context.Context, orgName string, projName string, agentName string, traceId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetTraceScoresRequest(c.Server, orgName, projName, agentName, traceId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RegenerateAgentTracingTokenWithBody(ctx context.Context, orgName string, projName string, agentName string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRegenerateAgentTracingTokenRequestWithBody(c.Server, orgName, projName, agentName, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RegenerateAgentTracingToken(ctx context.Context, orgName string, projName string, agentName string, body RegenerateAgentTracingTokenJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRegenerateAgentTracingTokenRequest(c.Server, orgName, projName, agentName, body)
 	if err != nil {
 		return nil, err
 	}
@@ -7735,8 +7778,19 @@ func NewListGatewayTokensRequest(server string, orgName string, gatewayID string
 	return req, nil
 }
 
-// NewRotateGatewayTokenRequest generates requests for RotateGatewayToken
-func NewRotateGatewayTokenRequest(server string, orgName string, gatewayID string) (*http.Request, error) {
+// NewRotateGatewayTokenRequest calls the generic RotateGatewayToken builder with application/json body
+func NewRotateGatewayTokenRequest(server string, orgName string, gatewayID string, body RotateGatewayTokenJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewRotateGatewayTokenRequestWithBody(server, orgName, gatewayID, "application/json", bodyReader)
+}
+
+// NewRotateGatewayTokenRequestWithBody generates requests for RotateGatewayToken with any type of body
+func NewRotateGatewayTokenRequestWithBody(server string, orgName string, gatewayID string, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -7768,10 +7822,12 @@ func NewRotateGatewayTokenRequest(server string, orgName string, gatewayID strin
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", queryURL.String(), nil)
+	req, err := http.NewRequest("POST", queryURL.String(), body)
 	if err != nil {
 		return nil, err
 	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -15520,6 +15576,67 @@ func NewGetTraceScoresRequest(server string, orgName string, projName string, ag
 	return req, nil
 }
 
+// NewRegenerateAgentTracingTokenRequest calls the generic RegenerateAgentTracingToken builder with application/json body
+func NewRegenerateAgentTracingTokenRequest(server string, orgName string, projName string, agentName string, body RegenerateAgentTracingTokenJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewRegenerateAgentTracingTokenRequestWithBody(server, orgName, projName, agentName, "application/json", bodyReader)
+}
+
+// NewRegenerateAgentTracingTokenRequestWithBody generates requests for RegenerateAgentTracingToken with any type of body
+func NewRegenerateAgentTracingTokenRequestWithBody(server string, orgName string, projName string, agentName string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "orgName", orgName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projName", projName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "agentName", agentName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/orgs/%s/projects/%s/agents/%s/tracing-token/regenerate", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewGetDeploymentPipelineRequest generates requests for GetDeploymentPipeline
 func NewGetDeploymentPipelineRequest(server string, orgName string, projName string) (*http.Request, error) {
 	var err error
@@ -16572,8 +16689,10 @@ type ClientWithResponsesInterface interface {
 	// ListGatewayTokensWithResponse request
 	ListGatewayTokensWithResponse(ctx context.Context, orgName string, gatewayID string, reqEditors ...RequestEditorFn) (*ListGatewayTokensResp, error)
 
-	// RotateGatewayTokenWithResponse request
-	RotateGatewayTokenWithResponse(ctx context.Context, orgName string, gatewayID string, reqEditors ...RequestEditorFn) (*RotateGatewayTokenResp, error)
+	// RotateGatewayTokenWithBodyWithResponse request with any body
+	RotateGatewayTokenWithBodyWithResponse(ctx context.Context, orgName string, gatewayID string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RotateGatewayTokenResp, error)
+
+	RotateGatewayTokenWithResponse(ctx context.Context, orgName string, gatewayID string, body RotateGatewayTokenJSONRequestBody, reqEditors ...RequestEditorFn) (*RotateGatewayTokenResp, error)
 
 	// RevokeGatewayTokenWithResponse request
 	RevokeGatewayTokenWithResponse(ctx context.Context, orgName string, gatewayID string, tokenID string, reqEditors ...RequestEditorFn) (*RevokeGatewayTokenResp, error)
@@ -17056,6 +17175,11 @@ type ClientWithResponsesInterface interface {
 	// GetTraceScoresWithResponse request
 	GetTraceScoresWithResponse(ctx context.Context, orgName string, projName string, agentName string, traceId string, reqEditors ...RequestEditorFn) (*GetTraceScoresResp, error)
 
+	// RegenerateAgentTracingTokenWithBodyWithResponse request with any body
+	RegenerateAgentTracingTokenWithBodyWithResponse(ctx context.Context, orgName string, projName string, agentName string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RegenerateAgentTracingTokenResp, error)
+
+	RegenerateAgentTracingTokenWithResponse(ctx context.Context, orgName string, projName string, agentName string, body RegenerateAgentTracingTokenJSONRequestBody, reqEditors ...RequestEditorFn) (*RegenerateAgentTracingTokenResp, error)
+
 	// GetDeploymentPipelineWithResponse request
 	GetDeploymentPipelineWithResponse(ctx context.Context, orgName string, projName string, reqEditors ...RequestEditorFn) (*GetDeploymentPipelineResp, error)
 
@@ -17303,7 +17427,6 @@ type GetAgentKindResp struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *AgentKindResponse
-	JSON404      *ErrorResponse
 	JSON500      *ErrorResponse
 }
 
@@ -17351,7 +17474,6 @@ type ListAgentKindVersionsResp struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *[]AgentKindVersionResponse
-	JSON404      *ErrorResponse
 	JSON500      *ErrorResponse
 }
 
@@ -22009,6 +22131,31 @@ func (r GetTraceScoresResp) StatusCode() int {
 	return 0
 }
 
+type RegenerateAgentTracingTokenResp struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *TracingTokenRegenerateResponse
+	JSON400      *ErrorResponse
+	JSON401      *ErrorResponse
+	JSON404      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r RegenerateAgentTracingTokenResp) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RegenerateAgentTracingTokenResp) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type GetDeploymentPipelineResp struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -23114,9 +23261,17 @@ func (c *ClientWithResponses) ListGatewayTokensWithResponse(ctx context.Context,
 	return ParseListGatewayTokensResp(rsp)
 }
 
-// RotateGatewayTokenWithResponse request returning *RotateGatewayTokenResp
-func (c *ClientWithResponses) RotateGatewayTokenWithResponse(ctx context.Context, orgName string, gatewayID string, reqEditors ...RequestEditorFn) (*RotateGatewayTokenResp, error) {
-	rsp, err := c.RotateGatewayToken(ctx, orgName, gatewayID, reqEditors...)
+// RotateGatewayTokenWithBodyWithResponse request with arbitrary body returning *RotateGatewayTokenResp
+func (c *ClientWithResponses) RotateGatewayTokenWithBodyWithResponse(ctx context.Context, orgName string, gatewayID string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RotateGatewayTokenResp, error) {
+	rsp, err := c.RotateGatewayTokenWithBody(ctx, orgName, gatewayID, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRotateGatewayTokenResp(rsp)
+}
+
+func (c *ClientWithResponses) RotateGatewayTokenWithResponse(ctx context.Context, orgName string, gatewayID string, body RotateGatewayTokenJSONRequestBody, reqEditors ...RequestEditorFn) (*RotateGatewayTokenResp, error) {
+	rsp, err := c.RotateGatewayToken(ctx, orgName, gatewayID, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -24660,6 +24815,23 @@ func (c *ClientWithResponses) GetTraceScoresWithResponse(ctx context.Context, or
 	return ParseGetTraceScoresResp(rsp)
 }
 
+// RegenerateAgentTracingTokenWithBodyWithResponse request with arbitrary body returning *RegenerateAgentTracingTokenResp
+func (c *ClientWithResponses) RegenerateAgentTracingTokenWithBodyWithResponse(ctx context.Context, orgName string, projName string, agentName string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RegenerateAgentTracingTokenResp, error) {
+	rsp, err := c.RegenerateAgentTracingTokenWithBody(ctx, orgName, projName, agentName, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRegenerateAgentTracingTokenResp(rsp)
+}
+
+func (c *ClientWithResponses) RegenerateAgentTracingTokenWithResponse(ctx context.Context, orgName string, projName string, agentName string, body RegenerateAgentTracingTokenJSONRequestBody, reqEditors ...RequestEditorFn) (*RegenerateAgentTracingTokenResp, error) {
+	rsp, err := c.RegenerateAgentTracingToken(ctx, orgName, projName, agentName, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRegenerateAgentTracingTokenResp(rsp)
+}
+
 // GetDeploymentPipelineWithResponse request returning *GetDeploymentPipelineResp
 func (c *ClientWithResponses) GetDeploymentPipelineWithResponse(ctx context.Context, orgName string, projName string, reqEditors ...RequestEditorFn) (*GetDeploymentPipelineResp, error) {
 	rsp, err := c.GetDeploymentPipeline(ctx, orgName, projName, reqEditors...)
@@ -25153,13 +25325,6 @@ func ParseGetAgentKindResp(rsp *http.Response) (*GetAgentKindResp, error) {
 		}
 		response.JSON200 = &dest
 
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest ErrorResponse
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
-
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -25232,13 +25397,6 @@ func ParseListAgentKindVersionsResp(rsp *http.Response) (*ListAgentKindVersionsR
 			return nil, err
 		}
 		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest ErrorResponse
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest ErrorResponse
@@ -33865,6 +34023,53 @@ func ParseGetTraceScoresResp(rsp *http.Response) (*GetTraceScoresResp, error) {
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseRegenerateAgentTracingTokenResp parses an HTTP response from a RegenerateAgentTracingTokenWithResponse call
+func ParseRegenerateAgentTracingTokenResp(rsp *http.Response) (*RegenerateAgentTracingTokenResp, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RegenerateAgentTracingTokenResp{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest TracingTokenRegenerateResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
 
 	}
 

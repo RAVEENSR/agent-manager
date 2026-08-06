@@ -73,6 +73,9 @@ spec:
                 secretKeyRef:
                   name: {{ include "agent-management-platform.postgresql.secretName" . }}
                   key: {{ include "agent-management-platform.postgresql.secretPasswordKey" . }}
+            {{- with (include "agent-management-platform.postgresql.tlsEnv" . | trim) }}
+            {{- . | nindent 12 }}
+            {{- end }}
             - name: API_KEY_VALUE
               valueFrom:
                 secretKeyRef:
@@ -88,4 +91,12 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- with .Values.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
 {{- end }}

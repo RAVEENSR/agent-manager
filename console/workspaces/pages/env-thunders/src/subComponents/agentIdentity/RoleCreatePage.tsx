@@ -27,13 +27,14 @@ import {
   TextField,
 } from "@wso2/oxygen-ui";
 import { Plus } from "@wso2/oxygen-ui-icons-react";
-import { generatePath, useNavigate, useParams } from "react-router-dom";
+import { generatePath, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   useCreateAgentIdentityRole,
   useListAgentIdentityScopes,
 } from "@agent-management-platform/api-client";
 import { useFormValidation, useDirtyState } from "@agent-management-platform/views";
 import { absoluteRouteMap } from "@agent-management-platform/types";
+import { withSearchParams } from "../../utils/withSearchParams";
 import {
   createAgentIdentityRoleSchema,
   type CreateAgentIdentityRoleFormValues,
@@ -41,7 +42,9 @@ import {
 import type { ScopeChoice } from "./scopeChoice";
 
 export const RoleCreatePage: React.FC = () => {
-  const { orgId, envName } = useParams<{ orgId: string; envName: string }>();
+  const { orgId } = useParams<{ orgId: string }>();
+  const [searchParams] = useSearchParams();
+  const envName = searchParams.get("envName") ?? "";
   const navigate = useNavigate();
 
   const [formData, setFormData] = useState<CreateAgentIdentityRoleFormValues>({
@@ -52,7 +55,7 @@ export const RoleCreatePage: React.FC = () => {
 
   const { data: scopesData } = useListAgentIdentityScopes({
     orgName: orgId,
-    envName: envName ?? "",
+    envName,
   });
   const scopes = scopesData?.scopes ?? [];
 
@@ -69,10 +72,11 @@ export const RoleCreatePage: React.FC = () => {
   } = useCreateAgentIdentityRole();
 
   const rolesNode =
-    absoluteRouteMap.children.org.children.thunderInstances.children.view.children.roles;
+    absoluteRouteMap.children.org.children.thunderInstances.children.roles;
 
-  const rolesPath =
-    orgId && envName ? generatePath(rolesNode.path, { orgId, envName }) : "#";
+  const rolesPath = orgId
+    ? withSearchParams(generatePath(rolesNode.path, { orgId }), searchParams)
+    : "#";
 
   const handleFieldChange = useCallback(
     (field: keyof CreateAgentIdentityRoleFormValues, value: string) => {
@@ -93,7 +97,7 @@ export const RoleCreatePage: React.FC = () => {
 
     try {
       const created = await createRole({
-        params: { orgName: orgId, envName: envName ?? "" },
+        params: { orgName: orgId, envName },
         body: {
           name: formData.name.trim(),
           description: formData.description?.trim() || undefined,
@@ -103,11 +107,10 @@ export const RoleCreatePage: React.FC = () => {
       resetDirty();
       clearErrors();
       navigate(
-        generatePath(rolesNode.children.detail.path, {
-          orgId,
-          envName,
-          roleId: created.id,
-        }),
+        withSearchParams(
+          generatePath(rolesNode.children.detail.path, { orgId, roleId: created.id }),
+          searchParams,
+        ),
       );
     } catch {
       // createError state is set by React Query and displayed in the Alert above
@@ -124,6 +127,7 @@ export const RoleCreatePage: React.FC = () => {
     clearErrors,
     navigate,
     rolesNode,
+    searchParams,
   ]);
 
   const submitErrors = Object.values(lastSubmittedValidationErrors);

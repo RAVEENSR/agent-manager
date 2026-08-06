@@ -36,7 +36,7 @@ import (
 const (
 	deploymentLimitBuffer = 5
 	maxDeploymentsPerAPI  = 20
-	apiVersionLLMProvider = "gateway.api-platform.wso2.com/v1alpha1"
+	apiVersionLLMProvider = "gateway.api-platform.wso2.com/v1"
 	kindLLMProvider       = "LlmProvider"
 
 	// Policy names and versions
@@ -161,6 +161,14 @@ func (s *LLMProviderDeploymentService) DeployLLMProvider(providerID string, req 
 	}
 
 	slog.Info("LLMProviderDeploymentService.DeployLLMProvider: provider retrieved", "providerID", providerID, "providerUUID", provider.UUID)
+
+	existing, err := s.deploymentRepo.GetDeployedGatewaysByProvider(provider.UUID, ouID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list existing provider deployments: %w", err)
+	}
+	if err := validateEgressPlacement(s.gatewayRepo, gateway, existing); err != nil {
+		return nil, fmt.Errorf("%w: %w", utils.ErrInvalidInput, err)
+	}
 
 	var baseDeploymentID *uuid.UUID
 	var contentBytes []byte

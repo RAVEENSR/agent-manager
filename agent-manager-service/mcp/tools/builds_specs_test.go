@@ -16,7 +16,11 @@
 
 package tools
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/wso2/agent-manager/agent-manager-service/rbac"
+)
 
 // Returns the test specs for tools registered by registerBuildTools.
 // New tools added to builds.go must have a spec here — registration_test.go fails the build otherwise.
@@ -25,12 +29,12 @@ func buildToolSpecs() []toolTestSpec {
 		{
 			name:                "list_builds",
 			toolset:             "build",
+			permissions:         []rbac.Permission{rbac.AgentRead},
 			descriptionKeywords: []string{"list", "build"},
 			descriptionMinLen:   20,
 			requiredParams:      []string{"project_name", "agent_name"},
-			optionalParams:      []string{"org_name", "limit", "offset"},
+			optionalParams:      []string{"limit", "offset"},
 			testArgs: map[string]any{
-				"org_name":     testOrgName,
 				"project_name": testProjectName,
 				"agent_name":   testAgentName,
 			},
@@ -50,12 +54,12 @@ func buildToolSpecs() []toolTestSpec {
 		{
 			name:                "get_build_details",
 			toolset:             "build",
+			permissions:         []rbac.Permission{rbac.AgentRead},
 			descriptionKeywords: []string{"build"},
 			descriptionMinLen:   20,
 			requiredParams:      []string{"project_name", "agent_name", "build_name"},
-			optionalParams:      []string{"org_name"},
+			optionalParams:      nil,
 			testArgs: map[string]any{
-				"org_name":     testOrgName,
 				"project_name": testProjectName,
 				"agent_name":   testAgentName,
 				"build_name":   testBuildName,
@@ -79,12 +83,12 @@ func buildToolSpecs() []toolTestSpec {
 		{
 			name:                "build_agent",
 			toolset:             "build",
+			permissions:         []rbac.Permission{rbac.AgentBuild},
 			descriptionKeywords: []string{"build"},
 			descriptionMinLen:   20,
 			requiredParams:      []string{"project_name", "agent_name"},
-			optionalParams:      []string{"org_name", "commit_id"},
+			optionalParams:      []string{"commit_id"},
 			testArgs: map[string]any{
-				"org_name":     testOrgName,
 				"project_name": testProjectName,
 				"agent_name":   testAgentName,
 			},

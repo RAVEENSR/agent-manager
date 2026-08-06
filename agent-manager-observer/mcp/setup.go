@@ -31,12 +31,15 @@ import (
 type Dependencies struct {
 	Tracing       *controllers.TracingController
 	Observability *controllers.ObservabilityController
+	// RBACEnabled applies the REST routes' scope policy per tool call: each
+	// tool requires its amp:observability:* scope on the per-call token.
+	RBACEnabled bool
 }
 
 // RegisterRoute builds the MCP HTTP handler and registers it on mux at
 // /mcp and /mcp/, wrapped with authMiddleware. It is mounted on the root
-// mux (not under /api/v1/): unlike the REST logs/metrics/build-logs routes,
-// /mcp deliberately accepts publisher-audience tokens too.
+// mux (not under /api/v1/): publisher-audience tokens may call it, confined
+// to their implicit trace-read permission by the per-tool guards.
 func RegisterRoute(mux *http.ServeMux, deps Dependencies, authMiddleware func(http.Handler) http.Handler) {
 	server := gomcp.NewServer(&gomcp.Implementation{
 		Name:    "am-obs-mcp",
@@ -46,6 +49,7 @@ func RegisterRoute(mux *http.ServeMux, deps Dependencies, authMiddleware func(ht
 	toolsets := &tools.Toolsets{
 		Tracing:       deps.Tracing,
 		Observability: deps.Observability,
+		RBACEnabled:   deps.RBACEnabled,
 	}
 	toolsets.Register(server)
 

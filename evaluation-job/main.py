@@ -129,9 +129,14 @@ class JsonFormatter(logging.Formatter):
 def configure_logging() -> None:
     """Configure JSON logging from LOG_LEVEL env var (default: INFO).
 
-    The root logger stays at INFO so library internals (e.g. trace parser
-    debug messages) don't leak into run logs.  Only the evaluation-job's
-    own logger is set to the requested level.
+    Logs are read by agent developers who cannot see the monitor/eval source,
+    so INFO is reserved for run progress and per-evaluator summaries, DEBUG for
+    monitor/eval internals, and WARN/ERROR for things the developer can act on
+    (LLM misconfiguration, skipped evals, parse failures).
+
+    LOG_LEVEL is applied to both the evaluation-job logger and the
+    ``amp_evaluation`` library so DEBUG is actually usable in dev; the root
+    logger is kept at INFO so noisy third-party libraries stay quiet.
     """
     level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
@@ -139,6 +144,7 @@ def configure_logging() -> None:
     handler.setFormatter(JsonFormatter(datefmt="%Y-%m-%dT%H:%M:%S"))
     logging.basicConfig(level=logging.INFO, handlers=[handler])
     logging.getLogger(__name__).setLevel(level)
+    logging.getLogger("amp_evaluation").setLevel(level)
 
     # The openai/anthropic SDKs (used internally by any_llm) log retry attempts at
     # INFO via their own package loggers, not through evaluation-job's logger above.
@@ -332,7 +338,7 @@ def publish_scores(
     # Publish scores to agent-manager API
     url = f"{api_endpoint}/api/v1/publisher/monitors/{monitor_id}/runs/{run_id}/scores"
 
-    logger.info(
+    logger.debug(
         "Publishing scores monitor_id=%s run_id=%s evaluators=%d individual_scores=%d",
         monitor_id,
         run_id,
@@ -349,7 +355,7 @@ def publish_scores(
             response = requests.post(url, json=payload, headers=headers, timeout=30)
             response.raise_for_status()
 
-            logger.info("Successfully published scores to agent-manager")
+            logger.debug("Successfully published scores to agent-manager")
             return True
 
         except requests.exceptions.RequestException as e:
@@ -367,7 +373,7 @@ def publish_scores(
                     return False
             if attempt < PUBLISH_MAX_RETRIES - 1:
                 backoff = PUBLISH_INITIAL_BACKOFF * (2**attempt)
-                logger.info("Retrying in %d seconds...", backoff)
+                logger.debug("Retrying in %d seconds...", backoff)
                 time.sleep(backoff)
 
     return False
@@ -409,14 +415,14 @@ def _load_custom_code_evaluator(identifier: str, source: str, config: dict):
         else:
             instance = FunctionEvaluator(found_func, name=identifier)
 
-        logger.info(
+        logger.debug(
             "Loaded custom code evaluator: %s (function=%s)", identifier, getattr(found_func, "__name__", identifier)
         )
         instance = instance.with_config(**config) if config else instance
         return instance
 
     if found_cls is not None:
-        logger.info("Loaded custom code evaluator: %s (class=%s)", identifier, found_cls.__name__)
+        logger.debug("Loaded custom code evaluator: %s (class=%s)", identifier, found_cls.__name__)
         return found_cls(**config)
 
     raise ValueError(
@@ -493,7 +499,7 @@ def _create_custom_llm_judge(identifier: str, prompt_template: str, level: str, 
         def _build_prompt(trace: Trace, task=None) -> str:  # type: ignore[misc]
             return _eval_template(prompt_template, {"trace": trace, "task": task, **template_extra})
 
-    logger.info("Created custom LLM-as-judge evaluator: %s (level=%s)", identifier, level)
+    logger.debug("Created custom LLM-as-judge evaluator: %s (level=%s)", identifier, level)
     return FunctionLLMJudge(_build_prompt, name=identifier, **llm_config)
 
 
@@ -537,7 +543,7 @@ def main() -> None:
         judge_cfg.api_base = llm_api_base
         judge_cfg.api_key = llm_api_key
 
-        logger.info("Configured LLM client to route through OpenAI-compatible gateway at %s", llm_api_base)
+        logger.debug("Configured LLM client to route through OpenAI-compatible gateway at %s", llm_api_base)
 
     logger.info(
         "Starting monitor evaluation monitor=%s organization=%s project=%s agent=%s env=%s time_range=%s..%s sampling=%.2f",

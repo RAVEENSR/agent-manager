@@ -27,6 +27,7 @@ import { EditEnvironmentDrawer } from "./subComponents/EditEnvironmentDrawer";
 import { CreateEnvironmentDrawer } from "./subComponents/CreateEnvironmentDrawer";
 import { DeleteEnvironmentDrawer } from "./subComponents/DeleteEnvironmentDrawer";
 import { EnvironmentViewPage } from "./EnvironmentViewPage";
+import { ViewThunderInstance } from "./subComponents/ViewThunderInstance";
 
 const ENVIRONMENT_CREATE_DRAWER_MOUNT_POINT = "environment-create-drawer";
 const ENVIRONMENT_DELETE_DRAWER_MOUNT_POINT = "environment-delete-drawer";
@@ -80,6 +81,7 @@ export function EnvironmentsOrganization() {
           }
         />
         <Route path=":envName" element={<EnvironmentViewPage />} />
+        <Route path=":envName/identity-provider" element={<ViewThunderInstance />} />
         <Route
           path="*"
           element={<Navigate to={`/org/${orgId}/environments`} replace />}

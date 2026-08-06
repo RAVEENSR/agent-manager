@@ -71,9 +71,9 @@ export function MCPProxyTable() {
     <ResourceListShell
       searchValue={searchValue}
       onSearchChange={setSearchValue}
-      searchPlaceholder="Search MCP proxies..."
+      searchPlaceholder="Search MCP servers..."
       addButton={{
-        label: "Add MCP Proxy",
+        label: "Register MCP Server",
         component: Link,
         to: generatePath(
           absoluteRouteMap.children.org.children.mcpProxies.children.add.path,
@@ -86,12 +86,12 @@ export function MCPProxyTable() {
       isSearchEmpty={!filteredProxies.length}
       emptyState={{
         illustration: <MCPLogo size={64} />,
-        title: "No MCP Proxies Yet",
-        description: "Add an MCP Proxy to provide tools for agents.",
+        title: "No MCP Servers Yet",
+        description: "Add an MCP Server to provide tools for agents.",
       }}
       searchEmptyState={{
         illustration: <Plus size={64} />,
-        title: "No MCP proxies match your search",
+        title: "No MCP servers match your search",
         description: "Try a different keyword or clear the search filter.",
       }}
     >
@@ -110,7 +110,7 @@ export function MCPProxyTable() {
         </ListingTable.Head>
         <ListingTable.Body>
           {filteredProxies.map((proxy: MCPProxyListItem) => {
-            const displayName = proxy.name ?? proxy.id ?? "MCP Proxy";
+            const displayName = proxy.name ?? proxy.id ?? "MCP Server";
             const proxyId = proxy.id;
             return (
               <ListingTable.Row
@@ -141,7 +141,7 @@ export function MCPProxyTable() {
                         flexShrink: 0,
                       }}
                     >
-                      {getAvatarInitials(displayName, { fallback: "MP" })}
+                      {getAvatarInitials(displayName, { fallback: "MS" })}
                     </Avatar>
                     <Typography variant="body2" fontWeight={500} noWrap>
                       {displayName}
@@ -163,13 +163,13 @@ export function MCPProxyTable() {
                   onClick={(event) => event.stopPropagation()}
                 >
                   {proxyId ? (
-                    <Tooltip title="Delete MCP Proxy">
+                    <Tooltip title="Delete MCP Server">
                       <IconButton
                         color="error"
                         size="small"
                         onClick={() =>
                           addConfirmation({
-                            title: "Delete MCP Proxy",
+                            title: "Delete MCP Server",
                             description: `Are you sure you want to delete ${displayName}? This action cannot be undone.`,
                             confirmButtonText: "Delete",
                             confirmButtonColor: "error",

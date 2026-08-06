@@ -147,7 +147,7 @@ func TestLoad_OAuthConfigured(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("SERVER_PUBLIC_URL", "http://traces.amp.localhost:8080")
 	t.Setenv("OAUTH_AUTHORIZATION_SERVERS", "http://thunder.amp.localhost:8080, http://other.example.com")
-	t.Setenv("OAUTH_SCOPES_SUPPORTED", "amp:observability:project-dashboard,amp:observability:org-dashboard")
+	t.Setenv("OAUTH_SCOPES_SUPPORTED", "amp:observability:log-read,amp:observability:trace-read")
 
 	cfg, err := Load()
 	if err != nil {
@@ -160,8 +160,32 @@ func TestLoad_OAuthConfigured(t *testing.T) {
 	if !reflect.DeepEqual(cfg.Auth.AuthorizationServers, wantServers) {
 		t.Errorf("expected AuthorizationServers %v, got %v", wantServers, cfg.Auth.AuthorizationServers)
 	}
-	wantScopes := []string{"amp:observability:project-dashboard", "amp:observability:org-dashboard"}
+	wantScopes := []string{"amp:observability:log-read", "amp:observability:trace-read"}
 	if !reflect.DeepEqual(cfg.Auth.ScopesSupported, wantScopes) {
 		t.Errorf("expected ScopesSupported %v, got %v", wantScopes, cfg.Auth.ScopesSupported)
+	}
+}
+
+func TestLoadRBACEnabled(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("RBAC_ENABLED", "true")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !cfg.Auth.RBACEnabled {
+		t.Error("RBACEnabled = false, want true when RBAC_ENABLED=true")
+	}
+}
+
+func TestLoadRBACEnabledDefaultsFalse(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("RBAC_ENABLED", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Auth.RBACEnabled {
+		t.Error("RBACEnabled = true, want default false when RBAC_ENABLED unset")
 	}
 }

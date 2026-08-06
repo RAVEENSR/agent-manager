@@ -1,10 +1,10 @@
 # Versions locked from a clean install of the LangChain 1.x ecosystem.
-langchain==1.3.0
-langchain-core==1.4.0
-langchain-openai==1.2.1
-langgraph==1.2.0
+langchain>=1.3.0
+langchain-core>=1.4.9
+langchain-openai>=0.3.35
+langgraph>=0.5.0
 
-fastapi==0.136.1
+fastapi==0.139.0
 uvicorn[standard]==0.47.0
 pydantic==2.13.4
 

@@ -33,7 +33,7 @@ import {
   Tooltip,
   Typography,
 } from "@wso2/oxygen-ui";
-import { Trash } from "@wso2/oxygen-ui-icons-react";
+import { Shield, Trash, Users } from "@wso2/oxygen-ui-icons-react";
 import { generatePath, useNavigate, useParams } from "react-router-dom";
 import {
   useListUsers,
@@ -305,9 +305,13 @@ export const GroupEditPage: React.FC = () => {
               )}
 
               {membersTotal === 0 && pendingAdds.length === 0 ? (
-                <Typography variant="body2" color="text.secondary">
-                  No members yet. Search and add users above.
-                </Typography>
+                <ListingTable.Container>
+                  <ListingTable.EmptyState
+                    illustration={<Users size={64} />}
+                    title="No members yet"
+                    description="Search and add users above."
+                  />
+                </ListingTable.Container>
               ) : membersTotal > 0 ? (
                 <ListingTable.Container>
                   <ListingTable>
@@ -373,9 +377,12 @@ export const GroupEditPage: React.FC = () => {
                     Failed to load roles. Please try again.
                   </Typography>
                 ) : roles.length === 0 ? (
-                  <Typography variant="body2" color="text.secondary">
-                    No roles assigned to this group.
-                  </Typography>
+                  <ListingTable.Container>
+                    <ListingTable.EmptyState
+                      illustration={<Shield size={64} />}
+                      title="No roles assigned to this group"
+                    />
+                  </ListingTable.Container>
                 ) : (
                   <ListingTable.Container>
                     <ListingTable>

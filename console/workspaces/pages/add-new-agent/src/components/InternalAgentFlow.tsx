@@ -118,7 +118,7 @@ export const InternalAgentFlow: React.FC = () => {
 
     if ((llmProviders.length > 0 || mcpProxies.length > 0) && !initialEnvironmentName) {
       setLastSubmittedValidationErrors({
-        llmProvider: "Unable to resolve the initial deployment environment for LLM provider / MCP proxy configuration.",
+        llmProvider: "Unable to resolve the initial deployment environment for LLM provider / MCP Server configuration.",
       });
       return;
     }

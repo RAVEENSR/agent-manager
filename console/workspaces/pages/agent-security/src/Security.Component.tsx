@@ -17,9 +17,9 @@
  */
 
 import React from "react";
-import { useParams } from "react-router-dom";
-import { Alert, Box, Skeleton } from "@wso2/oxygen-ui";
-import { Rocket } from "@wso2/oxygen-ui-icons-react";
+import { Link, generatePath, useParams } from "react-router-dom";
+import { Alert, Button, ListingTable, Skeleton } from "@wso2/oxygen-ui";
+import { KeyRound, Rocket, ShieldOff } from "@wso2/oxygen-ui-icons-react";
 import {
   useCreateAgentAPIKey,
   useGetAgent,
@@ -32,7 +32,8 @@ import {
   EnvironmentSelector,
   type CreateAPIKeyInput,
 } from "@agent-management-platform/shared-component";
-import { NoDataFound, PageLayout } from "@agent-management-platform/views";
+import { PageLayout } from "@agent-management-platform/views";
+import { absoluteRouteMap } from "@agent-management-platform/types";
 
 export const SecurityComponent: React.FC = () => {
   const { orgId, projectId, agentId, envId } = useParams();
@@ -50,6 +51,7 @@ export const SecurityComponent: React.FC = () => {
     });
 
   const securityEnabled = agent?.configurations?.enableApiKeySecurity ?? true;
+  const oauthEnabled = agent?.configurations?.enableOAuthSecurity ?? false;
   const currentDeployment = envId ? deployments?.[envId] : undefined;
   const hasActiveDeployment = currentDeployment?.status === "active";
   const shouldLoadKeys =
@@ -100,35 +102,60 @@ export const SecurityComponent: React.FC = () => {
     });
   };
 
-  if (!isLoading && !hasActiveDeployment) {
-    return (
-      <PageLayout title="API Keys" disableIcon actions={<EnvironmentSelector />}>
-        <Box
-          height="50vh"
-          display="flex"
-          justifyContent="center"
-          alignItems="center"
-        >
-          <NoDataFound
-            iconElement={Rocket}
-            disableBackground
-            message="Agent is not deployed"
-            subtitle="Deploy your agent to manage API keys. You can deploy your agent by clicking the deploy button in the deploy tab."
-          />
-        </Box>
-      </PageLayout>
-    );
-  }
+  const emptyState = !hasActiveDeployment
+    ? {
+        illustration: <Rocket size={48} />,
+        title: "Agent is not deployed",
+        description: "Deploy this agent to manage its API keys. Use the Deploy tab to get started.",
+      }
+    : !securityEnabled && oauthEnabled
+    ? {
+        illustration: <KeyRound size={48} />,
+        title: "This agent uses OAuth",
+        description: "Manage OAuth authentication from the configured identity provider.",
+        action: orgId && envId ? (
+          <Button
+            variant="outlined"
+            component={Link}
+            to={generatePath(
+              absoluteRouteMap.children.org.children.environments.children.view.children
+                .identityProvider.path,
+              { orgId, envName: envId },
+            )}
+          >
+            View Identity Provider
+          </Button>
+        ) : undefined,
+      }
+    : !securityEnabled
+    ? {
+        illustration: <ShieldOff size={48} />,
+        title: "Agent security is disabled",
+        description: "Enable API Key Security from the deployment settings and redeploy to manage API keys.",
+        action: orgId && projectId && agentId && envId ? (
+          <Button
+            variant="contained"
+            component={Link}
+            to={generatePath(
+              absoluteRouteMap.children.org.children.projects.children.agents.children.environment
+                .children.deploy.path,
+              { orgId, projectId, agentId, envId },
+            )}
+          >
+            Go to Deployment Settings
+          </Button>
+        ) : undefined,
+      }
+    : null;
 
   return (
     <PageLayout title="API Keys" disableIcon actions={<EnvironmentSelector />}>
       {isLoading ? (
         <Skeleton variant="rectangular" width="100%" height={200} />
-      ) : !securityEnabled ? (
-        <Alert severity="info">
-          API Key Security is disabled for this agent. To manage API keys, enable
-          it from the <strong>Deployment</strong> settings and redeploy.
-        </Alert>
+      ) : emptyState ? (
+        <ListingTable.Container>
+          <ListingTable.EmptyState {...emptyState} />
+        </ListingTable.Container>
       ) : (
         <>
         {gatewayOffline && (

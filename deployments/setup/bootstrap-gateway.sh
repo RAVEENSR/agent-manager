@@ -12,6 +12,8 @@
 #   GATEWAY_NAME         - Logical name for the gateway (lowercase alphanumeric + hyphens)
 #   GATEWAY_DISPLAY_NAME - Human-readable display name
 #   GATEWAY_VHOST        - Virtual host (FQDN or IP) the gateway is reachable on
+#   GATEWAY_RUNTIME_URL  - In-cluster base URL of the gateway runtime, no path
+#                          (e.g. http://api-platform-acme-dev-gw-gateway-gateway-runtime.acme-dev:22893)
 #   GATEWAY_TYPE         - Gateway type (must be "ai")
 #   TOKEN_FILE           - Path to write the plaintext token (e.g. /shared/gateway-token)
 
@@ -124,6 +126,7 @@ else
       "displayName": "'"${GATEWAY_DISPLAY_NAME}"'",
       "gatewayType": "'"${GATEWAY_TYPE}"'",
       "vhost": "'"${GATEWAY_VHOST}"'",
+      "runtimeUrl": "'"${GATEWAY_RUNTIME_URL:-}"'",
       "environmentIds": ["'"${ENVIRONMENT_ID}"'"]
     }')
 

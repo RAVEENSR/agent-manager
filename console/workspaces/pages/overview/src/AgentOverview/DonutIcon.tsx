@@ -21,6 +21,14 @@ import { useTheme } from "@wso2/oxygen-ui";
 
 export type DonutColor = "success" | "warning" | "error" | "primary";
 
+/** Maps a 0-100 score/percent to its donut color band, `null` scores rendering as neutral. */
+export const getDonutColorForPercent = (percent: number | null): DonutColor => {
+    if (percent === null) return "primary";
+    if (percent >= 70) return "success";
+    if (percent >= 40) return "warning";
+    return "error";
+};
+
 interface DonutIconProps {
     percent: number;
     color: DonutColor;

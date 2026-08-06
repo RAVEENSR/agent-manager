@@ -129,18 +129,20 @@ export const GroupsPage: React.FC = () => {
               </Button>
             }
           />
-          {!isLoading && total === 0 ? (
-            <ListingTable.EmptyState
-              illustration={<Folder size={64} />}
-              title="No groups yet"
-              description='Click "Create Group" to add one.'
-            />
-          ) : !isLoading && filteredGroups.length === 0 ? (
-            <ListingTable.EmptyState
-              illustration={<Folder size={64} />}
-              title="No groups found"
-              description={`No groups match "${search}". Try a different search term.`}
-            />
+          {!isLoading && filteredGroups.length === 0 ? (
+            search ? (
+              <ListingTable.EmptyState
+                illustration={<Folder size={64} />}
+                title="No groups found"
+                description={`No groups match "${search}". Try a different search term.`}
+              />
+            ) : (
+              <ListingTable.EmptyState
+                illustration={<Folder size={64} />}
+                title="No groups yet"
+                description='Click "Create Group" to add one.'
+              />
+            )
           ) : (
             <ListingTable variant="table">
               <ListingTable.Head>

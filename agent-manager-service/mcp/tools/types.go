@@ -25,10 +25,11 @@ import (
 )
 
 type Toolsets struct {
-	ProjectToolset    ProjectToolsetHandler
-	AgentToolset      AgentToolsetHandler
-	BuildToolset      BuildToolsetHandler
-	DeploymentToolset DeploymentToolsetHandler
+	ProjectToolset     ProjectToolsetHandler
+	AgentToolset       AgentToolsetHandler
+	BuildToolset       BuildToolsetHandler
+	DeploymentToolset  DeploymentToolsetHandler
+	EnvironmentToolset EnvironmentToolsetHandler
 }
 
 type ProjectToolsetHandler interface {
@@ -40,7 +41,6 @@ type AgentToolsetHandler interface {
 	ListAgents(ctx context.Context, ouID string, projName string, limit int32, offset int32) ([]*models.AgentResponse, int32, error)
 	GenerateToken(ctx context.Context, ouID string, projectName string, agentName string, environment string, expiresIn string) (*spec.TokenResponse, error)
 	CreateAgent(ctx context.Context, ouID string, projectName string, req *spec.CreateAgentRequest) error
-	GetAgent(ctx context.Context, ouID string, projectName string, agentName string) (*models.AgentResponse, error)
 }
 
 type BuildToolsetHandler interface {
@@ -53,4 +53,9 @@ type DeploymentToolsetHandler interface {
 	GetAgentDeployments(ctx context.Context, ouID string, projectName string, agentName string) ([]*models.DeploymentResponse, error)
 	DeployAgent(ctx context.Context, ouID string, projectName string, agentName string, req *spec.DeployAgentRequest) (string, error)
 	UpdateDeploymentState(ctx context.Context, ouID string, projectName string, agentName string, environment string, state string) error
+}
+
+type EnvironmentToolsetHandler interface {
+	ListEnvironments(ctx context.Context, ouID string, limit int32, offset int32) (*models.EnvironmentListResponse, error)
+	GetEnvironment(ctx context.Context, ouID string, envName string) (*models.GatewayEnvironmentResponse, error)
 }

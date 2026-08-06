@@ -321,7 +321,7 @@ type CreateSecretReferenceRequest struct {
 	Name            string   // Name of the SecretReference
 	ProjectName     string   // Project name for labels
 	ComponentName   string   // Component name for labels
-	KVPath          string   // Path in OpenBao KV store
+	KVPath          string   // Path in the backing KV store
 	SecretKeys      []string // Keys to extract from KV path
 	RefreshInterval string   // How often to refresh (e.g., "1h", "15s")
 	// TemplateAnnotations are set on the generated Secret's template metadata.

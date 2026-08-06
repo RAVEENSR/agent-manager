@@ -20,8 +20,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAuthHooks } from "@agent-management-platform/auth";
 import { useApiMutation, useApiQuery } from "./react-query-notifications";
 import type {
-  CreateGatewayPathParams,
-  CreateGatewayRequest,
   DeleteGatewayPathParams,
   DiscoverOidcPathParams,
   DiscoverOidcQuery,
@@ -43,7 +41,6 @@ import type {
 } from "@agent-management-platform/types";
 import {
   assignGatewayToEnvironment,
-  createGateway,
   deleteGateway,
   deleteIdentityProvider,
   discoverOidc,
@@ -147,22 +144,6 @@ export function useDeleteIdentityProvider() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["identity-providers"] });
       queryClient.invalidateQueries({ queryKey: ["environment-identity-providers"] });
-    },
-  });
-}
-
-export function useCreateGateway() {
-  const { getToken } = useAuthHooks();
-  const queryClient = useQueryClient();
-  return useApiMutation<
-    GatewayResponse,
-    unknown,
-    { params: CreateGatewayPathParams; body: CreateGatewayRequest }
-  >({
-    action: { verb: 'create', target: 'gateway' },
-    mutationFn: ({ params, body }) => createGateway(params, body, getToken),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["gateways"] });
     },
   });
 }

@@ -85,6 +85,10 @@ def evaluate(trace: Trace) -> EvalResult:
 Use `EvalResult.skip()` instead of returning a score of 0.0 when the evaluator is not applicable. Skipped evaluations are tracked separately and do not affect aggregated scores.
 :::
 
+:::info Disallowed imports
+Source containing `os`, `subprocess`, `socket`, `ctypes`, or `importlib` imports (or a dynamic `__import__()` call) is rejected at creation/update time with a 400 error naming the pattern. This check always applies regardless of deployment, but it's a basic content check, not a full sandbox — write evaluators that don't need these regardless, since network egress is only restricted on deployments where it's enabled and enforced (see [Network access](../concepts/evaluation.mdx#custom-evaluators)).
+:::
+
   </TabItem>
   <TabItem value="llm-judge" label="LLM-Judge Evaluator">
 

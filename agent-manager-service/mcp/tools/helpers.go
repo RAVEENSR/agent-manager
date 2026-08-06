@@ -41,14 +41,24 @@ func resolveOUID(ctx context.Context) string {
 	return ""
 }
 
-// helper function for resolving the environment of the agent
-const defaultEnvName = "default"
-
-func resolveEnv(value string) string {
-	if trimmed := strings.TrimSpace(value); trimmed != "" {
-		return trimmed
+// resolvePagination applies the standard limit/offset defaults and bounds
+// shared by every paginated list tool.
+func resolvePagination(limitPtr *int, offsetPtr *int) (int, int, error) {
+	limit := utils.DefaultLimit
+	if limitPtr != nil {
+		limit = *limitPtr
 	}
-	return defaultEnvName
+	if limit < utils.MinLimit || limit > utils.MaxLimit {
+		return 0, 0, fmt.Errorf("limit must be between %d and %d", utils.MinLimit, utils.MaxLimit)
+	}
+	offset := utils.DefaultOffset
+	if offsetPtr != nil {
+		offset = *offsetPtr
+	}
+	if offset < utils.MinOffset {
+		return 0, 0, fmt.Errorf("offset must be >= %d", utils.MinOffset)
+	}
+	return limit, offset, nil
 }
 
 // helper functions  that build JSON Schema snippets
@@ -101,6 +111,9 @@ func enumProperty(description string, values []string) map[string]any {
 	}
 }
 
+// shared hint for org-not-found errors, used by both classification branches below
+const orgNotFoundHint = "the organization on your token was not found. Re-authenticate and try again"
+
 // custom error handling to provide more LLM-friendly error messages for common errors
 func wrapToolError(toolName string, err error) error {
 	if err == nil {
@@ -108,11 +121,13 @@ func wrapToolError(toolName string, err error) error {
 	}
 	switch {
 	case errors.Is(err, utils.ErrOrganizationNotFound):
-		return fmt.Errorf("%s: invalid org name. Use a valid org name or omit it to use the default value", toolName)
+		return fmt.Errorf("%s: %s", toolName, orgNotFoundHint)
 	case errors.Is(err, utils.ErrProjectNotFound):
 		return fmt.Errorf("%s: invalid project name. Call list_projects to see valid projects", toolName)
 	case errors.Is(err, utils.ErrAgentNotFound):
 		return fmt.Errorf("%s: invalid agent name. Call list_agents or list_project_agent_pairs to see valid agents", toolName)
+	case errors.Is(err, utils.ErrEnvironmentNotFound):
+		return fmt.Errorf("%s: invalid environment name. Call list_environments to see valid environments", toolName)
 	case errors.Is(err, utils.ErrEvaluatorNotFound):
 		return fmt.Errorf("%s: invalid evaluator id. Call list_evaluators to see valid evaluators", toolName)
 	case errors.Is(err, utils.ErrCustomEvaluatorNotFound):
@@ -133,7 +148,7 @@ func wrapToolError(toolName string, err error) error {
 		msg := strings.ToLower(err.Error())
 		switch {
 		case strings.Contains(msg, "namespace not found") || strings.Contains(msg, "organization not found"):
-			return fmt.Errorf("%s: invalid org name. Use a valid org name or omit it to use the default value", toolName)
+			return fmt.Errorf("%s: %s", toolName, orgNotFoundHint)
 		case strings.Contains(msg, "project not found"):
 			return fmt.Errorf("%s: invalid project name. Call list_projects to see valid projects", toolName)
 		case strings.Contains(msg, "agent not found") || strings.Contains(msg, "component not found"):

@@ -206,7 +206,7 @@ func (c *mcpProxyController) DeleteMCPProxy(w http.ResponseWriter, r *http.Reque
 	ctx := r.Context()
 	log := logger.GetLogger(ctx)
 	ouID := middleware.OUIDFromRequest(r)
-	orgName := r.PathValue(utils.PathParamOrgName)
+	orgName := middleware.OrgHandleFromRequest(r)
 	proxyID := r.PathValue(utils.PathParamProxyId)
 
 	log.Info("DeleteMCPProxy: starting", "ouID", ouID, "proxyID", proxyID)

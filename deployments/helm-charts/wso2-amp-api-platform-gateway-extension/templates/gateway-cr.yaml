@@ -6,7 +6,7 @@
 #   3. The gateway-controller reads APIP_GW_GATEWAY_REGISTRATION_TOKEN from the Secret
 #      referenced by spec.controlPlane.tokenSecretRef (created by the bootstrap job)
 #   4. The gateway-controller connects to Agent Manager and stays registered
-apiVersion: gateway.api-platform.wso2.com/v1alpha1
+apiVersion: gateway.api-platform.wso2.com/v1
 kind: APIGateway
 metadata:
   name: {{ include "wso2-amp-gateway-extension.apiGatewayName" . }}

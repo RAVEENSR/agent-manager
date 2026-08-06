@@ -16,6 +16,7 @@
  * under the License.
  */
 
+import { useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuthHooks } from "@agent-management-platform/auth";
 import { useApiMutation, useApiQuery } from "./react-query-notifications";
@@ -83,12 +84,12 @@ export function useListAgentKinds(
 /**
  * Hook to get details of an Agent Kind
  */
-export function useGetAgentKind(params: GetAgentKindPathParams) {
+export function useGetAgentKind(params: GetAgentKindPathParams, options?: { enabled?: boolean }) {
   const { getToken } = useAuthHooks();
-  return useApiQuery<AgentKindResponse>({
+  return useApiQuery<AgentKindResponse | null>({
     queryKey: agentKindKeys.detail(params),
     queryFn: () => getAgentKind(params, getToken),
-    enabled: !!params.orgName && !!params.kindName,
+    enabled: options?.enabled ?? (!!params.orgName && !!params.kindName),
   });
 }
 
@@ -119,10 +120,16 @@ export function useDeleteAgentKind() {
   const { getToken } = useAuthHooks();
   const queryClient = useQueryClient();
   return useApiMutation<void, unknown, DeleteAgentKindPathParams>({
-    action: { verb: 'delete', target: 'agent kind' },
+    action: { verb: 'unpublish', target: 'agent kind' },
     mutationFn: (params) => deleteAgentKind(params, getToken),
-    onSuccess: () => {
+    onSuccess: (_data, params) => {
+      // GetKind/ListVersions now resolve to null/[] (200) rather than 404 for
+      // a kind that doesn't exist, so a plain refetch already lands on the
+      // correct "gone" state — no need to remove the cache entries outright.
       queryClient.invalidateQueries({ queryKey: agentKindKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: agentKindKeys.detail(params) });
+      queryClient.invalidateQueries({ queryKey: agentKindKeys.versionList(params) });
+      queryClient.invalidateQueries({ queryKey: agentKindKeys.kindAgentList(params) });
     },
   });
 }
@@ -130,13 +137,48 @@ export function useDeleteAgentKind() {
 /**
  * Hook to list all versions of an Agent Kind
  */
-export function useListAgentKindVersions(params: ListAgentKindVersionsPathParams) {
+export function useListAgentKindVersions(
+  params: ListAgentKindVersionsPathParams,
+  options?: { enabled?: boolean },
+) {
   const { getToken } = useAuthHooks();
   return useApiQuery<AgentKindVersionResponse[]>({
     queryKey: agentKindKeys.versionList(params),
     queryFn: () => listAgentKindVersions(params, getToken),
-    enabled: !!params.orgName && !!params.kindName,
+    enabled: options?.enabled ?? (!!params.orgName && !!params.kindName),
   });
+}
+
+/**
+ * Hook to resolve which Agent Kind version a deployed image matches, plus the
+ * newest available version — shared by every "deployed vX" chip and
+ * "newer version available" banner so the match logic lives in one place.
+ */
+export function useDeployedAgentKindVersion(params: {
+  orgName?: string;
+  kindName?: string;
+  imageId?: string;
+}) {
+  const { orgName, kindName, imageId } = params;
+  const { data: kindVersions } = useListAgentKindVersions({
+    orgName: orgName ?? "",
+    kindName: kindName ?? "",
+  });
+
+  const deployedVersion = useMemo(() => {
+    if (!imageId || !kindName) return null;
+    return kindVersions?.find((v) => v.imageId === imageId)?.version ?? null;
+  }, [imageId, kindName, kindVersions]);
+
+  const latestKindVersion = useMemo(() => (
+    kindVersions?.length
+      ? [...kindVersions].sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      )[0]
+      : undefined
+  ), [kindVersions]);
+
+  return { kindVersions, deployedVersion, latestKindVersion };
 }
 
 /**
@@ -207,10 +249,15 @@ export function usePublishAgentKind() {
   >({
     action: { verb: 'publish', target: 'agent kind' },
     mutationFn: ({ params, body }) => publishAgentKind(params, body, getToken),
-    onSuccess: () => {
+    // PublishAgentKindPathParams is agent-shaped (orgName/projName/agentName) —
+    // the kind being published is only identified by body.kindName, so that's
+    // what targets the invalidation at this specific kind rather than every
+    // kind's detail/version-list query in the org.
+    onSuccess: (_data, { params, body }) => {
+      const kindParams = { orgName: params.orgName, kindName: body.kindName };
       queryClient.invalidateQueries({ queryKey: agentKindKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: agentKindKeys.details() });
-      queryClient.invalidateQueries({ queryKey: agentKindKeys.versionLists() });
+      queryClient.invalidateQueries({ queryKey: agentKindKeys.detail(kindParams) });
+      queryClient.invalidateQueries({ queryKey: agentKindKeys.versionList(kindParams) });
     },
   });
 }

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -315,6 +316,17 @@ func (c *openChoreoClient) findReleaseBindingForEnv(ctx context.Context, namespa
 	return nil, nil //nolint:nilnil // documented sentinel: callers distinguish "no binding" from "list failed"
 }
 
+// bumpRestartedAt stamps a fresh restartedAt on the binding's ComponentTypeEnvironmentConfigs,
+// which OpenChoreo watches to trigger a pod rollout. Shared by every mutation that needs pods to
+// pick up changed secrets/config, so the mechanism lives in exactly one place.
+func bumpRestartedAt(rb *gen.ReleaseBinding) {
+	if rb.Spec.ComponentTypeEnvironmentConfigs == nil {
+		overrides := make(map[string]interface{})
+		rb.Spec.ComponentTypeEnvironmentConfigs = &overrides
+	}
+	(*rb.Spec.ComponentTypeEnvironmentConfigs)["restartedAt"] = time.Now().Format(time.RFC3339Nano)
+}
+
 // setRestartedAt updates restartedAt on the ReleaseBinding for the given environment to trigger a pod rollout.
 // It uses a List/Get/Update cycle: List finds the binding name, then retryReleaseBindingUpdate handles
 // the Get/Update with retry on resource-version conflicts.
@@ -330,11 +342,7 @@ func (c *openChoreoClient) setRestartedAt(ctx context.Context, namespaceName, co
 	}
 
 	return c.retryReleaseBindingUpdate(ctx, namespaceName, binding.Metadata.Name, func(rb *gen.ReleaseBinding) {
-		if rb.Spec.ComponentTypeEnvironmentConfigs == nil {
-			overrides := make(map[string]interface{})
-			rb.Spec.ComponentTypeEnvironmentConfigs = &overrides
-		}
-		(*rb.Spec.ComponentTypeEnvironmentConfigs)["restartedAt"] = time.Now().Format(time.RFC3339)
+		bumpRestartedAt(rb)
 	})
 }
 
@@ -344,6 +352,46 @@ func (c *openChoreoClient) setRestartedAt(ctx context.Context, namespaceName, co
 // pod rollout. Splitting them produced races (two separate updates contending on the same
 // resourceVersion) without giving callers any control they'd actually use.
 // Returns ErrNotFound when no binding exists yet for (component, environment).
+// mergeAgentAPIKeySecretRef carries the env-injection trait's agentApiKeySecretRef/Property
+// forward from existing into incoming when incoming doesn't already set its own value, so a
+// wholesale trait-config replacement can't silently drop it. Never mutates existing or incoming
+// (or their nested entries): retryReleaseBindingUpdate re-invokes its callback with a freshly
+// refetched existing on conflict, and a prior attempt's merge must not leak into that retry.
+func mergeAgentAPIKeySecretRef(existing *map[string]interface{}, incoming map[string]interface{}, componentName string) map[string]interface{} {
+	if existing == nil {
+		return incoming
+	}
+	envInjKey := componentName + "-" + string(TraitEnvInjection)
+	existingCfg, ok := (*existing)[envInjKey].(map[string]interface{})
+	if !ok {
+		return incoming
+	}
+	existingRef, ok := existingCfg["agentApiKeySecretRef"].(string)
+	if !ok || existingRef == "" {
+		return incoming
+	}
+	incomingCfg, _ := incoming[envInjKey].(map[string]interface{})
+	if ref, ok := incomingCfg["agentApiKeySecretRef"].(string); ok && ref != "" {
+		return incoming
+	}
+	merged := make(map[string]interface{}, len(incoming)+1)
+	for k, v := range incoming {
+		merged[k] = v
+	}
+	mergedCfg := make(map[string]interface{}, len(incomingCfg)+2)
+	for k, v := range incomingCfg {
+		mergedCfg[k] = v
+	}
+	mergedCfg["agentApiKeySecretRef"] = existingRef
+	if _, ok := mergedCfg["agentApiKeySecretProperty"]; !ok {
+		if existingProperty, ok := existingCfg["agentApiKeySecretProperty"].(string); ok && existingProperty != "" {
+			mergedCfg["agentApiKeySecretProperty"] = existingProperty
+		}
+	}
+	merged[envInjKey] = mergedCfg
+	return merged
+}
+
 func (c *openChoreoClient) UpdateReleaseBindingTraitConfigs(ctx context.Context, ouID, componentName, environment string, traitConfigs map[string]interface{}, componentTypeConfigs map[string]interface{}) error {
 	namespaceName := c.NamespaceFor(ouID)
 	binding, err := c.findReleaseBindingForEnv(ctx, namespaceName, componentName, environment)
@@ -355,12 +403,9 @@ func (c *openChoreoClient) UpdateReleaseBindingTraitConfigs(ctx context.Context,
 	}
 
 	return c.retryReleaseBindingUpdate(ctx, namespaceName, binding.Metadata.Name, func(rb *gen.ReleaseBinding) {
-		rb.Spec.TraitEnvironmentConfigs = &traitConfigs
-		if rb.Spec.ComponentTypeEnvironmentConfigs == nil {
-			overrides := make(map[string]interface{})
-			rb.Spec.ComponentTypeEnvironmentConfigs = &overrides
-		}
-		(*rb.Spec.ComponentTypeEnvironmentConfigs)["restartedAt"] = time.Now().Format(time.RFC3339)
+		merged := mergeAgentAPIKeySecretRef(rb.Spec.TraitEnvironmentConfigs, traitConfigs, componentName)
+		rb.Spec.TraitEnvironmentConfigs = &merged
+		bumpRestartedAt(rb)
 		// Merge component-type configs (e.g. runtimeClassName from the env's isolation tier).
 		for k, v := range componentTypeConfigs {
 			(*rb.Spec.ComponentTypeEnvironmentConfigs)[k] = v
@@ -426,7 +471,7 @@ func (c *openChoreoClient) EnsureReleaseBindingRuntimeClass(ctx context.Context,
 		}
 		// Bump restartedAt so the SandboxTemplate re-renders and the warm pods roll onto the
 		// isolation node. Only runs on correction (current != desired), so there is no restart loop.
-		(*rb.Spec.ComponentTypeEnvironmentConfigs)["restartedAt"] = time.Now().Format(time.RFC3339)
+		(*rb.Spec.ComponentTypeEnvironmentConfigs)["restartedAt"] = time.Now().Format(time.RFC3339Nano)
 	})
 }
 
@@ -461,11 +506,7 @@ func (c *openChoreoClient) ReplaceReleaseBindingWorkloadOverrides(ctx context.Co
 		}
 		rb.Spec.WorkloadOverrides = &gen.WorkloadOverrides{Container: container}
 
-		if rb.Spec.ComponentTypeEnvironmentConfigs == nil {
-			overrides := make(map[string]interface{})
-			rb.Spec.ComponentTypeEnvironmentConfigs = &overrides
-		}
-		(*rb.Spec.ComponentTypeEnvironmentConfigs)["restartedAt"] = time.Now().Format(time.RFC3339)
+		bumpRestartedAt(rb)
 	})
 }
 
@@ -549,13 +590,22 @@ func (c *openChoreoClient) PromoteComponent(ctx context.Context, ouID, projectNa
 	// Step 4: Create or update the release binding in the target environment
 	if getResp.StatusCode() == http.StatusOK && getResp.JSON200 != nil && getResp.JSON200.Spec != nil {
 		activeState := gen.ReleaseBindingSpecStateActive
+		incomingTraitConfigs := map[string]interface{}{}
+		if traitConfigs != nil {
+			incomingTraitConfigs = *traitConfigs
+		}
 		if err := c.retryReleaseBindingUpdate(ctx, namespaceName, targetBindingName, func(binding *gen.ReleaseBinding) {
 			binding.Spec.ReleaseName = &sourceReleaseName
 			binding.Spec.State = &activeState
 			// Always replace overrides on re-promotion so a clean source environment
 			// clears any stale target-specific env vars, file mounts, or trait configs.
 			binding.Spec.WorkloadOverrides = workloadOverrides
-			binding.Spec.TraitEnvironmentConfigs = traitConfigs
+			merged := mergeAgentAPIKeySecretRef(binding.Spec.TraitEnvironmentConfigs, incomingTraitConfigs, componentName)
+			if len(merged) > 0 {
+				binding.Spec.TraitEnvironmentConfigs = &merged
+			} else {
+				binding.Spec.TraitEnvironmentConfigs = traitConfigs
+			}
 			if ctConfigs != nil {
 				binding.Spec.ComponentTypeEnvironmentConfigs = ctConfigs
 			}
@@ -871,7 +921,14 @@ func (c *openChoreoClient) GetDeployments(ctx context.Context, ouID, pipelineNam
 				componentRelease = componentReleaseMap[*releaseBinding.Spec.ReleaseName]
 			}
 
-			deploymentDetail, err := toDeploymentDetailsResponse(releaseBinding, componentRelease, environmentMap, promotionTargetEnv, workloadEndpoints, liveWorkloadContainerImage)
+			// Only bindings that would otherwise report "active" need the extra
+			// resource-tree lookup; every other status is already accurate without it.
+			var runtime runtimeReplicaState
+			if determineDeploymentStatus(releaseBinding, runtimeReplicaState{}) == DeploymentStatusActive {
+				runtime = c.fetchRuntimeReplicaState(ctx, namespaceName, releaseBinding.Metadata.Name)
+			}
+
+			deploymentDetail, err := toDeploymentDetailsResponse(releaseBinding, componentRelease, environmentMap, promotionTargetEnv, workloadEndpoints, liveWorkloadContainerImage, runtime)
 			if err != nil {
 				return nil, fmt.Errorf("failed to build deployment details for environment %s: %w", envName, err)
 			}
@@ -976,7 +1033,11 @@ func (c *openChoreoClient) IsDeploymentInProgress(ctx context.Context, ouID, com
 	for i := range resp.JSON200.Items {
 		binding := &resp.JSON200.Items[i]
 		if binding.Spec != nil && binding.Spec.Environment == environment {
-			status := determineDeploymentStatus(binding)
+			// Deliberately binding-only: this guards against concurrent *rollouts*, and
+			// callers abort the deploy when it reports true. Counting a booting pod as
+			// in-progress here would block redeploys for the whole startup window — and
+			// forever for an agent whose pods never become ready.
+			status := determineDeploymentStatus(binding, runtimeReplicaState{})
 			return status == DeploymentStatusInProgress, nil
 		}
 	}
@@ -984,8 +1045,163 @@ func (c *openChoreoClient) IsDeploymentInProgress(ctx context.Context, ouID, com
 	return false, nil
 }
 
-// determineDeploymentStatus determines deployment status from release binding conditions
-func determineDeploymentStatus(binding *gen.ReleaseBinding) string {
+// runtimeReplicaState is the agent's live pod readiness, read from the SandboxWarmPool
+// in the release binding's Kubernetes resource tree.
+//
+// A ReleaseBinding reports Ready=True (and ResourcesReady=True, "All N resources ready")
+// as soon as the dataplane resources are applied — it never observes whether a pod passed
+// its readiness probe. An agent whose container is still booting therefore shows as Ready
+// on the binding while its Service has zero ready endpoints, which is what made the console
+// report "active" while invocations still failed with 503. The warm pool's replica counts
+// are the only readiness signal available, so they are consulted separately.
+//
+// found is false when the state could not be determined (no warm pool node in the tree, or
+// the tree fetch failed); callers then fall back to the binding conditions alone rather than
+// reporting a worse status than they can prove.
+type runtimeReplicaState struct {
+	found   bool
+	desired int32
+	ready   int32
+
+	// notReadyResource describes a resource the deployment depends on that reports itself not
+	// ready — in practice an ExternalSecret that will not sync, which leaves the container
+	// in CreateContainerConfigError ("secret ... not found") indefinitely. It separates
+	// "cannot start" from "still starting" so a broken deployment is not reported as
+	// in-progress forever. Empty when nothing reported itself unready.
+	notReadyResource string
+}
+
+// isBooting reports whether the agent is expected to be serving but no replica is ready
+// yet, and nothing is known to be preventing it from starting.
+func (r runtimeReplicaState) isBooting() bool {
+	return r.found && r.desired > 0 && r.ready == 0 && r.notReadyResource == ""
+}
+
+// isFailed reports whether the agent cannot serve and a dependency explains why.
+// Requires ready == 0: a pool still serving on a previously synced Secret is working,
+// whatever that Secret's ExternalSecret currently reports.
+func (r runtimeReplicaState) isFailed() bool {
+	return r.found && r.desired > 0 && r.ready == 0 && r.notReadyResource != ""
+}
+
+// runtimeReplicaStateFromTree extracts warm pool replica counts and any blocking
+// dependency failure from a resource tree.
+//
+// Node objects are inspected rather than the nodes' health field, which cannot be used
+// for either signal: OpenChoreo reports the SandboxWarmPool as Healthy regardless of how
+// many replicas are ready, and reports an ExternalSecret as Healthy while its own status
+// says Ready=False/SecretSyncedError. Pods are not in the tree at all (and the OpenChoreo
+// API exposes no pod endpoint), so container-level failures such as ImagePullBackOff or
+// CrashLoopBackOff cannot be detected here.
+func runtimeReplicaStateFromTree(tree *gen.K8sResourceTreeResponse) runtimeReplicaState {
+	if tree == nil {
+		return runtimeReplicaState{}
+	}
+
+	state := runtimeReplicaState{}
+	for _, rendered := range tree.RenderedReleases {
+		for i := range rendered.Nodes {
+			node := &rendered.Nodes[i]
+
+			if node.Kind == resourceKindSandboxWarmPool {
+				state.found = true
+				// A pool with no status yet has nothing ready; the zero counts already say so.
+				if status, ok := node.Object["status"].(map[string]interface{}); ok {
+					state.desired = replicaCount(status, "replicas")
+					state.ready = replicaCount(status, "readyReplicas")
+				}
+			}
+
+			// Any resource that reports itself not ready is a candidate explanation. No kind
+			// is singled out: ExternalSecret happens to be the only kind in the tree today
+			// that publishes a Ready condition (Backend and RestApi use Accepted/Programmed,
+			// the rest publish none), so naming it would add a rule without changing what is
+			// matched, and would need editing whenever another kind starts reporting Ready.
+			if state.notReadyResource == "" {
+				state.notReadyResource = notReadyCondition(node)
+			}
+		}
+	}
+
+	return state
+}
+
+// notReadyCondition returns a description of a node's Ready=False condition, or "" when
+// the node is ready or reports no Ready condition.
+func notReadyCondition(node *gen.ResourceNode) string {
+	status, ok := node.Object["status"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	conditions, ok := status["conditions"].([]interface{})
+	if !ok {
+		return ""
+	}
+
+	for _, raw := range conditions {
+		condition, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if condition["type"] != "Ready" || condition["status"] != "False" {
+			continue
+		}
+
+		reason, _ := condition["reason"].(string)
+		message, _ := condition["message"].(string)
+		return strings.TrimSpace(fmt.Sprintf("%s %s: %s %s", node.Kind, node.Name, reason, message))
+	}
+
+	return ""
+}
+
+// replicaCount reads an integral replica field out of an unstructured status map. JSON
+// numbers decode as float64, so the concrete numeric types are handled explicitly.
+func replicaCount(status map[string]interface{}, key string) int32 {
+	switch v := status[key].(type) {
+	case float64:
+		return int32(v)
+	case int64:
+		return int32(v)
+	case int:
+		return int32(v)
+	default:
+		return 0
+	}
+}
+
+// fetchRuntimeReplicaState looks up the live warm pool replica counts for a release binding.
+// It is best effort: any failure yields an unknown state so deployment listings degrade to
+// binding-only status instead of erroring.
+func (c *openChoreoClient) fetchRuntimeReplicaState(ctx context.Context, namespaceName, bindingName string) runtimeReplicaState {
+	if bindingName == "" {
+		return runtimeReplicaState{}
+	}
+
+	resp, err := c.ocClient.GetReleaseBindingK8sResourceTreeWithResponse(ctx, namespaceName, bindingName)
+	if err != nil {
+		slog.Warn("failed to fetch resource tree for deployment readiness",
+			"binding", bindingName, "namespace", namespaceName, "error", err)
+		return runtimeReplicaState{}
+	}
+	if resp.StatusCode() != http.StatusOK {
+		slog.Warn("resource tree request returned non-OK for deployment readiness",
+			"binding", bindingName, "namespace", namespaceName, "status", resp.StatusCode())
+		return runtimeReplicaState{}
+	}
+
+	state := runtimeReplicaStateFromTree(resp.JSON200)
+	slog.Debug("resolved agent runtime state",
+		"binding", bindingName, "namespace", namespaceName,
+		"desired", state.desired, "ready", state.ready, "cause", state.notReadyResource)
+
+	return state
+}
+
+// determineDeploymentStatus determines deployment status from release binding conditions,
+// downgrading "active" to "in-progress" while the agent's pods are still starting.
+// Pass an unknown runtimeReplicaState to derive the status from the binding alone.
+func determineDeploymentStatus(binding *gen.ReleaseBinding, runtime runtimeReplicaState) string {
 	if binding == nil {
 		return DeploymentStatusNotDeployed
 	}
@@ -1005,6 +1221,15 @@ func determineDeploymentStatus(binding *gen.ReleaseBinding) string {
 		if condition.Type == "Ready" {
 			switch condition.Status {
 			case "True":
+				// The binding is applied, but the agent cannot serve traffic until a pod
+				// passes its readiness probe. Reporting "active" here is what let callers
+				// invoke an agent whose container was still booting and get a 503.
+				if runtime.isFailed() {
+					return DeploymentStatusFailed
+				}
+				if runtime.isBooting() {
+					return DeploymentStatusInProgress
+				}
 				return DeploymentStatusActive
 			case "False":
 				// Check reason for more specific status
@@ -1046,12 +1271,12 @@ func findPromotionTargetEnvironment(sourceEnvName string, promotionPaths []model
 	return nil
 }
 
-func toDeploymentDetailsResponse(binding *gen.ReleaseBinding, componentRelease *gen.ComponentRelease, environmentMap map[string]*models.EnvironmentResponse, promotionTargetEnv *models.PromotionTargetEnvironment, workloadEndpoints map[string]*gen.WorkloadEndpoint, liveWorkloadContainerImage string) (*models.DeploymentResponse, error) {
+func toDeploymentDetailsResponse(binding *gen.ReleaseBinding, componentRelease *gen.ComponentRelease, environmentMap map[string]*models.EnvironmentResponse, promotionTargetEnv *models.PromotionTargetEnvironment, workloadEndpoints map[string]*gen.WorkloadEndpoint, liveWorkloadContainerImage string, runtime runtimeReplicaState) (*models.DeploymentResponse, error) {
 	if binding == nil || binding.Spec == nil {
 		return nil, fmt.Errorf("release binding is nil or has no spec")
 	}
 
-	status := determineDeploymentStatus(binding)
+	status := determineDeploymentStatus(binding, runtime)
 
 	// Extract endpoints from release binding status, enriched with workload endpoint info
 	endpoints := extractEndpointsFromBinding(binding, workloadEndpoints)

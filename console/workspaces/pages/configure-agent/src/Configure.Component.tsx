@@ -17,28 +17,20 @@
 
 import React, { useMemo, useState } from "react";
 import { generatePath, useParams, useSearchParams } from "react-router-dom";
-import { Box, Button, Card, Divider, Tab, Tabs } from "@wso2/oxygen-ui";
-import { ShieldCheck } from "@wso2/oxygen-ui-icons-react";
+import { Box, Card, Divider, Tab, Tabs } from "@wso2/oxygen-ui";
 import { PageLayout } from "@agent-management-platform/views";
-import { usePipelineEnvironmentsState } from "@agent-management-platform/shared-component";
 import {
   useDeleteAgentMCPConfig,
   useDeleteAgentModelConfig,
   useListAgentMCPConfigs,
   useListAgentModelConfigs,
-  useListEnvironments,
 } from "@agent-management-platform/api-client";
-import {
-  absoluteRouteMap,
-  IDENTITY_ENV_PARAM,
-  MANAGE_IDENTITY_PARAM,
-} from "@agent-management-platform/types";
+import { absoluteRouteMap } from "@agent-management-platform/types";
 import {
   AgentConfigTableSection,
   type AgentConfigTableLabels,
 } from "./Configure/subComponents/AgentConfigTableSection";
 import { AddMCPToolConfigPanel } from "./Configure/subComponents/AddMCPToolConfigPanel";
-import { ManageIdentityDrawer } from "./Configure/subComponents/ManageIdentityDrawer";
 import { CONFIGURE_TAB_KEYS, CONFIGURE_TAB_PARAM } from "./configureTabs";
 
 const configureRoutes =
@@ -120,52 +112,6 @@ export const ConfigureComponent: React.FC = () => {
     agentId: string;
   }>();
 
-  // Both live in the URL (not component state) so a link from an
-  // EnvironmentCard's "Manage AgentID" button can open the drawer already
-  // pointed at the right environment, and so closing/reopening or reloading
-  // doesn't lose the selection.
-  const isManagingIdentity = searchParams.get(MANAGE_IDENTITY_PARAM) === "true";
-  const selectedIdentityEnv = searchParams.get(IDENTITY_ENV_PARAM) ?? "";
-
-  const openManageIdentity = () => {
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      next.set(MANAGE_IDENTITY_PARAM, "true");
-      return next;
-    });
-  };
-  const closeManageIdentity = () => {
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        next.delete(MANAGE_IDENTITY_PARAM);
-        next.delete(IDENTITY_ENV_PARAM);
-        return next;
-      },
-      { replace: true },
-    );
-  };
-  const setSelectedIdentityEnv = (envName: string) => {
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        next.set(IDENTITY_ENV_PARAM, envName);
-        return next;
-      },
-      { replace: true },
-    );
-  };
-
-  const {
-    environments: pipelineEnvs,
-    isLoading: isPipelineEnvsLoading,
-    isError: isPipelineEnvsError,
-  } = usePipelineEnvironmentsState(orgId, projectId);
-  const envNames = useMemo(() => pipelineEnvs.map((env) => env.name), [pipelineEnvs]);
-  const { data: environmentsList = [] } = useListEnvironments({ orgName: orgId });
-  const getEnvDisplayName = (name: string) =>
-    environmentsList.find((env) => env.name === name)?.displayName ?? name;
-
   const {
     data: llmData,
     isLoading: isLoadingLLM,
@@ -224,20 +170,7 @@ export const ConfigureComponent: React.FC = () => {
       : "#";
 
   return (
-    <PageLayout
-      title="Configure Agent"
-      disableIcon
-      actions={
-        <Button
-          variant="outlined"
-          size="small"
-          startIcon={<ShieldCheck size={16} />}
-          onClick={openManageIdentity}
-        >
-          Manage AgentID
-        </Button>
-      }
-    >
+    <PageLayout title="Configure Agent" disableIcon>
       <Card variant="outlined">
         <Tabs
           value={tabIndex}
@@ -296,20 +229,6 @@ export const ConfigureComponent: React.FC = () => {
           />
         </TabPanel>
       </Card>
-
-      <ManageIdentityDrawer
-        open={isManagingIdentity}
-        onClose={closeManageIdentity}
-        orgId={orgId ?? ""}
-        projectId={projectId ?? ""}
-        agentId={agentId ?? ""}
-        envNames={envNames}
-        isEnvironmentsLoading={isPipelineEnvsLoading}
-        isEnvironmentsError={isPipelineEnvsError}
-        getEnvDisplayName={getEnvDisplayName}
-        selectedEnvName={selectedIdentityEnv}
-        onSelectedEnvNameChange={setSelectedIdentityEnv}
-      />
     </PageLayout>
   );
 };

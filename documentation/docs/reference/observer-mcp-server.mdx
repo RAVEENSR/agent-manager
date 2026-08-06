@@ -12,6 +12,8 @@ Unlike the main MCP server's tools, every `am-obs-mcp` tool call is scoped by an
 
 The observer MCP server provides **7 tools** organized into two toolsets: Observability (runtime logs, build logs, metrics) and Tracing (traces and spans).
 
+When `RBAC_ENABLED` is set on the observer, every tool call is authorized against the token's scopes — the trace tools require `amp:observability:trace-read`, and `get_runtime_logs`/`get_build_logs`/`get_metrics` require `amp:observability:log-read`/`build-log-read`/`metric-read` respectively — mirroring the REST routes' per-route checks. Publisher (`amp-publisher-*`) tokens are always confined to trace reads, regardless of the flag. These scopes are part of the platform-wide model documented in [Authorization](./authorization.mdx).
+
 <details>
 <summary><strong>Observability Toolset (3 tools)</strong></summary>
 
@@ -137,12 +139,16 @@ If you have changed the observer's public URL from the default, substitute that 
 
 ## Configuring AI Assistants
 
-The observer MCP server is authenticated the same way as the [main MCP server](./mcp-server.mdx#default-oauth-client) — the same pre-registered `am-mcp` OAuth client and pinned callback port `33418` apply, since both servers accept the same bearer token. Follow the [Configuring AI Assistants](./mcp-server.mdx#configuring-ai-assistants) instructions there, substituting the observer MCP server URL for the `agent-manager-service` one, for example:
+The observer MCP server has its own dedicated pre-registered OAuth client — `am-obs-mcp`, with pinned callback port `33419` — distinct from the [main MCP server](./mcp-server.mdx#default-oauth-client)'s `am-mcp`/`33418`. The `am-obs-mcp` client is allowed only the OIDC scopes plus the four `amp:observability:*-read` scopes, so a token obtained for the main MCP server cannot be reused here (and vice versa). Follow the [Configuring AI Assistants](./mcp-server.mdx#configuring-ai-assistants) instructions there, substituting the observer MCP server URL, client ID, and callback port, for example:
+
+*Migrating from an earlier setup that used the shared `am-mcp` client: remove and re-add the server registration with `am-obs-mcp` — existing `am-mcp` sessions lose the observability scopes on token refresh and observer tool calls start returning 403.*
+
+*Upgrading an existing install: the observability scopes in the token come from permissions registered on the observer MCP resource server in Thunder, seeded by the bootstrap job only — on existing installs, re-run the bootstrap job (it replaces legacy MCP resource servers automatically and seeds the permissions); a `helm upgrade` alone will not re-seed, and without the permissions tokens carry an empty scope list and every tool call returns 403.*
 
 ```bash
 claude mcp add --transport http agent-manager-observer http://traces.amp.localhost:11080/mcp \
-  --client-id am-mcp \
-  --callback-port 33418
+  --client-id am-obs-mcp \
+  --callback-port 33419
 ```
 
 ## Next Steps

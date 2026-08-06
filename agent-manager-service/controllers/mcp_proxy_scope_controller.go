@@ -53,7 +53,7 @@ func (c *mcpProxyScopeController) ListMCPProxyScopes(w http.ResponseWriter, r *h
 	ctx := r.Context()
 	log := logger.GetLogger(ctx)
 	ouID := middleware.OUIDFromRequest(r)
-	orgName := r.PathValue(utils.PathParamOrgName)
+	orgName := middleware.OrgHandleFromRequest(r)
 	proxyID := r.PathValue(utils.PathParamProxyId)
 
 	log.Info("ListMCPProxyScopes: starting", "ouID", ouID, "orgName", orgName, "proxyID", proxyID)
@@ -85,7 +85,7 @@ func (c *mcpProxyScopeController) CreateMCPProxyScope(w http.ResponseWriter, r *
 	ctx := r.Context()
 	log := logger.GetLogger(ctx)
 	ouID := middleware.OUIDFromRequest(r)
-	orgName := r.PathValue(utils.PathParamOrgName)
+	orgName := middleware.OrgHandleFromRequest(r)
 	proxyID := r.PathValue(utils.PathParamProxyId)
 
 	log.Info("CreateMCPProxyScope: starting", "ouID", ouID, "orgName", orgName, "proxyID", proxyID)
@@ -134,7 +134,7 @@ func (c *mcpProxyScopeController) UpdateMCPProxyScope(w http.ResponseWriter, r *
 	ctx := r.Context()
 	log := logger.GetLogger(ctx)
 	ouID := middleware.OUIDFromRequest(r)
-	orgName := r.PathValue(utils.PathParamOrgName)
+	orgName := middleware.OrgHandleFromRequest(r)
 	proxyID := r.PathValue(utils.PathParamProxyId)
 	action := r.PathValue(utils.PathParamScopeAction)
 
@@ -175,7 +175,7 @@ func (c *mcpProxyScopeController) DeleteMCPProxyScope(w http.ResponseWriter, r *
 	ctx := r.Context()
 	log := logger.GetLogger(ctx)
 	ouID := middleware.OUIDFromRequest(r)
-	orgName := r.PathValue(utils.PathParamOrgName)
+	orgName := middleware.OrgHandleFromRequest(r)
 	proxyID := r.PathValue(utils.PathParamProxyId)
 	action := r.PathValue(utils.PathParamScopeAction)
 
@@ -202,7 +202,7 @@ func (c *mcpProxyScopeController) ListAgentIdentityScopes(w http.ResponseWriter,
 	ctx := r.Context()
 	log := logger.GetLogger(ctx)
 	ouID := middleware.OUIDFromRequest(r)
-	orgName := r.PathValue(utils.PathParamOrgName)
+	orgName := middleware.OrgHandleFromRequest(r)
 	envName := r.PathValue("envName")
 
 	log.Info("ListAgentIdentityScopes: starting", "ouID", ouID, "orgName", orgName, "envName", envName)

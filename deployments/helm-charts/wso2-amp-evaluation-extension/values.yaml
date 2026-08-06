@@ -49,3 +49,54 @@ ampEvaluation:
     # Note: clientSecret is loaded dynamically from OpenBao via ExternalSecret at workflow runtime
     idpTokenUrl: "http://amp-thunder-extension-service.amp-thunder.svc.cluster.local:8090/oauth2/token"
     clientId: "amp-publisher-client"
+
+# Restricts the evaluation-job pod's egress (untrusted, user-submitted code) to just DNS,
+# the traces observer, Thunder, the agent-manager-service publisher endpoint, and the LLM gateway.
+networkPolicy:
+  evaluationJob:
+    # -- No-op on clusters whose CNI doesn't enforce NetworkPolicy (e.g. plain flannel).
+    enabled: true
+
+    # -- Empty derives "workflows-<ampEvaluation.workflowNamespace>" (where OpenChoreo runs this
+    # environment's Argo workflows), not this chart's own release namespace.
+    namespace: ""
+
+    # -- DNS target on port 53, scoped rather than left wide open since this pod runs untrusted code.
+    dns:
+      namespace: "kube-system"
+      podLabel:
+        key: "k8s-app"
+        value: "kube-dns"
+
+    observer:
+      namespace: "openchoreo-observability-plane"
+      port: 9098
+
+    publisher:
+      namespace: "wso2-amp"
+      port: 9000
+
+    idp:
+      namespace: "amp-thunder"
+      port: 8090
+
+    llmGateway:
+      port: 22893
+      # -- Namespace holding the API Platform Gateway, allowed in addition to any
+      # namespace labelled amp.wso2.com/api-platform-gateway=true. That label is
+      # only applied by setup-gateway.sh and add-environment.sh, so an install
+      # that follows the gateway chart's own apiGateway.namespace default
+      # (openchoreo-data-plane) has no matching namespace and llm_judge
+      # evaluators are silently denied egress to the gateway. Empty = rely on
+      # the label alone.
+      namespace: ""
+
+    # -- Local-dev only: ipBlock exception for agent-manager-service running outside the
+    # cluster (docker-compose). Empty (no-op) elsewhere; setup-amp-extensions.sh sets it.
+    devEgress:
+      cidr: ""
+      port: 8080
+
+    # -- kube-apiserver CIDR for the wait sidecar; empty falls back to a live lookup (RBAC + install/upgrade only, so set explicitly otherwise).
+    apiServer:
+      cidr: ""

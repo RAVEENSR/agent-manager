@@ -71,7 +71,29 @@ ensure_firewall() {
   else
     log "No ufw/firewalld found; assuming the host firewall is open for ${port}"
   fi
-  log "Ensure inbound ${port}/tcp is open in your cloud security group (raw TCP, no TLS-terminating proxy in front) — Caddy needs it."
+  log "Ensure inbound ${port}/tcp is open in your cloud security group (raw TCP, no TLS-terminating proxy in front) — the TLS listener needs it."
+}
+
+# ensure_loopback_alias HOST... — points each hostname at 127.0.0.1 in /etc/hosts.
+#
+# The installer has to call the platform through its own routes before the public
+# TLS listener exists (Caddy and the consolidated gateway are both brought up only
+# after the base installer returns). The plane ports are loopback-bound, so the
+# request has to go to 127.0.0.1 while still carrying the route's hostname in the
+# Host header — which is exactly what resolving the hostname to loopback gives us.
+# Entries stay after the install: the host resolving its own service names to
+# itself is what a caller on this VM wants anyway.
+ensure_loopback_alias() {
+  local host entry
+  for host in "$@"; do
+    [[ -n "$host" ]] || continue
+    entry="127.0.0.1 ${host}"
+    # Exact-line match: only ever matches an entry this helper wrote, so a
+    # hostname already mapped elsewhere is left alone rather than duplicated.
+    grep -qxF "$entry" /etc/hosts 2>/dev/null && continue
+    printf '%s\n' "$entry" >>/etc/hosts
+    log "Mapped ${host} to 127.0.0.1 for in-install API calls"
+  done
 }
 
 ensure_disk() {

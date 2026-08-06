@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/wso2/agent-manager/agent-manager-observer/config"
@@ -35,7 +36,7 @@ func TestWellKnownOAuthProtectedResource_HappyPath(t *testing.T) {
 	cfg := config.AuthConfig{
 		ServerPublicURL:      "https://traces.amp.example.com",
 		AuthorizationServers: []string{"https://thunder.example.com"},
-		ScopesSupported:      []string{"amp:observability:project-dashboard", "amp:observability:org-dashboard"},
+		ScopesSupported:      []string{"amp:observability:log-read", "amp:observability:trace-read"},
 	}
 
 	mux := setupWellKnownMux(cfg)
@@ -66,8 +67,8 @@ func TestWellKnownOAuthProtectedResource_HappyPath(t *testing.T) {
 	if len(body.BearerMethodsSupported) != 1 || body.BearerMethodsSupported[0] != "header" {
 		t.Errorf("expected bearer_methods_supported [header], got %v", body.BearerMethodsSupported)
 	}
-	if len(body.ScopesSupported) != 2 {
-		t.Errorf("expected 2 scopes, got %v", body.ScopesSupported)
+	if !reflect.DeepEqual(body.ScopesSupported, cfg.ScopesSupported) {
+		t.Errorf("expected scopes %v, got %v", cfg.ScopesSupported, body.ScopesSupported)
 	}
 }
 

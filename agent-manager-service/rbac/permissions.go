@@ -180,12 +180,12 @@ const (
 	MonitorScorePublish Permission = "monitor:score-publish"
 )
 
-// Observability permissions
+// Observability permissions — data-read scopes enforced by agent-manager-observer
 const (
-	ObservabilityOrgDashboard     Permission = "observability:org-dashboard"
-	ObservabilityProjectDashboard Permission = "observability:project-dashboard"
-	ObservabilityGuardrailMetric  Permission = "observability:guardrail-metric"
-	ObservabilityInfraMetric      Permission = "observability:infra-metric"
+	ObservabilityTraceRead    Permission = "observability:trace-read"
+	ObservabilityLogRead      Permission = "observability:log-read"
+	ObservabilityBuildLogRead Permission = "observability:build-log-read"
+	ObservabilityMetricRead   Permission = "observability:metric-read"
 )
 
 // Role management permissions

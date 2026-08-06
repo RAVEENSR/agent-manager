@@ -34,6 +34,7 @@ import (
 
 	"github.com/wso2/agent-manager/agent-manager-service/clients/clientmocks"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
+	"github.com/wso2/agent-manager/agent-manager-service/db"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/jwtassertion"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/spec"
@@ -999,4 +1000,297 @@ func TestCreateAgent(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCreateAgentFromKind_SecretConfigDefaults covers agent creation from a kind whose
+// config schema has a secret item: a secret's default value is never returned to a
+// client, so the server applies it itself when the create-agent request leaves the
+// field untouched, rather than relying on the client to round-trip a value it was
+// never given.
+func TestCreateAgentFromKind_SecretConfigDefaults(t *testing.T) {
+	authMiddleware := jwtassertion.NewMockMiddleware(t)
+
+	// Seeds an Agent Kind version whose config schema declares one mandatory secret
+	// item with a default value.
+	seedKindVersion := func(t *testing.T) (kindName, version string) {
+		gdb := db.DB(context.Background())
+		kindName = fmt.Sprintf("test-kind-%s", uuid.New().String()[:5])
+		sourceAgentName := fmt.Sprintf("source-agent-%s", uuid.New().String()[:5])
+		kind := &models.AgentKind{
+			ID:          uuid.New(),
+			Name:        kindName,
+			DisplayName: "Test Kind",
+			OUID:        jwtassertion.MockOUID,
+			ProjectName: testProjName,
+			AgentName:   sourceAgentName,
+			Labels:      map[string]string{},
+			CreatedAt:   time.Now(),
+			UpdatedAt:   time.Now(),
+		}
+		require.NoError(t, gdb.Create(kind).Error)
+		t.Cleanup(func() { gdb.Delete(kind) })
+
+		version = "v1"
+		kindVersion := &models.AgentKindVersion{
+			ID:          uuid.New(),
+			AgentKindID: kind.ID,
+			Version:     version,
+			ImageId:     "sha256:test-kind-image",
+			ConfigSchema: []models.KindConfigSchemaItem{
+				{Name: "OPENAI_API_KEY", IsSecret: true, IsMandatory: true, DefaultValue: strPtr("sk-kind-default-secret")},
+			},
+			CreatedAt: time.Now(),
+		}
+		require.NoError(t, gdb.Create(kindVersion).Error)
+		t.Cleanup(func() { gdb.Delete(kindVersion) })
+
+		return kindName, version
+	}
+
+	t.Run("omitting a mandatory secret field applies the kind's default server-side, never exposing it", func(t *testing.T) {
+		kindName, version := seedKindVersion(t)
+		openChoreoClient := apitestutils.CreateMockOpenChoreoClient()
+		// Kind-based creation calls CreateInternalAgentFromKindWorkload (not
+		// TriggerBuild) since the image is already built; the shared mock has no
+		// default for it.
+		openChoreoClient.CreateInternalAgentFromKindWorkloadFunc = func(ctx context.Context, ouID, projectName, componentName string, req client.InternalAgentFromKindWorkloadRequest) error {
+			return nil
+		}
+		secretMgmtClient := apitestutils.CreateMockSecretManagementClient()
+		testClients := wiring.TestClients{
+			OpenChoreoClient: openChoreoClient,
+			SecretMgmtClient: secretMgmtClient,
+		}
+		app := apitestutils.MakeAppClientWithDeps(t, testClients, authMiddleware)
+
+		agentName := fmt.Sprintf("test-agent-%s", uuid.New().String()[:5])
+		reqBody := new(bytes.Buffer)
+		require.NoError(t, json.NewEncoder(reqBody).Encode(map[string]interface{}{
+			"name":        agentName,
+			"displayName": "Kind Agent",
+			"provisioning": map[string]interface{}{
+				"type": "internal",
+				"agentKind": map[string]interface{}{
+					"name":    kindName,
+					"version": version,
+				},
+			},
+			// No configurations.env at all: the mandatory secret field is left
+			// untouched, exactly like a user accepting the kind's default without
+			// typing anything (the frontend never even receives a value to submit).
+		}))
+
+		url := fmt.Sprintf("/api/v1/orgs/%s/projects/%s/agents", testOrgName, testProjName)
+		req := httptest.NewRequest(http.MethodPost, url, reqBody)
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		app.ServeHTTP(rr, req)
+
+		require.Equal(t, http.StatusAccepted, rr.Code, rr.Body.String())
+
+		require.Len(t, secretMgmtClient.CreateSecretCalls(), 1)
+		require.Equal(t, "sk-kind-default-secret", secretMgmtClient.CreateSecretCalls()[0].Data["OPENAI_API_KEY"])
+
+		require.Len(t, openChoreoClient.CreateComponentCalls(), 1)
+		envVars := openChoreoClient.CreateComponentCalls()[0].Req.Configurations.Env
+		require.Len(t, envVars, 1)
+		require.Empty(t, envVars[0].Value, "the OpenChoreo-bound request must never carry the plaintext secret")
+		require.NotNil(t, envVars[0].ValueFrom)
+		require.NotNil(t, envVars[0].ValueFrom.SecretKeyRef)
+	})
+
+	t.Run("an explicit override value wins over the kind's default and is still treated as sensitive", func(t *testing.T) {
+		kindName, version := seedKindVersion(t)
+		openChoreoClient := apitestutils.CreateMockOpenChoreoClient()
+		// Kind-based creation calls CreateInternalAgentFromKindWorkload (not
+		// TriggerBuild) since the image is already built; the shared mock has no
+		// default for it.
+		openChoreoClient.CreateInternalAgentFromKindWorkloadFunc = func(ctx context.Context, ouID, projectName, componentName string, req client.InternalAgentFromKindWorkloadRequest) error {
+			return nil
+		}
+		secretMgmtClient := apitestutils.CreateMockSecretManagementClient()
+		testClients := wiring.TestClients{
+			OpenChoreoClient: openChoreoClient,
+			SecretMgmtClient: secretMgmtClient,
+		}
+		app := apitestutils.MakeAppClientWithDeps(t, testClients, authMiddleware)
+
+		agentName := fmt.Sprintf("test-agent-%s", uuid.New().String()[:5])
+		reqBody := new(bytes.Buffer)
+		require.NoError(t, json.NewEncoder(reqBody).Encode(map[string]interface{}{
+			"name":        agentName,
+			"displayName": "Kind Agent Override",
+			"provisioning": map[string]interface{}{
+				"type": "internal",
+				"agentKind": map[string]interface{}{
+					"name":    kindName,
+					"version": version,
+				},
+			},
+			"configurations": map[string]interface{}{
+				"env": []map[string]interface{}{
+					// isSensitive deliberately false: the server must force it true
+					// for any key matching a secret schema item, regardless of what
+					// the client claims.
+					{"key": "OPENAI_API_KEY", "value": "my-own-api-key", "isSensitive": false},
+				},
+			},
+		}))
+
+		url := fmt.Sprintf("/api/v1/orgs/%s/projects/%s/agents", testOrgName, testProjName)
+		req := httptest.NewRequest(http.MethodPost, url, reqBody)
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		app.ServeHTTP(rr, req)
+
+		require.Equal(t, http.StatusAccepted, rr.Code, rr.Body.String())
+
+		require.Len(t, secretMgmtClient.CreateSecretCalls(), 1)
+		require.Equal(t, "my-own-api-key", secretMgmtClient.CreateSecretCalls()[0].Data["OPENAI_API_KEY"])
+
+		require.Len(t, openChoreoClient.CreateComponentCalls(), 1)
+		envVars := openChoreoClient.CreateComponentCalls()[0].Req.Configurations.Env
+		require.Len(t, envVars, 1)
+		require.Empty(t, envVars[0].Value, "a kind-declared secret must never be emitted as plaintext, even if the client claimed isSensitive=false")
+		require.NotNil(t, envVars[0].ValueFrom)
+		require.NotNil(t, envVars[0].ValueFrom.SecretKeyRef)
+	})
+
+	t.Run("rejects a duplicate env var key instead of silently picking one", func(t *testing.T) {
+		kindName, version := seedKindVersion(t)
+		openChoreoClient := apitestutils.CreateMockOpenChoreoClient()
+		secretMgmtClient := apitestutils.CreateMockSecretManagementClient()
+		testClients := wiring.TestClients{
+			OpenChoreoClient: openChoreoClient,
+			SecretMgmtClient: secretMgmtClient,
+		}
+		app := apitestutils.MakeAppClientWithDeps(t, testClients, authMiddleware)
+
+		agentName := fmt.Sprintf("test-agent-%s", uuid.New().String()[:5])
+		reqBody := new(bytes.Buffer)
+		require.NoError(t, json.NewEncoder(reqBody).Encode(map[string]interface{}{
+			"name":        agentName,
+			"displayName": "Kind Agent Duplicate Key",
+			"provisioning": map[string]interface{}{
+				"type": "internal",
+				"agentKind": map[string]interface{}{
+					"name":    kindName,
+					"version": version,
+				},
+			},
+			"configurations": map[string]interface{}{
+				"env": []map[string]interface{}{
+					// The same key submitted twice, once as a plaintext, unmarked value —
+					// exactly the shape that would otherwise let an earlier duplicate slip
+					// through unsecreted while only the later one gets forced sensitive.
+					{"key": "OPENAI_API_KEY", "value": "sneaked-in-plaintext", "isSensitive": false},
+					{"key": "OPENAI_API_KEY", "value": "", "isSensitive": true},
+				},
+			},
+		}))
+
+		url := fmt.Sprintf("/api/v1/orgs/%s/projects/%s/agents", testOrgName, testProjName)
+		req := httptest.NewRequest(http.MethodPost, url, reqBody)
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		app.ServeHTTP(rr, req)
+
+		require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+		require.Contains(t, rr.Body.String(), "duplicate environment variable key")
+		require.Empty(t, secretMgmtClient.CreateSecretCalls(), "no secret must be stored once the request is rejected")
+		require.Empty(t, openChoreoClient.CreateComponentCalls(), "no component must be created once the request is rejected")
+	})
+
+	t.Run("a mandatory secret with no kind default must be supplied by the caller", func(t *testing.T) {
+		gdb := db.DB(context.Background())
+		kindName := fmt.Sprintf("test-kind-%s", uuid.New().String()[:5])
+		sourceAgentName := fmt.Sprintf("source-agent-%s", uuid.New().String()[:5])
+		kind := &models.AgentKind{
+			ID:          uuid.New(),
+			Name:        kindName,
+			DisplayName: "Test Kind No Default",
+			OUID:        jwtassertion.MockOUID,
+			ProjectName: testProjName,
+			AgentName:   sourceAgentName,
+			Labels:      map[string]string{},
+			CreatedAt:   time.Now(),
+			UpdatedAt:   time.Now(),
+		}
+		require.NoError(t, gdb.Create(kind).Error)
+		t.Cleanup(func() { gdb.Delete(kind) })
+
+		version := "v1"
+		kindVersion := &models.AgentKindVersion{
+			ID:          uuid.New(),
+			AgentKindID: kind.ID,
+			Version:     version,
+			ImageId:     "sha256:test-kind-image",
+			// No DefaultValue: the kind author never baked one in, so whoever creates
+			// an agent from this kind must supply their own value.
+			ConfigSchema: []models.KindConfigSchemaItem{
+				{Name: "OPENAI_API_KEY", IsSecret: true, IsMandatory: true},
+			},
+			CreatedAt: time.Now(),
+		}
+		require.NoError(t, gdb.Create(kindVersion).Error)
+		t.Cleanup(func() { gdb.Delete(kindVersion) })
+
+		openChoreoClient := apitestutils.CreateMockOpenChoreoClient()
+		secretMgmtClient := apitestutils.CreateMockSecretManagementClient()
+		testClients := wiring.TestClients{
+			OpenChoreoClient: openChoreoClient,
+			SecretMgmtClient: secretMgmtClient,
+		}
+		app := apitestutils.MakeAppClientWithDeps(t, testClients, authMiddleware)
+
+		buildReqBody := func(env []map[string]interface{}) *bytes.Buffer {
+			body := map[string]interface{}{
+				"name":        fmt.Sprintf("test-agent-%s", uuid.New().String()[:5]),
+				"displayName": "Kind Agent No Default",
+				"provisioning": map[string]interface{}{
+					"type": "internal",
+					"agentKind": map[string]interface{}{
+						"name":    kindName,
+						"version": version,
+					},
+				},
+			}
+			if env != nil {
+				body["configurations"] = map[string]interface{}{"env": env}
+			}
+			reqBody := new(bytes.Buffer)
+			require.NoError(t, json.NewEncoder(reqBody).Encode(body))
+			return reqBody
+		}
+
+		t.Run("omitted entirely: rejected, not silently created with a blank secret", func(t *testing.T) {
+			url := fmt.Sprintf("/api/v1/orgs/%s/projects/%s/agents", testOrgName, testProjName)
+			req := httptest.NewRequest(http.MethodPost, url, buildReqBody(nil))
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+			app.ServeHTTP(rr, req)
+
+			require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+			require.Contains(t, rr.Body.String(), "missing required configuration value")
+			require.Empty(t, secretMgmtClient.CreateSecretCalls())
+		})
+
+		t.Run("supplied by the caller: creation succeeds with that value", func(t *testing.T) {
+			openChoreoClient.CreateInternalAgentFromKindWorkloadFunc = func(ctx context.Context, ouID, projectName, componentName string, req client.InternalAgentFromKindWorkloadRequest) error {
+				return nil
+			}
+			env := []map[string]interface{}{
+				{"key": "OPENAI_API_KEY", "value": "caller-supplied-key", "isSensitive": false},
+			}
+			url := fmt.Sprintf("/api/v1/orgs/%s/projects/%s/agents", testOrgName, testProjName)
+			req := httptest.NewRequest(http.MethodPost, url, buildReqBody(env))
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
+			app.ServeHTTP(rr, req)
+
+			require.Equal(t, http.StatusAccepted, rr.Code, rr.Body.String())
+			require.Len(t, secretMgmtClient.CreateSecretCalls(), 1)
+			require.Equal(t, "caller-supplied-key", secretMgmtClient.CreateSecretCalls()[0].Data["OPENAI_API_KEY"])
+		})
+	})
 }

@@ -17,11 +17,16 @@
  */
 
 import type { AsgardeoProviderProps } from "@asgardeo/react";
-import { TraceListTimeRange } from '../api/traces';
-import  { type Duration, sub } from 'date-fns';
+import { TraceListTimeRange } from "../api/traces";
+import { type Duration, sub } from "date-fns";
 export interface AppConfig {
   authConfig: AsgardeoProviderProps;
   apiBaseUrl: string;
+  /**
+   * Base URL for the unauthenticated GET /api/v1/config discovery request that
+   * runs at app bootstrap (before the user has a token)
+   */
+  configDiscoveryBaseUrl?: string;
   /** Gateway control plane URL (default: http://localhost:9243). Used for gateway setup commands. */
   gatewayControlPlaneUrl?: string;
   /** Gateway version used in setup commands (default: v0.9.0). */
@@ -35,6 +40,14 @@ export interface AppConfig {
   /** When false, nav items are shown regardless of token scopes (mirrors RBAC_ENABLED). */
   rbacEnabled: boolean;
   instrumentationUrl: string;
+  /**
+   * When true, the OTEL endpoint shown in the Setup Agent panel is
+   * `instrumentationUrl` as-is. Enable this in deployments where one endpoint
+   * fronts every environment, or where the gateway vhost is not externally
+   * reachable. Defaults to false: the endpoint is derived per environment from
+   * the vhost of the gateway mapped to that environment.
+   */
+  useConfiguredInstrumentationUrl?: boolean;
   /**
    * Base URL the API Platform Gateway uses to reach Agent Manager from inside
    * the cluster. The add-environment.sh script appends /api/v1 and
@@ -91,6 +104,12 @@ export type FeatureFlags = {
    * buttons on the Settings page are disabled.
    */
   enableUserManagement?: boolean;
+  /**
+   * Shows the Agent ID surfaces: the per-agent Agent ID page, the
+   * organization-level identity groups/roles pages, and the roles & groups
+   * section on the agent overview.
+   */
+  enableAgentIdentity?: boolean;
 };
 
 export type GuardrailCapabilities = {
@@ -106,7 +125,6 @@ export type GuardrailCapabilities = {
   semanticGuardrails?: boolean;
 };
 
-
 // Extend the Window interface to include our config
 declare global {
   interface Window {
@@ -115,6 +133,15 @@ declare global {
 }
 
 export const globalConfig: AppConfig = window.__RUNTIME_CONFIG__;
+
+/**
+ * Whether the Agent ID surfaces are shown. Read through this rather than the
+ * flag directly — the feature spans the nav, routes and the agent overview, and
+ * every "value missing" path (older hand-written config.js, unsubstituted
+ * template placeholder) has to land on disabled.
+ */
+export const isAgentIdentityEnabled = (): boolean =>
+  globalConfig.featureFlags?.enableAgentIdentity === true;
 
 const buildRange = (duration: Duration) => {
   const endTime = new Date();
@@ -148,4 +175,4 @@ export const getTimeRange = (timeRange: TraceListTimeRange) => {
     case TraceListTimeRange.THIRTY_DAYS:
       return buildRange({ days: 30 });
   }
-}
+};

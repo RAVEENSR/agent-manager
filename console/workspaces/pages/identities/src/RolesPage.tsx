@@ -125,18 +125,20 @@ export const RolesPage: React.FC = () => {
               </Button>
             }
           />
-          {!isLoading && total === 0 ? (
-            <ListingTable.EmptyState
-              illustration={<Shield size={64} />}
-              title="No roles yet"
-              description='Click "Create Role" to add one.'
-            />
-          ) : !isLoading && filteredRoles.length === 0 ? (
-            <ListingTable.EmptyState
-              illustration={<Shield size={64} />}
-              title="No roles found"
-              description={`No roles match "${search}". Try a different search term.`}
-            />
+          {!isLoading && filteredRoles.length === 0 ? (
+            search ? (
+              <ListingTable.EmptyState
+                illustration={<Shield size={64} />}
+                title="No roles found"
+                description={`No roles match "${search}". Try a different search term.`}
+              />
+            ) : (
+              <ListingTable.EmptyState
+                illustration={<Shield size={64} />}
+                title="No roles yet"
+                description='Click "Create Role" to add one.'
+              />
+            )
           ) : (
             <ListingTable variant="table">
               <ListingTable.Head>

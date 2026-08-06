@@ -22,6 +22,7 @@ import (
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/wso2/agent-manager/agent-manager-observer/controllers"
+	"github.com/wso2/agent-manager/agent-manager-observer/rbac"
 )
 
 const (
@@ -83,28 +84,30 @@ type spanDetailsInput struct {
 }
 
 func (t *Toolsets) registerTraceTools(server *gomcp.Server) {
+	authorize := requireToolPermission(t.RBACEnabled, rbac.TraceRead)
+
 	gomcp.AddTool(server, &gomcp.Tool{
 		Name: "list_traces",
 		Description: "Returns a summary view of recent traces for an agent within a time window. " +
 			"A trace is a single end-to-end execution record for an agent request. ",
-	}, withToolLogging("list_traces", listTraces(t.Tracing)))
+	}, withToolLogging("list_traces", listTraces(t.Tracing, authorize)))
 
 	gomcp.AddTool(server, &gomcp.Tool{
 		Name: "get_traces",
 		Description: "Returns the traces for an agent including full span details within a time window. " +
 			"A trace is a single end-to-end execution record for an agent which contains spans that record the internal steps of an execution.",
-	}, withToolLogging("get_traces", getTraces(t.Tracing)))
+	}, withToolLogging("get_traces", getTraces(t.Tracing, authorize)))
 
 	gomcp.AddTool(server, &gomcp.Tool{
 		Name:        "get_trace_details",
 		Description: "Return the metadata plus its span list for one trace",
-	}, withToolLogging("get_trace_details", getTraceDetails(t.Tracing)))
+	}, withToolLogging("get_trace_details", getTraceDetails(t.Tracing, authorize)))
 
 	gomcp.AddTool(server, &gomcp.Tool{
 		Name: "get_span_details",
 		Description: "Return the execution details for a single span. " +
 			"A span is a single step within a trace execution, such as an LLM call, tool invocation, or retriever lookup, capturing its timing, inputs, outputs, and attributes",
-	}, withToolLogging("get_span_details", getSpanDetails(t.Tracing)))
+	}, withToolLogging("get_span_details", getSpanDetails(t.Tracing, authorize)))
 }
 
 // scopedTraceInput is the common subset of listTracesInput/traceDetailsInput
@@ -136,8 +139,11 @@ func requireTraceScope(organization, project, agent, environment string) (scoped
 	return scopedTraceInput{Organization: org, Project: project, Agent: agent, Environment: environment}, nil
 }
 
-func listTraces(tracing *controllers.TracingController) func(context.Context, *gomcp.CallToolRequest, listTracesInput) (*gomcp.CallToolResult, any, error) {
-	return func(ctx context.Context, _ *gomcp.CallToolRequest, input listTracesInput) (*gomcp.CallToolResult, any, error) {
+func listTraces(tracing *controllers.TracingController, authorize func(*gomcp.CallToolRequest) error) func(context.Context, *gomcp.CallToolRequest, listTracesInput) (*gomcp.CallToolResult, any, error) {
+	return func(ctx context.Context, req *gomcp.CallToolRequest, input listTracesInput) (*gomcp.CallToolResult, any, error) {
+		if err := authorize(req); err != nil {
+			return nil, nil, err
+		}
 		scope, err := requireTraceScope(input.Organization, input.Project, input.Agent, input.Environment)
 		if err != nil {
 			return nil, nil, err
@@ -175,8 +181,11 @@ func listTraces(tracing *controllers.TracingController) func(context.Context, *g
 	}
 }
 
-func getTraces(tracing *controllers.TracingController) func(context.Context, *gomcp.CallToolRequest, listTracesInput) (*gomcp.CallToolResult, any, error) {
-	return func(ctx context.Context, _ *gomcp.CallToolRequest, input listTracesInput) (*gomcp.CallToolResult, any, error) {
+func getTraces(tracing *controllers.TracingController, authorize func(*gomcp.CallToolRequest) error) func(context.Context, *gomcp.CallToolRequest, listTracesInput) (*gomcp.CallToolResult, any, error) {
+	return func(ctx context.Context, req *gomcp.CallToolRequest, input listTracesInput) (*gomcp.CallToolResult, any, error) {
+		if err := authorize(req); err != nil {
+			return nil, nil, err
+		}
 		scope, err := requireTraceScope(input.Organization, input.Project, input.Agent, input.Environment)
 		if err != nil {
 			return nil, nil, err
@@ -214,8 +223,11 @@ func getTraces(tracing *controllers.TracingController) func(context.Context, *go
 	}
 }
 
-func getTraceDetails(tracing *controllers.TracingController) func(context.Context, *gomcp.CallToolRequest, traceDetailsInput) (*gomcp.CallToolResult, any, error) {
-	return func(ctx context.Context, _ *gomcp.CallToolRequest, input traceDetailsInput) (*gomcp.CallToolResult, any, error) {
+func getTraceDetails(tracing *controllers.TracingController, authorize func(*gomcp.CallToolRequest) error) func(context.Context, *gomcp.CallToolRequest, traceDetailsInput) (*gomcp.CallToolResult, any, error) {
+	return func(ctx context.Context, req *gomcp.CallToolRequest, input traceDetailsInput) (*gomcp.CallToolResult, any, error) {
+		if err := authorize(req); err != nil {
+			return nil, nil, err
+		}
 		organization, err := requireField(input.Organization, "organization")
 		if err != nil {
 			return nil, nil, err
@@ -249,8 +261,11 @@ func getTraceDetails(tracing *controllers.TracingController) func(context.Contex
 	}
 }
 
-func getSpanDetails(tracing *controllers.TracingController) func(context.Context, *gomcp.CallToolRequest, spanDetailsInput) (*gomcp.CallToolResult, any, error) {
-	return func(ctx context.Context, _ *gomcp.CallToolRequest, input spanDetailsInput) (*gomcp.CallToolResult, any, error) {
+func getSpanDetails(tracing *controllers.TracingController, authorize func(*gomcp.CallToolRequest) error) func(context.Context, *gomcp.CallToolRequest, spanDetailsInput) (*gomcp.CallToolResult, any, error) {
+	return func(ctx context.Context, req *gomcp.CallToolRequest, input spanDetailsInput) (*gomcp.CallToolResult, any, error) {
+		if err := authorize(req); err != nil {
+			return nil, nil, err
+		}
 		traceID, err := requireField(input.TraceID, "trace_id")
 		if err != nil {
 			return nil, nil, err

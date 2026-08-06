@@ -14,7 +14,7 @@ requires-python = ">=3.10"
 version = "0.0.0-dev"
 
 dependencies = [
-  "requests>=2.31.0",
+  "requests==2.34.2",
   "opentelemetry-api>=1.20.0",
   "opentelemetry-sdk>=1.20.0",
   "opentelemetry-instrumentation-requests>=0.41b0",
@@ -27,7 +27,7 @@ deepeval = ["deepeval>=3.8.4"]
 any-llm = [
   "any-llm-sdk[openai,anthropic,gemini,groq,mistral,bedrock,azureopenai,azure]==1.16.0",
   # any-llm's azure (Azure AI Foundry) provider makes async calls but does not pull an async HTTP backend.
-  "aiohttp>=3.9",
+  "aiohttp>=3.14.1",
 ]
 dev = [
   "pytest>=7.0",
@@ -36,7 +36,7 @@ dev = [
   "ruff>=0.1.0",
   "deepeval>=3.8.4",
   "any-llm-sdk[openai,anthropic,gemini,groq,mistral,bedrock,azureopenai,azure]==1.16.0",
-  "aiohttp>=3.9",
+  "aiohttp>=3.14.1",
 ]
 
 [project.urls]

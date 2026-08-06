@@ -25,9 +25,9 @@ export const AddMCPProxyOrganization = () => {
 
   return (
     <PageLayout
-      title="Create MCP Proxy from Endpoint"
+      title="Register MCP Server"
       backHref={backHref}
-      backLabel="Back to MCP Proxy list"
+      backLabel="Back to MCP Server list"
       disableIcon
     >
       <AddMCPProxyForm onCancel={() => navigate(backHref)} />

@@ -18,17 +18,20 @@
 import React, { useCallback, useState } from "react";
 import { Alert, Box, Button, Collapse, Form, TextField } from "@wso2/oxygen-ui";
 import { Plus } from "@wso2/oxygen-ui-icons-react";
-import { generatePath, useNavigate, useParams } from "react-router-dom";
+import { generatePath, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useCreateAgentIdentityGroup } from "@agent-management-platform/api-client";
 import { useFormValidation, useDirtyState } from "@agent-management-platform/views";
 import { absoluteRouteMap } from "@agent-management-platform/types";
+import { withSearchParams } from "../../utils/withSearchParams";
 import {
   createAgentIdentityGroupSchema,
   type CreateAgentIdentityGroupFormValues,
 } from "./schemas";
 
 export const GroupCreatePage: React.FC = () => {
-  const { orgId, envName } = useParams<{ orgId: string; envName: string }>();
+  const { orgId } = useParams<{ orgId: string }>();
+  const [searchParams] = useSearchParams();
+  const envName = searchParams.get("envName") ?? "";
   const navigate = useNavigate();
 
   const [formData, setFormData] = useState<CreateAgentIdentityGroupFormValues>({
@@ -49,10 +52,11 @@ export const GroupCreatePage: React.FC = () => {
   } = useCreateAgentIdentityGroup();
 
   const groupsNode =
-    absoluteRouteMap.children.org.children.thunderInstances.children.view.children.groups;
+    absoluteRouteMap.children.org.children.thunderInstances.children.groups;
 
-  const groupsPath =
-    orgId && envName ? generatePath(groupsNode.path, { orgId, envName }) : "#";
+  const groupsPath = orgId
+    ? withSearchParams(generatePath(groupsNode.path, { orgId }), searchParams)
+    : "#";
 
   const handleFieldChange = useCallback(
     (field: keyof CreateAgentIdentityGroupFormValues, value: string) => {
@@ -65,6 +69,7 @@ export const GroupCreatePage: React.FC = () => {
   );
 
   const handleSubmit = useCallback(async () => {
+    if (!orgId || !envName) return;
     if (!validateForm(formData)) {
       setLastSubmittedValidationErrors(errors);
       return;
@@ -73,7 +78,7 @@ export const GroupCreatePage: React.FC = () => {
 
     try {
       const created = await createGroup({
-        params: { orgName: orgId, envName: envName ?? "" },
+        params: { orgName: orgId, envName },
         body: {
           name: formData.name.trim(),
           description: formData.description?.trim() || undefined,
@@ -82,11 +87,10 @@ export const GroupCreatePage: React.FC = () => {
       resetDirty();
       clearErrors();
       navigate(
-        generatePath(groupsNode.children.detail.path, {
-          orgId,
-          envName,
-          groupId: created.id,
-        }),
+        withSearchParams(
+          generatePath(groupsNode.children.detail.path, { orgId, groupId: created.id }),
+          searchParams,
+        ),
       );
     } catch {
       // createError state is set by React Query and displayed in the Alert above
@@ -102,6 +106,7 @@ export const GroupCreatePage: React.FC = () => {
     clearErrors,
     navigate,
     groupsNode,
+    searchParams,
   ]);
 
   const submitErrors = Object.values(lastSubmittedValidationErrors);

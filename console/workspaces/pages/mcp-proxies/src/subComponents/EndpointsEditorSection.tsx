@@ -232,7 +232,7 @@ export function EndpointsEditorSection({
         </Box>
       )}
 
-      {environments.length > 0 ? (
+      {environments.length > 1 ? (
         <Typography variant="caption" color="text.secondary">
           {usedEnvIds.size} of {environments.length} environments have an
           endpoint.

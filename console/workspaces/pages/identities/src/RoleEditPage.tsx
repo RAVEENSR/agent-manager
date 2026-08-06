@@ -19,10 +19,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Autocomplete,
-  createFilterOptions,
   Box,
   Button,
-  Checkbox,
   Chip,
   Form,
   IconButton,
@@ -35,7 +33,7 @@ import {
   Typography,
 } from "@wso2/oxygen-ui";
 
-import { Trash } from "@wso2/oxygen-ui-icons-react";
+import { Folder, Trash, Users } from "@wso2/oxygen-ui-icons-react";
 import { generatePath, useNavigate, useParams } from "react-router-dom";
 import {
   useAllUsers,
@@ -54,6 +52,10 @@ import {
   type ThunderGroup,
   type ThunderPermission,
 } from "@agent-management-platform/types";
+import {
+  PermissionTree,
+  type PermissionTreeItem,
+} from "@agent-management-platform/shared-component";
 import { BackButton } from "./components/BackButton";
 import { EditFormSkeleton } from "./components/EditFormSkeleton";
 import { EntityHeader } from "./components/EntityHeader";
@@ -64,30 +66,6 @@ const permLabel = (p: ThunderPermission) =>
   p.actionName || p.name.split(":")[1] || p.name;
 const permGroup = (p: ThunderPermission) =>
   p.resourceName || p.name.split(":")[0];
-
-type PermissionGroup = { resource: string; permissions: ThunderPermission[] };
-
-type CheckboxChangeHandler = React.ChangeEventHandler<HTMLInputElement>;
-
-const groupPermissions = (perms: ThunderPermission[]): PermissionGroup[] => {
-  const map = new Map<string, ThunderPermission[]>();
-  for (const p of perms) {
-    const g = permGroup(p);
-    if (!map.has(g)) map.set(g, []);
-    map.get(g)!.push(p);
-  }
-  return [...map.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([resource, permissions]) => ({ resource, permissions }));
-};
-
-const filterPermissions = createFilterOptions<ThunderPermission>({
-  stringify: (option) => {
-    const resource = permGroup(option);
-    const action = permLabel(option);
-    return `${resource} ${action}`;
-  },
-});
 
 export const RoleEditPage: React.FC = () => {
   const { orgId, roleId } = useParams<{ orgId: string; roleId: string }>();
@@ -164,20 +142,20 @@ export const RoleEditPage: React.FC = () => {
   );
 
   // --- Permissions tab: full selected-state approach ---
-  const [selectedPermissions, setSelectedPermissions] = useState<
-    ThunderPermission[]
+  // Held as bare permission names (not ThunderPermission objects) since every
+  // consumer below — the tree, the dirty check, and the add/remove diffing —
+  // only ever needs the name.
+  const [selectedPermissionIds, setSelectedPermissionIds] = useState<
+    string[]
   >([]);
   const hasEditedPermissions = useRef(false);
 
-  // Initialise selectedPermissions from server data once (guard against refetch overwrites)
+  // Initialise selectedPermissionIds from server data once (guard against refetch overwrites)
   useEffect(() => {
-    if (!hasEditedPermissions.current && catalogPermissions.length > 0) {
-      const nameSet = new Set(initialPermissions);
-      setSelectedPermissions(
-        catalogPermissions.filter((p) => nameSet.has(p.name)),
-      );
+    if (!hasEditedPermissions.current && !isLoadingCatalog) {
+      setSelectedPermissionIds(initialPermissions);
     }
-  }, [initialPermissions, catalogPermissions]);
+  }, [initialPermissions, isLoadingCatalog]);
 
   const rolesPath = orgId
     ? generatePath(
@@ -216,14 +194,13 @@ export const RoleEditPage: React.FC = () => {
     [allGroups, displayedGroupIds],
   );
 
-  const catalogGroups = useMemo(
-    () => groupPermissions(catalogPermissions),
+  const permissionTreeItems: PermissionTreeItem[] = useMemo(
+    () =>
+      catalogPermissions.map((p) => ({
+        id: p.name,
+        path: [permGroup(p), permLabel(p)],
+      })),
     [catalogPermissions],
-  );
-
-  const selectedNames = useMemo(
-    () => new Set(selectedPermissions.map((p) => p.name)),
-    [selectedPermissions],
   );
 
   const getUsername = (user: ThunderUser) =>
@@ -280,17 +257,9 @@ export const RoleEditPage: React.FC = () => {
   };
 
   // --- Permissions handler ---
-  const handlePermissionsChange = (
-    _e: React.SyntheticEvent,
-    newValue: ThunderPermission[],
-  ) => {
+  const handlePermissionSelectionChange = (names: string[]) => {
     hasEditedPermissions.current = true;
-    setSelectedPermissions(newValue);
-  };
-
-  const handleRemovePermission = (name: string) => {
-    hasEditedPermissions.current = true;
-    setSelectedPermissions((prev) => prev.filter((p) => p.name !== name));
+    setSelectedPermissionIds(names);
   };
 
   // --- Save ---
@@ -329,7 +298,7 @@ export const RoleEditPage: React.FC = () => {
         !isPermissionsReadOnly
       ) {
         const currentSet = new Set(initialPermissions);
-        const nextSet = new Set(selectedPermissions.map((p) => p.name));
+        const nextSet = new Set(selectedPermissionIds);
         const toAdd = [...nextSet].filter((n) => !currentSet.has(n));
         const toRemove = [...currentSet].filter((n) => !nextSet.has(n));
         if (toAdd.length > 0) {
@@ -372,10 +341,10 @@ export const RoleEditPage: React.FC = () => {
     if (isPermissionsReadOnly) return false;
     const initial = new Set(initialPermissions);
     return (
-      initial.size !== selectedPermissions.length ||
-      selectedPermissions.some((p) => !initial.has(p.name))
+      initial.size !== selectedPermissionIds.length ||
+      selectedPermissionIds.some((id) => !initial.has(id))
     );
-  }, [isPermissionsReadOnly, initialPermissions, selectedPermissions]);
+  }, [isPermissionsReadOnly, initialPermissions, selectedPermissionIds]);
 
   const isDirty =
     permissionsDirty ||
@@ -427,165 +396,17 @@ export const RoleEditPage: React.FC = () => {
               <Typography variant="body2" color="text.secondary">
                 {isPermissionsReadOnly
                   ? "Permissions for predefined roles cannot be modified."
-                  : "Search and select permissions to assign to this role."}
+                  : "Check the permissions to assign to this role."}
               </Typography>
 
               <Box sx={{ mt: 1 }}>
-                {!isPermissionsReadOnly && (
-                  <Form.ElementWrapper
-                    label="Add permissions"
-                    name="addPermissions"
-                  >
-                    <Autocomplete
-                      id="addPermissions"
-                      multiple
-                      disableCloseOnSelect
-                      options={catalogPermissions}
-                      value={selectedPermissions}
-                      onChange={handlePermissionsChange}
-                      getOptionLabel={(option) =>
-                        permLabel(option as ThunderPermission)
-                      }
-                      groupBy={(option) =>
-                        permGroup(option as ThunderPermission)
-                      }
-                      filterOptions={filterPermissions}
-                      isOptionEqualToValue={(option, value) =>
-                        (option as ThunderPermission).name ===
-                        (value as ThunderPermission).name
-                      }
-                      renderTags={() => null}
-                      renderGroup={(params) => {
-                        const groupPerms = catalogPermissions.filter(
-                          (p) => permGroup(p) === params.group,
-                        );
-                        const allSelected = groupPerms.every((p) =>
-                          selectedNames.has(p.name),
-                        );
-                        const someSelected = groupPerms.some((p) =>
-                          selectedNames.has(p.name),
-                        );
-                        const handleGroupToggle = (e: React.MouseEvent) => {
-                          e.stopPropagation();
-                          hasEditedPermissions.current = true;
-                          if (allSelected) {
-                            setSelectedPermissions((prev) =>
-                              prev.filter((p) => permGroup(p) !== params.group),
-                            );
-                          } else {
-                            const toAdd = groupPerms.filter(
-                              (p) => !selectedNames.has(p.name),
-                            );
-                            setSelectedPermissions((prev) => [
-                              ...prev,
-                              ...toAdd,
-                            ]);
-                          }
-                        };
-                        const handleGroupCheckboxChange =
-                          handleGroupToggle as unknown as CheckboxChangeHandler;
-                        return (
-                          <li key={params.key}>
-                            <Box
-                              sx={{
-                                display: "flex",
-                                alignItems: "center",
-                                px: 1,
-                                py: 0.25,
-                                cursor: "pointer",
-                                userSelect: "none",
-                                "&:hover": { bgcolor: "action.hover" },
-                              }}
-                              onClick={handleGroupToggle}
-                            >
-                              <Checkbox
-                                checked={allSelected}
-                                indeterminate={someSelected && !allSelected}
-                                size="small"
-                                sx={{ mr: 0.5, p: 0.5 }}
-                                onClick={(e) => e.stopPropagation()}
-                                onChange={handleGroupCheckboxChange}
-                              />
-                              <Typography
-                                variant="caption"
-                                fontWeight={700}
-                                sx={{
-                                  textTransform: "uppercase",
-                                  letterSpacing: 0.5,
-                                }}
-                              >
-                                {params.group}
-                              </Typography>
-                            </Box>
-                            <ul style={{ padding: 0 }}>{params.children}</ul>
-                          </li>
-                        );
-                      }}
-                      renderOption={(props, option, { selected }) => (
-                        <li {...props}>
-                          <Checkbox
-                            checked={selected}
-                            size="small"
-                            sx={{ mr: 1 }}
-                          />
-                          {permLabel(option as ThunderPermission)}
-                        </li>
-                      )}
-                      renderInput={(params) => (
-                        <TextField
-                          {...params}
-                          placeholder="Search by resource or action..."
-                        />
-                      )}
-                      noOptionsText="No permissions available"
-                      sx={{ mb: 3 }}
-                    />
-                  </Form.ElementWrapper>
-                )}
-
-                {selectedPermissions.length === 0 ? (
-                  <Typography variant="body2" color="text.secondary">
-                    No permissions assigned yet.
-                  </Typography>
-                ) : (
-                  <ListingTable.Container>
-                    <ListingTable>
-                      <ListingTable.Head>
-                        <ListingTable.Row>
-                          <ListingTable.Cell>Resource</ListingTable.Cell>
-                          <ListingTable.Cell>Permission</ListingTable.Cell>
-                          {!isPermissionsReadOnly && <ListingTable.Cell />}
-                        </ListingTable.Row>
-                      </ListingTable.Head>
-                      <ListingTable.Body>
-                        {catalogGroups
-                          .flatMap(({ resource, permissions }) =>
-                            permissions
-                              .filter((p) => selectedNames.has(p.name))
-                              .map((p) => ({ resource, permission: p })),
-                          )
-                          .map(({ resource, permission: p }) => (
-                            <ListingTable.Row key={p.name}>
-                              <ListingTable.Cell>{resource}</ListingTable.Cell>
-                              <ListingTable.Cell>{permLabel(p)}</ListingTable.Cell>
-                              {!isPermissionsReadOnly && (
-                                <ListingTable.Cell align="right">
-                                  <Tooltip title="Remove permission">
-                                    <IconButton
-                                      size="small"
-                                      onClick={() => handleRemovePermission(p.name)}
-                                    >
-                                      <Trash size={16} />
-                                    </IconButton>
-                                  </Tooltip>
-                                </ListingTable.Cell>
-                              )}
-                            </ListingTable.Row>
-                          ))}
-                      </ListingTable.Body>
-                    </ListingTable>
-                  </ListingTable.Container>
-                )}
+                <PermissionTree
+                  items={permissionTreeItems}
+                  selectedIds={selectedPermissionIds}
+                  onChange={handlePermissionSelectionChange}
+                  readOnly={isPermissionsReadOnly}
+                  emptyMessage="No permissions available."
+                />
               </Box>
             </>
           )}
@@ -617,9 +438,13 @@ export const RoleEditPage: React.FC = () => {
               </Box>
 
               {displayedUsers.length === 0 ? (
-                <Typography variant="body2" color="text.secondary">
-                  No users assigned yet. Search and add users above.
-                </Typography>
+                <ListingTable.Container>
+                  <ListingTable.EmptyState
+                    illustration={<Users size={64} />}
+                    title="No users assigned yet"
+                    description="Search and add users above."
+                  />
+                </ListingTable.Container>
               ) : (
                 <ListingTable.Container>
                   <ListingTable>
@@ -681,9 +506,13 @@ export const RoleEditPage: React.FC = () => {
               </Box>
 
               {displayedGroups.length === 0 ? (
-                <Typography variant="body2" color="text.secondary">
-                  No groups assigned yet. Search and add groups above.
-                </Typography>
+                <ListingTable.Container>
+                  <ListingTable.EmptyState
+                    illustration={<Folder size={64} />}
+                    title="No groups assigned yet"
+                    description="Search and add groups above."
+                  />
+                </ListingTable.Container>
               ) : (
                 <ListingTable.Container>
                   <ListingTable>

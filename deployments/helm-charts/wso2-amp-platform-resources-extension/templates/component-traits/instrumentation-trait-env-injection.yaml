@@ -93,7 +93,7 @@ spec:
             name: ${parameters.otelEndpointEnvName}
             # In-cluster gateway runtime Service (per-org-env namespace): the
             # sandboxed agent reaches the runtime directly at
-            # "api-platform-<org>-<env>-gateway-gateway-runtime.<org>-<env>:22893/otel".
+            # "api-platform-<org>-<env>-gw-gateway-gateway-runtime.<org>-<env>:22893/otel".
             # Derived from the apiGatewayName convention ("api-platform-<org>-<env>")
             # + the per-env gateway namespace ("<org>-<env>"), matching the
             # API-management trait's runtime backend. This in-cluster path is what
@@ -105,7 +105,7 @@ spec:
             # install fronts a single public gateway host on :443, where the
             # per-env in-cluster Service does not apply). Leave empty for the
             # default in-cluster runtime endpoint.
-            value: {{ if .Values.apiPlatformGatewayVhost.otelEndpointOverride }}{{ .Values.apiPlatformGatewayVhost.otelEndpointOverride | quote }}{{ else }}"http://api-platform-${metadata.componentNamespace}-${metadata.environmentName}-gateway-gateway-runtime.${metadata.componentNamespace}-${metadata.environmentName}:22893/otel"{{ end }}
+            value: {{ if .Values.apiPlatformGatewayVhost.otelEndpointOverride }}{{ .Values.apiPlatformGatewayVhost.otelEndpointOverride | quote }}{{ else }}"http://{{ include "amp.gatewayRuntimeHost" . }}:22893/otel"{{ end }}
         - op: add
           path: /spec/podTemplate/spec/containers/0/env/-
           value:

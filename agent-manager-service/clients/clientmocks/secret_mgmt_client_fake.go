@@ -29,9 +29,6 @@ var _ secretmanagersvc.SecretManagementClient = &SecretManagementClientMock{}
 //			GetSecretFunc: func(ctx context.Context, kvPath string) (*secretmanagersvc.SecretInfo, error) {
 //				panic("mock out the GetSecret method")
 //			},
-//			GetSecretWithValueFunc: func(ctx context.Context, kvPath string) (map[string]string, error) {
-//				panic("mock out the GetSecretWithValue method")
-//			},
 //			PatchSecretFunc: func(ctx context.Context, location secretmanagersvc.SecretLocation, data map[string]string, keysToDelete []string) (string, error) {
 //				panic("mock out the PatchSecret method")
 //			},
@@ -50,9 +47,6 @@ type SecretManagementClientMock struct {
 
 	// GetSecretFunc mocks the GetSecret method.
 	GetSecretFunc func(ctx context.Context, kvPath string) (*secretmanagersvc.SecretInfo, error)
-
-	// GetSecretWithValueFunc mocks the GetSecretWithValue method.
-	GetSecretWithValueFunc func(ctx context.Context, kvPath string) (map[string]string, error)
 
 	// PatchSecretFunc mocks the PatchSecret method.
 	PatchSecretFunc func(ctx context.Context, location secretmanagersvc.SecretLocation, data map[string]string, keysToDelete []string) (string, error)
@@ -84,13 +78,6 @@ type SecretManagementClientMock struct {
 			// KvPath is the kvPath argument value.
 			KvPath string
 		}
-		// GetSecretWithValue holds details about calls to the GetSecretWithValue method.
-		GetSecretWithValue []struct {
-			// Ctx is the ctx argument value.
-			Ctx context.Context
-			// KvPath is the kvPath argument value.
-			KvPath string
-		}
 		// PatchSecret holds details about calls to the PatchSecret method.
 		PatchSecret []struct {
 			// Ctx is the ctx argument value.
@@ -103,11 +90,10 @@ type SecretManagementClientMock struct {
 			KeysToDelete []string
 		}
 	}
-	lockCreateSecret       sync.RWMutex
-	lockDeleteSecret       sync.RWMutex
-	lockGetSecret          sync.RWMutex
-	lockGetSecretWithValue sync.RWMutex
-	lockPatchSecret        sync.RWMutex
+	lockCreateSecret sync.RWMutex
+	lockDeleteSecret sync.RWMutex
+	lockGetSecret    sync.RWMutex
+	lockPatchSecret  sync.RWMutex
 }
 
 // CreateSecret calls CreateSecretFunc.
@@ -223,42 +209,6 @@ func (mock *SecretManagementClientMock) GetSecretCalls() []struct {
 	mock.lockGetSecret.RLock()
 	calls = mock.calls.GetSecret
 	mock.lockGetSecret.RUnlock()
-	return calls
-}
-
-// GetSecretWithValue calls GetSecretWithValueFunc.
-func (mock *SecretManagementClientMock) GetSecretWithValue(ctx context.Context, kvPath string) (map[string]string, error) {
-	if mock.GetSecretWithValueFunc == nil {
-		panic("SecretManagementClientMock.GetSecretWithValueFunc: method is nil but SecretManagementClient.GetSecretWithValue was just called")
-	}
-	callInfo := struct {
-		Ctx    context.Context
-		KvPath string
-	}{
-		Ctx:    ctx,
-		KvPath: kvPath,
-	}
-	mock.lockGetSecretWithValue.Lock()
-	mock.calls.GetSecretWithValue = append(mock.calls.GetSecretWithValue, callInfo)
-	mock.lockGetSecretWithValue.Unlock()
-	return mock.GetSecretWithValueFunc(ctx, kvPath)
-}
-
-// GetSecretWithValueCalls gets all the calls that were made to GetSecretWithValue.
-// Check the length with:
-//
-//	len(mockedSecretManagementClient.GetSecretWithValueCalls())
-func (mock *SecretManagementClientMock) GetSecretWithValueCalls() []struct {
-	Ctx    context.Context
-	KvPath string
-} {
-	var calls []struct {
-		Ctx    context.Context
-		KvPath string
-	}
-	mock.lockGetSecretWithValue.RLock()
-	calls = mock.calls.GetSecretWithValue
-	mock.lockGetSecretWithValue.RUnlock()
 	return calls
 }
 

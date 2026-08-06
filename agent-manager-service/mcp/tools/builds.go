@@ -25,26 +25,24 @@ import (
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/wso2/agent-manager/agent-manager-service/rbac"
 	"github.com/wso2/agent-manager/agent-manager-service/spec"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
 
 // input structs
 type listBuildsInput struct {
-	OrgName     string `json:"org_name"`
 	ProjectName string `json:"project_name"`
 	AgentName   string `json:"agent_name"`
 	Limit       *int   `json:"limit,omitempty"`
 	Offset      *int   `json:"offset,omitempty"`
 }
 type getBuildDetailsInput struct {
-	OrgName     string `json:"org_name"`
 	ProjectName string `json:"project_name"`
 	AgentName   string `json:"agent_name"`
 	BuildName   string `json:"build_name"`
 }
 type buildAgentInput struct {
-	OrgName     string  `json:"org_name"`
 	ProjectName string  `json:"project_name"`
 	AgentName   string  `json:"agent_name"`
 	CommitID    *string `json:"commit_id,omitempty"`
@@ -61,7 +59,6 @@ type listBuildItem struct {
 	RetryAfterSeconds *int       `json:"retry_after_seconds,omitempty"`
 }
 type listBuildsOutput struct {
-	OrgName     string          `json:"org_name"`
 	ProjectName string          `json:"project_name"`
 	AgentName   string          `json:"agent_name"`
 	Builds      []listBuildItem `json:"builds"`
@@ -71,7 +68,6 @@ type listBuildsOutput struct {
 	Note        string          `json:"note"`
 }
 type getBuildDetailsOutput struct {
-	OrgName           string                    `json:"org_name"`
 	ProjectName       string                    `json:"project_name"`
 	AgentName         string                    `json:"agent_name"`
 	Build             spec.BuildDetailsResponse `json:"build"`
@@ -79,52 +75,48 @@ type getBuildDetailsOutput struct {
 	Note              string                    `json:"note,omitempty"`
 }
 type buildAgentOutput struct {
-	OrgName     string             `json:"org_name"`
 	ProjectName string             `json:"project_name"`
 	AgentName   string             `json:"agent_name"`
 	Build       spec.BuildResponse `json:"build"`
 	Note        string             `json:"note,omitempty"`
 }
 
-func (t *Toolsets) registerBuildTools(server *gomcp.Server) {
-	gomcp.AddTool(server, &gomcp.Tool{
+func (t *Toolsets) registerBuildTools(server *gomcp.Server, reg *toolRegistry) {
+	addTool(reg, server, &gomcp.Tool{
 		Name: "list_builds",
 		Description: "List builds for an agent. " +
 			"A build is a versioned packaging job that turns agent source into a runnable image using a specific commit and build parameters. " +
 			"Successful builds trigger deployment automatically, and in-progress builds may take a few minutes to complete.",
 		InputSchema: createSchema(map[string]any{
-			"org_name":     stringProperty("Optional. Organization name."),
 			"project_name": stringProperty("Required. Project name where the agent exists."),
 			"agent_name":   stringProperty("Required. Agent name to list builds for."),
 			"limit":        intProperty(fmt.Sprintf("Optional. Max builds to return (default %d, min %d, max %d).", utils.DefaultLimit, utils.MinLimit, utils.MaxLimit)),
 			"offset":       intProperty(fmt.Sprintf("Optional. Pagination offset (default %d, min %d).", utils.DefaultOffset, utils.MinOffset)),
 		}, []string{"project_name", "agent_name"}),
-	}, withToolLogging("list_builds", listBuilds(t.BuildToolset)))
+	}, listBuilds(t.BuildToolset), rbac.AgentRead)
 
-	gomcp.AddTool(server, &gomcp.Tool{
+	addTool(reg, server, &gomcp.Tool{
 		Name: "get_build_details",
 		Description: "Return detailed information for a specific build, including status, steps, duration, commit, and build parameters. " +
 			"If the build is still running, completion may take a few minutes.",
 		InputSchema: createSchema(map[string]any{
-			"org_name":     stringProperty("Optional. Organization name."),
 			"project_name": stringProperty("Required. Project name where the agent exists."),
 			"agent_name":   stringProperty("Required. Agent name that owns the build."),
 			"build_name":   stringProperty("Required. Build name to fetch details for."),
 		}, []string{"project_name", "agent_name", "build_name"}),
-	}, withToolLogging("get_build_details", getBuildDetails(t.BuildToolset)))
+	}, getBuildDetails(t.BuildToolset), rbac.AgentRead)
 
-	gomcp.AddTool(server, &gomcp.Tool{
+	addTool(reg, server, &gomcp.Tool{
 		Name: "build_agent",
 		Description: "Start a new build for an existing agent. " +
 			"A build packages the agent source into a runnable image from a specific commit and build parameters. " +
 			"Successful builds trigger deployment automatically.",
 		InputSchema: createSchema(map[string]any{
-			"org_name":     stringProperty("Optional. Organization name."),
 			"project_name": stringProperty("Required. Project name where the agent exists."),
 			"agent_name":   stringProperty("Required. Agent name to trigger build for."),
 			"commit_id":    stringProperty("Optional. Commit ID to build. Defaults to latest."),
 		}, []string{"project_name", "agent_name"}),
-	}, withToolLogging("build_agent", buildAgent(t.BuildToolset)))
+	}, buildAgent(t.BuildToolset), rbac.AgentBuild)
 }
 
 func listBuilds(handler BuildToolsetHandler) func(context.Context, *gomcp.CallToolRequest, listBuildsInput) (*gomcp.CallToolResult, any, error) {
@@ -139,20 +131,9 @@ func listBuilds(handler BuildToolsetHandler) func(context.Context, *gomcp.CallTo
 		}
 		ouID := resolveOUID(ctx)
 
-		limit := utils.DefaultLimit
-		if input.Limit != nil {
-			limit = *input.Limit
-		}
-		if limit < utils.MinLimit || limit > utils.MaxLimit {
-			return nil, nil, fmt.Errorf("limit must be between %d and %d", utils.MinLimit, utils.MaxLimit)
-		}
-
-		offset := utils.DefaultOffset
-		if input.Offset != nil {
-			offset = *input.Offset
-		}
-		if offset < utils.MinOffset {
-			return nil, nil, fmt.Errorf("offset must be >= %d", utils.MinOffset)
+		limit, offset, err := resolvePagination(input.Limit, input.Offset)
+		if err != nil {
+			return nil, nil, err
 		}
 
 		builds, total, err := handler.ListAgentBuilds(ctx, ouID, projectName, agentName, int32(limit), int32(offset))
@@ -161,7 +142,6 @@ func listBuilds(handler BuildToolsetHandler) func(context.Context, *gomcp.CallTo
 		}
 
 		response := listBuildsOutput{
-			OrgName:     ouID,
 			ProjectName: projectName,
 			AgentName:   agentName,
 			Builds:      reduceBuildListResponse(builds),
@@ -198,7 +178,6 @@ func getBuildDetails(handler BuildToolsetHandler) func(context.Context, *gomcp.C
 		}
 
 		response := getBuildDetailsOutput{
-			OrgName:     ouID,
 			ProjectName: projectName,
 			AgentName:   agentName,
 			Build:       utils.ConvertToBuildDetailsResponse(result),
@@ -232,7 +211,6 @@ func buildAgent(handler BuildToolsetHandler) func(context.Context, *gomcp.CallTo
 			return nil, nil, wrapToolError("build_agent", err)
 		}
 		response := buildAgentOutput{
-			OrgName:     ouID,
 			ProjectName: projectName,
 			AgentName:   agentName,
 			Build:       utils.ConvertToBuildResponse(build),

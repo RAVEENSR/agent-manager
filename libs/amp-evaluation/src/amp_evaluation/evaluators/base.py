@@ -32,6 +32,7 @@ LLM-as-judge evaluators use build_prompt() instead of evaluate():
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import os
 from typing import List, Optional, Callable, TYPE_CHECKING, Any, Dict, Tuple
 import logging
 import inspect
@@ -690,6 +691,12 @@ The "explanation" field MUST be formatted as valid Markdown. Use headings, bulle
             client_args = {"async_client": httpx.AsyncClient(headers=header)}
         elif provider == "groq":
             # any-llm's Groq provider ignores api_base; route via base_url instead.
+            # This branch only runs once a gateway is configured (see the early
+            # returns above), so base_url always points at the gateway — the
+            # SDK's own api_key must stay a fixed placeholder even if
+            # GROQ_API_KEY is set, or a real Groq credential would be sent to
+            # the gateway as a bearer token. The real gateway secret travels
+            # only via default_headers.
             return {"api_key": "gateway", "client_args": {"base_url": cfg.api_base, "default_headers": header}}
         elif provider == "bedrock":
             # boto3 has no default_headers hook. Build a client pointed at the
@@ -699,8 +706,6 @@ The "explanation" field MUST be formatted as valid Markdown. Use headings, bulle
             # the upstream AWS call with its own stored credentials. (A dummy
             # SigV4 signature would be passed through to AWS and rejected with
             # UnrecognizedClientException.)
-            import os
-
             import boto3
             from botocore import UNSIGNED
             from botocore.config import Config
@@ -722,7 +727,8 @@ The "explanation" field MUST be formatted as valid Markdown. Use headings, bulle
             # openai, anthropic, and other OpenAI-style clients accept default_headers.
             client_args = {"default_headers": header}
 
-        return {"api_base": cfg.api_base, "api_key": "gateway", "client_args": client_args}
+        gateway_key = os.getenv("GATEWAY_API_KEY") or "gateway"
+        return {"api_base": cfg.api_base, "api_key": gateway_key, "client_args": client_args}
 
     def _call_llm_with_retry(self, prompt: str) -> EvalResult:
         """Call the LLM client, validate with Pydantic, retry on failure."""

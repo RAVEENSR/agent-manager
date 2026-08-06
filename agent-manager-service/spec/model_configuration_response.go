@@ -24,8 +24,20 @@ type ConfigurationResponse struct {
 	// Name of the agent
 	AgentName string `json:"agentName"`
 	// Environment name
-	Environment    string                              `json:"environment"`
-	Configurations ConfigurationResponseConfigurations `json:"configurations"`
+	Environment string `json:"environment"`
+	// Whether auto-instrumentation (tracing) is enabled for this environment
+	EnableAutoInstrumentation *bool `json:"enableAutoInstrumentation,omitempty"`
+	// AMP instrumentation version pinned for this environment, if any
+	InstrumentationVersion *string `json:"instrumentationVersion,omitempty"`
+	// Whether API key security is enabled for this environment's agent endpoint
+	EnableApiKeySecurity *bool `json:"enableApiKeySecurity,omitempty"`
+	// Whether OAuth security is enabled for this environment's agent endpoint
+	EnableOAuthSecurity *bool        `json:"enableOAuthSecurity,omitempty"`
+	CorsConfig          *CORSConfig  `json:"corsConfig,omitempty"`
+	OauthConfig         *OAuthConfig `json:"oauthConfig,omitempty"`
+	// Max duration (seconds) the gateway keeps a response open between the agent and the client before cutting it off, for this agent's endpoint in this environment. Defaults to 30 seconds when unset.
+	ResilienceTimeoutSeconds *int32                              `json:"resilienceTimeoutSeconds,omitempty"`
+	Configurations           ConfigurationResponseConfigurations `json:"configurations"`
 }
 
 // NewConfigurationResponse instantiates a new ConfigurationResponse object
@@ -121,6 +133,230 @@ func (o *ConfigurationResponse) SetEnvironment(v string) {
 	o.Environment = v
 }
 
+// GetEnableAutoInstrumentation returns the EnableAutoInstrumentation field value if set, zero value otherwise.
+func (o *ConfigurationResponse) GetEnableAutoInstrumentation() bool {
+	if o == nil || IsNil(o.EnableAutoInstrumentation) {
+		var ret bool
+		return ret
+	}
+	return *o.EnableAutoInstrumentation
+}
+
+// GetEnableAutoInstrumentationOk returns a tuple with the EnableAutoInstrumentation field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *ConfigurationResponse) GetEnableAutoInstrumentationOk() (*bool, bool) {
+	if o == nil || IsNil(o.EnableAutoInstrumentation) {
+		return nil, false
+	}
+	return o.EnableAutoInstrumentation, true
+}
+
+// HasEnableAutoInstrumentation returns a boolean if a field has been set.
+func (o *ConfigurationResponse) HasEnableAutoInstrumentation() bool {
+	if o != nil && !IsNil(o.EnableAutoInstrumentation) {
+		return true
+	}
+
+	return false
+}
+
+// SetEnableAutoInstrumentation gets a reference to the given bool and assigns it to the EnableAutoInstrumentation field.
+func (o *ConfigurationResponse) SetEnableAutoInstrumentation(v bool) {
+	o.EnableAutoInstrumentation = &v
+}
+
+// GetInstrumentationVersion returns the InstrumentationVersion field value if set, zero value otherwise.
+func (o *ConfigurationResponse) GetInstrumentationVersion() string {
+	if o == nil || IsNil(o.InstrumentationVersion) {
+		var ret string
+		return ret
+	}
+	return *o.InstrumentationVersion
+}
+
+// GetInstrumentationVersionOk returns a tuple with the InstrumentationVersion field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *ConfigurationResponse) GetInstrumentationVersionOk() (*string, bool) {
+	if o == nil || IsNil(o.InstrumentationVersion) {
+		return nil, false
+	}
+	return o.InstrumentationVersion, true
+}
+
+// HasInstrumentationVersion returns a boolean if a field has been set.
+func (o *ConfigurationResponse) HasInstrumentationVersion() bool {
+	if o != nil && !IsNil(o.InstrumentationVersion) {
+		return true
+	}
+
+	return false
+}
+
+// SetInstrumentationVersion gets a reference to the given string and assigns it to the InstrumentationVersion field.
+func (o *ConfigurationResponse) SetInstrumentationVersion(v string) {
+	o.InstrumentationVersion = &v
+}
+
+// GetEnableApiKeySecurity returns the EnableApiKeySecurity field value if set, zero value otherwise.
+func (o *ConfigurationResponse) GetEnableApiKeySecurity() bool {
+	if o == nil || IsNil(o.EnableApiKeySecurity) {
+		var ret bool
+		return ret
+	}
+	return *o.EnableApiKeySecurity
+}
+
+// GetEnableApiKeySecurityOk returns a tuple with the EnableApiKeySecurity field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *ConfigurationResponse) GetEnableApiKeySecurityOk() (*bool, bool) {
+	if o == nil || IsNil(o.EnableApiKeySecurity) {
+		return nil, false
+	}
+	return o.EnableApiKeySecurity, true
+}
+
+// HasEnableApiKeySecurity returns a boolean if a field has been set.
+func (o *ConfigurationResponse) HasEnableApiKeySecurity() bool {
+	if o != nil && !IsNil(o.EnableApiKeySecurity) {
+		return true
+	}
+
+	return false
+}
+
+// SetEnableApiKeySecurity gets a reference to the given bool and assigns it to the EnableApiKeySecurity field.
+func (o *ConfigurationResponse) SetEnableApiKeySecurity(v bool) {
+	o.EnableApiKeySecurity = &v
+}
+
+// GetEnableOAuthSecurity returns the EnableOAuthSecurity field value if set, zero value otherwise.
+func (o *ConfigurationResponse) GetEnableOAuthSecurity() bool {
+	if o == nil || IsNil(o.EnableOAuthSecurity) {
+		var ret bool
+		return ret
+	}
+	return *o.EnableOAuthSecurity
+}
+
+// GetEnableOAuthSecurityOk returns a tuple with the EnableOAuthSecurity field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *ConfigurationResponse) GetEnableOAuthSecurityOk() (*bool, bool) {
+	if o == nil || IsNil(o.EnableOAuthSecurity) {
+		return nil, false
+	}
+	return o.EnableOAuthSecurity, true
+}
+
+// HasEnableOAuthSecurity returns a boolean if a field has been set.
+func (o *ConfigurationResponse) HasEnableOAuthSecurity() bool {
+	if o != nil && !IsNil(o.EnableOAuthSecurity) {
+		return true
+	}
+
+	return false
+}
+
+// SetEnableOAuthSecurity gets a reference to the given bool and assigns it to the EnableOAuthSecurity field.
+func (o *ConfigurationResponse) SetEnableOAuthSecurity(v bool) {
+	o.EnableOAuthSecurity = &v
+}
+
+// GetCorsConfig returns the CorsConfig field value if set, zero value otherwise.
+func (o *ConfigurationResponse) GetCorsConfig() CORSConfig {
+	if o == nil || IsNil(o.CorsConfig) {
+		var ret CORSConfig
+		return ret
+	}
+	return *o.CorsConfig
+}
+
+// GetCorsConfigOk returns a tuple with the CorsConfig field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *ConfigurationResponse) GetCorsConfigOk() (*CORSConfig, bool) {
+	if o == nil || IsNil(o.CorsConfig) {
+		return nil, false
+	}
+	return o.CorsConfig, true
+}
+
+// HasCorsConfig returns a boolean if a field has been set.
+func (o *ConfigurationResponse) HasCorsConfig() bool {
+	if o != nil && !IsNil(o.CorsConfig) {
+		return true
+	}
+
+	return false
+}
+
+// SetCorsConfig gets a reference to the given CORSConfig and assigns it to the CorsConfig field.
+func (o *ConfigurationResponse) SetCorsConfig(v CORSConfig) {
+	o.CorsConfig = &v
+}
+
+// GetOauthConfig returns the OauthConfig field value if set, zero value otherwise.
+func (o *ConfigurationResponse) GetOauthConfig() OAuthConfig {
+	if o == nil || IsNil(o.OauthConfig) {
+		var ret OAuthConfig
+		return ret
+	}
+	return *o.OauthConfig
+}
+
+// GetOauthConfigOk returns a tuple with the OauthConfig field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *ConfigurationResponse) GetOauthConfigOk() (*OAuthConfig, bool) {
+	if o == nil || IsNil(o.OauthConfig) {
+		return nil, false
+	}
+	return o.OauthConfig, true
+}
+
+// HasOauthConfig returns a boolean if a field has been set.
+func (o *ConfigurationResponse) HasOauthConfig() bool {
+	if o != nil && !IsNil(o.OauthConfig) {
+		return true
+	}
+
+	return false
+}
+
+// SetOauthConfig gets a reference to the given OAuthConfig and assigns it to the OauthConfig field.
+func (o *ConfigurationResponse) SetOauthConfig(v OAuthConfig) {
+	o.OauthConfig = &v
+}
+
+// GetResilienceTimeoutSeconds returns the ResilienceTimeoutSeconds field value if set, zero value otherwise.
+func (o *ConfigurationResponse) GetResilienceTimeoutSeconds() int32 {
+	if o == nil || IsNil(o.ResilienceTimeoutSeconds) {
+		var ret int32
+		return ret
+	}
+	return *o.ResilienceTimeoutSeconds
+}
+
+// GetResilienceTimeoutSecondsOk returns a tuple with the ResilienceTimeoutSeconds field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *ConfigurationResponse) GetResilienceTimeoutSecondsOk() (*int32, bool) {
+	if o == nil || IsNil(o.ResilienceTimeoutSeconds) {
+		return nil, false
+	}
+	return o.ResilienceTimeoutSeconds, true
+}
+
+// HasResilienceTimeoutSeconds returns a boolean if a field has been set.
+func (o *ConfigurationResponse) HasResilienceTimeoutSeconds() bool {
+	if o != nil && !IsNil(o.ResilienceTimeoutSeconds) {
+		return true
+	}
+
+	return false
+}
+
+// SetResilienceTimeoutSeconds gets a reference to the given int32 and assigns it to the ResilienceTimeoutSeconds field.
+func (o *ConfigurationResponse) SetResilienceTimeoutSeconds(v int32) {
+	o.ResilienceTimeoutSeconds = &v
+}
+
 // GetConfigurations returns the Configurations field value
 func (o *ConfigurationResponse) GetConfigurations() ConfigurationResponseConfigurations {
 	if o == nil {
@@ -158,6 +394,27 @@ func (o ConfigurationResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize["projectName"] = o.ProjectName
 	toSerialize["agentName"] = o.AgentName
 	toSerialize["environment"] = o.Environment
+	if !IsNil(o.EnableAutoInstrumentation) {
+		toSerialize["enableAutoInstrumentation"] = o.EnableAutoInstrumentation
+	}
+	if !IsNil(o.InstrumentationVersion) {
+		toSerialize["instrumentationVersion"] = o.InstrumentationVersion
+	}
+	if !IsNil(o.EnableApiKeySecurity) {
+		toSerialize["enableApiKeySecurity"] = o.EnableApiKeySecurity
+	}
+	if !IsNil(o.EnableOAuthSecurity) {
+		toSerialize["enableOAuthSecurity"] = o.EnableOAuthSecurity
+	}
+	if !IsNil(o.CorsConfig) {
+		toSerialize["corsConfig"] = o.CorsConfig
+	}
+	if !IsNil(o.OauthConfig) {
+		toSerialize["oauthConfig"] = o.OauthConfig
+	}
+	if !IsNil(o.ResilienceTimeoutSeconds) {
+		toSerialize["resilienceTimeoutSeconds"] = o.ResilienceTimeoutSeconds
+	}
 	toSerialize["configurations"] = o.Configurations
 	return toSerialize, nil
 }

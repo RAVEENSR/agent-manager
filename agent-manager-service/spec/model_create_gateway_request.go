@@ -22,10 +22,12 @@ type CreateGatewayRequest struct {
 	// Unique gateway name (lowercase, alphanumeric with hyphens)
 	Name string `json:"name"`
 	// Human-readable display name
-	DisplayName string      `json:"displayName"`
-	GatewayType GatewayType `json:"gatewayType"`
+	DisplayName string           `json:"displayName"`
+	GatewayType GatewayTypeInput `json:"gatewayType"`
 	// Virtual host for the gateway (FQDN or IP)
 	Vhost string `json:"vhost"`
+	// In-cluster base URL of the gateway runtime, used by sandboxed platform-hosted agents. Empty means no internal address is registered and the vhost is used instead. Must carry an explicit port other than 80 or 443 and a cluster-local host.
+	RuntimeUrl *string `json:"runtimeUrl,omitempty"`
 	// Deployment region (optional)
 	Region *string `json:"region,omitempty"`
 	// Flag indicating if this is a critical production gateway
@@ -40,7 +42,7 @@ type CreateGatewayRequest struct {
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewCreateGatewayRequest(name string, displayName string, gatewayType GatewayType, vhost string) *CreateGatewayRequest {
+func NewCreateGatewayRequest(name string, displayName string, gatewayType GatewayTypeInput, vhost string) *CreateGatewayRequest {
 	this := CreateGatewayRequest{}
 	this.Name = name
 	this.DisplayName = displayName
@@ -110,9 +112,9 @@ func (o *CreateGatewayRequest) SetDisplayName(v string) {
 }
 
 // GetGatewayType returns the GatewayType field value
-func (o *CreateGatewayRequest) GetGatewayType() GatewayType {
+func (o *CreateGatewayRequest) GetGatewayType() GatewayTypeInput {
 	if o == nil {
-		var ret GatewayType
+		var ret GatewayTypeInput
 		return ret
 	}
 
@@ -121,7 +123,7 @@ func (o *CreateGatewayRequest) GetGatewayType() GatewayType {
 
 // GetGatewayTypeOk returns a tuple with the GatewayType field value
 // and a boolean to check if the value has been set.
-func (o *CreateGatewayRequest) GetGatewayTypeOk() (*GatewayType, bool) {
+func (o *CreateGatewayRequest) GetGatewayTypeOk() (*GatewayTypeInput, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -129,7 +131,7 @@ func (o *CreateGatewayRequest) GetGatewayTypeOk() (*GatewayType, bool) {
 }
 
 // SetGatewayType sets field value
-func (o *CreateGatewayRequest) SetGatewayType(v GatewayType) {
+func (o *CreateGatewayRequest) SetGatewayType(v GatewayTypeInput) {
 	o.GatewayType = v
 }
 
@@ -155,6 +157,38 @@ func (o *CreateGatewayRequest) GetVhostOk() (*string, bool) {
 // SetVhost sets field value
 func (o *CreateGatewayRequest) SetVhost(v string) {
 	o.Vhost = v
+}
+
+// GetRuntimeUrl returns the RuntimeUrl field value if set, zero value otherwise.
+func (o *CreateGatewayRequest) GetRuntimeUrl() string {
+	if o == nil || IsNil(o.RuntimeUrl) {
+		var ret string
+		return ret
+	}
+	return *o.RuntimeUrl
+}
+
+// GetRuntimeUrlOk returns a tuple with the RuntimeUrl field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *CreateGatewayRequest) GetRuntimeUrlOk() (*string, bool) {
+	if o == nil || IsNil(o.RuntimeUrl) {
+		return nil, false
+	}
+	return o.RuntimeUrl, true
+}
+
+// HasRuntimeUrl returns a boolean if a field has been set.
+func (o *CreateGatewayRequest) HasRuntimeUrl() bool {
+	if o != nil && !IsNil(o.RuntimeUrl) {
+		return true
+	}
+
+	return false
+}
+
+// SetRuntimeUrl gets a reference to the given string and assigns it to the RuntimeUrl field.
+func (o *CreateGatewayRequest) SetRuntimeUrl(v string) {
+	o.RuntimeUrl = &v
 }
 
 // GetRegion returns the Region field value if set, zero value otherwise.
@@ -299,6 +333,9 @@ func (o CreateGatewayRequest) ToMap() (map[string]interface{}, error) {
 	toSerialize["displayName"] = o.DisplayName
 	toSerialize["gatewayType"] = o.GatewayType
 	toSerialize["vhost"] = o.Vhost
+	if !IsNil(o.RuntimeUrl) {
+		toSerialize["runtimeUrl"] = o.RuntimeUrl
+	}
 	if !IsNil(o.Region) {
 		toSerialize["region"] = o.Region
 	}

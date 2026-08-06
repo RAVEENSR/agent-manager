@@ -35,10 +35,29 @@ import {
   TextField,
   Typography,
 } from "@wso2/oxygen-ui";
+import { useFormValidation } from "@agent-management-platform/views";
+import { z } from "zod";
 import { type EndpointDraft } from "./EndpointFormFields";
 import { EndpointsEditorSection } from "./EndpointsEditorSection";
 import { draftToEndpoint } from "./mcpEndpoints";
 import { MCP_SPEC_VERSION } from "../constants";
+
+const DEFAULT_PROXY_VERSION = "0.0.1";
+
+const SEMVER_PATTERN =
+  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-.]+)?(?:\+[0-9A-Za-z-.]+)?$/;
+
+interface AddMCPProxyFormValues {
+  version: string;
+}
+
+const addMCPProxySchema = z.object({
+  version: z
+    .string()
+    .trim()
+    .min(1, "Version is required")
+    .regex(SEMVER_PATTERN, "Use a semantic version, e.g. 0.0.1"),
+});
 
 interface AddMCPProxyFormProps {
   onCancel: () => void;
@@ -53,21 +72,32 @@ export function AddMCPProxyForm({ onCancel }: AddMCPProxyFormProps) {
   });
 
   const [proxyName, setProxyName] = useState("");
-  const [proxyVersion, setProxyVersion] = useState("");
+  const [proxyVersion, setProxyVersion] = useState(DEFAULT_PROXY_VERSION);
   const [proxyDescription, setProxyDescription] = useState("");
   const [proxyContext, setProxyContext] = useState("");
   const [endpoints, setEndpoints] = useState<EndpointDraft[]>([]);
   const [addOpen, setAddOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  const { errors, validateField, validateForm, setFieldError } =
+    useFormValidation<AddMCPProxyFormValues>(addMCPProxySchema);
+
   const isCreating = createMCPProxy.isPending;
+
+  const handleVersionChange = useCallback(
+    (value: string) => {
+      setProxyVersion(value);
+      setFieldError("version", validateField("version", value));
+    },
+    [validateField, setFieldError],
+  );
 
   const handleNameChange = useCallback(
     (value: string) => {
-      const previousContext = proxyName ? `/default/${proxyName}` : "";
+      const previousContext = proxyName ? `/default/${toHandle(proxyName)}` : "";
       setProxyName(value);
       if (!proxyContext || proxyContext === previousContext) {
-        setProxyContext(value ? `/default/${value}` : "");
+        setProxyContext(value ? `/default/${toHandle(value)}` : "");
       }
     },
     [proxyContext, proxyName],
@@ -79,17 +109,20 @@ export function AddMCPProxyForm({ onCancel }: AddMCPProxyFormProps) {
     (draft: Omit<EndpointDraft, "id">) => {
       if (!proxyName && draft.serverName) {
         setProxyName(draft.serverName);
-        if (!proxyContext) setProxyContext(`/default/${draft.serverName}`);
+        if (!proxyContext) {
+          setProxyContext(`/default/${toHandle(draft.serverName)}`);
+        }
       }
-      if (!proxyVersion && draft.serverVersion) {
-        setProxyVersion(draft.serverVersion);
+      if (proxyVersion === DEFAULT_PROXY_VERSION && draft.serverVersion) {
+        handleVersionChange(draft.serverVersion);
       }
     },
-    [proxyContext, proxyName, proxyVersion],
+    [proxyContext, proxyName, proxyVersion, handleVersionChange],
   );
 
   const handleCreate = useCallback(async () => {
     if (!orgId || endpoints.length === 0) return;
+    if (!validateForm({ version: proxyVersion })) return;
 
     const name = proxyName.trim();
 
@@ -126,11 +159,13 @@ export function AddMCPProxyForm({ onCancel }: AddMCPProxyFormProps) {
     proxyDescription,
     proxyName,
     proxyVersion,
+    validateForm,
   ]);
 
   const canCreate =
     Boolean(proxyName.trim()) &&
     Boolean(proxyVersion.trim()) &&
+    !errors.version &&
     endpoints.length > 0 &&
     !isCreating;
 
@@ -151,12 +186,17 @@ export function AddMCPProxyForm({ onCancel }: AddMCPProxyFormProps) {
                 onChange={(event) => handleNameChange(event.target.value)}
               />
             </FormControl>
-            <FormControl sx={{ width: { xs: "100%", md: 300 } }}>
+            <FormControl
+              sx={{ width: { xs: "100%", md: 300 } }}
+              error={Boolean(errors.version)}
+            >
               <FormLabel required>Version</FormLabel>
               <TextField
                 fullWidth
                 value={proxyVersion}
-                onChange={(event) => setProxyVersion(event.target.value)}
+                onChange={(event) => handleVersionChange(event.target.value)}
+                error={Boolean(errors.version)}
+                helperText={errors.version}
               />
             </FormControl>
           </Form.Stack>
@@ -169,7 +209,7 @@ export function AddMCPProxyForm({ onCancel }: AddMCPProxyFormProps) {
               minRows={3}
               value={proxyDescription}
               onChange={(event) => setProxyDescription(event.target.value)}
-              placeholder="Primary MCP Proxy"
+              placeholder="Primary MCP Server"
             />
           </FormControl>
 
@@ -188,8 +228,9 @@ export function AddMCPProxyForm({ onCancel }: AddMCPProxyFormProps) {
         <Form.Header>Endpoints</Form.Header>
         <Form.Stack spacing={2}>
           <Typography variant="body2" color="text.secondary">
-            Add a backend endpoint and assign it to one or more environments.
-            Environments without an endpoint are simply left unconfigured.
+            {environments.length > 1
+              ? "Add a backend endpoint and assign it to one or more environments. Environments without an endpoint are simply left unconfigured."
+              : "Add a backend endpoint for this MCP Server."}
           </Typography>
 
           <EndpointsEditorSection

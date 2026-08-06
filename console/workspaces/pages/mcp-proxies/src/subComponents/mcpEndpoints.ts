@@ -197,6 +197,10 @@ export function capabilitiesToFetchedInfo(
  * environment UUIDs.
  */
 export function endpointToDraft(endpoint: MCPProxyEndpoint): EndpointDraft {
+  const gatewayByEnv: Record<string, string> = {};
+  (endpoint.environments ?? []).forEach((env) => {
+    if (env.gatewayId) gatewayByEnv[env.environmentUuid] = env.gatewayId;
+  });
   return {
     id: endpoint.id,
     name: endpoint.name ?? "",
@@ -206,6 +210,7 @@ export function endpointToDraft(endpoint: MCPProxyEndpoint): EndpointDraft {
     environments: (endpoint.environments ?? []).map(
       (env) => env.environmentUuid,
     ),
+    gatewayByEnv,
     fetchedInfo: capabilitiesToFetchedInfo(endpoint.capabilities),
   };
 }
@@ -319,8 +324,21 @@ function pruneAclPolicy(
 }
 
 /**
- * Derives an endpoint handle (id) from its name, falling back to the URL host and finally
- * a positional `endpoint-N`. The result is slugified to the `[a-z0-9-]` handle charset.
+ * Longest handle we derive from a blank-name endpoint. The backend composes the deployed
+ * gateway artifact's name/displayName as `{proxyHandle}-{endpointHandle}-{envUUID}`, which
+ * must stay within the gateway's 100-char displayName limit. A raw URL host
+ *  slugifies to ~70 chars and blows that budget once the proxy handle and
+ * 32-char environment suffix are added — deploying then fails gateway-side. Bounding the
+ * derived handle keeps the blank-name case well clear; the backend still validates the
+ * full composite for callers that bypass this derivation.
+ */
+const MAX_DERIVED_ENDPOINT_HANDLE_LENGTH = 30;
+
+/**
+ * Derives an endpoint handle (id) from its name, then the fetched server name, then the URL
+ * host, and finally a positional `endpoint-N`. The result is slugified to the `[a-z0-9-]`
+ * handle charset and bounded to MAX_DERIVED_ENDPOINT_HANDLE_LENGTH so the backend's composite
+ * artifact handle stays within the gateway's length limit.
  *
  * When `usedHandles` is supplied, the derived handle is de-duplicated against it (two new
  * endpoints sharing a name or URL host would otherwise collide, which the backend rejects
@@ -328,21 +346,30 @@ function pruneAclPolicy(
  * chosen handle is added to the set so subsequent calls see it.
  */
 export function deriveEndpointHandle(
-  draft: Pick<EndpointDraft, "name" | "url">,
+  draft: Pick<EndpointDraft, "name" | "url" | "serverName">,
   index: number,
   usedHandles?: Set<string>,
 ): string {
+  const positional = `endpoint-${index + 1}`;
   const base =
-    slugify(draft.name ?? "") ||
-    slugify(hostFromUrl(draft.url)) ||
-    `endpoint-${index + 1}`;
+    boundHandle(
+      slugify(draft.name ?? "") ||
+        slugify(draft.serverName ?? "") ||
+        slugify(hostFromUrl(draft.url)),
+    ) || positional;
 
   if (!usedHandles) return base;
 
   let handle = base;
   let suffix = 2;
   while (usedHandles.has(handle)) {
-    handle = `${base}-${suffix}`;
+    // Reserve room for the suffix so the collision-resolved handle still honours
+    // MAX_DERIVED_ENDPOINT_HANDLE_LENGTH (a bare `${base}-${suffix}` would overrun it).
+    const suffixStr = `-${suffix}`;
+    const truncatedBase =
+      boundHandle(base, MAX_DERIVED_ENDPOINT_HANDLE_LENGTH - suffixStr.length) ||
+      positional;
+    handle = `${truncatedBase}${suffixStr}`;
     suffix += 1;
   }
   usedHandles.add(handle);
@@ -390,6 +417,7 @@ export function draftToEndpoint(
     security: existing?.security ?? DEFAULT_ENDPOINT_SECURITY,
     environments: draft.environments.map((environmentUuid) => ({
       environmentUuid,
+      gatewayId: draft.gatewayByEnv?.[environmentUuid],
     })),
   };
 }
@@ -400,6 +428,18 @@ function slugify(value: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+// Truncates an already-slugified handle to `max` (default MAX_DERIVED_ENDPOINT_HANDLE_LENGTH),
+// stripping any hyphen the cut leaves dangling so the result stays a clean `[a-z0-9-]` handle.
+// Callers reserving room for a de-dup suffix pass a smaller `max` so the suffixed handle still
+// honours MAX_DERIVED_ENDPOINT_HANDLE_LENGTH.
+function boundHandle(
+  handle: string,
+  max: number = MAX_DERIVED_ENDPOINT_HANDLE_LENGTH,
+): string {
+  if (handle.length <= max) return handle;
+  return handle.slice(0, max).replace(/-+$/g, "");
 }
 
 function hostFromUrl(url: string): string {

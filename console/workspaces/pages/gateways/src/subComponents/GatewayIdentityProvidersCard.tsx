@@ -285,7 +285,7 @@ export function GatewayIdentityProvidersCard({
             alignItems="center"
           >
             <Stack spacing={0.5}>
-              <Typography variant="h6">Identity Providers</Typography>
+              <Typography variant="h6">Token Issuers</Typography>
               <Typography variant="body2" color="text.secondary">
                 Token issuers configured on this gateway. Secure agent endpoints
                 with OAuth.

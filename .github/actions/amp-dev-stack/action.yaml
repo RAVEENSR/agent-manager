@@ -47,22 +47,22 @@ runs:
         # OpenChoreo + builds & loads amp-observer + instrumentation images
         # from source into k3d.
         make setup-openchoreo
+        # Agent Sandbox module: installs the SandboxTemplate CRDs and the
+        # openchoreo-agent-sandbox-access ClusterRole. Without it the
+        # cluster-agent-dataplane service account cannot patch the
+        # SandboxTemplate every agent deploy now renders, so every deploy
+        # 403s. Part of the local `make setup` chain; must run after
+        # setup-openchoreo (needs the openchoreo-data-plane namespace).
+        make setup-sandbox
         # Build + start the core platform (agent-manager-service via compose).
         # COMPOSE_SERVICES restricts the compose bring-up to the service (+ its
         # postgres dependency), skipping the slow console image the heavy tier
         # doesn't use.
+        # setup-platform seeds agent-manager-service/.env from the tracked
+        # example, runs DB migrations against the compose-exposed Postgres, and
+        # only then starts the service — so it boots cleanly against a migrated
+        # schema with no extra host-side migrate/restart needed here.
         COMPOSE_SERVICES=agent-manager-service make setup-platform
-        # dev-migrate runs `go run -migrate` on the host (not in the compose
-        # container) and loads agent-manager-service/.env via ENV_FILE_PATH.
-        # That file is gitignored, so seed it from the tracked example — its DB
-        # creds match the compose-exposed Postgres on localhost:5432.
-        cp agent-manager-service/.env.example agent-manager-service/.env
-        make dev-migrate
-        # setup-platform started the service against a fresh, unmigrated DB, so
-        # it crashed on the missing schema and Air won't restart it on its own.
-        # Now that migrations have run, restart it so it boots cleanly. (Locally
-        # this is masked by a pre-populated postgres volume.)
-        docker compose -f deployments/docker-compose.yml restart agent-manager-service
         # Expose AMP API (9000) + amp-observer (9098). Bind 0.0.0.0 so the
         # agent-manager container can reach the forwards via the bridge gateway
         # (a 127.0.0.1-only forward is unreachable from inside the container).

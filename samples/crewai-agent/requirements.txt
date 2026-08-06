@@ -1,5 +1,5 @@
-crewai==1.1.0
-crewai-tools==1.1.0
+crewai==1.15.2
+crewai-tools==1.15.2
 openai
 fastapi
 uvicorn

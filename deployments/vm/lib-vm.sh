@@ -29,6 +29,14 @@ vm_host() {
 # own serving (that is internalServer.tlsEnabled) — it is purely the endpoint
 # scheme. The agent host is only reachable over TLS via Caddy's wildcard site, so
 # without this the console emits http:// and the browser blocks it as mixed content.
+#
+# VERSION SKEW: current charts derive the advertised authorization server from
+# the issuer, and append publicURL plus a trailing slash to the audience. This
+# installer targets whatever published AMP_VERSION the caller asks for, including
+# releases predating that derivation, where the defaults pin the k3d hostnames
+# these functions have just moved. So both this function and
+# observability_helm_args below restate the derived values explicitly. Commas
+# stay escaped or helm's --set splits the value into a list.
 # shellcheck disable=SC2154  # AMP_HOST_* come from the caller's scope by design.
 amp_helm_args() {
   local k
@@ -37,6 +45,7 @@ amp_helm_args() {
       "--set" "${k}.config.serverPublicURL=https://${AMP_HOST_API}" \
       "--set" "${k}.config.oauthAuthorizationServers=https://${AMP_HOST_THUNDER}" \
       "--set" "${k}.config.keyManager.issuer=https://${AMP_HOST_THUNDER}" \
+      "--set" "${k}.config.keyManager.audience=amp\,amp-console-client\,amp-api-client\,amp-publisher-*\,amctl\,am-mcp\,https://${AMP_HOST_API}/" \
       "--set" "${k}.config.tlsEnabled=true" \
       "--set" "${k}.config.thunderHostBaseDomain=${AMP_HOST_THUNDER#thunder.}"
   done
@@ -125,13 +134,18 @@ build_gateway_helm_args() {
 # issuer is the public Thunder URL too. jwksUrl stays on the in-cluster service.
 # observability_helm_args — hostname-driven core. Reads AMP_HOST_THUNDER and
 # AMP_HOST_OBSERVER.
+#
+# authorizationServers/audience are restated for the version-skew reason noted
+# above amp_helm_args. The last audience entry is the observer MCP token's `aud`
+# (publicUrl plus a trailing slash); the first three cover console/amctl tokens.
 # shellcheck disable=SC2154  # AMP_HOST_* come from the caller's scope by design.
 observability_helm_args() {
   printf '%s\n' \
     "--set" "amObserver.auth.issuer=https://${AMP_HOST_THUNDER}" \
     "--set" "amObserver.ocIngress.hostname=${AMP_HOST_OBSERVER}" \
     "--set" "amObserver.publicUrl=https://${AMP_HOST_OBSERVER}" \
-    "--set" "amObserver.oauth.authorizationServers=https://${AMP_HOST_THUNDER}"
+    "--set" "amObserver.oauth.authorizationServers=https://${AMP_HOST_THUNDER}" \
+    "--set" "amObserver.auth.audience=amp\,amp-api-client\,am-obs-mcp\,https://${AMP_HOST_OBSERVER}/"
 }
 
 # build_observability_helm_args <ip> — sslip.io-from-IP wrapper.
@@ -195,20 +209,32 @@ build_cp_helm_args() {
 #    externalURL: the invoke URL is empty and try-out falls back to a relative /chat
 #    (405) — the very symptom this override exists to fix. Both bind listenerName
 #    http (TLS terminates at Caddy) and differ only in advertised scheme.
-# shellcheck disable=SC2154  # AMP_AGENTS_BASE/AMP_HOST_GATEWAY come from the caller's scope by design.
+#
+# 2. apiPlatformGatewayVhost.otelEndpointOverride is deliberately NOT set. Deployed
+#    agents run inside this cluster, so they reach the gateway runtime directly on
+#    the chart's default in-cluster endpoint
+#    ("api-platform-<org>-<env>-gateway-gateway-runtime.<org>-<env>:22893/otel").
+#    Overriding it with the public gateway host makes every agent egress to
+#    <AMP_HOST_GATEWAY>:443 instead, which the sandbox NetworkPolicy refuses on a
+#    private-network VM: it allows :443 to 0.0.0.0/0 EXCEPT RFC-1918, and there the
+#    public hostname resolves to the VM's own private address. Trace export then
+#    fails with "Connection refused". On a public VM the same override happens to
+#    work only because the hostname resolves outside those ranges. The in-cluster
+#    endpoint is what the sandbox policy explicitly permits and works on both.
+# shellcheck disable=SC2154  # AMP_AGENTS_BASE comes from the caller's scope by design.
 build_platform_resources_helm_args() {
   printf '%s\n' \
     "--set" "global.oauth.tokenUrl=http://amp-thunder-extension-service.amp-thunder.svc.cluster.local:8090/oauth2/token" \
     "--set" "environment.gateway.http.host=${AMP_AGENTS_BASE}" \
     "--set" "environment.gateway.http.port=443" \
     "--set" "environment.gateway.https.host=${AMP_AGENTS_BASE}" \
-    "--set" "environment.gateway.https.port=443" \
-    "--set" "apiPlatformGatewayVhost.otelEndpointOverride=https://${AMP_HOST_GATEWAY}/otel"
+    "--set" "environment.gateway.https.port=443"
 }
 
 # build_thunder_helm_args <ip>
 # Prints helm args, one token per line.
-# thunder_helm_args — hostname-driven core. Reads AMP_HOST_THUNDER, AMP_HOST_CONSOLE.
+# thunder_helm_args — hostname-driven core. Reads AMP_HOST_THUNDER, AMP_HOST_CONSOLE,
+# AMP_HOST_API, AMP_HOST_OBSERVER.
 # shellcheck disable=SC2154  # AMP_HOST_* come from the caller's scope by design.
 thunder_helm_args() {
   printf '%s\n' \
@@ -219,6 +245,25 @@ thunder_helm_args() {
     "--set" "thunder.configuration.gateClient.scheme=https" \
     "--set" "thunder.configuration.gateClient.port=443" \
     "--set" "thunder.configuration.cors.allowedOrigins[0]=https://${AMP_HOST_CONSOLE}"
+
+  # RFC 8707 resource indicators for the two MCP endpoints. Thunder matches the
+  # authorize request's `resource` parameter against each resource server's
+  # identifier verbatim and answers invalid_target on any mismatch, so the
+  # identifiers must be the hosts an MCP client actually dials — not the chart's
+  # localhost defaults, which describe a k3d install. Both MCP endpoints are
+  # served by services already exposed here: the agent-manager one by amp-api and
+  # the observer one by the observer itself.
+  #
+  # The bootstrap template builds each identifier from a base-URL scalar and
+  # appends the trailing slash, so override those two scalars rather than the
+  # mcpResourceServers list. A scalar --set merges; --set on a list element
+  # replaces the whole element and would drop its name/handle/description/
+  # permissionSet, which makes Thunder reject the resource server (empty name)
+  # and the bootstrap fail. Pass the base URL without a trailing slash — the
+  # template adds it.
+  printf '%s\n' \
+    "--set" "thunder.bootstrap.agentManagerMcpBaseUrl=https://${AMP_HOST_API}" \
+    "--set" "thunder.bootstrap.observerMcpBaseUrl=https://${AMP_HOST_OBSERVER}"
 
   # The console client's registered redirect URI lives under `setup` (<=main) and
   # was renamed to `bootstrap` (>=0.15.0, which is what the registration template
@@ -233,9 +278,11 @@ thunder_helm_args() {
 # build_thunder_helm_args <ip> — sslip.io-from-IP wrapper.
 build_thunder_helm_args() {
   local ip="$1"
-  local AMP_HOST_THUNDER AMP_HOST_CONSOLE
+  local AMP_HOST_THUNDER AMP_HOST_CONSOLE AMP_HOST_API AMP_HOST_OBSERVER
   AMP_HOST_THUNDER="$(vm_host thunder "$ip")"
   AMP_HOST_CONSOLE="$(vm_host console "$ip")"
+  AMP_HOST_API="$(vm_host api "$ip")"
+  AMP_HOST_OBSERVER="$(vm_host observer "$ip")"
   thunder_helm_args
 }
 

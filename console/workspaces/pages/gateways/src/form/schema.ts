@@ -17,60 +17,6 @@
 
 import { z } from "zod";
 
-const isValidUrlOrHostname = (v: string): boolean => {
-  if (!v || typeof v !== "string") return false;
-  const s = v.trim();
-  if (!s) return false;
-  if (s.startsWith("*.")) {
-    try {
-      new URL(`https://${s.slice(2)}`);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  try {
-    new URL(s.includes("://") ? s : `https://${s}`);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-const GATEWAY_NAME_PATTERN = /^[a-z0-9-]+$/;
-
-export const addGatewaySchema = z.object({
-  displayName: z
-    .string()
-    .trim()
-    .min(3, "Display name is required, minimum 3 characters")
-    .max(128, "Display name must be at most 128 characters"),
-  name: z
-    .string()
-    .trim()
-    .min(1, "Name is required")
-    .max(64, "Name must be at most 64 characters")
-    .regex(
-      GATEWAY_NAME_PATTERN,
-      "Name must be lowercase alphanumeric with hyphens only (e.g. ai-gateway-prod)"
-    ),
-  vhost: z
-    .string()
-    .trim()
-    .min(3, "Virtual host is required, minimum 3 characters")
-    .max(253, "Virtual host must be at most 253 characters")
-    .refine(isValidUrlOrHostname, {
-      message: "Enter a valid URL or hostname (e.g., api.example.com)",
-    }),
-  isCritical: z.boolean(),
-  environmentIds: z
-    .array(z.string())
-    .min(1, "Select an environment")
-    .max(1, "A gateway can be assigned to only one environment"),
-});
-
-export type AddGatewayFormValues = z.infer<typeof addGatewaySchema>;
-
 export const editGatewaySchema = z.object({
   displayName: z
     .string()

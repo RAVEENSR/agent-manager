@@ -2,7 +2,7 @@
 # RestApi: Routes OTEL trace requests through the API Platform gateway with jwt-auth
 # policy enforcement. Each gateway instance gets its own RestApi so traces from agents
 # in any environment are authenticated and forwarded to the OpenTelemetry collector.
-apiVersion: gateway.api-platform.wso2.com/v1alpha1
+apiVersion: gateway.api-platform.wso2.com/v1
 kind: RestApi
 metadata:
   name: {{ include "wso2-amp-gateway-extension.apiGatewayName" . }}-otel-restapi

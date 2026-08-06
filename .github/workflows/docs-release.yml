@@ -25,9 +25,9 @@ jobs:
     steps:
       - name: Validate inputs
         run: |
-          # Validate version format (e.g., v0.8.x or v0.8.0)
-          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.(x|[0-9]+)$ ]]; then
-            echo "Error: Invalid version format. Expected: vX.Y.x or vX.Y.Z"
+          # Validate version format (e.g., v0.8.x, v0.8.0, or v1.0.0-alpha1)
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.(x|[0-9]+(-[a-zA-Z0-9.]+)?)$ ]]; then
+            echo "Error: Invalid version format. Expected: vX.Y.x, vX.Y.Z, or vX.Y.Z-<pre-release>"
             exit 1
           fi
 
@@ -39,11 +39,12 @@ jobs:
 
           # Semantic comparison between VERSION and DOCKER_TAG
           # Extract major.minor from VERSION (already validated by regex above)
-          V_MAJOR="${VERSION#v}"
-          V_MAJOR="${V_MAJOR%%.*}"
-          V_MINOR="${VERSION#v*.}"
-          V_MINOR="${V_MINOR%%.*}"
-          V_PATCH="${VERSION##*.}"
+          V_NO_PREFIX="${VERSION#v}"
+          V_MAJOR="${V_NO_PREFIX%%.*}"
+          V_REST="${V_NO_PREFIX#*.}"
+          V_MINOR="${V_REST%%.*}"
+          V_PATCH="${V_REST#*.}"
+          V_PATCH="${V_PATCH%%-*}"
 
           # Extract major.minor from DOCKER_TAG (already validated by regex above)
           DT_NO_PREFIX="${DOCKER_TAG#v}"

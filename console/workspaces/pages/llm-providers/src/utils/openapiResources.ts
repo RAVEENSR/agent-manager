@@ -16,73 +16,24 @@
  * under the License.
  */
 
-import yaml from "js-yaml";
+import {
+  extractOpenApiResources,
+  parseOpenApiSpecContent,
+  type OpenApiResource,
+} from "@agent-management-platform/shared-component";
 
-export const HTTP_METHODS = new Set([
-  "get",
-  "post",
-  "put",
-  "delete",
-  "patch",
-  "head",
-  "options",
-  "trace",
-]);
-
-export type ResourceItem = {
-  method: string;
-  path: string;
-  summary?: string;
-};
+export type ResourceItem = OpenApiResource;
 
 export function parseOpenApiSpec(
   text: string,
 ): Record<string, unknown> | null {
-  if (!text?.trim()) return null;
-  try {
-    const spec = JSON.parse(text) as Record<string, unknown>;
-    return spec && typeof spec === "object" ? spec : null;
-  } catch {
-    try {
-      const spec = yaml.load(text) as Record<string, unknown>;
-      return spec && typeof spec === "object" ? spec : null;
-    } catch {
-      return null;
-    }
-  }
+  return parseOpenApiSpecContent(text) ?? null;
 }
 
 export function extractResourcesFromSpec(
   spec: Record<string, unknown>,
 ): ResourceItem[] {
-  const paths = spec?.paths as Record<string, unknown> | undefined;
-  if (!paths || typeof paths !== "object") return [];
-
-  const extracted: ResourceItem[] = [];
-
-  for (const path of Object.keys(paths)) {
-    const operations = paths[path] as Record<string, unknown> | undefined;
-    if (!operations || typeof operations !== "object") continue;
-
-    for (const methodKey of Object.keys(operations)) {
-      if (!HTTP_METHODS.has(methodKey.toLowerCase())) continue;
-
-      const op = (operations[methodKey] || {}) as Record<string, unknown>;
-      extracted.push({
-        method: methodKey.toUpperCase(),
-        path,
-        summary: (op?.summary || op?.description) as string | undefined,
-      });
-    }
-  }
-
-  extracted.sort((a, b) => {
-    const p = a.path.localeCompare(b.path);
-    if (p !== 0) return p;
-    return a.method.localeCompare(b.method);
-  });
-
-  return extracted;
+  return extractOpenApiResources(spec);
 }
 
 export function getResourceKey(

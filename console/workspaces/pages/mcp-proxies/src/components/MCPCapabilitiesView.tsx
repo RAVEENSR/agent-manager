@@ -33,6 +33,9 @@ export interface MCPCapabilitiesViewProps {
   resources?: CapabilityItem[];
   prompts?: CapabilityItem[];
   sectionTitleVariant?: "subtitle1" | "h6";
+  // Access-control status for a tool, e.g. from the ACL policy — Resources/Prompts
+  // aren't gated by it here, so this only annotates the Tools section.
+  getToolStatus?: (tool: CapabilityItem) => "allowed" | "denied" | undefined;
 }
 
 export function MCPCapabilitiesView({
@@ -40,6 +43,7 @@ export function MCPCapabilitiesView({
   resources = [],
   prompts = [],
   sectionTitleVariant = "subtitle1",
+  getToolStatus,
 }: MCPCapabilitiesViewProps) {
   return (
     <Stack>
@@ -47,6 +51,7 @@ export function MCPCapabilitiesView({
         title="Tools"
         items={tools}
         titleVariant={sectionTitleVariant}
+        getItemStatus={getToolStatus}
       />
       <CapabilitySection
         title="Resources"
@@ -66,10 +71,12 @@ function CapabilitySection({
   title,
   items,
   titleVariant,
+  getItemStatus,
 }: {
   title: string;
   items: CapabilityItem[];
   titleVariant: "subtitle1" | "h6";
+  getItemStatus?: (item: CapabilityItem) => "allowed" | "denied" | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const [expandedItem, setExpandedItem] = useState("");
@@ -98,6 +105,7 @@ function CapabilitySection({
           {items.map((item, index) => {
             const name = getItemName(item) ?? `${title.slice(0, -1)} ${index + 1}`;
             const key = `${name}-${index}`;
+            const status = getItemStatus?.(item);
             return (
               <Accordion
                 key={key}
@@ -107,9 +115,19 @@ function CapabilitySection({
                 variant="outlined"
               >
                 <AccordionSummary expandIcon={<ChevronDown size={16} />}>
-                  <Typography variant="subtitle2" fontWeight={600}>
-                    {name}
-                  </Typography>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <Typography variant="subtitle2" fontWeight={600}>
+                      {name}
+                    </Typography>
+                    {status && (
+                      <Chip
+                        label={status === "allowed" ? "Allowed" : "Denied"}
+                        size="small"
+                        variant="outlined"
+                        color={status === "allowed" ? "success" : "default"}
+                      />
+                    )}
+                  </Stack>
                 </AccordionSummary>
                 <AccordionDetails>
                   <MCPItemDetails item={item} />

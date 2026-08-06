@@ -102,10 +102,23 @@ func NewAgentAPIKeyService(
 // least one live websocket connection to this control plane. Key events for
 // a disconnected gateway are queued and only apply after it reconnects, so
 // callers surface this to warn that a fresh key is not yet usable.
+//
+// A gateway holds its websocket with exactly one replica, and the connection
+// registry is per-process, so the local registry alone cannot answer this for
+// the whole deployment: a replica that does not hold the socket would report a
+// live gateway as disconnected. is_active is the cross-replica view of the same
+// fact — the holding replica writes it on connect and clears it on disconnect —
+// so it is consulted as a fallback.
+//
+// The two are OR'd rather than the DB replacing the registry. The local
+// registry is the fresher signal when this replica does hold the socket, and
+// is_active can go stale as true if a holding pod dies without running its
+// disconnect path. OR keeps the accurate answer in the common case and can only
+// turn a false negative into a true, never the reverse.
 func (s *AgentAPIKeyService) gatewaysConnected(gateways []*models.Gateway) *bool {
 	connected := true
 	for _, gw := range gateways {
-		if len(s.connChecker.GetConnections(gw.UUID.String())) == 0 {
+		if len(s.connChecker.GetConnections(gw.UUID.String())) == 0 && !gw.IsActive {
 			connected = false
 			break
 		}
@@ -129,19 +142,19 @@ func (s *AgentAPIKeyService) resolveAgentAPIArtifact(ctx context.Context, ouID, 
 	return artifact, environment.UUID, nil
 }
 
-// resolveEnvGateways returns the gateways associated with the given environment UUID.
+// resolveEnvGateways returns the environment's ingress-capable gateways. This is a
+// fan-out and stays one: every ingress gateway in the environment gets the key.
+//
+// No Status filter. Keys are distributed regardless of is_active today, and is_active
+// tracks WebSocket connectivity, which flaps — filtering on it would intermittently
+// starve a live gateway of keys. The role filter is the only change.
 func (s *AgentAPIKeyService) resolveEnvGateways(envUUID string) ([]*models.Gateway, error) {
-	mappings, err := s.gatewayRepo.GetEnvironmentMappingsByEnvironmentID(envUUID)
+	gateways, err := s.gatewayRepo.ListWithFilters(repositories.GatewayFilterOptions{
+		EnvironmentID:       &envUUID,
+		FunctionalityTypeIn: models.IngressGatewayRoles,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get gateway mappings: %w", err)
-	}
-	var gateways []*models.Gateway
-	for _, m := range mappings {
-		gw, err := s.gatewayRepo.GetByUUID(m.GatewayUUID.String())
-		if err != nil {
-			return nil, fmt.Errorf("failed to get gateway %s: %w", m.GatewayUUID, err)
-		}
-		gateways = append(gateways, gw)
+		return nil, fmt.Errorf("failed to list ingress gateways for environment %s: %w", envUUID, err)
 	}
 	if len(gateways) == 0 {
 		return nil, utils.ErrGatewayNotFound

@@ -29,7 +29,6 @@ import {
   type GatewayResponse,
 } from "@agent-management-platform/types";
 import { AIGatewaysTable } from "./subComponents/AIGatewaysTable";
-import { AddAIGatewayOrganization } from "./AddAIGateway.Organization";
 import { ViewGateway } from "./subComponents/ViewGateway";
 import { EditGatewayDrawer } from "./subComponents/EditGatewayDrawer";
 
@@ -61,7 +60,6 @@ export const GatewaysOrganization: React.FC = () => {
             </PageLayout>
           }
         />
-        <Route path="add" element={<AddAIGatewayOrganization />} />
         <Route path="view/:gatewayId" element={<ViewGateway />} />
         <Route
           path="*"

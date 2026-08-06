@@ -33,3 +33,38 @@ export function parseOpenApiSpecContent(
     }
   }
 }
+
+const HTTP_METHODS = new Set(["get", "post", "put", "delete", "patch", "head", "options", "trace"]);
+
+export interface OpenApiResource {
+  method: string;
+  path: string;
+  summary?: string;
+}
+
+/** Flattens an OpenAPI spec's `paths` object into method+path pairs, sorted by path then method. */
+export function extractOpenApiResources(
+  spec: Record<string, unknown> | undefined,
+): OpenApiResource[] {
+  const paths = spec?.paths as Record<string, unknown> | undefined;
+  if (!paths || typeof paths !== "object") return [];
+
+  const resources: OpenApiResource[] = [];
+  for (const path of Object.keys(paths)) {
+    const operations = paths[path] as Record<string, unknown> | undefined;
+    if (!operations || typeof operations !== "object") continue;
+
+    for (const methodKey of Object.keys(operations)) {
+      if (!HTTP_METHODS.has(methodKey.toLowerCase())) continue;
+      const op = (operations[methodKey] || {}) as Record<string, unknown>;
+      resources.push({
+        method: methodKey.toUpperCase(),
+        path,
+        summary: (op?.summary ?? op?.description) as string | undefined,
+      });
+    }
+  }
+
+  resources.sort((a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method));
+  return resources;
+}

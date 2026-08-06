@@ -78,9 +78,13 @@ export async function httpGET(
         token?: string,
         options?: HttpOptions,
         timeoutMs?: number,
+        // Overrides globalConfig.apiBaseUrl for this request. Used by the
+        // unauthenticated runtime-config discovery call, which must target a
+        // public host rather than the JWT-locked apiBaseUrl.
+        baseUrl?: string,
     }) {
-    const {searchParams, token, timeoutMs} = params;
-    const baseUrl = globalConfig.apiBaseUrl;
+    const {searchParams, token, timeoutMs, baseUrl: baseUrlOverride} = params;
+    const baseUrl = baseUrlOverride ?? globalConfig.apiBaseUrl;
     // Optional AbortController timeout so a hung endpoint rejects (as an
     // AbortError) instead of leaving the request pending forever. Callers that
     // gate app bootstrap on a GET (e.g. runtime config) must pass timeoutMs.

@@ -22,6 +22,10 @@ An MCP proxy is **multi-environment**. You attach one or more **endpoints** to i
 - Environments **without** an endpoint are simply left unconfigured (no artifact, and agents referencing the proxy there receive empty connection values).
 - If an environment has no active AI Gateway yet, that environment is skipped and deployed on the next proxy update once a gateway becomes available.
 
+### Where configuration lives
+
+The endpoint is the unit of configuration. Its upstream connection, capabilities, access control, rewrite, security, and gateway policies are all stored **on the endpoint**, not on the environment. An environment is deployed with the configuration of the endpoint it is bound to, so several environments can share one endpoint's config, and editing that endpoint changes all of them. To vary settings across environments, put them on separate endpoints. The one exception is **scopes** (used for [agent authorization](./authorize-agent-access-to-mcp-tools.mdx)): they are defined once for the whole proxy and apply across every endpoint and environment.
+
 Agents do not embed the proxy — they **reference** it. Each agent resolves the proxy's per-environment endpoint at its own deploy time, so changing a proxy does not automatically redeploy the agents that use it; they pick up the change on their next deployment.
 
 ## Prerequisites
@@ -93,12 +97,12 @@ The **Add Endpoint** dialog maps a backend MCP server to one or more environment
 
 Click a proxy in the list to open its detail page. The header shows the proxy name, version, context, and description (click the edit icon to rename or re-version).
 
-Because a proxy is configured per environment, the detail page has two controls above the tabs:
+Configuration lives on the endpoints, so the detail page has two controls above the tabs:
 
-- **Environment** selector — choose which configured environment's settings the tabs display and edit. Only environments that have an endpoint appear here; if none are configured, the page shows *"This MCP proxy has no environments configured."*
+- **Environment** selector — choose an environment to view and edit the configuration of the endpoint that serves it. Only environments that have an endpoint appear here; if none are configured, the page shows *"This MCP proxy has no environments configured."* Because one endpoint can serve several environments, a change you make with one environment selected applies to every environment sharing that endpoint.
 - **Manage Endpoints** — opens the **Manage Endpoints** dialog to add, edit, or remove endpoints after creation. Editing an endpoint updates the upstream URL, authentication, and capabilities for every environment it serves; environments left without an endpoint become unconfigured.
 
-Configuration is organized into the tabs below. When you change a setting, an **unsaved changes** banner appears — click **Save** to persist or **Cancel**/**Discard** to revert. All tabs except **Overview** and **Capabilities** apply to the environment currently selected above.
+Configuration is organized into the tabs below. When you change a setting, an **unsaved changes** banner appears — click **Save** to persist or **Cancel**/**Discard** to revert. Every tab except **Overview** and **Capabilities** edits the endpoint serving the selected environment.
 
 ### Overview Tab
 

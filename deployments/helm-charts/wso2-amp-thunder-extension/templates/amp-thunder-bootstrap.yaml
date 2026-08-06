@@ -1,6 +1,127 @@
 {{- $scheme := ternary "http" "https" .Values.thunder.configuration.server.httpOnly }}
 {{- $port := .Values.thunder.configuration.server.port }}
 {{- $thunderUrl := printf "%s://localhost:%d" $scheme (int $port) }}
+{{/*
+Shared registration script for the two public PKCE MCP clients (am-mcp and
+am-obs-mcp). Takes a dict with:
+  client — the client's values block (amMcpClient / amObsMcpClient)
+  scopes — the list of OAuth2 scopes the client may request
+*/}}
+{{- define "amp-thunder.mcpClientScript" -}}
+#!/bin/bash
+set -e
+
+SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]:-$0}")"
+source "${SCRIPT_DIR}/common.sh"
+
+
+log_info "Checking if application '{{ .client.name }}' already exists..."
+
+# Get the default OU ID
+RESPONSE=$(api_call GET "/organization-units/tree/default")
+HTTP_CODE="${RESPONSE: -3}"
+BODY="${RESPONSE%???}"
+if [[ "$HTTP_CODE" != "200" ]]; then
+  log_error "Failed to fetch default organization unit (HTTP $HTTP_CODE)"
+  echo "Response: $BODY"
+  exit 1
+fi
+DEFAULT_OU_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+if [[ -z "$DEFAULT_OU_ID" ]]; then
+  log_error "Could not extract default organization unit ID from response"
+  echo "Response: $BODY"
+  exit 1
+fi
+log_info "Using OU ID: $DEFAULT_OU_ID"
+
+# Look up the default auth flow ID
+RESPONSE=$(api_call GET "/flows?flowType=AUTHENTICATION&limit=200")
+HTTP_CODE="${RESPONSE: -3}"
+BODY="${RESPONSE%???}"
+if [[ "$HTTP_CODE" != "200" ]]; then
+  log_error "Failed to fetch authentication flows (HTTP $HTTP_CODE)"
+  echo "Response: $BODY"
+  exit 1
+fi
+AUTH_FLOW_ID=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"handle":"default-basic-flow"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+if [[ -z "$AUTH_FLOW_ID" ]]; then
+  log_error "Could not find default-basic-flow authentication flow"
+  exit 1
+fi
+log_info "Using auth flow ID: $AUTH_FLOW_ID"
+
+# Check existing apps
+RESPONSE=$(api_call GET "/applications")
+HTTP_CODE="${RESPONSE: -3}"
+BODY="${RESPONSE%???}"
+if [[ "$HTTP_CODE" != "200" ]]; then
+  log_error "Failed to fetch applications (HTTP $HTTP_CODE)"
+  echo "Response: $BODY"
+  exit 1
+fi
+
+APP_PAYLOAD='{
+  "name": "{{ .client.name }}",
+  "description": "{{ .client.description }}",
+  "ouId": "'${DEFAULT_OU_ID}'",
+  "authFlowId": "'${AUTH_FLOW_ID}'",
+  "allowedUserTypes": {{ .client.allowedUserTypes | toJson }},
+  "inboundAuthConfig": [
+    {
+      "type": "oauth2",
+      "config": {
+        "clientId": "{{ .client.clientId }}",
+        "redirectUris": {{ .client.redirectUris | toJson }},
+        "grantTypes": {{ .client.grantTypes | toJson }},
+        "responseTypes": {{ .client.responseTypes | toJson }},
+        "tokenEndpointAuthMethod": "{{ .client.tokenEndpointAuthMethod }}",
+        "pkceRequired": {{ .client.pkceRequired }},
+        "publicClient": {{ .client.publicClient }},
+        "scopes": {{ .scopes | toJson }},
+        "token": {
+          "accessToken": {
+            "validityPeriod": {{ .client.accessTokenValidityPeriod }},
+            "userAttributes": {{ .client.userAttributes | toJson }}
+          },
+          "idToken": {
+            "validityPeriod": {{ .client.idTokenValidityPeriod }},
+            "userAttributes": {{ .client.userAttributes | toJson }}
+          }
+        }
+      }
+    }
+  ]
+}'
+
+if echo "$BODY" | grep -q '"clientId":"{{ .client.clientId }}"'; then
+  app_id=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"clientId":"{{ .client.clientId }}"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+  log_info "Application '{{ .client.name }}' already exists (id: $app_id), updating..."
+  RESPONSE=$(api_call PUT "/applications/$app_id" "$APP_PAYLOAD")
+  HTTP_CODE="${RESPONSE: -3}"
+  if [[ "$HTTP_CODE" == "200" ]]; then
+    log_info "Application '{{ .client.name }}' updated successfully"
+  else
+    log_error "Failed to update application (HTTP $HTTP_CODE)"
+    echo "Response: ${RESPONSE%???}"
+    exit 1
+  fi
+else
+  log_info "Application '{{ .client.name }}' does not exist, creating..."
+  RESPONSE=$(api_call POST "/applications" "$APP_PAYLOAD")
+  HTTP_CODE="${RESPONSE: -3}"
+  if [[ "$HTTP_CODE" == "201" ]] || [[ "$HTTP_CODE" == "200" ]]; then
+    log_info "Application '{{ .client.name }}' created successfully"
+  elif [[ "$HTTP_CODE" == "409" ]]; then
+    log_info "Application '{{ .client.name }}' already exists, skipping"
+  else
+    log_error "Failed to create application (HTTP $HTTP_CODE)"
+    echo "Response: ${RESPONSE%???}"
+    exit 1
+  fi
+fi
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -1052,120 +1173,17 @@ data:
       fi
     fi
 
+  {{- /* am-mcp may request every amp scope EXCEPT the observability data-read
+       scopes (thunder.bootstrap.observabilityScopes) — those belong to the
+       observer MCP client (64-am-obs-mcp-client.sh). */}}
+  {{- $amMcpScopes := list }}
+  {{- range .Values.thunder.bootstrap.ampScopes }}
+  {{- if not (has . $.Values.thunder.bootstrap.observabilityScopes) }}
+  {{- $amMcpScopes = append $amMcpScopes . }}
+  {{- end }}
+  {{- end }}
   59-am-mcp-client.sh: |
-    #!/bin/bash
-    set -e
-
-    SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]:-$0}")"
-    source "${SCRIPT_DIR}/common.sh"
-
-
-    log_info "Checking if application '{{  .Values.thunder.bootstrap.amMcpClient.name }}' already exists..."
-
-    # Get the default OU ID
-    RESPONSE=$(api_call GET "/organization-units/tree/default")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch default organization unit (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    DEFAULT_OU_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-    if [[ -z "$DEFAULT_OU_ID" ]]; then
-      log_error "Could not extract default organization unit ID from response"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    log_info "Using OU ID: $DEFAULT_OU_ID"
-
-    # Look up the default auth flow ID
-    RESPONSE=$(api_call GET "/flows?flowType=AUTHENTICATION&limit=200")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch authentication flows (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    AUTH_FLOW_ID=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"handle":"default-basic-flow"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-    if [[ -z "$AUTH_FLOW_ID" ]]; then
-      log_error "Could not find default-basic-flow authentication flow"
-      exit 1
-    fi
-    log_info "Using auth flow ID: $AUTH_FLOW_ID"
-
-    # Check existing apps
-    RESPONSE=$(api_call GET "/applications")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch applications (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-
-    APP_PAYLOAD='{
-      "name": "{{  .Values.thunder.bootstrap.amMcpClient.name }}",
-      "description": "{{  .Values.thunder.bootstrap.amMcpClient.description }}",
-      "ouId": "'${DEFAULT_OU_ID}'",
-      "authFlowId": "'${AUTH_FLOW_ID}'",
-      "allowedUserTypes": {{  .Values.thunder.bootstrap.amMcpClient.allowedUserTypes | toJson }},
-      "inboundAuthConfig": [
-        {
-          "type": "oauth2",
-          "config": {
-            "clientId": "{{  .Values.thunder.bootstrap.amMcpClient.clientId }}",
-            "redirectUris": {{  .Values.thunder.bootstrap.amMcpClient.redirectUris | toJson }},
-            "grantTypes": {{  .Values.thunder.bootstrap.amMcpClient.grantTypes | toJson }},
-            "responseTypes": {{  .Values.thunder.bootstrap.amMcpClient.responseTypes | toJson }},
-            "tokenEndpointAuthMethod": "{{  .Values.thunder.bootstrap.amMcpClient.tokenEndpointAuthMethod }}",
-            "pkceRequired": {{  .Values.thunder.bootstrap.amMcpClient.pkceRequired }},
-            "publicClient": {{  .Values.thunder.bootstrap.amMcpClient.publicClient }},
-            "scopes": {{ .Values.thunder.bootstrap.ampScopes | toJson }},
-            "token": {
-              "accessToken": {
-                "validityPeriod": {{  .Values.thunder.bootstrap.amMcpClient.accessTokenValidityPeriod }},
-                "userAttributes": {{  .Values.thunder.bootstrap.amMcpClient.userAttributes | toJson }}
-              },
-              "idToken": {
-                "validityPeriod": {{  .Values.thunder.bootstrap.amMcpClient.idTokenValidityPeriod }},
-                "userAttributes": {{  .Values.thunder.bootstrap.amMcpClient.userAttributes | toJson }}
-              }
-            }
-          }
-        }
-      ]
-    }'
-
-    if echo "$BODY" | grep -q '"clientId":"{{  .Values.thunder.bootstrap.amMcpClient.clientId }}"'; then
-      app_id=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"clientId":"{{  .Values.thunder.bootstrap.amMcpClient.clientId }}"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-      log_info "Application '{{  .Values.thunder.bootstrap.amMcpClient.name }}' already exists (id: $app_id), updating..."
-      RESPONSE=$(api_call PUT "/applications/$app_id" "$APP_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "200" ]]; then
-        log_info "Application '{{  .Values.thunder.bootstrap.amMcpClient.name }}' updated successfully"
-      else
-        log_error "Failed to update application (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    else
-      log_info "Application '{{  .Values.thunder.bootstrap.amMcpClient.name }}' does not exist, creating..."
-      RESPONSE=$(api_call POST "/applications" "$APP_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "201" ]] || [[ "$HTTP_CODE" == "200" ]]; then
-        log_info "Application '{{  .Values.thunder.bootstrap.amMcpClient.name }}' created successfully"
-      elif [[ "$HTTP_CODE" == "409" ]]; then
-        log_info "Application '{{  .Values.thunder.bootstrap.amMcpClient.name }}' already exists, skipping"
-      else
-        log_error "Failed to create application (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    fi
+    {{- include "amp-thunder.mcpClientScript" (dict "client" .Values.thunder.bootstrap.amMcpClient "scopes" $amMcpScopes) | nindent 4 }}
 
   60-amp-resource-server.sh: |
     #!/bin/bash
@@ -1289,6 +1307,216 @@ data:
       exit 1
     }
 
+    # ---------------------------------------------------------------------------
+    # Helper: register the amp permission tree under a resource server
+    # Usage: register_amp_permissions <rs_id> <mode> [parent_res_id]
+    #   mode: full                    — all resources and actions
+    #         amp-minus-observability — everything except the observability
+    #                                   resource and its actions
+    #         observability-only      — only the observability resource and
+    #                                   its actions
+    # When parent_res_id is given, resources are created as children of it so
+    # the derived permission strings start at that resource's permission (used
+    # by the MCP resource servers, which carry no handle of their own).
+    # ---------------------------------------------------------------------------
+    register_amp_permissions() {
+      local rs_id="$1" mode="$2" parent_id="${3:-}"
+      local r_org r_project r_env r_gw r_dp r_pipe r_git r_llmt r_llm r_mcp \
+            r_scope r_agentid r_proxy r_eval r_agent r_agent_kind r_mon r_obs \
+            r_role r_group r_cat r_repo r_profile
+
+      case "$mode" in
+        full|amp-minus-observability|observability-only) ;;
+        *)
+          log_error "register_amp_permissions: unrecognized mode '${mode}' (expected full, amp-minus-observability, or observability-only)"
+          exit 1
+          ;;
+      esac
+
+      if [[ "$mode" != "observability-only" ]]; then
+        log_info "Creating resources..."
+
+        r_org=$(create_or_get_resource        "$rs_id" "Organization"            "org"                    "Organizational unit management"       "$parent_id")
+        r_project=$(create_or_get_resource    "$rs_id" "Project"                  "project"                "Project management"                   "$parent_id")
+        r_env=$(create_or_get_resource        "$rs_id" "Environment"              "environment"            "Environment management"               "$parent_id")
+        r_gw=$(create_or_get_resource         "$rs_id" "Gateway"                  "gateway"                "Gateway management"                   "$parent_id")
+        r_dp=$(create_or_get_resource         "$rs_id" "Data Plane"               "data-plane"             "Data plane visibility"                "$parent_id")
+        r_pipe=$(create_or_get_resource       "$rs_id" "Deployment Pipeline"      "deployment-pipeline"    "Deployment pipeline visibility"       "$parent_id")
+        r_git=$(create_or_get_resource        "$rs_id" "Git Secret"               "git-secret"             "Git credential management"            "$parent_id")
+        r_llmt=$(create_or_get_resource       "$rs_id" "LLM Provider Template"    "llm-provider-template"  "LLM provider template management"     "$parent_id")
+        r_llm=$(create_or_get_resource        "$rs_id" "LLM Provider"             "llm-provider"           "LLM provider management"              "$parent_id")
+        r_mcp=$(create_or_get_resource        "$rs_id" "MCP Server"               "mcp-server"             "MCP server management"                "$parent_id")
+        r_scope=$(create_or_get_resource      "$rs_id" "Scope"                    "scope"                  "Scope catalog management"             "$parent_id")
+        r_agentid=$(create_or_get_resource    "$rs_id" "Agent Identity"           "agent-identity"         "Agent identity management"            "$parent_id")
+        r_proxy=$(create_or_get_resource      "$rs_id" "LLM Proxy"                "llm-proxy"              "LLM proxy management"                 "$parent_id")
+        r_eval=$(create_or_get_resource       "$rs_id" "Evaluator"                "evaluator"              "Evaluator management"                 "$parent_id")
+        r_agent=$(create_or_get_resource      "$rs_id" "Agent"                    "agent"                  "Agent management"                     "$parent_id")
+        r_agent_kind=$(create_or_get_resource "$rs_id" "Agent Kind"               "agent-kind"             "Agent kind management"                "$parent_id")
+        r_mon=$(create_or_get_resource        "$rs_id" "Monitor"                  "monitor"                "Monitor management"                   "$parent_id")
+        r_role=$(create_or_get_resource       "$rs_id" "Role"                     "role"                   "Role management"                      "$parent_id")
+        r_group=$(create_or_get_resource      "$rs_id" "Group"                    "group"                  "Group management"                     "$parent_id")
+        r_cat=$(create_or_get_resource        "$rs_id" "Catalog"                  "catalog"                "Resource catalog"                     "$parent_id")
+        r_repo=$(create_or_get_resource       "$rs_id" "Repository"               "repository"             "Source repository browsing"           "$parent_id")
+        r_profile=$(create_or_get_resource    "$rs_id" "Profile"                  "profile"                "User profile management"              "$parent_id")
+
+        log_info "Creating actions..."
+
+        # org actions  → amp:org:<action>
+        create_action "$rs_id" "$r_org"          "View"                   "view"                   "View organizational details"
+        create_action "$rs_id" "$r_org"          "Modify Settings"        "modify-settings"        "Modify organizational settings"
+        create_action "$rs_id" "$r_org"          "Invite Member"          "invite-member"          "Invite members to the organization"
+        create_action "$rs_id" "$r_org"          "Remove Member"          "remove-member"          "Remove members from the organization"
+        create_action "$rs_id" "$r_org"          "Assign Role"            "assign-role"            "Assign or revoke roles"
+        create_action "$rs_id" "$r_org"          "Manage IDP"             "manage-idp"             "Configure Identity Provider"
+        create_action "$rs_id" "$r_org"          "Manage Service Account" "manage-service-account" "Manage service accounts"
+
+        # profile actions  → amp:profile:<action>
+        create_action "$rs_id" "$r_profile"      "Read"                     "read"                 "View user profile information"
+        create_action "$rs_id" "$r_profile"      "Update Attributes"        "update-attributes"    "Update user attributes"
+
+        # project actions  → amp:project:<action>
+        create_action "$rs_id" "$r_project"      "Create"                 "create"                 "Create a project"
+        create_action "$rs_id" "$r_project"      "Read"                   "read"                   "View project details"
+        create_action "$rs_id" "$r_project"      "Update"                 "update"                 "Update project settings"
+        create_action "$rs_id" "$r_project"      "Delete"                 "delete"                 "Delete a project"
+
+        # environment actions  → amp:environment:<action>
+        create_action "$rs_id" "$r_env"          "Create"                 "create"                 "Create an environment"
+        create_action "$rs_id" "$r_env"          "Read"                   "read"                   "View environment details"
+        create_action "$rs_id" "$r_env"          "Update"                 "update"                 "Update an environment"
+        create_action "$rs_id" "$r_env"          "Delete"                 "delete"                 "Delete an environment"
+
+        # gateway actions  → amp:gateway:<action>
+        create_action "$rs_id" "$r_gw"           "Create"                 "create"                 "Register a gateway"
+        create_action "$rs_id" "$r_gw"           "Read"                   "read"                   "View gateway details and status"
+        create_action "$rs_id" "$r_gw"           "Update"                 "update"                 "Update gateway configuration"
+        create_action "$rs_id" "$r_gw"           "Delete"                 "delete"                 "Delete a gateway"
+        create_action "$rs_id" "$r_gw"           "Manage Token"           "token-manage"           "Create, list, and delete gateway tokens"
+
+        # data-plane actions  → amp:data-plane:<action>
+        create_action "$rs_id" "$r_dp"           "Read"                   "read"                   "View data planes"
+
+        # deployment-pipeline actions  → amp:deployment-pipeline:<action>
+        create_action "$rs_id" "$r_pipe"         "Create"                 "create"                 "Create a deployment pipeline"
+        create_action "$rs_id" "$r_pipe"         "Read"                   "read"                   "View deployment pipelines"
+        create_action "$rs_id" "$r_pipe"         "Update"                 "update"                 "Update a deployment pipeline"
+        create_action "$rs_id" "$r_pipe"         "Delete"                 "delete"                 "Delete a deployment pipeline"
+
+        # git-secret actions  → amp:git-secret:<action>
+        create_action "$rs_id" "$r_git"          "Create"                 "create"                 "Create a git secret"
+        create_action "$rs_id" "$r_git"          "Read"                   "read"                   "List git secrets"
+        create_action "$rs_id" "$r_git"          "Delete"                 "delete"                 "Delete a git secret"
+
+        # llm-provider-template actions  → amp:llm-provider-template:<action>
+        create_action "$rs_id" "$r_llmt"         "Create"                 "create"                 "Create a provider template"
+        create_action "$rs_id" "$r_llmt"         "Read"                   "read"                   "View provider templates"
+        create_action "$rs_id" "$r_llmt"         "Update"                 "update"                 "Update a provider template"
+        create_action "$rs_id" "$r_llmt"         "Delete"                 "delete"                 "Delete a provider template"
+
+        # llm-provider actions  → amp:llm-provider:<action>
+        create_action "$rs_id" "$r_llm"          "Create"                 "create"                 "Create an LLM provider"
+        create_action "$rs_id" "$r_llm"          "Read"                   "read"                   "View LLM providers and deployments"
+        create_action "$rs_id" "$r_llm"          "Update"                 "update"                 "Update an LLM provider"
+        create_action "$rs_id" "$r_llm"          "Delete"                 "delete"                 "Delete an LLM provider"
+        create_action "$rs_id" "$r_llm"          "Configure Guardrail"    "configure-guardrail"    "Configure guardrails, rate limits, and budgets"
+        create_action "$rs_id" "$r_llm"          "Connect"                "connect"                "Connect an agent to an LLM provider"
+        create_action "$rs_id" "$r_llm"          "Deploy"                 "deploy"                 "Deploy, undeploy, and restore an LLM provider"
+        create_action "$rs_id" "$r_llm"          "Manage API Key"         "api-key-manage"         "Create, update, and delete LLM provider API keys"
+
+        # mcp-server actions  → amp:mcp-server:<action>
+        create_action "$rs_id" "$r_mcp"          "Create"                 "create"                 "Create an MCP server"
+        create_action "$rs_id" "$r_mcp"          "Read"                   "read"                   "View MCP servers"
+        create_action "$rs_id" "$r_mcp"          "Update"                 "update"                 "Update an MCP server"
+        create_action "$rs_id" "$r_mcp"          "Delete"                 "delete"                 "Delete an MCP server"
+        create_action "$rs_id" "$r_mcp"          "Configure Guardrail"    "configure-guardrail"    "Configure guardrails on an MCP server"
+        create_action "$rs_id" "$r_mcp"          "Connect"                "connect"                "Connect an agent to an MCP server"
+        create_action "$rs_id" "$r_mcp"          "Manage API Key"         "api-key-manage"         "Create, update, and delete MCP server API keys"
+
+        # scope actions  → amp:scope:<action>
+        create_action "$rs_id" "$r_scope"        "Create"                 "create"                 "Create a scope"
+        create_action "$rs_id" "$r_scope"        "Read"                   "read"                   "View scopes"
+        create_action "$rs_id" "$r_scope"        "Update"                 "update"                 "Update a scope"
+        create_action "$rs_id" "$r_scope"        "Delete"                 "delete"                 "Delete a scope"
+
+        # agent-identity actions  → amp:agent-identity:<action>
+        create_action "$rs_id" "$r_agentid"      "Create"                 "create"                 "Create an agent identity"
+        create_action "$rs_id" "$r_agentid"      "Read"                   "read"                   "View agent identities"
+        create_action "$rs_id" "$r_agentid"      "Update"                 "update"                 "Update an agent identity"
+        create_action "$rs_id" "$r_agentid"      "Delete"                 "delete"                 "Delete an agent identity"
+
+        # llm-proxy actions  → amp:llm-proxy:<action>
+        create_action "$rs_id" "$r_proxy"        "Create"                 "create"                 "Create an LLM proxy"
+        create_action "$rs_id" "$r_proxy"        "Read"                   "read"                   "View LLM proxies and deployments"
+        create_action "$rs_id" "$r_proxy"        "Update"                 "update"                 "Update an LLM proxy"
+        create_action "$rs_id" "$r_proxy"        "Delete"                 "delete"                 "Delete an LLM proxy"
+        create_action "$rs_id" "$r_proxy"        "Deploy"                 "deploy"                 "Deploy, undeploy, and restore an LLM proxy"
+        create_action "$rs_id" "$r_proxy"        "Manage API Key"         "api-key-manage"         "Create, update, and delete LLM proxy API keys"
+
+        # evaluator actions  → amp:evaluator:<action>
+        create_action "$rs_id" "$r_eval"         "Create"                 "create"                 "Create a custom evaluator"
+        create_action "$rs_id" "$r_eval"         "Read"                   "read"                   "View evaluators"
+        create_action "$rs_id" "$r_eval"         "Update"                 "update"                 "Update a custom evaluator"
+        create_action "$rs_id" "$r_eval"         "Delete"                 "delete"                 "Delete a custom evaluator"
+
+        # agent actions  → amp:agent:<action>
+        create_action "$rs_id" "$r_agent"        "Create"                 "create"                 "Create an agent"
+        create_action "$rs_id" "$r_agent"        "Read"                   "read"                   "View agent details, builds, deployments, and configs"
+        create_action "$rs_id" "$r_agent"        "Update"                 "update"                 "Update agent configuration and resource configs"
+        create_action "$rs_id" "$r_agent"        "Delete"                 "delete"                 "Delete an agent"
+        create_action "$rs_id" "$r_agent"        "Build"                  "build"                  "Trigger an agent build"
+        create_action "$rs_id" "$r_agent"        "Promote"                "promote"                "Promote an agent deployment across environments"
+        create_action "$rs_id" "$r_agent"        "Rollback"               "rollback"               "Rollback an agent deployment"
+        create_action "$rs_id" "$r_agent"        "Suspend"                "suspend"                "Suspend or stop an agent deployment"
+        create_action "$rs_id" "$r_agent"        "Deploy Non-Production"  "deploy-non-production"  "Deploy an agent to a non-production environment"
+        create_action "$rs_id" "$r_agent"        "Deploy Production"      "deploy-production"      "Deploy an agent to a production environment"
+        create_action "$rs_id" "$r_agent"        "Manage Token"           "token-manage"           "Generate agent tokens"
+        create_action "$rs_id" "$r_agent"        "Manage API Key"         "api-key-manage"         "Create, update, and delete agent API keys"
+
+        # agent-kind actions  → amp:agent-kind:<action>
+        create_action "$rs_id" "$r_agent_kind"   "Create"                 "create"                 "Create an agent kind"
+        create_action "$rs_id" "$r_agent_kind"   "Read"                   "read"                   "View agent kinds and versions"
+        create_action "$rs_id" "$r_agent_kind"   "Update"                 "update"                 "Update an agent kind"
+        create_action "$rs_id" "$r_agent_kind"   "Delete"                 "delete"                 "Delete an agent kind"
+
+        # monitor actions  → amp:monitor:<action>
+        create_action "$rs_id" "$r_mon"          "Create"                 "create"                 "Create a monitor"
+        create_action "$rs_id" "$r_mon"          "Read"                   "read"                   "View monitors, runs, and run logs"
+        create_action "$rs_id" "$r_mon"          "Update"                 "update"                 "Update a monitor"
+        create_action "$rs_id" "$r_mon"          "Delete"                 "delete"                 "Delete a monitor"
+        create_action "$rs_id" "$r_mon"          "Execute"                "execute"                "Start, stop, and rerun monitors"
+        create_action "$rs_id" "$r_mon"          "Read Score"             "score-read"             "View scores, breakdowns, and timeseries"
+        create_action "$rs_id" "$r_mon"          "Publish Score"          "score-publish"          "Publish monitor scores (internal/system use)"
+
+        # role actions  → amp:role:<action>
+        create_action "$rs_id" "$r_role"         "Create"                 "create"                 "Create a custom role"
+        create_action "$rs_id" "$r_role"         "Read"                   "read"                   "View roles and their permissions"
+        create_action "$rs_id" "$r_role"         "Update"                 "update"                 "Update a custom role"
+        create_action "$rs_id" "$r_role"         "Delete"                 "delete"                 "Delete a custom role"
+
+        # group actions  → amp:group:<action>
+        create_action "$rs_id" "$r_group"        "Create"                 "create"                 "Create a group"
+        create_action "$rs_id" "$r_group"        "Read"                   "read"                   "View groups and their members"
+        create_action "$rs_id" "$r_group"        "Update"                 "update"                 "Update a group"
+        create_action "$rs_id" "$r_group"        "Delete"                 "delete"                 "Delete a group"
+
+        # catalog actions  → amp:catalog:<action>
+        create_action "$rs_id" "$r_cat"          "Read"                   "read"                   "View the resource catalog"
+
+        # repository actions  → amp:repository:<action>
+        create_action "$rs_id" "$r_repo"         "Read"                   "read"                   "Browse repository branches and commits"
+      fi
+
+      if [[ "$mode" != "amp-minus-observability" ]]; then
+        # observability resource and actions  → amp:observability:<action>
+        r_obs=$(create_or_get_resource "$rs_id" "Observability" "observability" "Observability dashboards and metrics" "$parent_id")
+
+        create_action "$rs_id" "$r_obs"          "Trace Read"             "trace-read"             "Read traces and spans"
+        create_action "$rs_id" "$r_obs"          "Log Read"               "log-read"               "Read runtime logs"
+        create_action "$rs_id" "$r_obs"          "Build Log Read"         "build-log-read"         "Read build logs"
+        create_action "$rs_id" "$r_obs"          "Metric Read"            "metric-read"            "Read runtime and infrastructure metrics"
+      fi
+    }
+
     # ===========================================================================
     # 0. Fetch default OU ID (required by Thunder for resource server creation)
     # ===========================================================================
@@ -1314,192 +1542,73 @@ data:
     log_info "Resource server 'amp' ready (id: $RS_ID)"
 
     # ===========================================================================
-    # 2. Create level-1 resources
+    # 2. Register the amp permission tree
     # ===========================================================================
-    log_info "Creating level-1 resources..."
+    register_amp_permissions "$RS_ID" full
 
-    R_ORG=$(create_or_get_resource        "$RS_ID" "Organization"            "org"                    "Organizational unit management")
-    R_PROJECT=$(create_or_get_resource    "$RS_ID" "Project"                  "project"                "Project management")
-    R_ENV=$(create_or_get_resource        "$RS_ID" "Environment"              "environment"            "Environment management")
-    R_GW=$(create_or_get_resource         "$RS_ID" "Gateway"                  "gateway"                "Gateway management")
-    R_DP=$(create_or_get_resource         "$RS_ID" "Data Plane"               "data-plane"             "Data plane visibility")
-    R_PIPE=$(create_or_get_resource       "$RS_ID" "Deployment Pipeline"      "deployment-pipeline"    "Deployment pipeline visibility")
-    R_GIT=$(create_or_get_resource        "$RS_ID" "Git Secret"               "git-secret"             "Git credential management")
-    R_LLMT=$(create_or_get_resource       "$RS_ID" "LLM Provider Template"    "llm-provider-template"  "LLM provider template management")
-    R_LLM=$(create_or_get_resource        "$RS_ID" "LLM Provider"             "llm-provider"           "LLM provider management")
-    R_MCP=$(create_or_get_resource        "$RS_ID" "MCP Server"               "mcp-server"             "MCP server management")
-    R_SCOPE=$(create_or_get_resource      "$RS_ID" "Scope"                    "scope"                  "Scope catalog management")
-    R_AGENTID=$(create_or_get_resource    "$RS_ID" "Agent Identity"           "agent-identity"         "Agent identity management")
-    R_PROXY=$(create_or_get_resource      "$RS_ID" "LLM Proxy"                "llm-proxy"              "LLM proxy management")
-    R_EVAL=$(create_or_get_resource       "$RS_ID" "Evaluator"                "evaluator"              "Evaluator management")
-    R_AGENT=$(create_or_get_resource      "$RS_ID" "Agent"                    "agent"                  "Agent management")
-    R_AGENT_KIND=$(create_or_get_resource "$RS_ID" "Agent Kind"               "agent-kind"             "Agent kind management")
-    R_MON=$(create_or_get_resource        "$RS_ID" "Monitor"                  "monitor"                "Monitor management")
-    R_OBS=$(create_or_get_resource        "$RS_ID" "Observability"            "observability"          "Observability dashboards and metrics")
-    R_ROLE=$(create_or_get_resource       "$RS_ID" "Role"                     "role"                   "Role management")
-    R_GROUP=$(create_or_get_resource      "$RS_ID" "Group"                    "group"                  "Group management")
-    R_CAT=$(create_or_get_resource        "$RS_ID" "Catalog"                  "catalog"                "Resource catalog")
-    R_REPO=$(create_or_get_resource       "$RS_ID" "Repository"               "repository"             "Source repository browsing")
-    R_PROFILE=$(create_or_get_resource    "$RS_ID" "Profile"                  "profile"                "User profile management")
-
-    log_info "Level-1 resources created."
+    log_info "Agent Manager resource server registration complete (all amp permissions registered)."
 
     # ===========================================================================
-    # 4. Create actions
+    # 3. MCP resource servers (RFC 8707 resource indicators)
     # ===========================================================================
-    log_info "Creating actions..."
+    # MCP clients (Claude Code etc.) send the service's public base URL, with a
+    # trailing slash, as the OAuth `resource` parameter. Thunder rejects the
+    # authorize request with invalid_target unless that value exactly matches a
+    # registered resource-server identifier, so each MCP endpoint's public URL
+    # is registered here as its own resource server.
+    #
+    # Thunder also downscopes the granted scopes to the permissions DEFINED on
+    # the resource server named in `resource` (RFC 6749 §3.3), so a bare
+    # resource server yields tokens with an EMPTY scope list. Each MCP resource
+    # server therefore mirrors the slice of the amp permission tree its client
+    # is allowed (permissionSet in values.yaml). Because Thunder prefixes every
+    # derived permission with the resource server's handle, the MCP resource
+    # servers carry no handle and instead root the tree under a top-level "amp"
+    # resource — yielding scope strings identical to the amp resource server's
+    # (e.g. amp:project:read), which is what agent-manager-service's per-route
+    # authorization checks expect.
+    log_info "Registering MCP resource servers..."
+    {{- range .Values.thunder.bootstrap.mcpResourceServers }}
+    {{- $base := index $.Values.thunder.bootstrap .baseUrlValue }}
+    {{- if $base }}
+    {{- $identifier := printf "%s/" (trimSuffix "/" $base) }}
+    MCP_RS_ID=$(create_or_get_rs "{{ .name }}" "{{ .handle }}" "{{ $identifier }}" "{{ .description }}" "$DEFAULT_OU_ID")
+    log_info "MCP resource server '{{ $identifier }}' ready (id: $MCP_RS_ID)"
 
-    # org actions  → amp:org:<action>
-    create_action "$RS_ID" "$R_ORG"          "View"                   "view"                   "View organizational details"
-    create_action "$RS_ID" "$R_ORG"          "Modify Settings"        "modify-settings"        "Modify organizational settings"
-    create_action "$RS_ID" "$R_ORG"          "Invite Member"          "invite-member"          "Invite members to the organization"
-    create_action "$RS_ID" "$R_ORG"          "Remove Member"          "remove-member"          "Remove members from the organization"
-    create_action "$RS_ID" "$R_ORG"          "Assign Role"            "assign-role"            "Assign or revoke roles"
-    create_action "$RS_ID" "$R_ORG"          "Manage IDP"             "manage-idp"             "Configure Identity Provider"
-    create_action "$RS_ID" "$R_ORG"          "Manage Service Account" "manage-service-account" "Manage service accounts"
-
-    # profile actions  → amp:profile:<action>
-    create_action "$RS_ID" "$R_PROFILE"      "Read"                     "read"                 "View user profile information"
-    create_action "$RS_ID" "$R_PROFILE"      "Update Attributes"        "update-attributes"    "Update user attributes"
-    
-    # project actions  → amp:project:<action>
-    create_action "$RS_ID" "$R_PROJECT"      "Create"                 "create"                 "Create a project"
-    create_action "$RS_ID" "$R_PROJECT"      "Read"                   "read"                   "View project details"
-    create_action "$RS_ID" "$R_PROJECT"      "Update"                 "update"                 "Update project settings"
-    create_action "$RS_ID" "$R_PROJECT"      "Delete"                 "delete"                 "Delete a project"
-
-    # environment actions  → amp:environment:<action>
-    create_action "$RS_ID" "$R_ENV"          "Create"                 "create"                 "Create an environment"
-    create_action "$RS_ID" "$R_ENV"          "Read"                   "read"                   "View environment details"
-    create_action "$RS_ID" "$R_ENV"          "Update"                 "update"                 "Update an environment"
-    create_action "$RS_ID" "$R_ENV"          "Delete"                 "delete"                 "Delete an environment"
-
-    # gateway actions  → amp:gateway:<action>
-    create_action "$RS_ID" "$R_GW"           "Create"                 "create"                 "Register a gateway"
-    create_action "$RS_ID" "$R_GW"           "Read"                   "read"                   "View gateway details and status"
-    create_action "$RS_ID" "$R_GW"           "Update"                 "update"                 "Update gateway configuration"
-    create_action "$RS_ID" "$R_GW"           "Delete"                 "delete"                 "Delete a gateway"
-    create_action "$RS_ID" "$R_GW"           "Manage Token"           "token-manage"           "Create, list, and delete gateway tokens"
-
-    # data-plane actions  → amp:data-plane:<action>
-    create_action "$RS_ID" "$R_DP"           "Read"                   "read"                   "View data planes"
-
-    # deployment-pipeline actions  → amp:deployment-pipeline:<action>
-    create_action "$RS_ID" "$R_PIPE"         "Create"                 "create"                 "Create a deployment pipeline"
-    create_action "$RS_ID" "$R_PIPE"         "Read"                   "read"                   "View deployment pipelines"
-    create_action "$RS_ID" "$R_PIPE"         "Update"                 "update"                 "Update a deployment pipeline"
-    create_action "$RS_ID" "$R_PIPE"         "Delete"                 "delete"                 "Delete a deployment pipeline"
-
-    # git-secret actions  → amp:git-secret:<action>
-    create_action "$RS_ID" "$R_GIT"          "Create"                 "create"                 "Create a git secret"
-    create_action "$RS_ID" "$R_GIT"          "Read"                   "read"                   "List git secrets"
-    create_action "$RS_ID" "$R_GIT"          "Delete"                 "delete"                 "Delete a git secret"
-
-    # llm-provider-template actions  → amp:llm-provider-template:<action>
-    create_action "$RS_ID" "$R_LLMT"         "Create"                 "create"                 "Create a provider template"
-    create_action "$RS_ID" "$R_LLMT"         "Read"                   "read"                   "View provider templates"
-    create_action "$RS_ID" "$R_LLMT"         "Update"                 "update"                 "Update a provider template"
-    create_action "$RS_ID" "$R_LLMT"         "Delete"                 "delete"                 "Delete a provider template"
-
-    # llm-provider actions  → amp:llm-provider:<action>
-    create_action "$RS_ID" "$R_LLM"          "Create"                 "create"                 "Create an LLM provider"
-    create_action "$RS_ID" "$R_LLM"          "Read"                   "read"                   "View LLM providers and deployments"
-    create_action "$RS_ID" "$R_LLM"          "Update"                 "update"                 "Update an LLM provider"
-    create_action "$RS_ID" "$R_LLM"          "Delete"                 "delete"                 "Delete an LLM provider"
-    create_action "$RS_ID" "$R_LLM"          "Configure Guardrail"    "configure-guardrail"    "Configure guardrails, rate limits, and budgets"
-    create_action "$RS_ID" "$R_LLM"          "Connect"                "connect"                "Connect an agent to an LLM provider"
-    create_action "$RS_ID" "$R_LLM"          "Deploy"                 "deploy"                 "Deploy, undeploy, and restore an LLM provider"
-    create_action "$RS_ID" "$R_LLM"          "Manage API Key"         "api-key-manage"         "Create, update, and delete LLM provider API keys"
-
-    # mcp-server actions  → amp:mcp-server:<action>
-    create_action "$RS_ID" "$R_MCP"          "Create"                 "create"                 "Create an MCP server"
-    create_action "$RS_ID" "$R_MCP"          "Read"                   "read"                   "View MCP servers"
-    create_action "$RS_ID" "$R_MCP"          "Update"                 "update"                 "Update an MCP server"
-    create_action "$RS_ID" "$R_MCP"          "Delete"                 "delete"                 "Delete an MCP server"
-    create_action "$RS_ID" "$R_MCP"          "Configure Guardrail"    "configure-guardrail"    "Configure guardrails on an MCP server"
-    create_action "$RS_ID" "$R_MCP"          "Connect"                "connect"                "Connect an agent to an MCP server"
-    create_action "$RS_ID" "$R_MCP"          "Manage API Key"         "api-key-manage"         "Create, update, and delete MCP server API keys"
-
-    # scope actions  → amp:scope:<action>
-    create_action "$RS_ID" "$R_SCOPE"        "Create"                 "create"                 "Create a scope"
-    create_action "$RS_ID" "$R_SCOPE"        "Read"                   "read"                   "View scopes"
-    create_action "$RS_ID" "$R_SCOPE"        "Update"                 "update"                 "Update a scope"
-    create_action "$RS_ID" "$R_SCOPE"        "Delete"                 "delete"                 "Delete a scope"
-
-    # agent-identity actions  → amp:agent-identity:<action>
-    create_action "$RS_ID" "$R_AGENTID"      "Create"                 "create"                 "Create an agent identity"
-    create_action "$RS_ID" "$R_AGENTID"      "Read"                   "read"                   "View agent identities"
-    create_action "$RS_ID" "$R_AGENTID"      "Update"                 "update"                 "Update an agent identity"
-    create_action "$RS_ID" "$R_AGENTID"      "Delete"                 "delete"                 "Delete an agent identity"
-
-    # llm-proxy actions  → amp:llm-proxy:<action>
-    create_action "$RS_ID" "$R_PROXY"        "Create"                 "create"                 "Create an LLM proxy"
-    create_action "$RS_ID" "$R_PROXY"        "Read"                   "read"                   "View LLM proxies and deployments"
-    create_action "$RS_ID" "$R_PROXY"        "Update"                 "update"                 "Update an LLM proxy"
-    create_action "$RS_ID" "$R_PROXY"        "Delete"                 "delete"                 "Delete an LLM proxy"
-    create_action "$RS_ID" "$R_PROXY"        "Deploy"                 "deploy"                 "Deploy, undeploy, and restore an LLM proxy"
-    create_action "$RS_ID" "$R_PROXY"        "Manage API Key"         "api-key-manage"         "Create, update, and delete LLM proxy API keys"
-
-    # evaluator actions  → amp:evaluator:<action>
-    create_action "$RS_ID" "$R_EVAL"         "Create"                 "create"                 "Create a custom evaluator"
-    create_action "$RS_ID" "$R_EVAL"         "Read"                   "read"                   "View evaluators"
-    create_action "$RS_ID" "$R_EVAL"         "Update"                 "update"                 "Update a custom evaluator"
-    create_action "$RS_ID" "$R_EVAL"         "Delete"                 "delete"                 "Delete a custom evaluator"
-
-    # agent actions  → amp:agent:<action>
-    create_action "$RS_ID" "$R_AGENT"        "Create"                 "create"                 "Create an agent"
-    create_action "$RS_ID" "$R_AGENT"        "Read"                   "read"                   "View agent details, builds, deployments, and configs"
-    create_action "$RS_ID" "$R_AGENT"        "Update"                 "update"                 "Update agent configuration and resource configs"
-    create_action "$RS_ID" "$R_AGENT"        "Delete"                 "delete"                 "Delete an agent"
-    create_action "$RS_ID" "$R_AGENT"        "Build"                  "build"                  "Trigger an agent build"
-    create_action "$RS_ID" "$R_AGENT"        "Promote"                "promote"                "Promote an agent deployment across environments"
-    create_action "$RS_ID" "$R_AGENT"        "Rollback"               "rollback"               "Rollback an agent deployment"
-    create_action "$RS_ID" "$R_AGENT"        "Suspend"                "suspend"                "Suspend or stop an agent deployment"
-    create_action "$RS_ID" "$R_AGENT"        "Deploy Non-Production"  "deploy-non-production"  "Deploy an agent to a non-production environment"
-    create_action "$RS_ID" "$R_AGENT"        "Deploy Production"      "deploy-production"      "Deploy an agent to a production environment"
-    create_action "$RS_ID" "$R_AGENT"        "Manage Token"           "token-manage"           "Generate agent tokens"
-    create_action "$RS_ID" "$R_AGENT"        "Manage API Key"         "api-key-manage"         "Create, update, and delete agent API keys"
-
-    # agent-kind actions  → amp:agent-kind:<action>
-    create_action "$RS_ID" "$R_AGENT_KIND"   "Create"                 "create"                 "Create an agent kind"
-    create_action "$RS_ID" "$R_AGENT_KIND"   "Read"                   "read"                   "View agent kinds and versions"
-    create_action "$RS_ID" "$R_AGENT_KIND"   "Update"                 "update"                 "Update an agent kind"
-    create_action "$RS_ID" "$R_AGENT_KIND"   "Delete"                 "delete"                 "Delete an agent kind"
-
-    # monitor actions  → amp:monitor:<action>
-    create_action "$RS_ID" "$R_MON"          "Create"                 "create"                 "Create a monitor"
-    create_action "$RS_ID" "$R_MON"          "Read"                   "read"                   "View monitors, runs, and run logs"
-    create_action "$RS_ID" "$R_MON"          "Update"                 "update"                 "Update a monitor"
-    create_action "$RS_ID" "$R_MON"          "Delete"                 "delete"                 "Delete a monitor"
-    create_action "$RS_ID" "$R_MON"          "Execute"                "execute"                "Start, stop, and rerun monitors"
-    create_action "$RS_ID" "$R_MON"          "Read Score"             "score-read"             "View scores, breakdowns, and timeseries"
-    create_action "$RS_ID" "$R_MON"          "Publish Score"          "score-publish"          "Publish monitor scores (internal/system use)"
-
-    # observability actions  → amp:observability:<action>
-    create_action "$RS_ID" "$R_OBS"          "Org Dashboard"          "org-dashboard"          "Access the organization-level observability dashboard"
-    create_action "$RS_ID" "$R_OBS"          "Project Dashboard"      "project-dashboard"      "Access the project-level observability dashboard"
-    create_action "$RS_ID" "$R_OBS"          "Guardrail Metric"       "guardrail-metric"       "View guardrail metrics"
-    create_action "$RS_ID" "$R_OBS"          "Infra Metric"           "infra-metric"           "View CPU, memory, and infrastructure metrics"
-
-    # role actions  → amp:role:<action>
-    create_action "$RS_ID" "$R_ROLE"         "Create"                 "create"                 "Create a custom role"
-    create_action "$RS_ID" "$R_ROLE"         "Read"                   "read"                   "View roles and their permissions"
-    create_action "$RS_ID" "$R_ROLE"         "Update"                 "update"                 "Update a custom role"
-    create_action "$RS_ID" "$R_ROLE"         "Delete"                 "delete"                 "Delete a custom role"
-
-    # group actions  → amp:group:<action>
-    create_action "$RS_ID" "$R_GROUP"        "Create"                 "create"                 "Create a group"
-    create_action "$RS_ID" "$R_GROUP"        "Read"                   "read"                   "View groups and their members"
-    create_action "$RS_ID" "$R_GROUP"        "Update"                 "update"                 "Update a group"
-    create_action "$RS_ID" "$R_GROUP"        "Delete"                 "delete"                 "Delete a group"
-
-    # catalog actions  → amp:catalog:<action>
-    create_action "$RS_ID" "$R_CAT"          "Read"                   "read"                   "View the resource catalog"
-
-    # repository actions  → amp:repository:<action>
-    create_action "$RS_ID" "$R_REPO"         "Read"                   "read"                   "Browse repository branches and commits"
-
-    log_info "Agent Manager resource server registration complete (104 permissions registered)."
+    # Remediation: a resource server seeded by an older bootstrap carries a
+    # non-empty handle. The handle is immutable and would prefix every derived
+    # permission (e.g. amp-am:amp:project:read), producing scope strings
+    # agent-manager-service will never accept. The MCP resource servers are
+    # pure mirrors of the amp permission tree with no independent state, so
+    # delete the legacy resource server and recreate it with an empty handle.
+    RESPONSE=$(api_call GET "/resource-servers/${MCP_RS_ID}")
+    HTTP_CODE="${RESPONSE: -3}"
+    BODY="${RESPONSE%???}"
+    if [[ "$HTTP_CODE" != "200" ]]; then
+      log_error "Failed to fetch resource server ${MCP_RS_ID} (HTTP $HTTP_CODE): $BODY"
+      exit 1
+    fi
+    MCP_RS_HANDLE=$(echo "$BODY" | grep -o '"handle":"[^"]*"' | head -1 | cut -d'"' -f4)
+    if [[ -n "$MCP_RS_HANDLE" ]]; then
+      log_warning "Resource server '{{ $identifier }}' has legacy handle '$MCP_RS_HANDLE'; deleting and recreating it with an empty handle..."
+      RESPONSE=$(api_call DELETE "/resource-servers/${MCP_RS_ID}")
+      HTTP_CODE="${RESPONSE: -3}"
+      BODY="${RESPONSE%???}"
+      if [[ "$HTTP_CODE" != "200" ]] && [[ "$HTTP_CODE" != "204" ]]; then
+        log_error "Failed to delete legacy resource server ${MCP_RS_ID} (HTTP $HTTP_CODE): $BODY"
+        exit 1
+      fi
+      MCP_RS_ID=$(create_or_get_rs "{{ .name }}" "{{ .handle }}" "{{ $identifier }}" "{{ .description }}" "$DEFAULT_OU_ID")
+      log_info "MCP resource server '{{ $identifier }}' recreated (id: $MCP_RS_ID)"
+    fi
+    MCP_AMP_ROOT=$(create_or_get_resource "$MCP_RS_ID" "Agent Manager" "amp" "Root of the amp permission tree")
+    register_amp_permissions "$MCP_RS_ID" "{{ .permissionSet }}" "$MCP_AMP_ROOT"
+    log_info "MCP resource server '{{ $identifier }}': '{{ .permissionSet }}' permission set registered."
+    {{- else if not .optional }}
+    {{- fail (printf "thunder.bootstrap.%s must be set (base URL for the %s resource server)" .baseUrlValue .name) }}
+    {{- end }}
+    {{- end }}
+    log_success "MCP resource servers registered."
 
   61-amp-default-roles.sh: |
     #!/bin/bash
@@ -1530,6 +1639,12 @@ data:
 
     # ---------------------------------------------------------------------------
     # Fetch AMP resource server ID
+    #
+    # Role permissions below reference only the 'amp' resource server. That is
+    # sufficient for the MCP resource servers too (60-amp-resource-server.sh):
+    # Thunder grants scopes by matching the role's permission STRINGS against
+    # the requested scopes without filtering by resource server, and the MCP
+    # resource servers register the identical amp:* permission strings.
     # ---------------------------------------------------------------------------
     RESPONSE=$(api_call GET "/resource-servers")
     HTTP_CODE="${RESPONSE: -3}"
@@ -1605,28 +1720,28 @@ data:
     # ===========================================================================
     ADMIN_ID=$(create_or_get_role "admin" "Full administrative access to all AMP resources")
     set_role_permissions "$ADMIN_ID" "admin" "Full administrative access to all AMP resources" \
-      '["amp:org:view","amp:org:modify-settings","amp:org:invite-member","amp:org:remove-member","amp:org:assign-role","amp:org:manage-idp","amp:org:manage-service-account","amp:project:create","amp:project:read","amp:project:update","amp:project:delete","amp:environment:create","amp:environment:read","amp:environment:update","amp:environment:delete","amp:gateway:create","amp:gateway:read","amp:gateway:update","amp:gateway:delete","amp:gateway:token-manage","amp:data-plane:read","amp:deployment-pipeline:create","amp:deployment-pipeline:read","amp:deployment-pipeline:update","amp:deployment-pipeline:delete","amp:git-secret:create","amp:git-secret:read","amp:git-secret:delete","amp:llm-provider-template:create","amp:llm-provider-template:read","amp:llm-provider-template:update","amp:llm-provider-template:delete","amp:llm-provider:create","amp:llm-provider:read","amp:llm-provider:update","amp:llm-provider:delete","amp:llm-provider:configure-guardrail","amp:llm-provider:connect","amp:llm-provider:deploy","amp:llm-provider:api-key-manage","amp:mcp-server:create","amp:mcp-server:read","amp:mcp-server:update","amp:mcp-server:delete","amp:mcp-server:configure-guardrail","amp:mcp-server:connect","amp:mcp-server:api-key-manage","amp:scope:create","amp:scope:read","amp:scope:update","amp:scope:delete","amp:llm-proxy:create","amp:llm-proxy:read","amp:llm-proxy:update","amp:llm-proxy:delete","amp:llm-proxy:deploy","amp:llm-proxy:api-key-manage","amp:evaluator:create","amp:evaluator:read","amp:evaluator:update","amp:evaluator:delete","amp:agent:create","amp:agent:read","amp:agent:update","amp:agent:delete","amp:agent:build","amp:agent:deploy-non-production","amp:agent:deploy-production","amp:agent:promote","amp:agent:rollback","amp:agent:suspend","amp:agent:token-manage","amp:agent:api-key-manage","amp:agent-kind:read","amp:agent-kind:create","amp:agent-kind:update","amp:agent-kind:delete","amp:monitor:create","amp:monitor:read","amp:monitor:update","amp:monitor:delete","amp:monitor:execute","amp:monitor:score-read","amp:monitor:score-publish","amp:observability:org-dashboard","amp:observability:project-dashboard","amp:observability:guardrail-metric","amp:observability:infra-metric","amp:role:create","amp:role:read","amp:role:update","amp:role:delete","amp:group:create","amp:group:read","amp:group:update","amp:group:delete","amp:agent-identity:read","amp:agent-identity:create","amp:agent-identity:update","amp:agent-identity:delete","amp:catalog:read","amp:repository:read","amp:profile:read","amp:profile:update-attributes"]'
+      '["amp:org:view","amp:org:modify-settings","amp:org:invite-member","amp:org:remove-member","amp:org:assign-role","amp:org:manage-idp","amp:org:manage-service-account","amp:project:create","amp:project:read","amp:project:update","amp:project:delete","amp:environment:create","amp:environment:read","amp:environment:update","amp:environment:delete","amp:gateway:create","amp:gateway:read","amp:gateway:update","amp:gateway:delete","amp:gateway:token-manage","amp:data-plane:read","amp:deployment-pipeline:create","amp:deployment-pipeline:read","amp:deployment-pipeline:update","amp:deployment-pipeline:delete","amp:git-secret:create","amp:git-secret:read","amp:git-secret:delete","amp:llm-provider-template:create","amp:llm-provider-template:read","amp:llm-provider-template:update","amp:llm-provider-template:delete","amp:llm-provider:create","amp:llm-provider:read","amp:llm-provider:update","amp:llm-provider:delete","amp:llm-provider:configure-guardrail","amp:llm-provider:connect","amp:llm-provider:deploy","amp:llm-provider:api-key-manage","amp:mcp-server:create","amp:mcp-server:read","amp:mcp-server:update","amp:mcp-server:delete","amp:mcp-server:configure-guardrail","amp:mcp-server:connect","amp:mcp-server:api-key-manage","amp:scope:create","amp:scope:read","amp:scope:update","amp:scope:delete","amp:llm-proxy:create","amp:llm-proxy:read","amp:llm-proxy:update","amp:llm-proxy:delete","amp:llm-proxy:deploy","amp:llm-proxy:api-key-manage","amp:evaluator:create","amp:evaluator:read","amp:evaluator:update","amp:evaluator:delete","amp:agent:create","amp:agent:read","amp:agent:update","amp:agent:delete","amp:agent:build","amp:agent:deploy-non-production","amp:agent:deploy-production","amp:agent:promote","amp:agent:rollback","amp:agent:suspend","amp:agent:token-manage","amp:agent:api-key-manage","amp:agent-kind:read","amp:agent-kind:create","amp:agent-kind:update","amp:agent-kind:delete","amp:monitor:create","amp:monitor:read","amp:monitor:update","amp:monitor:delete","amp:monitor:execute","amp:monitor:score-read","amp:monitor:score-publish","amp:observability:trace-read","amp:observability:log-read","amp:observability:build-log-read","amp:observability:metric-read","amp:role:create","amp:role:read","amp:role:update","amp:role:delete","amp:group:create","amp:group:read","amp:group:update","amp:group:delete","amp:agent-identity:read","amp:agent-identity:create","amp:agent-identity:update","amp:agent-identity:delete","amp:catalog:read","amp:repository:read","amp:profile:read","amp:profile:update-attributes"]'
 
     # ===========================================================================
     # developer — project-scoped development and deployment
     # ===========================================================================
     DEV_ID=$(create_or_get_role "developer" "Development access: build, deploy, and observe agents within projects")
     set_role_permissions "$DEV_ID" "developer" "Development access: build, deploy, and observe agents within projects" \
-      '["amp:org:view","amp:project:create","amp:project:read","amp:project:update","amp:project:delete","amp:environment:read","amp:data-plane:read","amp:deployment-pipeline:read","amp:git-secret:create","amp:git-secret:read","amp:git-secret:delete","amp:llm-provider-template:read","amp:llm-provider:read","amp:llm-provider:configure-guardrail","amp:llm-provider:connect","amp:mcp-server:read","amp:mcp-server:configure-guardrail","amp:mcp-server:connect","amp:mcp-server:api-key-manage","amp:scope:read","amp:llm-proxy:create","amp:llm-proxy:read","amp:llm-proxy:update","amp:llm-proxy:delete","amp:llm-proxy:deploy","amp:llm-proxy:api-key-manage","amp:evaluator:read","amp:agent-kind:read","amp:agent:create","amp:agent:read","amp:agent:update","amp:agent:delete","amp:agent:build","amp:agent:deploy-non-production","amp:agent:token-manage","amp:agent:api-key-manage","amp:monitor:create","amp:monitor:read","amp:monitor:update","amp:monitor:delete","amp:monitor:execute","amp:monitor:score-read","amp:observability:project-dashboard","amp:observability:infra-metric","amp:catalog:read","amp:repository:read","amp:profile:read","amp:profile:update-attributes"]'
+      '["amp:org:view","amp:project:create","amp:project:read","amp:project:update","amp:project:delete","amp:environment:read","amp:data-plane:read","amp:deployment-pipeline:read","amp:git-secret:create","amp:git-secret:read","amp:git-secret:delete","amp:llm-provider-template:read","amp:llm-provider:read","amp:llm-provider:configure-guardrail","amp:llm-provider:connect","amp:mcp-server:read","amp:mcp-server:configure-guardrail","amp:mcp-server:connect","amp:mcp-server:api-key-manage","amp:scope:read","amp:llm-proxy:create","amp:llm-proxy:read","amp:llm-proxy:update","amp:llm-proxy:delete","amp:llm-proxy:deploy","amp:llm-proxy:api-key-manage","amp:evaluator:read","amp:agent-kind:read","amp:agent:create","amp:agent:read","amp:agent:update","amp:agent:delete","amp:agent:build","amp:agent:deploy-non-production","amp:agent:token-manage","amp:agent:api-key-manage","amp:monitor:create","amp:monitor:read","amp:monitor:update","amp:monitor:delete","amp:monitor:execute","amp:monitor:score-read","amp:observability:trace-read","amp:observability:log-read","amp:observability:build-log-read","amp:observability:metric-read","amp:catalog:read","amp:repository:read","amp:profile:read","amp:profile:update-attributes"]'
 
     # ===========================================================================
     # ai-lead — AI/ML resources and provider management
     # ===========================================================================
     AILEAD_ID=$(create_or_get_role "ai-lead" "AI lead access: manage LLM providers, MCP servers, and evaluators")
     set_role_permissions "$AILEAD_ID" "ai-lead" "AI lead access: manage LLM providers, MCP servers, and evaluators" \
-      '["amp:org:view","amp:project:read","amp:environment:read","amp:data-plane:read","amp:deployment-pipeline:read","amp:llm-provider-template:create","amp:llm-provider-template:read","amp:llm-provider-template:update","amp:llm-provider-template:delete","amp:llm-provider:create","amp:llm-provider:read","amp:llm-provider:update","amp:llm-provider:delete","amp:llm-provider:configure-guardrail","amp:llm-provider:connect","amp:llm-provider:deploy","amp:llm-provider:api-key-manage","amp:mcp-server:create","amp:mcp-server:read","amp:mcp-server:update","amp:mcp-server:delete","amp:mcp-server:configure-guardrail","amp:mcp-server:connect","amp:mcp-server:api-key-manage","amp:scope:create","amp:scope:read","amp:scope:update","amp:scope:delete","amp:evaluator:create","amp:evaluator:read","amp:evaluator:update","amp:evaluator:delete","amp:agent-kind:read","amp:agent:read","amp:agent:build","amp:agent:deploy-non-production","amp:agent:api-key-manage","amp:monitor:read","amp:monitor:score-read","amp:observability:org-dashboard","amp:observability:project-dashboard","amp:observability:guardrail-metric","amp:catalog:read","amp:profile:read","amp:profile:update-attributes"]'
+      '["amp:org:view","amp:project:read","amp:environment:read","amp:data-plane:read","amp:deployment-pipeline:read","amp:llm-provider-template:create","amp:llm-provider-template:read","amp:llm-provider-template:update","amp:llm-provider-template:delete","amp:llm-provider:create","amp:llm-provider:read","amp:llm-provider:update","amp:llm-provider:delete","amp:llm-provider:configure-guardrail","amp:llm-provider:connect","amp:llm-provider:deploy","amp:llm-provider:api-key-manage","amp:mcp-server:create","amp:mcp-server:read","amp:mcp-server:update","amp:mcp-server:delete","amp:mcp-server:configure-guardrail","amp:mcp-server:connect","amp:mcp-server:api-key-manage","amp:scope:create","amp:scope:read","amp:scope:update","amp:scope:delete","amp:evaluator:create","amp:evaluator:read","amp:evaluator:update","amp:evaluator:delete","amp:agent-kind:read","amp:agent:read","amp:agent:build","amp:agent:deploy-non-production","amp:agent:api-key-manage","amp:monitor:read","amp:monitor:score-read","amp:observability:trace-read","amp:observability:metric-read","amp:catalog:read","amp:profile:read","amp:profile:update-attributes"]'
 
     # ===========================================================================
     # platform-engineer — infrastructure and deployment pipeline management
     # ===========================================================================
     PE_ID=$(create_or_get_role "platform-engineer" "Platform engineering: manage environments, gateways, and agent deployments")
     set_role_permissions "$PE_ID" "platform-engineer" "Platform engineering: manage environments, gateways, and agent deployments" \
-      '["amp:org:view","amp:project:read","amp:environment:create","amp:environment:read","amp:environment:update","amp:environment:delete","amp:gateway:create","amp:gateway:read","amp:gateway:update","amp:gateway:delete","amp:gateway:token-manage","amp:data-plane:read","amp:deployment-pipeline:create","amp:deployment-pipeline:read","amp:deployment-pipeline:update","amp:deployment-pipeline:delete","amp:llm-provider:read","amp:llm-provider:configure-guardrail","amp:mcp-server:read","amp:mcp-server:configure-guardrail","amp:scope:read","amp:agent-kind:read","amp:agent:read","amp:agent:build","amp:agent:api-key-manage","amp:agent:deploy-non-production","amp:agent:deploy-production","amp:agent:promote","amp:agent:rollback","amp:agent:suspend","amp:monitor:read","amp:monitor:score-read","amp:observability:org-dashboard","amp:observability:project-dashboard","amp:observability:infra-metric","amp:catalog:read","amp:profile:read","amp:profile:update-attributes"]'
+      '["amp:org:view","amp:project:read","amp:environment:create","amp:environment:read","amp:environment:update","amp:environment:delete","amp:gateway:create","amp:gateway:read","amp:gateway:update","amp:gateway:delete","amp:gateway:token-manage","amp:data-plane:read","amp:deployment-pipeline:create","amp:deployment-pipeline:read","amp:deployment-pipeline:update","amp:deployment-pipeline:delete","amp:llm-provider:read","amp:llm-provider:configure-guardrail","amp:mcp-server:read","amp:mcp-server:configure-guardrail","amp:scope:read","amp:agent-kind:read","amp:agent:read","amp:agent:build","amp:agent:api-key-manage","amp:agent:deploy-non-production","amp:agent:deploy-production","amp:agent:promote","amp:agent:rollback","amp:agent:suspend","amp:monitor:read","amp:monitor:score-read","amp:observability:log-read","amp:observability:build-log-read","amp:observability:metric-read","amp:catalog:read","amp:profile:read","amp:profile:update-attributes"]'
 
     log_info "Default role provisioning complete (4 roles created/updated)."
 
@@ -1823,3 +1938,100 @@ data:
     fi
 
     log_info "Default group provisioning complete (1 group created/updated)."
+  63-am-observer-client.sh: |
+    #!/bin/bash
+    set -e
+
+    SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]:-$0}")"
+    source "${SCRIPT_DIR}/common.sh"
+
+
+    log_info "Checking if application '{{ .Values.thunder.bootstrap.amObserverClient.name }}' already exists..."
+
+    # Get the default OU ID
+    RESPONSE=$(api_call GET "/organization-units/tree/default")
+    HTTP_CODE="${RESPONSE: -3}"
+    BODY="${RESPONSE%???}"
+    if [[ "$HTTP_CODE" != "200" ]]; then
+      log_error "Failed to fetch default organization unit (HTTP $HTTP_CODE)"
+      echo "Response: $BODY"
+      exit 1
+    fi
+    DEFAULT_OU_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+    if [[ -z "$DEFAULT_OU_ID" ]]; then
+      log_error "Could not extract default organization unit ID from response"
+      echo "Response: $BODY"
+      exit 1
+    fi
+    log_info "Using OU ID: $DEFAULT_OU_ID"
+
+    # Check existing apps
+    RESPONSE=$(api_call GET "/applications")
+    HTTP_CODE="${RESPONSE: -3}"
+    BODY="${RESPONSE%???}"
+    if [[ "$HTTP_CODE" != "200" ]]; then
+      log_error "Failed to fetch applications (HTTP $HTTP_CODE)"
+      echo "Response: $BODY"
+      exit 1
+    fi
+
+    # No "scopes" key on purpose: this client's authority comes from its
+    # OpenChoreo ClusterAuthzRoleBinding (amp-observer-reader-binding), not
+    # from AMP scopes. Scope-less client_credentials tokens fall back to the
+    # client ID as audience.
+    APP_PAYLOAD='{
+      "name": "{{ .Values.thunder.bootstrap.amObserverClient.name }}",
+      "description": "{{ .Values.thunder.bootstrap.amObserverClient.description }}",
+      "ouId": "'${DEFAULT_OU_ID}'",
+      "inboundAuthConfig": [
+        {
+          "type": "oauth2",
+          "config": {
+            "clientId": "{{ .Values.thunder.bootstrap.amObserverClient.clientId }}",
+            "clientSecret": "{{ .Values.thunder.bootstrap.amObserverClient.clientSecret }}",
+            "grantTypes": {{ .Values.thunder.bootstrap.amObserverClient.grantTypes | toJson }},
+            "tokenEndpointAuthMethod": "{{ .Values.thunder.bootstrap.amObserverClient.tokenEndpointAuthMethod }}",
+            "pkceRequired": {{ .Values.thunder.bootstrap.amObserverClient.pkceRequired }},
+            "publicClient": {{ .Values.thunder.bootstrap.amObserverClient.publicClient }},
+            "token": {
+              "accessToken": {
+                "validityPeriod": {{ .Values.thunder.bootstrap.amObserverClient.accessTokenValidityPeriod }}
+              }
+            }
+          }
+        }
+      ]
+    }'
+
+    if echo "$BODY" | grep -q '"clientId":"{{ .Values.thunder.bootstrap.amObserverClient.clientId }}"'; then
+      app_id=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"clientId":"{{ .Values.thunder.bootstrap.amObserverClient.clientId }}"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+      log_info "Application '{{ .Values.thunder.bootstrap.amObserverClient.name }}' already exists (id: $app_id), updating..."
+      RESPONSE=$(api_call PUT "/applications/$app_id" "$APP_PAYLOAD")
+      HTTP_CODE="${RESPONSE: -3}"
+      if [[ "$HTTP_CODE" == "200" ]]; then
+        log_info "Application '{{ .Values.thunder.bootstrap.amObserverClient.name }}' updated successfully"
+      else
+        log_error "Failed to update application (HTTP $HTTP_CODE)"
+        echo "Response: ${RESPONSE%???}"
+        exit 1
+      fi
+    else
+      log_info "Application '{{ .Values.thunder.bootstrap.amObserverClient.name }}' does not exist, creating..."
+      RESPONSE=$(api_call POST "/applications" "$APP_PAYLOAD")
+      HTTP_CODE="${RESPONSE: -3}"
+      if [[ "$HTTP_CODE" == "201" ]] || [[ "$HTTP_CODE" == "200" ]]; then
+        log_info "Application '{{ .Values.thunder.bootstrap.amObserverClient.name }}' created successfully"
+      elif [[ "$HTTP_CODE" == "409" ]]; then
+        log_info "Application '{{ .Values.thunder.bootstrap.amObserverClient.name }}' already exists, skipping"
+      else
+        log_error "Failed to create application (HTTP $HTTP_CODE)"
+        echo "Response: ${RESPONSE%???}"
+        exit 1
+      fi
+    fi
+  {{- /* am-obs-mcp gets its OIDC scopes (amObsMcpClient.scopes) plus the four
+       observability data-read scopes, single-sourced from
+       thunder.bootstrap.observabilityScopes. */}}
+  64-am-obs-mcp-client.sh: |
+    {{- include "amp-thunder.mcpClientScript" (dict "client" .Values.thunder.bootstrap.amObsMcpClient "scopes" (concat .Values.thunder.bootstrap.amObsMcpClient.scopes .Values.thunder.bootstrap.observabilityScopes)) | nindent 4 }}
