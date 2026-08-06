@@ -299,3 +299,27 @@ func TestGatewayRolesMigration_SharedGatewayAbortsInsteadOfBreachingCap(t *testi
 	assert.Contains(t, err.Error(), uncoveredEnvID.String())
 	assert.NotContains(t, err.Error(), coveredEnvID.String())
 }
+
+// Case 11: gateway X is mapped to uncovered environments A and B, while older gateway Y
+// is mapped to B alone. Promoting Y would cover B and strand A, so X — which covers both
+// in one promotion — must win despite Y being older: coverage is ranked ahead of age.
+func TestGatewayRolesMigration_PrefersGatewayCoveringMoreEnvironments(t *testing.T) {
+	tx := gatewayRolesTestTx(t)
+	envA := uuid.New()
+	envB := uuid.New()
+	sharedX := seedRoleGateway(t, tx, "ai")
+	olderY := seedRoleGateway(t, tx, "ai")
+	mapGatewayToEnvironment(t, tx, sharedX, envA)
+	mapGatewayToEnvironment(t, tx, sharedX, envB)
+	mapGatewayToEnvironment(t, tx, olderY, envB)
+	setGatewayCreatedAt(t, tx, olderY, "2026-07-03 10:15:39")
+	setGatewayCreatedAt(t, tx, sharedX, "2026-07-22 08:54:05")
+
+	runRoleBackfill(t, tx)
+	require.NoError(t, dbmigrations.PromoteSoleEgressGateways(tx))
+
+	assert.Equal(t, "both", roleOf(t, tx, sharedX), "the gateway covering both environments must be promoted")
+	assert.Equal(t, "egress", roleOf(t, tx, olderY), "promoting it too would give env B two ingress gateways")
+	assert.NoError(t, dbmigrations.AssertSingleIngressPerEnvironment(tx))
+	assert.NoError(t, dbmigrations.AssertIngressCoveragePerEnvironment(tx))
+}

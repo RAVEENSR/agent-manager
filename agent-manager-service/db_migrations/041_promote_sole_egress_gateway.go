@@ -19,8 +19,10 @@ package dbmigrations
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -50,8 +52,28 @@ var migration041 = migration{
 	},
 }
 
-// PromoteSoleEgressGateways promotes at most one gateway per environment that has no
-// ingress-capable gateway.
+// promotionCandidate is an egress gateway eligible for promotion, with the environments
+// it would cover as a comma-separated list.
+type promotionCandidate struct {
+	UUID uuid.UUID `gorm:"column:uuid"`
+	Envs string    `gorm:"column:envs"`
+}
+
+// PromoteSoleEgressGateways promotes egress gateways to 'both' so that every environment
+// currently without an ingress-capable gateway gets one.
+//
+// A gateway's role applies in every environment it is mapped to at once, so a candidate
+// must map only to uncovered environments — otherwise promoting it would breach the
+// one-ingress cap in an environment that already has coverage. Among those candidates,
+// the ones covering the most uncovered environments are taken first, so a gateway shared
+// by several uncovered environments covers them all in one promotion rather than being
+// passed over in favour of a single-environment gateway. created_at then uuid break ties.
+// Two promoted gateways may not share an environment, since that environment would then
+// hold two ingress-capable gateways.
+//
+// The greedy pick is not proven minimal for arbitrarily overlapping mappings; anything it
+// leaves uncovered is reported by AssertIngressCoveragePerEnvironment rather than passing
+// silently.
 //
 // deleted_at IS NULL because raw SQL bypasses GORM's soft-delete scope. is_active is
 // deliberately not filtered — it tracks WebSocket liveness and flaps, so a gateway that
@@ -75,40 +97,42 @@ func PromoteSoleEgressGateways(tx *gorm.DB) error {
 				WHERE l2.environment_uuid = l.environment_uuid
 				  AND l2.role IN ('ingress', 'both')
 			)
-		),
-		winners AS (
-			-- One candidate per environment, since the ingress slot holds exactly one.
-			-- Ordered so the pick is deterministic across runs.
-			SELECT uuid, environment_uuid
-			FROM (
-				SELECT l.uuid,
-				       l.environment_uuid,
-				       row_number() OVER (PARTITION BY l.environment_uuid
-				                          ORDER BY l.created_at, l.uuid) AS rn
-				FROM live l
-				JOIN uncovered u USING (environment_uuid)
-				WHERE l.role = 'egress'
-			) r
-			WHERE rn = 1
-		),
-		safe AS (
-			-- The role lives on the gateway row, so a promotion applies to every
-			-- environment the gateway serves. Promote only where it won in all of them,
-			-- else it would breach the one-ingress cap in the ones it lost.
-			SELECT wc.uuid
-			FROM (SELECT uuid, count(*) AS wins FROM winners GROUP BY uuid) wc
-			JOIN (SELECT gateway_uuid, count(*) AS total
-			      FROM gateway_environment_mappings
-			      GROUP BY gateway_uuid) mc ON mc.gateway_uuid = wc.uuid
-			WHERE wc.wins = mc.total
 		)
-		UPDATE gateways
-		SET gateway_functionality_type = 'both',
-		    updated_at = now()
-		WHERE uuid IN (SELECT uuid FROM safe);`
+		SELECT l.uuid,
+		       string_agg(l.environment_uuid::text, ',' ORDER BY l.environment_uuid) AS envs
+		FROM live l
+		LEFT JOIN uncovered u ON u.environment_uuid = l.environment_uuid
+		WHERE l.role = 'egress'
+		GROUP BY l.uuid, l.created_at
+		HAVING bool_and(u.environment_uuid IS NOT NULL)
+		ORDER BY count(*) DESC, l.created_at, l.uuid;`
 
-	if err := tx.Exec(q).Error; err != nil {
-		return fmt.Errorf("migration 041: promoting sole egress gateways failed: %w", err)
+	var candidates []promotionCandidate
+	if err := tx.Raw(q).Scan(&candidates).Error; err != nil {
+		return fmt.Errorf("migration 041: collecting promotion candidates failed: %w", err)
+	}
+
+	claimed := make(map[string]bool)
+	var promote []uuid.UUID
+	for _, c := range candidates {
+		envs := strings.Split(c.Envs, ",")
+		if slices.ContainsFunc(envs, func(env string) bool { return claimed[env] }) {
+			continue
+		}
+		for _, env := range envs {
+			claimed[env] = true
+		}
+		promote = append(promote, c.UUID)
+	}
+	if len(promote) == 0 {
+		return nil
+	}
+
+	if err := tx.Exec(
+		`UPDATE gateways SET gateway_functionality_type = 'both', updated_at = now()
+		 WHERE uuid IN ?`, promote,
+	).Error; err != nil {
+		return fmt.Errorf("migration 041: promoting egress gateways failed: %w", err)
 	}
 	return nil
 }
