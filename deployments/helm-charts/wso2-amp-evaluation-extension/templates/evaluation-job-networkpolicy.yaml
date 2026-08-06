@@ -47,13 +47,23 @@ spec:
           protocol: TCP
 
     # agent-manager-service publisher endpoint (amp-api) — publish evaluation scores.
+    # Guarded: an egress rule whose ports list renders empty allows EVERY port, so a values
+    # file still carrying the pre-list `publisher.port` key would silently widen this pod's
+    # egress to the whole namespace. Omit the rule instead and fail closed — publishing
+    # breaks loudly, which is recoverable; a silent hole is not.
+    {{- with .Values.networkPolicy.evaluationJob.publisher }}
+    {{- if and .namespace .ports }}
     - to:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.networkPolicy.evaluationJob.publisher.namespace }}
+              kubernetes.io/metadata.name: {{ .namespace }}
       ports:
-        - port: {{ .Values.networkPolicy.evaluationJob.publisher.port }}
+        {{- range .ports }}
+        - port: {{ . }}
           protocol: TCP
+        {{- end }}
+    {{- end }}
+    {{- end }}
 
     # LLM gateway for llm_judge evaluators — unconditional since NetworkPolicy can't scope by workflow.
     # Two selectors, because the gateway's namespace is a deployment choice: the

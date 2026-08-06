@@ -74,7 +74,14 @@ networkPolicy:
 
     publisher:
       namespace: "wso2-amp"
-      port: 9000
+      # -- 8080 is the port that carries the traffic: policy is matched after the Service port
+      # is translated, so the CNI sees amp-api's containerPort, never the 9000 its Service
+      # publishes. Both kube-router and Cilium document matching post-translation, so 9000 is
+      # a no-op here — it is kept only to record the Service port this rule corresponds to,
+      # and can be dropped without behavioural change.
+      ports:
+        - 9000
+        - 8080
 
     idp:
       namespace: "amp-thunder"
