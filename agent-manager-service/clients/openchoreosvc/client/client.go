@@ -92,7 +92,10 @@ type OpenChoreoClient interface {
 	GetComponentFileMounts(ctx context.Context, ouID, projectName, componentName, environment string) ([]models.FileMountEntry, error)
 
 	// Build Operations
-	TriggerBuild(ctx context.Context, ouID, projectName, componentName, commitID string) (*models.BuildResponse, error)
+	// workflowRunName may be supplied by the service when deployment-specific work must
+	// happen before the run is created. An empty value preserves the default behavior and
+	// lets the client generate the name.
+	TriggerBuild(ctx context.Context, ouID, projectName, componentName, commitID, workflowRunName string) (*models.BuildResponse, error)
 	GetBuild(ctx context.Context, ouID, projectName, componentName, buildName string) (*models.BuildDetailsResponse, error)
 	ListBuilds(ctx context.Context, ouID, projectName, componentName string) ([]*models.BuildResponse, error)
 	UpdateComponentBuildParameters(ctx context.Context, ouID, projectName, componentName string, req UpdateComponentBuildParametersRequest) error

@@ -245,7 +245,8 @@ func TestNotReadyResourceIsReportedAsFailed(t *testing.T) {
 		}
 
 		state := runtimeReplicaStateFromTree(
-			treeWith(map[string]interface{}{"replicas": float64(1)}, accepted, blocked))
+			treeWith(map[string]interface{}{"replicas": float64(1)}, accepted, blocked),
+		)
 
 		assert.Contains(t, state.notReadyResource, "SomeFutureKind")
 		assert.NotContains(t, state.notReadyResource, "Backend", "a non-Ready condition type is ignored")

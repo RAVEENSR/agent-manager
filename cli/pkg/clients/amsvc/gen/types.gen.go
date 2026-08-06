@@ -2153,6 +2153,9 @@ type CreateAgentRequest struct {
 	// DisplayName Display name of the agent
 	DisplayName string `json:"displayName"`
 
+	// GithubApp Optional GitHub App source binding for cloud deployments. The control plane consumes this metadata, persists it through the deployment-provided repository source provider, and never forwards it to OpenChoreo. When omitted, public-repository and PAT-backed behavior is unchanged.
+	GithubApp *GitHubAppSource `json:"githubApp,omitempty"`
+
 	// InputInterface Endpoint configurations
 	InputInterface *InputInterface `json:"inputInterface,omitempty"`
 
@@ -3137,6 +3140,27 @@ type GitCredentials struct {
 
 	// Username Username for basic auth
 	Username string `json:"username"`
+}
+
+// GitHubAppSource Optional GitHub App source binding for cloud deployments. The control plane consumes this metadata, persists it through the deployment-provided repository source provider, and never forwards it to OpenChoreo. When omitted, public-repository and PAT-backed behavior is unchanged.
+type GitHubAppSource struct {
+	// AppPath Source directory; defaults to provisioning.repository.appPath
+	AppPath *string `json:"appPath,omitempty"`
+
+	// Branch Branch to build; defaults to provisioning.repository.branch
+	Branch *string `json:"branch,omitempty"`
+
+	// InstallationId GitHub App installation that grants access to the repository
+	InstallationId int64 `json:"installationId"`
+
+	// Owner GitHub repository owner or organization
+	Owner string `json:"owner"`
+
+	// Repo GitHub repository name without the owner prefix
+	Repo string `json:"repo"`
+
+	// RepositoryUrl Repository clone URL; defaults to provisioning.repository.url
+	RepositoryUrl *string `json:"repositoryUrl,omitempty"`
 }
 
 // GitSecretListResponse defines model for GitSecretListResponse.

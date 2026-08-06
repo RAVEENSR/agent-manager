@@ -11144,6 +11144,8 @@ components:
           description: Display name of the agent
         provisioning:
           $ref: "#/components/schemas/Provisioning"
+        githubApp:
+          $ref: "#/components/schemas/GitHubAppSource"
         description:
           type: string
           description: Description of the agent
@@ -11173,6 +11175,42 @@ components:
             $ref: "#/components/schemas/MCPConfigRequest"
         labels:
           $ref: "#/components/schemas/Labels"
+
+    GitHubAppSource:
+      type: object
+      description: >-
+        Optional GitHub App source binding for cloud deployments. The control
+        plane consumes this metadata, persists it through the deployment-provided
+        repository source provider, and never forwards it to OpenChoreo. When
+        omitted, public-repository and PAT-backed behavior is unchanged.
+      required:
+        - installationId
+        - owner
+        - repo
+      properties:
+        installationId:
+          type: integer
+          format: int64
+          minimum: 1
+          description: GitHub App installation that grants access to the repository
+        owner:
+          type: string
+          minLength: 1
+          description: GitHub repository owner or organization
+        repo:
+          type: string
+          minLength: 1
+          description: GitHub repository name without the owner prefix
+        branch:
+          type: string
+          description: Branch to build; defaults to provisioning.repository.branch
+        appPath:
+          type: string
+          description: Source directory; defaults to provisioning.repository.appPath
+        repositoryUrl:
+          type: string
+          format: uri
+          description: Repository clone URL; defaults to provisioning.repository.url
 
     ModelConfigRequest:
       type: object

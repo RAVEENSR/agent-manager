@@ -190,6 +190,7 @@ export const buildAgentCreationPayload = (
             secretRef: data.gitSecretRef || null,
           },
         },
+        ...(data.githubApp ? { githubApp: data.githubApp } : {}),
         agentType: {
           type: "agent-api",
           subType: data.interfaceType === "CUSTOM" ? "custom-api" : "chat-api",

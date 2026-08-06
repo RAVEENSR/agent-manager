@@ -22,8 +22,9 @@ type CreateAgentRequest struct {
 	// Unique name of the agent
 	Name string `json:"name"`
 	// Display name of the agent
-	DisplayName  string       `json:"displayName"`
-	Provisioning Provisioning `json:"provisioning"`
+	DisplayName  string           `json:"displayName"`
+	Provisioning Provisioning     `json:"provisioning"`
+	GithubApp    *GitHubAppSource `json:"githubApp,omitempty"`
 	// Description of the agent
 	Description    *string         `json:"description,omitempty"`
 	AgentType      *AgentType      `json:"agentType,omitempty"`
@@ -128,6 +129,38 @@ func (o *CreateAgentRequest) GetProvisioningOk() (*Provisioning, bool) {
 // SetProvisioning sets field value
 func (o *CreateAgentRequest) SetProvisioning(v Provisioning) {
 	o.Provisioning = v
+}
+
+// GetGithubApp returns the GithubApp field value if set, zero value otherwise.
+func (o *CreateAgentRequest) GetGithubApp() GitHubAppSource {
+	if o == nil || IsNil(o.GithubApp) {
+		var ret GitHubAppSource
+		return ret
+	}
+	return *o.GithubApp
+}
+
+// GetGithubAppOk returns a tuple with the GithubApp field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *CreateAgentRequest) GetGithubAppOk() (*GitHubAppSource, bool) {
+	if o == nil || IsNil(o.GithubApp) {
+		return nil, false
+	}
+	return o.GithubApp, true
+}
+
+// HasGithubApp returns a boolean if a field has been set.
+func (o *CreateAgentRequest) HasGithubApp() bool {
+	if o != nil && !IsNil(o.GithubApp) {
+		return true
+	}
+
+	return false
+}
+
+// SetGithubApp gets a reference to the given GitHubAppSource and assigns it to the GithubApp field.
+func (o *CreateAgentRequest) SetGithubApp(v GitHubAppSource) {
+	o.GithubApp = &v
 }
 
 // GetDescription returns the Description field value if set, zero value otherwise.
@@ -399,6 +432,9 @@ func (o CreateAgentRequest) ToMap() (map[string]interface{}, error) {
 	toSerialize["name"] = o.Name
 	toSerialize["displayName"] = o.DisplayName
 	toSerialize["provisioning"] = o.Provisioning
+	if !IsNil(o.GithubApp) {
+		toSerialize["githubApp"] = o.GithubApp
+	}
 	if !IsNil(o.Description) {
 		toSerialize["description"] = o.Description
 	}
