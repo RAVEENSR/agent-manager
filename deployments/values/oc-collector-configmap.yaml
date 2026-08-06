@@ -28,9 +28,18 @@ data:
 
     extensions:
       basicauth/opensearch:
-        client_auth: 
-          username: admin
-          password: ThisIsTheOpenSearchPassword1
+        client_auth:
+          # Injected by the observability-tracing-opensearch chart's default
+          # opentelemetry-collector.extraEnvs, which source them from the
+          # opensearch-admin-credentials Secret — the same Secret the observer,
+          # the Fluent Bit adapter and openSearchSetup already read. Never
+          # inline the credentials here: a literal keeps working on a local
+          # install (where the seeded password happens to match the chart
+          # default) while silently failing anywhere the password was changed,
+          # and the collector then drops every trace with
+          # "failed to json unmarshal body: invalid character 'U'".
+          username: ${env:OPENSEARCH_USERNAME}
+          password: ${env:OPENSEARCH_PASSWORD}
       health_check:
         endpoint: ${env:MY_POD_IP}:13133
   

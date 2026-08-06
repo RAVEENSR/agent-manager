@@ -228,6 +228,49 @@ Uses simple naming: "amp-postgresql" instead of release-name-postgresql
 {{- end }}
 
 {{/*
+PostgreSQL SSL mode (libpq "sslmode": disable|allow|prefer|require|verify-ca|verify-full)
+Only meaningful for an external database — the in-cluster PostgreSQL this chart
+deploys serves plaintext, so the value stays empty there and the driver keeps its
+"prefer" default. Empty output means the DB_SSL_MODE env var is not rendered.
+*/}}
+{{- define "agent-management-platform.postgresql.sslMode" -}}
+{{- if .Values.postgresql.enabled }}
+{{- print "" }}
+{{- else }}
+{{- .Values.postgresql.external.sslMode | default "" }}
+{{- end }}
+{{- end }}
+
+{{/*
+PostgreSQL SSL root certificate (libpq "sslrootcert"): a path inside the
+container, or the literal "system" to validate against the image trust store.
+*/}}
+{{- define "agent-management-platform.postgresql.sslRootCert" -}}
+{{- if .Values.postgresql.enabled }}
+{{- print "" }}
+{{- else }}
+{{- .Values.postgresql.external.sslRootCert | default "" }}
+{{- end }}
+{{- end }}
+
+{{/*
+Renders the optional DB TLS environment variables shared by the API deployment
+and the migration job. Emits nothing when no SSL mode is configured.
+*/}}
+{{- define "agent-management-platform.postgresql.tlsEnv" -}}
+{{- $sslMode := include "agent-management-platform.postgresql.sslMode" . }}
+{{- $sslRootCert := include "agent-management-platform.postgresql.sslRootCert" . }}
+{{- if $sslMode }}
+- name: DB_SSL_MODE
+  value: {{ $sslMode | quote }}
+{{- end }}
+{{- if $sslRootCert }}
+- name: DB_SSL_ROOT_CERT
+  value: {{ $sslRootCert | quote }}
+{{- end }}
+{{- end }}
+
+{{/*
 PostgreSQL password secret key
 */}}
 {{- define "agent-management-platform.postgresql.secretPasswordKey" -}}

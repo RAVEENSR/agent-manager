@@ -25,23 +25,12 @@ export function normalizeVersion(value: string | undefined): string | undefined 
   return value.toLowerCase().startsWith("v") ? value : `v${value}`;
 }
 
-export interface AvatarInitialsOptions {
-  fallback?: string;
-  maxChars?: number;
-}
-
-export function getAvatarInitials(
-  value: string | undefined,
-  options: AvatarInitialsOptions = {},
-): string {
-  const { fallback = "??", maxChars = 2 } = options;
-  if (!value) return fallback;
-  const letters = value.replace(/[^A-Za-z]/g, "");
-  if (!letters) return fallback;
-  return letters
-    .slice(0, Math.max(1, maxChars))
-    .toUpperCase();
-}
+// Lives in `views` so the avatar components there can share it; re-exported
+// here for the call sites that already import it from this module.
+export {
+  getAvatarInitials,
+  type AvatarInitialsOptions,
+} from "@agent-management-platform/views";
 
 /** Capitalizes the first letter of a status/label string, e.g. "active" -> "Active". */
 export function capitalize(value: string): string {

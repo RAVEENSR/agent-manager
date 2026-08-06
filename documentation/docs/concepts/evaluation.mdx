@@ -221,6 +221,10 @@ For example, a "Response Format Check" evaluator might define a `required_format
 For a step-by-step walkthrough of creating custom evaluators in the AMP Console, see the [Custom Evaluators](../tutorials/custom-evaluators.mdx) tutorial.
 :::
 
+:::note Network access
+On deployments where the evaluation-job NetworkPolicy is enabled and the cluster's CNI enforces it (see [Cluster Requirements](../getting-started/on-your-environment.mdx#cluster-requirements)), custom evaluator code runs with restricted network egress — it can reach only what evaluation itself needs (trace data, the LLM gateway for LLM-Judge evaluators, and the scoring endpoint), not arbitrary external services. Design evaluators that don't depend on unrelated outbound network calls regardless, since this isn't guaranteed on every deployment.
+:::
+
 ## Monitors
 
 A **monitor** is a configured evaluation job that runs one or more evaluators against agent traces. Each monitor belongs to a specific agent and environment, and produces scores that are tracked over time.

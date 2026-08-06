@@ -2014,12 +2014,11 @@ paths:
             default: 0
         - name: type
           in: query
-          description: Filter by gateway type
+          description: |
+            Filter by gateway type. `REGULAR` and `AI` are deprecated aliases
+            (REGULAR -> BOTH, AI -> EGRESS) kept for backward compatibility.
           schema:
-            type: string
-            enum:
-              - AI
-              - REGULAR
+            $ref: "#/components/schemas/GatewayTypeInput"
         - name: status
           in: query
           description: Filter by gateway status
@@ -8753,17 +8752,15 @@ paths:
             type: string
       responses:
         "200":
-          description: Agent Kind details with all versions
+          description: >-
+            Agent Kind details with all versions, or `null` if no Agent Kind
+            has been published under this name yet.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AgentKindResponse"
-        "404":
-          description: Agent Kind not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                nullable: true
+                allOf:
+                  - $ref: "#/components/schemas/AgentKindResponse"
         "500":
           description: Internal server error
           content:
@@ -8870,19 +8867,15 @@ paths:
             type: string
       responses:
         "200":
-          description: List of Agent Kind versions
+          description: >-
+            List of Agent Kind versions. Empty if there are no versions, or
+            if no Agent Kind has been published under this name yet.
           content:
             application/json:
               schema:
                 type: array
                 items:
                   $ref: "#/components/schemas/AgentKindVersionResponse"
-        "404":
-          description: Agent Kind not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
         "500":
           description: Internal server error
           content:
@@ -11447,6 +11440,8 @@ components:
           description: Name of the Agent Kind this agent was instantiated from (absent for source-built agents)
         labels:
           $ref: "#/components/schemas/Labels"
+        createdBy:
+          $ref: "#/components/schemas/AgentCreatedBy"
       required:
         - uuid
         - name
@@ -11456,6 +11451,26 @@ components:
         - description
         - provisioning
         - agentType
+    AgentCreatedBy:
+      type: object
+      description: |
+        The user who created this agent. Resolved from an audit-only
+        requester id captured at creation time, so it is best-effort and
+        omitted entirely when unknown (e.g. agents created before this was
+        tracked, or where the creating user could not be resolved).
+      required:
+        - id
+      properties:
+        id:
+          type: string
+          description: User ID of the creator
+          example: "user-123"
+        display:
+          type: string
+          description: |
+            Display name/username of the creator, when resolvable. Omitted
+            if the user has since been deleted.
+          example: "john.doe"
     ResourceNameRequest:
       type: object
       properties:
@@ -11834,6 +11849,11 @@ components:
           $ref: "#/components/schemas/OAuthConfig"
           nullable: true
           description: Current OAuth configuration for the agent endpoint
+        resilienceTimeoutSeconds:
+          type: integer
+          description: Max duration (seconds) the gateway keeps a response open between the agent and the client before cutting it off, for this agent's endpoint in this environment. Defaults to 30 seconds when unset.
+          minimum: 1
+          maximum: 3600
     EnvironmentVariable:
       type: object
       required:
@@ -12242,6 +12262,11 @@ components:
           $ref: "#/components/schemas/OAuthConfig"
           nullable: true
           description: OAuth configuration for this environment's agent endpoint
+        resilienceTimeoutSeconds:
+          type: integer
+          description: Max duration (seconds) the gateway keeps a response open between the agent and the client before cutting it off, for this agent's endpoint in this environment. Defaults to 30 seconds when unset.
+          minimum: 1
+          maximum: 3600
         configurations:
           type: object
           description: Configuration data containing env vars and file mounts
@@ -14071,6 +14096,11 @@ components:
         oauthConfig:
           description: OAuth configuration for the agent endpoint in this environment. Omit to keep the current value.
           $ref: "#/components/schemas/OAuthConfig"
+        resilienceTimeoutSeconds:
+          type: integer
+          description: Max duration (seconds) the gateway keeps a response open between the agent and the client before cutting it off, for this agent's endpoint in this environment. Omit to keep the current value.
+          minimum: 1
+          maximum: 3600
 
     PromoteAgentRequest:
       type: object
@@ -14128,6 +14158,11 @@ components:
           description: Enable OAuth security for the agent endpoint in the target environment. Mutually exclusive with enableApiKeySecurity.
         oauthConfig:
           $ref: "#/components/schemas/OAuthConfig"
+        resilienceTimeoutSeconds:
+          type: integer
+          description: Max duration (seconds) the gateway keeps a response open between the agent and the client before cutting it off, for this agent's endpoint in the target environment. Omit to inherit the source environment's value.
+          minimum: 1
+          maximum: 3600
 
     PromoteAgentResponse:
       type: object
@@ -14152,13 +14187,35 @@ components:
     GatewayType:
       type: string
       enum:
-        - AI
-        - REGULAR
+        - INGRESS
+        - EGRESS
+        - BOTH
       description: |
-        Gateway type:
-        - REGULAR: Handles incoming API traffic
-        - AI: Handles outgoing LLM/MCP traffic (used for AI agents)
-      example: AI
+        Gateway placement role. Naming and placement policy, not capability — every
+        gateway has identical runtime capabilities regardless of role.
+        - INGRESS: handles inbound agent traffic. At most one per environment.
+        - EGRESS: hosts outbound LLM/MCP artifacts. Uncapped per environment.
+        - BOTH: does both. Counts against the ingress cap.
+
+        Immutable once registered. `REGULAR` and `AI` are accepted on input as
+        deprecated aliases (REGULAR -> BOTH, AI -> EGRESS) so gateway charts pinned to
+        an older version keep registering; responses always emit canonical values.
+      example: BOTH
+
+    GatewayTypeInput:
+      type: string
+      enum:
+        - INGRESS
+        - EGRESS
+        - BOTH
+        - REGULAR
+        - AI
+      description: |
+        Gateway placement role accepted on input. `REGULAR` and `AI` are deprecated
+        aliases kept for gateway charts pinned to an older version (REGULAR -> BOTH,
+        AI -> EGRESS); prefer INGRESS/EGRESS/BOTH. Responses and the canonical
+        `GatewayType` schema never emit REGULAR/AI.
+      example: BOTH
 
     GatewayStatus:
       type: string
@@ -14210,6 +14267,15 @@ components:
           description: Virtual host for the gateway
           maxLength: 253
           example: api.production.example.com
+        runtimeUrl:
+          type: string
+          description: >-
+            In-cluster base URL of the gateway runtime, used by sandboxed
+            platform-hosted agents. Empty means no internal address is
+            registered and the vhost is used instead. Must carry an explicit
+            port other than 80 or 443 and a cluster-local host.
+          maxLength: 512
+          example: http://api-platform-acme-dev-gw-gateway-gateway-runtime.acme-dev:22893
         region:
           type: string
           description: Deployment region
@@ -14441,13 +14507,22 @@ components:
           maxLength: 128
           example: Production AI Gateway
         gatewayType:
-          $ref: "#/components/schemas/GatewayType"
+          $ref: "#/components/schemas/GatewayTypeInput"
         vhost:
           type: string
           description: Virtual host for the gateway (FQDN or IP)
           minLength: 1
           maxLength: 253
           example: api.production.example.com
+        runtimeUrl:
+          type: string
+          description: >-
+            In-cluster base URL of the gateway runtime, used by sandboxed
+            platform-hosted agents. Empty means no internal address is
+            registered and the vhost is used instead. Must carry an explicit
+            port other than 80 or 443 and a cluster-local host.
+          maxLength: 512
+          example: http://api-platform-acme-dev-gw-gateway-gateway-runtime.acme-dev:22893
         region:
           type: string
           description: Deployment region (optional)
@@ -14495,6 +14570,15 @@ components:
           type: boolean
           description: Updated critical flag
           example: false
+        runtimeUrl:
+          type: string
+          description: >-
+            In-cluster base URL of the gateway runtime, used by sandboxed
+            platform-hosted agents. Empty means no internal address is
+            registered and the vhost is used instead. Must carry an explicit
+            port other than 80 or 443 and a cluster-local host.
+          maxLength: 512
+          example: http://api-platform-acme-dev-gw-gateway-gateway-runtime.acme-dev:22893
         status:
           $ref: "#/components/schemas/GatewayStatus"
 
@@ -15172,7 +15256,11 @@ components:
           example: true
         gateways:
           type: array
-          description: Gateway UUIDs to deploy the MCP proxy to after creation
+          deprecated: true
+          description: |
+            Deprecated and never implemented. Deployment is per (endpoint, environment),
+            so this proxy-wide field is at the wrong granularity — use
+            MCPEndpointEnvironment.gatewayId. Populated on read only.
           items:
             type: string
             format: uuid
@@ -15347,6 +15435,15 @@ components:
           enum:
             - Deployed
             - Undeployed
+        gatewayId:
+          type: string
+          format: uuid
+          description: |
+            Egress gateway to deploy this endpoint→environment binding to. Optional:
+            inferred when the environment has exactly one egress gateway, and required
+            when it has more than one. Placement is fixed once deployed — supplying a
+            different gateway on update is rejected. Emitted on read as the gateway the
+            binding is actually deployed to.
 
     MCPPolicy:
       type: object
@@ -17198,7 +17295,7 @@ components:
         defaultValue:
           type: string
           nullable: true
-          description: Default value if not provided by the user
+          description: Default value if not provided by the user (plain text for input; for a secret item, responses never carry the real value, only a masked placeholder if a default exists, or nothing if it doesn't)
 
     AgentKindVersionResponse:
       type: object

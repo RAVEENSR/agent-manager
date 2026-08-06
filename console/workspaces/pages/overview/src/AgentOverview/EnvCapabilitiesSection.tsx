@@ -16,19 +16,20 @@
  * under the License.
  */
 
-import { useMemo } from "react";
-import { Box, Chip, Divider, Tooltip, Typography, type ChipProps } from "@wso2/oxygen-ui";
-import { generatePath } from "react-router-dom";
-import { useGetAgentEndpoints } from "@agent-management-platform/api-client";
+import { useState } from "react";
+import { Box, Button, Chip, Tooltip, Typography } from "@wso2/oxygen-ui";
+import { Plug } from "@wso2/oxygen-ui-icons-react";
 import {
     CollapsibleSection,
-    extractOpenApiResources,
-    parseOpenApiSpecContent,
-    type OpenApiResource,
+    DeploymentStatus,
+    getAgentDeploymentPath,
+    IsolationTierChip,
+    OverviewSectionCard,
 } from "@agent-management-platform/shared-component";
-import { absoluteRouteMap, type Configurations } from "@agent-management-platform/types";
+import { type Configurations } from "@agent-management-platform/types";
 import { TextInput } from "@agent-management-platform/views";
-import { SectionHeader, UppercaseCaptionLabel } from "./SectionHeader";
+import { ConsumerConfigDrawer, type AuthMode } from "./ConsumerConfigDrawer";
+import { useAgentEndpointResources } from "./useAgentEndpointResources";
 
 interface EnvCapabilitiesSectionProps {
     orgId: string;
@@ -37,19 +38,46 @@ interface EnvCapabilitiesSectionProps {
     envId: string;
     configurations?: Configurations;
     external?: boolean;
+    isolationTier?: string;
+    deploymentStatus?: DeploymentStatus;
 }
 
-const METHOD_LABEL: Record<string, string> = {
-    DELETE: "DEL",
-};
+// Stable reference so an absent `oauthConfig.issuers` doesn't defeat
+// ConsumerConfigDrawer's memoization with a new empty array every render.
+const EMPTY_ISSUERS: string[] = [];
 
-const METHOD_COLOR: Record<string, ChipProps["color"]> = {
-    GET: "success",
-    POST: "warning",
-    PUT: "info",
-    PATCH: "info",
-    DELETE: "error",
-};
+/**
+ * Everything derived from `authMode` in one place — the Deploy page
+ * (DeployCard.tsx) mirrors this same oauth/apikey/none branching for its own
+ * security summary, so keeping every consumer of `authMode` here keyed off
+ * one lookup (rather than four separate ternary chains) is what keeps the
+ * wording in sync as it changes.
+ */
+function getAuthPresentation(
+    authMode: AuthMode, authHeaderPrefix: string, oauthHeaderName: string,
+): { label: string; tooltip: string; headerExample: string } {
+    switch (authMode) {
+        case "oauth":
+            return {
+                label: `OAuth2 (${authHeaderPrefix})`,
+                tooltip: `Callers send an Authorization: ${authHeaderPrefix} <token> header validated `
+                    + "by the gateway",
+                headerExample: `${oauthHeaderName}: ${authHeaderPrefix} <token>`,
+            };
+        case "apikey":
+            return {
+                label: "API Key",
+                tooltip: "Requests must include the header: x-api-key: <your-key>",
+                headerExample: "x-api-key: <your-api-key>",
+            };
+        case "none":
+            return {
+                label: "None",
+                tooltip: "Endpoint is publicly accessible without authentication",
+                headerExample: "No authentication header required",
+            };
+    }
+}
 
 interface StatusPillProps {
     label: string;
@@ -69,63 +97,35 @@ const StatusPill: React.FC<StatusPillProps> = ({ label, value, tooltip }) => (
 );
 
 /**
- * Per-environment "Capabilities" list — the HTTP endpoints an agent exposes,
- * its invoke URL, and a read-only CORS/Authentication summary (no configure
- * action here; that lives on the Deploy page). Endpoints are parsed from each
- * endpoint's published OpenAPI schema. Links out to the full API Spec viewer
- * on the Try It page. Not applicable to external agents (they aren't deployed
- * through this platform, so there's nothing to fetch), so `external` withholds
- * `orgName` to keep useGetAgentEndpoints disabled instead of firing a request
- * that would just be discarded.
+ * Per-environment "API Endpoint" card — the agent's invoke URL plus a
+ * read-only CORS/Authentication summary (no configure action here; that lives
+ * on the Deploy page). The invoke URL is resolved from the environment's
+ * deployed endpoints; the sibling "Agent Interface" card (which lists the
+ * parsed HTTP resources) now lives next to the "Agent ID" card instead of
+ * here — see EnvAgentInterfaceCard. Not applicable to external agents (they
+ * aren't deployed through this platform, so there's nothing to fetch).
  */
 export const EnvCapabilitiesSection: React.FC<EnvCapabilitiesSectionProps> = ({
-    orgId, projectId, agentId, envId, configurations, external,
+    orgId, projectId, agentId, envId, configurations, external, isolationTier, deploymentStatus,
 }) => {
-    const { data: endpoints, isLoading } = useGetAgentEndpoints(
-        { orgName: external ? "" : orgId, projName: projectId, agentName: agentId },
-        { environment: envId },
-    );
+    const [consumerConfigOpen, setConsumerConfigOpen] = useState(false);
 
-    // Single pass over the endpoint map: flattens every endpoint's OpenAPI
-    // schema into a deduped method+path list, and separately picks the
-    // externally-reachable endpoint as "the" invoke URL, falling back to
-    // whichever entry is present when none is marked external.
-    const { resources, invokeUrl } = useMemo(() => {
-        const endpointList = Object.values(endpoints ?? {});
-        const byKey = new Map<string, OpenApiResource>();
-        endpointList.forEach((endpoint) => {
-            const spec = parseOpenApiSpecContent(endpoint.schema?.content);
-            extractOpenApiResources(spec).forEach((resource) => {
-                byKey.set(`${resource.method} ${resource.path}`, resource);
-            });
-        });
-        const externalEndpoint = endpointList.find(
-            (endpoint) => endpoint.visibility?.toLowerCase() === "external",
-        );
-        return {
-            resources: Array.from(byKey.values()),
-            invokeUrl: (externalEndpoint ?? endpointList[0])?.url,
-        };
-    }, [endpoints]);
+    const { invokeUrl, isLoading, isError } = useAgentEndpointResources({
+        orgId, projectId, agentId, envId, external,
+    });
 
     // Mirrors DeployCard.tsx's authMode derivation so the wording matches the
     // Deploy page's own security summary.
-    const authMode: "none" | "apikey" | "oauth" = configurations?.enableOAuthSecurity
+    const authMode: AuthMode = configurations?.enableOAuthSecurity
         ? "oauth"
         : configurations?.enableApiKeySecurity
             ? "apikey"
             : "none";
     const authHeaderPrefix = configurations?.oauthConfig?.authHeaderPrefix || "Bearer";
-    const authLabel = authMode === "oauth"
-        ? `OAuth2 (${authHeaderPrefix})`
-        : authMode === "apikey"
-            ? "API Key"
-            : "None";
-    const authTooltip = authMode === "oauth"
-        ? `Callers send an Authorization: ${authHeaderPrefix} <token> header validated by the gateway`
-        : authMode === "apikey"
-            ? "Requests must include the header: x-api-key: <your-key>"
-            : "Endpoint is publicly accessible without authentication";
+    const oauthHeaderName = configurations?.oauthConfig?.headerName || "Authorization";
+    const { label: authLabel, tooltip: authTooltip, headerExample: authHeaderExample } =
+        getAuthPresentation(authMode, authHeaderPrefix, oauthHeaderName);
+    const oauthIssuers = configurations?.oauthConfig?.issuers ?? EMPTY_ISSUERS;
 
     const corsEnabled = configurations?.corsConfig?.enabled ?? false;
     const corsOrigins = configurations?.corsConfig?.allowOrigin ?? [];
@@ -146,94 +146,96 @@ export const EnvCapabilitiesSection: React.FC<EnvCapabilitiesSectionProps> = ({
         return null;
     }
 
-    // Points at the general tryOut route (not the api/chat sub-path) since
-    // TestComponent picks Swagger vs. AgentChat based on agent type regardless
-    // of which sub-path is requested — this is now the card's one "Try It"
-    // entry point, replacing EnvironmentCard's own removed header button.
-    const tryItHref = generatePath(
-        absoluteRouteMap.children.org.children.projects.children.agents
-            .children.environment.children.tryOut.path,
-        { orgId, projectId, agentId, envId },
-    );
+    const deploymentPath = getAgentDeploymentPath(orgId, projectId, agentId);
 
-    // Resources need a parsed OpenAPI schema; invokeUrl only needs the
-    // endpoint itself to have resolved a URL. A kind-type agent can have one
-    // without the other (e.g. schema not registered yet) — show whichever is
-    // actually available instead of hiding invokeUrl behind resources.
-    const show = !isLoading && (resources.length > 0 || !!invokeUrl);
+    // Only worth showing once the environment is actually deployed and has a
+    // resolved invoke URL — an inactive environment can still have a URL left
+    // over from a prior deployment, and surfacing it as if it were live would
+    // be misleading. A failed fetch is shown regardless, so the failure isn't
+    // silently treated as "nothing deployed yet".
+    const show = isError
+        || (deploymentStatus === DeploymentStatus.ACTIVE && !isLoading && !!invokeUrl);
 
     return (
-        <CollapsibleSection show={show}>
-            <SectionHeader title="Capabilities" viewAllHref={tryItHref} viewAllLabel="Try It" />
-            {resources.length === 0 ? (
-                <Typography
-                    variant="caption"
-                    color="text.disabled"
-                    sx={{ display: "block", fontStyle: "italic", mb: 1.5 }}
-                >
-                    Unable to find API schema
-                </Typography>
-            ) : (
-                <Box display="flex" flexWrap="wrap" gap={1} sx={{ mb: 1.5 }}>
-                    {resources.map((resource) => (
-                        <Box
-                            key={`${resource.method} ${resource.path}`}
-                            display="flex"
-                            alignItems="center"
-                            gap={0.75}
-                            sx={{
-                                border: "1px solid",
-                                borderColor: "divider",
-                                borderRadius: "999px",
-                                // The Chip already carries its own pill padding on the
-                                // left, so a smaller pl here (vs. pr, which backs onto
-                                // plain unpadded text) keeps the inset even on both ends.
-                                pl: 0.5,
-                                pr: 1.25,
-                                py: 0.5,
-                            }}
-                        >
-                            <Chip
-                                label={METHOD_LABEL[resource.method] ?? resource.method}
-                                size="small"
-                                variant="outlined"
-                                color={METHOD_COLOR[resource.method] ?? "default"}
-                                sx={{ fontSize: "0.6875rem", fontWeight: 600 }}
-                            />
-                            <Typography variant="body2" sx={{ fontFamily: "monospace" }} noWrap>
-                                {resource.path}
+        <>
+            <CollapsibleSection show={show}>
+                {(invokeUrl || isError) && (
+                    <OverviewSectionCard
+                        title="API Endpoint"
+                        actionHref={deploymentPath}
+                        actionLabel="Deployments"
+                        headerAction={(
+                            <Tooltip title="Open the consumer configuration">
+                                <Button
+                                    size="small"
+                                    variant="text"
+                                    startIcon={<Plug size={14} />}
+                                    onClick={() => setConsumerConfigOpen(true)}
+                                    sx={{
+                                        minWidth: 0,
+                                        fontSize: (theme) => theme.typography.caption.fontSize,
+                                    }}
+                                >
+                                    Connect
+                                </Button>
+                            </Tooltip>
+                        )}
+                        sx={{ mb: 1.5 }}
+                    >
+                        {isError ? (
+                            <Typography variant="body2" color="error">
+                                Unable to load the API endpoint. Try again later.
                             </Typography>
-                        </Box>
-                    ))}
-                </Box>
-            )}
+                        ) : (
+                            <>
+                                <TextInput
+                                    label="Invoke URL"
+                                    value={invokeUrl}
+                                    copyable
+                                    copyTooltipText="Copy URL"
+                                    slotProps={{ input: { readOnly: true } }}
+                                    sx={{ mb: 1 }}
+                                />
+                                <Box display="flex" flexWrap="wrap" gap={1}>
+                                    <StatusPill
+                                        label="Auth"
+                                        value={authLabel}
+                                        tooltip={authTooltip}
+                                    />
+                                    <StatusPill
+                                        label="CORS"
+                                        value={corsLabel}
+                                        tooltip={corsTooltip}
+                                    />
+                                    <IsolationTierChip tier={isolationTier} />
+                                </Box>
+                            </>
+                        )}
+                    </OverviewSectionCard>
+                )}
+            </CollapsibleSection>
+            {/* Rendered outside CollapsibleSection so it isn't retained inside
+                collapsed (zero-height) content — DrawerWrapper's underlying
+                MUI Drawer portals to document.body regardless, so nesting it
+                inside a collapsed ancestor wouldn't actually hide it. Gating
+                `open` on `show` also closes it if the card itself disappears
+                (e.g. the environment goes inactive) instead of leaving a
+                stale drawer open with no visible trigger behind it. */}
             {invokeUrl && (
-                <Box sx={{ mb: 1.5 }}>
-                    <Divider sx={{ mb: 1.5 }} />
-                    <UppercaseCaptionLabel sx={{ display: "block", mb: 0.75 }}>
-                        Invoke URL
-                    </UppercaseCaptionLabel>
-                    <TextInput
-                        value={invokeUrl}
-                        copyable
-                        copyTooltipText="Copy URL"
-                        slotProps={{ input: { readOnly: true } }}
-                        sx={{ mb: 1 }}
-                    />
-                    <Box display="flex" flexWrap="wrap" gap={1}>
-                        <StatusPill
-                            label="Auth"
-                            value={authLabel}
-                            tooltip={authTooltip}
-                        />
-                        <StatusPill
-                            label="CORS"
-                            value={corsLabel}
-                            tooltip={corsTooltip}
-                        />
-                    </Box>
-                </Box>
+                <ConsumerConfigDrawer
+                    open={consumerConfigOpen && show}
+                    onClose={() => setConsumerConfigOpen(false)}
+                    orgId={orgId}
+                    projectId={projectId}
+                    agentId={agentId}
+                    envId={envId}
+                    invokeUrl={invokeUrl}
+                    authMode={authMode}
+                    authLabel={authLabel}
+                    authHeaderExample={authHeaderExample}
+                    oauthIssuers={oauthIssuers}
+                />
             )}
-        </CollapsibleSection>
+        </>
     );
 };

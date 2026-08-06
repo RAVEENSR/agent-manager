@@ -118,6 +118,10 @@ var (
 	ErrEnvironmentHasGateways   = errors.New("environment has associated gateways")
 	ErrEnvironmentInUse         = errors.New("environment is referenced by one or more deployment pipelines")
 
+	// ErrGatewayIngressCapExceeded is returned when assigning an ingress-capable gateway to
+	// an environment that already has one. Maps to 409.
+	ErrGatewayIngressCapExceeded = errors.New("environment already has an ingress gateway")
+
 	// LLM Provider-related errors
 	ErrProviderNotFound        = errors.New("provider not found")
 	ErrProviderAlreadyExists   = errors.New("provider already exists")

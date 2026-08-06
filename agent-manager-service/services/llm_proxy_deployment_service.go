@@ -137,6 +137,14 @@ func (s *LLMProxyDeploymentService) DeployLLMProxy(proxyID string, req *models.D
 
 	slog.Info("LLMProxyDeploymentService.DeployLLMProxy: proxy retrieved", "proxyID", proxyID, "proxyUUID", proxy.UUID)
 
+	existing, err := s.deploymentRepo.GetDeployedGatewaysByProvider(proxy.UUID, ouID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list existing proxy deployments: %w", err)
+	}
+	if err := validateEgressPlacement(s.gatewayRepo, gateway, existing); err != nil {
+		return nil, fmt.Errorf("%w: %w", utils.ErrInvalidInput, err)
+	}
+
 	var baseDeploymentID *uuid.UUID
 	var contentBytes []byte
 

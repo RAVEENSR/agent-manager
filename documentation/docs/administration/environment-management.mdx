@@ -74,6 +74,35 @@ ISOLATION_TIER=gvisor \
 
 Agents deployed or promoted to that environment automatically run under the tier's runtime — no agent-side changes are needed.
 
+### Gateway topology
+
+Every environment gets an API Platform Gateway. Its **topology** decides whether one gateway handles both directions of traffic, or two gateways split the roles — an *ingress* gateway for traffic arriving at the agents deployed in the environment, and an *egress* gateway for the calls those agents make out to LLMs, MCP servers, and other APIs.
+
+| Topology | Helm releases installed | Namespaces | Registered gateway type |
+|---|---|---|---|
+| `single` (default) | `api-platform-<org>-<env>` | `<org>-<env>` | `BOTH` |
+| `split` | `api-platform-<org>-<env>` and `api-platform-<org>-<env>-egress` | `<org>-<env>` and `<org>-<env>-egress` | `INGRESS` and `EGRESS` |
+
+In split topology each release is a complete gateway of its own — its own `APIGateway` resource, its own runtime, its own routing hostname (`<env>-<org>.gateway.localhost` for ingress, `<env>-<org>-egress.gateway.localhost` for egress) — and each registers with Agent Manager separately, with its own cluster-local runtime URL.
+
+A gateway's type is fixed when it first registers and cannot be changed afterward, so an environment's topology cannot be switched in place. To move an existing environment to split topology, delete it and create it again.
+
+:::warning
+Split topology shortens the maximum `ENV_NAME` by 7 characters, to leave room for the `-egress` suffix on the second release's Kubernetes resource names. The limit is `22 - len(ORG_NAME)` characters, minus a further 7 in split topology — for the default organization `default` that leaves **8 characters**, so `ENV_NAME=production` is rejected. Use a shorter name such as `prod`.
+
+The name the Console generates for you is not bounded by the split limit, so shorten it if you are creating a split environment.
+:::
+
+The **Create Environment** drawer has no topology option, and the command it generates always creates a single-topology environment. If you script environment creation directly instead of using the Console, set the variable yourself:
+
+```bash
+GATEWAY_TOPOLOGY=split \
+  ENV_NAME=... DISPLAY_NAME=... AGENT_MANAGER_TOKEN=... \
+  bash add-environment.sh
+```
+
+Deletion needs no equivalent flag: the delete command detects the egress release and namespace and removes them along with the ingress gateway, and does nothing extra for a single-topology environment.
+
 ### Delete an environment
 
 1. On the Environments page, open the **Delete** action for the environment you want to remove.

@@ -33,7 +33,6 @@ import {
   TablePagination,
   DataGrid,
   SearchBar,
-  Avatar,
 } from "@wso2/oxygen-ui";
 import {
   Plus as Add,
@@ -49,6 +48,7 @@ import {
   displayProvisionTypes,
   DescriptionCard,
   CreatedMetadata,
+  EntityAvatar,
 } from "@agent-management-platform/views";
 import { generatePath, useNavigate, useParams } from "react-router-dom";
 import {
@@ -64,9 +64,13 @@ import {
 } from "@agent-management-platform/api-client";
 import { AgentTypeSummery } from "./subComponents/AgentTypeSummery";
 import { DeploymentPipelineCard } from "./subComponents/DeploymentPipelineCard";
-import { getErrorMessage, LabelChips, useConfirmationDialog } from "@agent-management-platform/shared-component";
+import {
+  formatRelativeTime,
+  getErrorMessage,
+  LabelChips,
+  useConfirmationDialog,
+} from "@agent-management-platform/shared-component";
 import { EditProjectDrawer } from "../ProjectList/EditProjectDrawer";
-import { formatDistanceToNow } from "date-fns";
 
 export function ListPageSkeleton() {
   return (
@@ -213,12 +217,10 @@ export const AgentsList: React.FC = () => {
     );
   }, [handleCloseAddAgentMenu, navigate, orgId, projectId]);
 
-  const getRelativeTime = useCallback((date?: string) => {
-    if (!date) {
-      return "—";
-    }
-    return formatDistanceToNow(new Date(date), { addSuffix: true });
-  }, []);
+  const getRelativeTime = useCallback(
+    (date?: string) => formatRelativeTime(date, { fallback: "—" }),
+    [],
+  );
 
   const getAgentPath = (isInternal: boolean) => {
     let path =
@@ -301,8 +303,9 @@ export const AgentsList: React.FC = () => {
   return (
     <>
       <PageLayout
+        variant="card"
         title={project?.displayName ?? "Agents"}
-        description={project ? <CreatedMetadata createdAt={project.createdAt} /> : undefined}
+        meta={project ? <CreatedMetadata createdAt={project.createdAt} /> : undefined}
         isLoading={isPageLoading}
         actions={
           <Button
@@ -326,14 +329,14 @@ export const AgentsList: React.FC = () => {
           <Stack
             direction="row"
             justifyContent="space-between"
-            gap={4}
+            gap={2}
           >
             <Stack
               direction="column"
               sx={{
                 flexGrow: 1,
               }}
-              spacing={4}
+              spacing={2}
             >
               <Stack direction="row" spacing={1}>
                 <Box flexGrow={1}>
@@ -415,9 +418,13 @@ export const AgentsList: React.FC = () => {
                         >
                           <ListingTable.Cell>
                             <Stack direction="row" alignItems="center" spacing={2} sx={{ width: "100%", minWidth: 0 }}>
-                              <Avatar sx={{ bgcolor: "primary.main", fontSize: 16, height: 32, width: 32, color: "primary.contrastText", flexShrink: 0 }}>
-                                {agent.displayName.charAt(0).toUpperCase()}
-                              </Avatar>
+                              <EntityAvatar
+                                name={agent.displayName}
+                                color="primary.main"
+                                shape="circular"
+                                size={32}
+                                sx={{ flexShrink: 0 }}
+                              />
                               <Stack direction="row" alignItems="flex-start" spacing={1} sx={{ minWidth: 0, flex: 1 }}>
                                 <Typography variant="body1" sx={{ flexShrink: 0 }}>
                                   {agent.displayName}

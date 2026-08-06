@@ -17,6 +17,7 @@
 package repositories
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 
@@ -34,13 +35,13 @@ var ErrAgentConfigNotFound = errors.New("agent config not found")
 //go:generate moq -rm -fmt goimports -skip-ensure -pkg repomocks -out repomocks/agent_config_repository_mock.go . AgentConfigRepository:AgentConfigRepositoryMock
 type AgentConfigRepository interface {
 	// Upsert creates or updates an agent config for a specific environment
-	Upsert(config *models.AgentConfig) error
+	Upsert(ctx context.Context, config *models.AgentConfig) error
 
 	// Get retrieves agent config for a specific agent and environment
-	Get(ouID, projectName, agentName, environmentName string) (*models.AgentConfig, error)
+	Get(ctx context.Context, ouID, projectName, agentName, environmentName string) (*models.AgentConfig, error)
 
 	// DeleteAllByAgent removes all configs for an agent (used when agent is deleted)
-	DeleteAllByAgent(ouID, projectName, agentName string) error
+	DeleteAllByAgent(ctx context.Context, ouID, projectName, agentName string) error
 }
 
 // AgentConfigRepo implements AgentConfigRepository using GORM
@@ -54,7 +55,7 @@ func NewAgentConfigRepo(db *gorm.DB) AgentConfigRepository {
 }
 
 // Upsert creates or updates an agent config for a specific environment
-func (r *AgentConfigRepo) Upsert(config *models.AgentConfig) error {
+func (r *AgentConfigRepo) Upsert(ctx context.Context, config *models.AgentConfig) error {
 	// clause.Assignments bypasses GORM's serializer:json tag, so []string fields
 	// must be pre-serialized to JSON strings and cast to jsonb explicitly.
 	originsJSON, _ := json.Marshal(config.CORSAllowOrigins)
@@ -65,7 +66,7 @@ func (r *AgentConfigRepo) Upsert(config *models.AgentConfig) error {
 
 	// Use Select("*") to force GORM to include all fields including boolean false values
 	// Without this, GORM skips "zero value" fields like false booleans during Create
-	return r.db.Select("*").Clauses(clause.OnConflict{
+	return r.db.WithContext(ctx).Select("*").Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "ou_id"}, {Name: "project_name"}, {Name: "agent_name"}, {Name: "environment_name"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
 			"enable_auto_instrumentation": config.EnableAutoInstrumentation,
@@ -82,15 +83,16 @@ func (r *AgentConfigRepo) Upsert(config *models.AgentConfig) error {
 			"oauth_header_name":           config.OAuthHeaderName,
 			"oauth_auth_header_prefix":    config.OAuthAuthHeaderPrefix,
 			"oauth_forward_token":         config.OAuthForwardToken,
+			"resilience_timeout_seconds":  config.ResilienceTimeoutSeconds,
 			"updated_at":                  clause.Expr{SQL: "NOW()"},
 		}),
 	}).Create(config).Error
 }
 
 // Get retrieves agent config for a specific agent and environment
-func (r *AgentConfigRepo) Get(ouID, projectName, agentName, environmentName string) (*models.AgentConfig, error) {
+func (r *AgentConfigRepo) Get(ctx context.Context, ouID, projectName, agentName, environmentName string) (*models.AgentConfig, error) {
 	var config models.AgentConfig
-	err := r.db.Where("ou_id = ? AND project_name = ? AND agent_name = ? AND environment_name = ?",
+	err := r.db.WithContext(ctx).Where("ou_id = ? AND project_name = ? AND agent_name = ? AND environment_name = ?",
 		ouID, projectName, agentName, environmentName).First(&config).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -102,7 +104,7 @@ func (r *AgentConfigRepo) Get(ouID, projectName, agentName, environmentName stri
 }
 
 // DeleteAllByAgent removes all configs for an agent (used when agent is deleted)
-func (r *AgentConfigRepo) DeleteAllByAgent(ouID, projectName, agentName string) error {
-	return r.db.Where("ou_id = ? AND project_name = ? AND agent_name = ?",
+func (r *AgentConfigRepo) DeleteAllByAgent(ctx context.Context, ouID, projectName, agentName string) error {
+	return r.db.WithContext(ctx).Where("ou_id = ? AND project_name = ? AND agent_name = ?",
 		ouID, projectName, agentName).Delete(&models.AgentConfig{}).Error
 }

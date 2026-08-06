@@ -11,7 +11,7 @@ metadata:
     {{- include "wso2-amp-gateway-extension.labels" . | nindent 4 }}
     app.kubernetes.io/component: gateway-bootstrap
   annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook": pre-install,pre-upgrade,pre-rollback
     "helm.sh/hook-weight": "1"
     "helm.sh/hook-delete-policy": before-hook-creation
 ---
@@ -25,7 +25,7 @@ metadata:
     {{- include "wso2-amp-gateway-extension.labels" . | nindent 4 }}
     app.kubernetes.io/component: gateway-bootstrap
   annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook": pre-install,pre-upgrade,pre-rollback
     "helm.sh/hook-weight": "2"
     "helm.sh/hook-delete-policy": before-hook-creation
 rules:
@@ -48,7 +48,7 @@ metadata:
     {{- include "wso2-amp-gateway-extension.labels" . | nindent 4 }}
     app.kubernetes.io/component: gateway-bootstrap
   annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook": pre-install,pre-upgrade,pre-rollback
     "helm.sh/hook-weight": "3"
     "helm.sh/hook-delete-policy": before-hook-creation
 subjects:
@@ -80,7 +80,7 @@ metadata:
     {{- include "wso2-amp-gateway-extension.labels" . | nindent 4 }}
     app.kubernetes.io/component: gateway-bootstrap
   annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook": pre-install,pre-upgrade,pre-rollback
     "helm.sh/hook-weight": "10"
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
@@ -122,6 +122,8 @@ spec:
               value: {{ .Values.gateway.displayName | quote }}
             - name: GATEWAY_VHOST
               value: {{ .Values.gateway.vhost | quote }}
+            - name: GATEWAY_RUNTIME_URL
+              value: {{ include "wso2-amp-gateway-extension.runtimeUrl" . | quote }}
             - name: GATEWAY_TYPE
               value: {{ .Values.gateway.type | quote }}
             - name: ENVIRONMENT_NAME
@@ -223,6 +225,48 @@ spec:
                 fi
               }
 
+              # sync_runtime_url wanted registered — PUTs the in-cluster runtime address when
+              # it differs from what AMS holds. Unlike the role, the address is mutable: it is
+              # a fact about placement, so a stale one is simply wrong. Non-fatal like
+              # seed_identity_provider — http_put returns 1 on non-2xx and set -eu would
+              # otherwise abort this pre-upgrade hook, killing the runtime image bump that
+              # was the point of the upgrade.
+              sync_runtime_url() {
+                # _ru_ prefix: POSIX sh has no portable `local`, so these leak as globals.
+                _ru_want="$1"; _ru_have="$2"
+                if [ -z "${_ru_want}" ] || [ "${_ru_want}" = "${_ru_have}" ]; then
+                  return 0
+                fi
+                log_info "Updating gateway runtimeUrl from '${_ru_have}' to '${_ru_want}'..."
+                if http_put \
+                    "${AMP_API_URL}/orgs/${ORG_NAME}/gateways/${GATEWAY_ID}" \
+                    "application/json" \
+                    '{"runtimeUrl":"'"${_ru_want}"'"}' \
+                    "Bearer ${ACCESS_TOKEN}" >/dev/null; then
+                  log_info "Gateway runtimeUrl updated."
+                else
+                  log_error "Failed to update gateway runtimeUrl to '${_ru_want}' (continuing). Sandboxed agents will keep using the registered value."
+                fi
+                # Explicit: without it an appended statement could make this fatal again.
+                return 0
+              }
+
+              warn_vhost_drift() {
+                # _vh_ prefix: POSIX sh has no portable `local`, so these leak as globals.
+                _vh_want="$1"; _vh_have="$2"
+                if [ -z "${_vh_want}" ] || [ "${_vh_want}" = "${_vh_have}" ]; then
+                  return 0
+                fi
+                # Unlike runtimeUrl there is no PUT for vhost: it is not part of the
+                # gateway update API, so registration is the only chance to set it and a
+                # supplied value that differs is silently discarded. Say so, rather than
+                # leaving the operator to notice the console still shows the old host.
+                log_info "WARNING: gateway.vhost is '${_vh_want}' but this gateway is registered with '${_vh_have}'."
+                log_info "WARNING: vhost is written at first registration only and cannot be updated, so the registered value stays in effect."
+                log_info "WARNING: Applying it means deleting this gateway registration and re-registering."
+                return 0
+              }
+
               # ----------------------------------------------------------------
               # Step 1: Wait for Agent Manager API to be healthy
               # ----------------------------------------------------------------
@@ -274,6 +318,38 @@ spec:
 
               if [ -n "${GATEWAY_ID}" ]; then
                 log_info "Gateway '${GATEWAY_NAME}' already exists with ID: ${GATEWAY_ID}"
+                # Read-only drift check. The role is written only at registration and is
+                # immutable afterwards, so this never writes and cannot fail the hook.
+                # Under the ingress cap, PUTting the role on every upgrade could fail
+                # because a *different* release holds the environment's ingress slot —
+                # and as a pre-upgrade hook that would abort the whole release upgrade,
+                # including the runtime image bump that was the point of it.
+                REGISTERED_TYPE=$(echo "${LIST_RESPONSE}" | \
+                  grep -o '"name":"'"${GATEWAY_NAME}"'"[^}]*"gatewayType":"[^"]*"\|"gatewayType":"[^"]*"[^}]*"name":"'"${GATEWAY_NAME}"'"' | \
+                  grep -o '"gatewayType":"[^"]*"' | cut -d'"' -f4 | head -1)
+                WANTED_TYPE=$(echo "${GATEWAY_TYPE}" | tr '[:lower:]' '[:upper:]')
+                case "${WANTED_TYPE}" in
+                  REGULAR) WANTED_TYPE="BOTH" ;;
+                  AI)      WANTED_TYPE="EGRESS" ;;
+                esac
+                if [ -n "${REGISTERED_TYPE}" ] && [ "${REGISTERED_TYPE}" != "${WANTED_TYPE}" ]; then
+                  log_info "WARNING: gateway '${GATEWAY_NAME}' is registered as '${REGISTERED_TYPE}' but values.yaml requests '${WANTED_TYPE}'."
+                  log_info "         The role is immutable; values.yaml will stay wrong until the gateway is re-registered."
+                fi
+                # Window is safe because JSON object keys are emitted alphabetically: the only
+                # }-bearing value, environments, precedes name, and only scalar region can fall
+                # between name and runtimeUrl.
+                REGISTERED_RUNTIME_URL=$(echo "${LIST_RESPONSE}" | \
+                  grep -o '"name":"'"${GATEWAY_NAME}"'"[^}]*"runtimeUrl":"[^"]*"' | \
+                  grep -o '"runtimeUrl":"[^"]*"' | cut -d'"' -f4 | head -1)
+                sync_runtime_url "${GATEWAY_RUNTIME_URL}" "${REGISTERED_RUNTIME_URL}"
+
+                # Same window reasoning as runtimeUrl above: vhost sorts after name and
+                # everything between them is scalar.
+                REGISTERED_VHOST=$(echo "${LIST_RESPONSE}" | \
+                  grep -o '"name":"'"${GATEWAY_NAME}"'"[^}]*"vhost":"[^"]*"' | \
+                  grep -o '"vhost":"[^"]*"' | cut -d'"' -f4 | head -1)
+                warn_vhost_drift "${GATEWAY_VHOST}" "${REGISTERED_VHOST}"
               else
                 # ----------------------------------------------------------------
                 # Step 4: Find the environment by name
@@ -302,7 +378,7 @@ spec:
                 REGISTER_RESPONSE=$(http_post \
                   "${AMP_API_URL}/orgs/${ORG_NAME}/gateways" \
                   "application/json" \
-                  '{"name":"'"${GATEWAY_NAME}"'","displayName":"'"${GATEWAY_DISPLAY_NAME}"'","gatewayType":"'"${GATEWAY_TYPE}"'","vhost":"'"${GATEWAY_VHOST}"'","environmentIds":["'"${ENVIRONMENT_ID}"'"]}' \
+                  '{"name":"'"${GATEWAY_NAME}"'","displayName":"'"${GATEWAY_DISPLAY_NAME}"'","gatewayType":"'"${GATEWAY_TYPE}"'","vhost":"'"${GATEWAY_VHOST}"'","runtimeUrl":"'"${GATEWAY_RUNTIME_URL}"'","environmentIds":["'"${ENVIRONMENT_ID}"'"]}' \
                   "Bearer ${ACCESS_TOKEN}")
 
                 GATEWAY_ID=$(echo "${REGISTER_RESPONSE}" | \
@@ -340,6 +416,22 @@ spec:
               EXISTING_TOKEN=$(kubectl get secret "${TOKEN_SECRET_NAME}" \
                 --namespace="${TOKEN_SECRET_NAMESPACE}" \
                 -o jsonpath="{.data.${TOKEN_SECRET_KEY}}" 2>/dev/null | base64 -d 2>/dev/null || true)
+
+              # The Secret is created with kubectl below, so Helm does not own it and
+              # `helm uninstall` leaves it behind. Reusing it unconditionally would then
+              # hand the controller a credential the control plane has no record of —
+              # which is what happens on a reinstall after the gateway's tokens are gone,
+              # and it authenticates nowhere while looking correctly configured. Only
+              # reuse the Secret when this gateway still has at least one token.
+              if [ -n "${EXISTING_TOKEN}" ]; then
+                TOKEN_LIST=$(http_get \
+                  "${AMP_API_URL}/orgs/${ORG_NAME}/gateways/${GATEWAY_ID}/tokens" \
+                  "${ACCESS_TOKEN}" || true)
+                if ! echo "${TOKEN_LIST}" | grep -q '"id"'; then
+                  log_info "Token Secret '${TOKEN_SECRET_NAME}' exists but gateway '${GATEWAY_ID}' has no registered tokens — minting a new one."
+                  EXISTING_TOKEN=""
+                fi
+              fi
 
               if [ -n "${EXISTING_TOKEN}" ]; then
                 log_info "Token Secret '${TOKEN_SECRET_NAME}' already exists — skipping token rotation."

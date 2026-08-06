@@ -94,6 +94,17 @@ export interface Provisioning {
   agentKind?: ProvisioningAgentKind;
 }
 
+/**
+ * Creator of an agent, resolved best-effort by the control plane — absent for
+ * agents created before this was tracked, or when the user can't be resolved.
+ */
+export interface AgentCreatedBy {
+  /** User ID captured at creation time. */
+  id: string;
+  /** Display name/username, omitted when the user could not be resolved. */
+  display?: string;
+}
+
 export interface AgentResponse {
   name: string;
   displayName: string;
@@ -109,6 +120,7 @@ export interface AgentResponse {
   uuid?: string;
   kindName?: string;
   labels?: Record<string, string>;
+  createdBy?: AgentCreatedBy;
 }
 
 export interface AgentListResponse extends PaginationMeta {

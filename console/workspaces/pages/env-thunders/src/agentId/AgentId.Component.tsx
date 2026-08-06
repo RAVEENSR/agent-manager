@@ -540,7 +540,7 @@ const AgentIdentitySection: React.FC<AgentIdentitySectionProps> = ({
             {thunderAgentId && (
               <TextInput
                 slotProps={{ input: { readOnly: true } }}
-                label="Thunder Agent ID"
+                label="Agent ID"
                 value={thunderAgentId}
                 copyable
                 fullWidth

@@ -317,6 +317,14 @@ install_evaluation_extension() {
     local chart_version="${VERSION}"
     local release_name="amp-evaluation-extension"
 
+    # The chart's NetworkPolicy targets "workflows-<env>" (workflows-default unless
+    # ampEvaluation.workflowNamespace is overridden) — the namespace OpenChoreo's control
+    # plane runs that environment's Argo workflows in. On a fresh cluster nothing has
+    # triggered a workflow yet, so OpenChoreo hasn't created it and the install fails with
+    # "namespaces \"workflows-default\" not found". Pre-create it (idempotent) so install
+    # order doesn't depend on a workflow having already run.
+    kubectl create namespace workflows-default --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+
     # Install Helm chart
     if ! install_amp_helm_chart "${release_name}" "${chart_ref}" "${EVALUATION_NS}" "${TIMEOUT_AMP_INSTALL}" \
         --version "${chart_version}" \
@@ -426,6 +434,31 @@ install_gateway_extension() {
     if ! kubectl label namespace "${gateway_namespace}" \
         "amp.wso2.com/api-platform-gateway=true" --overwrite >/dev/null; then
         log_error "Failed to label gateway namespace ${gateway_namespace}"
+        return 1
+    fi
+
+    # gateway-controller 1.2.0-beta mounts an AES-256 at-rest encryption key from
+    # a Secret in the SAME namespace as the gateway release.
+    local enc_secret_name="${GATEWAY_ENCRYPTION_SECRET_NAME:-gateway-encryption-keys}"
+    local enc_secret_key="${GATEWAY_ENCRYPTION_SECRET_KEY:-default-aesgcm256-v1.bin}"
+
+    local key_tmp
+    key_tmp="$(mktemp)"
+    if ! openssl rand 32 > "${key_tmp}"; then
+        log_error "Failed to generate gateway encryption key"
+        rm -f "${key_tmp}"
+        return 1
+    fi
+    local enc_create_out enc_create_rc
+    enc_create_out="$(kubectl create secret generic "${enc_secret_name}" -n "${gateway_namespace}" \
+        "--from-file=${enc_secret_key}=${key_tmp}" 2>&1)" && enc_create_rc=0 || enc_create_rc=$?
+    rm -f "${key_tmp}" # don't leave the plaintext key on disk
+    if [ "${enc_create_rc}" -eq 0 ]; then
+        log_success "Gateway encryption key secret created in '${gateway_namespace}'"
+    elif printf '%s\n' "${enc_create_out}" | grep -q "AlreadyExists"; then
+        log_info "Gateway encryption key secret '${enc_secret_name}' already exists in '${gateway_namespace}', leaving it untouched."
+    else
+        log_error "Failed to create gateway encryption key secret '${enc_secret_name}' in '${gateway_namespace}': ${enc_create_out}"
         return 1
     fi
 

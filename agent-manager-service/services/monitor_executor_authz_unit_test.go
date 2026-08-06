@@ -52,7 +52,6 @@ import (
 
 	"github.com/wso2/agent-manager/agent-manager-service/clients/clientmocks"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
-	"github.com/wso2/agent-manager/agent-manager-service/config"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories/repomocks"
 )
@@ -188,7 +187,7 @@ func TestExecuteMonitorRunStaysWithinSchedulerGrantedActions(t *testing.T) {
 		llmMappingRepo,
 		&repomocks.GatewayRepositoryMock{},
 		&repomocks.LLMProviderRepositoryMock{},
-		config.GatewayRuntimeConfig{},
+		&repomocks.DeploymentRepositoryMock{},
 	)
 
 	// The scheduler injects its restricted, role-bound client through the context;

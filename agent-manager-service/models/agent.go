@@ -39,6 +39,21 @@ type AgentResponse struct {
 	Configurations *Configurations   `json:"configurations,omitempty"`
 	KindName       string            `json:"kindName,omitempty"`
 	Labels         map[string]string `json:"labels,omitempty"`
+	// CreatedBy is best-effort: resolved from the audit-only requester id
+	// captured at agent-creation time (see AgentThunderClient.RequestedBy).
+	// Nil when unknown — pre-existing agents, deployments without AgentID
+	// provisioning wired up, or when the id couldn't be resolved to a user.
+	CreatedBy *AgentCreatedBy `json:"createdBy,omitempty"`
+}
+
+// AgentCreatedBy identifies the user who created an agent, resolved
+// best-effort from the platform Thunder identity store.
+type AgentCreatedBy struct {
+	// ID is the raw user id (JWT subject) captured at creation time.
+	ID string `json:"id"`
+	// Display is the resolved username/display name, empty if the user
+	// couldn't be resolved (e.g. since deleted).
+	Display string `json:"display,omitempty"`
 }
 
 // Configurations contains runtime configurations for an agent
@@ -50,6 +65,7 @@ type Configurations struct {
 	CorsConfig                *CorsConfig  `json:"corsConfig,omitempty"`
 	EnableOAuthSecurity       *bool        `json:"enableOAuthSecurity,omitempty"`
 	OAuthConfig               *OAuthConfig `json:"oauthConfig,omitempty"`
+	ResilienceTimeoutSeconds  *int32       `json:"resilienceTimeoutSeconds,omitempty"`
 }
 
 type CorsConfig struct {

@@ -29,6 +29,8 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/rbac"
 )
 
+//go:generate moq -rm -fmt goimports -skip-ensure -pkg clientmocks -out ../clientmocks/identity_client_mock.go . IdentityClient:IdentityClientMock
+
 // IdentityClient provides user, group, and role management operations via the Thunder API.
 type IdentityClient interface {
 	// Users

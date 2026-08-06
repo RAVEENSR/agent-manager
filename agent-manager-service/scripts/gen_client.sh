@@ -22,6 +22,7 @@ if [ "$CI" = "true" ]; then
         -o spec \
         --package-name spec \
         --schema-mappings MetricDateTime=string \
+        --additional-properties enumClassPrefix=true \
         --enable-post-process-file
 else
     # Locally, use Docker
@@ -35,7 +36,8 @@ else
         -g go \
         -o /local/spec \
         --package-name spec \
-        --schema-mappings MetricDateTime=string
+        --schema-mappings MetricDateTime=string \
+        --additional-properties enumClassPrefix=true
 fi
 
 rm spec/.openapi-generator-ignore

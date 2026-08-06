@@ -29,7 +29,7 @@ import {
   Select,
   Typography,
 } from "@wso2/oxygen-ui";
-import { Package, Plus } from "@wso2/oxygen-ui-icons-react";
+import { Package, Plus, Trash } from "@wso2/oxygen-ui-icons-react";
 import { generatePath, Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { DrawerWrapper, DrawerHeader, DrawerContent, TextInput, PageLayout } from "@agent-management-platform/views";
 import {
@@ -40,7 +40,7 @@ import {
 } from "@agent-management-platform/types";
 import { LabelsEditor, useConfirmationDialog } from "@agent-management-platform/shared-component";
 import { RuntimeConfigEditor, createRuntimeConfigRow, type RuntimeConfigRow } from "./RuntimeConfigEditor";
-import { useGetAgent, useGetAgentBuilds, useGetAgentKind, useListAgentKindVersions, usePublishAgentKind } from "@agent-management-platform/api-client";
+import { useDeleteAgentKind, useGetAgent, useGetAgentBuilds, useGetAgentKind, useListAgentKindVersions, usePublishAgentKind } from "@agent-management-platform/api-client";
 
 
 export const PublishedList: React.FC = () => {
@@ -53,14 +53,14 @@ export const PublishedList: React.FC = () => {
     agentId: string;
   }>();
 
+  const { mutate: unpublishAgentKind, isPending: isUnpublishing, isSuccess: hasUnpublished } =
+    useDeleteAgentKind();
+
   const {data: agentKindVersions, isLoading: isAgentKindVersionsLoading} =
-    useListAgentKindVersions({
-    orgName: orgId,
-    kindName: agentId!,
-  });
+    useListAgentKindVersions({ orgName: orgId, kindName: agentId! });
 
   const { data:agent } = useGetAgent({
-    orgName: orgId, 
+    orgName: orgId,
     projName: projectId,
     agentName: agentId,
   });
@@ -89,8 +89,14 @@ export const PublishedList: React.FC = () => {
 
   const { addConfirmation } = useConfirmationDialog();
 
-  // Pre-fill display name & description from existing kind when drawer opens
+  // Pre-fill display name & description from existing kind when drawer opens.
+  // Skipped once hasUnpublished is true — the drawer is closed at that point
+  // anyway, so there's nothing to pre-fill, only a pointless re-render as
+  // `existingKind` settles to null once the invalidated query refetches.
   useEffect(() => {
+    if (hasUnpublished) {
+      return;
+    }
     if (isCreateOpen && existingKind) {
       setKindDisplayName(existingKind.displayName ?? "");
       setKindDescription(existingKind.description ?? "");
@@ -98,9 +104,20 @@ export const PublishedList: React.FC = () => {
       setKindDisplayName(agent.displayName ?? "");
       setKindDescription(agent.description ?? "");
     }
-  }, [isCreateOpen, existingKind, agent]);
+  }, [isCreateOpen, existingKind, agent, hasUnpublished]);
 
   const { mutateAsync: publishAgentKind, isPending: isCreating } = usePublishAgentKind();
+
+  const handleUnpublishKind = useCallback(() => {
+    addConfirmation({
+      title: "Unpublish Kind",
+      description: "Are you sure you want to unpublish this Agent Kind? This removes it and all its versions from the catalog. This action cannot be undone.",
+      confirmButtonText: "Unpublish",
+      confirmButtonColor: "error",
+      confirmButtonIcon: <Trash size={16} />,
+      onConfirm: () => unpublishAgentKind({ orgName: orgId!, kindName: agentId! }),
+    });
+  }, [addConfirmation, unpublishAgentKind, orgId, agentId]);
 
   const isDirty = useMemo(
     () => versionName.trim() !== "" || selectedBuildName !== "" || kindDisplayName.trim() !== "" || kindDescription.trim() !== "" || Object.keys(kindLabels).length > 0 || createRows.some((r) => r.key.trim() !== ""),
@@ -198,8 +215,21 @@ export const PublishedList: React.FC = () => {
         title="Publish"
         description="Manage and publish versions of this Agent Kind to the catalog."
         disableIcon
-        actions={
+        actions={[
+          existingKind && (
+            <Button
+              key="unpublish-kind"
+              variant="outlined"
+              color="error"
+              startIcon={<Trash />}
+              disabled={isUnpublishing}
+              onClick={handleUnpublishKind}
+            >
+              {isUnpublishing ? "Unpublishing..." : "Unpublish Kind"}
+            </Button>
+          ),
           <Button
+            key="create-version"
             variant="contained"
             component={Link}
             to={createVersionPath}
@@ -207,8 +237,8 @@ export const PublishedList: React.FC = () => {
             color="primary"
           >
             Create Version
-          </Button>
-        }
+          </Button>,
+        ].filter(Boolean)}
       >
         <ListingTable.Container>
           {isAgentKindVersionsLoading ? (

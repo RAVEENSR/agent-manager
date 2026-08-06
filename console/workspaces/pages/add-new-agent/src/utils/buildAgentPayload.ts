@@ -17,6 +17,7 @@
  */
 
 import {
+  AgentKindConfigSchemaItem,
   CreateAgentRequest,
   MCPConfigRequest,
   ModelConfigRequest,
@@ -29,6 +30,34 @@ import {
   LLMProviderFormEntry,
   MCPProxyFormEntry,
 } from "../form/schema";
+
+export interface CatalogEnvSeed {
+  env: { key: string; value: string; isSensitive: boolean }[];
+  lockedEnvKeys: Set<string>;
+  /**
+   * Keys that are both kind-declared secrets AND have a real default set — only
+   * these should render as a locked/masked "existing secret" field. A mandatory
+   * secret with no default must stay a normal, empty, editable field, since there
+   * is nothing to fall back to if the user leaves it alone — the kind's config
+   * schema response can't tell those two cases apart by isSecret alone, since a
+   * secret's real default is never sent to the client (only whether one exists).
+   */
+  kindSecretKeysWithDefault: Set<string>;
+}
+
+export function deriveCatalogEnvSeed(schema: AgentKindConfigSchemaItem[]): CatalogEnvSeed {
+  return {
+    env: schema.map((item) => ({
+      key: item.name,
+      value: item.isSecret ? "" : (item.defaultValue ?? ""),
+      isSensitive: item.isSecret,
+    })),
+    lockedEnvKeys: new Set(schema.map((item) => item.name)),
+    kindSecretKeysWithDefault: new Set(
+      schema.filter((item) => item.isSecret && !!item.defaultValue).map((item) => item.name),
+    ),
+  };
+}
 
 export function findLowestEnvironmentName(
   promotionPaths: PromotionPath[] = [],
@@ -278,11 +307,15 @@ export const buildCatalogAgentPayload = (
         },
       },
       configurations: {
+        // A whitespace-only value (e.g. a pasted secret with a trailing newline) must
+        // be treated the same as "left empty" — otherwise it both ships a broken,
+        // barely-visible value AND skips the server-side default backfill for secret
+        // fields, which only fires when the submitted value is truly empty.
         env: (data.env ?? [])
-          .filter((envVar) => envVar.key && envVar.value)
+          .filter((envVar) => envVar.key && envVar.value?.trim())
           .map((envVar) => ({
             key: envVar.key!.trim().replace(/\s+/g, '_'),
-            value: envVar.value!,
+            value: envVar.value!.trim(),
             isSensitive: envVar.isSensitive || false,
           })),
         files: (data.files ?? [])

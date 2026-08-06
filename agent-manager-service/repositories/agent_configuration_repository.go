@@ -38,8 +38,23 @@ type AgentConfigurationRepository interface {
 	// GetByUUID retrieves configuration by UUID
 	GetByUUID(ctx context.Context, configUUID uuid.UUID, ouID string) (*models.AgentConfiguration, error)
 
-	// GetByAgentID retrieves configuration by agent ID
+	// GetByAgentID retrieves configuration by agent ID. An agent can have
+	// several configuration rows of the same type (e.g. one per bound MCP
+	// proxy — see ListMCPConfigsByAgent's doc comment), so this returns an
+	// ARBITRARY single row when more than one exists; callers that need
+	// every row of a given type must use ListMCPConfigsByAgent (MCP) or
+	// ListByAgentAndType instead.
 	GetByAgentID(ctx context.Context, agentID, ouID string) (*models.AgentConfiguration, error)
+
+	// ListMCPConfigsByAgent returns every MCP-type AgentConfiguration row for
+	// one agent, each fully preloaded with its EnvMCPMappings (and their
+	// MCPProxy/Artifact) — one row per MCP proxy the agent is configured
+	// with (see createMCPConfig: each configured MCP proxy gets its own
+	// AgentConfiguration row, all sharing TypeID=AgentConfigTypeIDMCP).
+	// Callers that need the full set of MCP proxies an agent is bound to
+	// (e.g. resolving the union of every proxy's scopes) must use this
+	// instead of GetByAgentID, which only ever returns one arbitrary row.
+	ListMCPConfigsByAgent(ctx context.Context, ouID, projectName, agentID string) ([]models.AgentConfiguration, error)
 
 	// List retrieves configurations with pagination
 	List(ctx context.Context, ouID string, limit, offset int) ([]models.AgentConfiguration, error)
@@ -125,6 +140,18 @@ func (r *agentConfigurationRepository) GetByAgentID(ctx context.Context, agentID
 		backfillLLMProxyHandles(&config)
 	}
 	return &config, err
+}
+
+func (r *agentConfigurationRepository) ListMCPConfigsByAgent(ctx context.Context, ouID, projectName, agentID string) ([]models.AgentConfiguration, error) {
+	var configs []models.AgentConfiguration
+	err := r.db.WithContext(ctx).
+		Preload("EnvMCPMappings").
+		Preload("EnvMCPMappings.Artifact").
+		Preload("EnvMCPMappings.MCPProxy").
+		Preload("EnvMCPMappings.MCPProxy.Artifact").
+		Where("ou_id = ? AND project_name = ? AND agent_id = ? AND type_id = ?", ouID, projectName, agentID, models.AgentConfigTypeIDMCP).
+		Find(&configs).Error
+	return configs, err
 }
 
 // backfillLLMProxyHandles populates the Handle field of each preloaded LLM proxy

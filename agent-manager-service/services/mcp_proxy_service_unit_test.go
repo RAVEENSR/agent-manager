@@ -18,6 +18,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -68,7 +69,10 @@ func gatewayWithPolicyManifest(nameVersionPairs ...string) *models.Gateway {
 			"version": nameVersionPairs[i+1],
 		})
 	}
-	return &models.Gateway{Manifest: map[string]interface{}{"policies": items}}
+	return &models.Gateway{
+		Manifest:                 map[string]interface{}{"policies": items},
+		GatewayFunctionalityType: models.GatewayRoleBoth,
+	}
 }
 
 func TestDefaultMCPProxySecurity_IdentityVariantSkipsAPIKeyDefaults(t *testing.T) {
@@ -123,7 +127,7 @@ func TestValidateMCPEndpointSecurity_IdentityNeedsGatewayPolicies(t *testing.T) 
 	endpoints := []models.MCPProxyEndpointDTO{
 		endpointWith("https://93.184.216.34", identityEnabledSecurity()),
 	}
-	err := svc.validateMCPEndpointSecurity(context.Background(), "org1", endpoints)
+	err := svc.validateMCPEndpointSecurity(context.Background(), "org1", endpoints, nil)
 	assert.ErrorIs(t, err, utils.ErrInvalidInput)
 }
 
@@ -137,7 +141,7 @@ func TestValidateMCPEndpointSecurity_IdentityAcceptedWithGatewayPolicies(t *test
 	endpoints := []models.MCPProxyEndpointDTO{
 		endpointWith("https://93.184.216.34", identityEnabledSecurity()),
 	}
-	assert.NoError(t, svc.validateMCPEndpointSecurity(context.Background(), "org1", endpoints))
+	assert.NoError(t, svc.validateMCPEndpointSecurity(context.Background(), "org1", endpoints, nil))
 }
 
 func TestValidateMCPEndpointSecurity_IdentityAllowedWhenNoGatewayYet(t *testing.T) {
@@ -152,7 +156,7 @@ func TestValidateMCPEndpointSecurity_IdentityAllowedWhenNoGatewayYet(t *testing.
 	endpoints := []models.MCPProxyEndpointDTO{
 		endpointWith("https://93.184.216.34", identityEnabledSecurity()),
 	}
-	assert.NoError(t, svc.validateMCPEndpointSecurity(context.Background(), "org1", endpoints))
+	assert.NoError(t, svc.validateMCPEndpointSecurity(context.Background(), "org1", endpoints, nil))
 }
 
 // newDeleteTestProxy builds a proxy with one identity-enabled endpoint bound to envUUID,
@@ -280,4 +284,232 @@ func TestMCPProxyDelete_CleanupSurvivesResolverError(t *testing.T) {
 	err := svc.Delete(context.Background(), "org-uuid", "org", "gh-proxy")
 
 	assert.NoError(t, err, "Thunder cleanup is best-effort and must never fail the delete")
+}
+
+// gatewayWithPolicyManifestAndRole is gatewayWithPolicyManifest with a distinct UUID/Name
+// and an explicit functionality role, so two-egress-gateway scenarios can tell the
+// candidates apart (by UUID for anchoring, by Name for error messages).
+func gatewayWithPolicyManifestAndRole(role string, nameVersionPairs ...string) *models.Gateway {
+	gw := gatewayWithPolicyManifest(nameVersionPairs...)
+	gw.UUID = uuid.New()
+	gw.Name = "gateway-" + gw.UUID.String()
+	gw.GatewayFunctionalityType = role
+	return gw
+}
+
+func TestValidateMCPEndpointSecurity_TwoEgressGateways_AnchorsOnExistingDeployment(t *testing.T) {
+	// The deployed gateway has full policy support; the other egress candidate lacks
+	// mcp-authz. Environment-based selection requires every candidate to comply and
+	// would therefore fail, so NoError here proves the probe anchored on the deployment.
+	deployed := gatewayWithPolicyManifestAndRole(models.GatewayRoleBoth, "mcp-auth", "v1", "mcp-authz", "v1")
+	other := gatewayWithPolicyManifestAndRole(models.GatewayRoleEgress, "mcp-auth", "v1")
+	gwRepo := gatewayFixtureRepo(t, testMCPEnvUUID, []*models.Gateway{deployed, other})
+
+	artifactUUID := uuid.New()
+	depRepo := &repomocks.DeploymentRepositoryMock{
+		GetDeployedGatewaysByProviderFunc: func(gotArtifactUUID uuid.UUID, _ string) ([]string, error) {
+			assert.Equal(t, artifactUUID, gotArtifactUUID)
+			return []string{deployed.UUID.String()}, nil
+		},
+	}
+	svc := &MCPProxyService{gatewayRepo: gwRepo, deploymentRepo: depRepo}
+	endpoints := []models.MCPProxyEndpointDTO{
+		endpointWith("https://93.184.216.34", identityEnabledSecurity()),
+	}
+	existingArtifactByEnv := map[string]uuid.UUID{testMCPEnvUUID: artifactUUID}
+
+	assert.NoError(t, svc.validateMCPEndpointSecurity(context.Background(), "org1", endpoints, existingArtifactByEnv))
+}
+
+func TestValidateMCPEndpointSecurity_TwoEgressGateways_NoDeployment_AllCandidatesCompliant(t *testing.T) {
+	// No existing deployment to anchor on (create, or a genuinely new binding): this is a
+	// read-only policy probe, so two egress-capable candidates must not be ambiguous —
+	// both support the required policies, so validation passes.
+	gwA := gatewayWithPolicyManifestAndRole(models.GatewayRoleBoth, "mcp-auth", "v1", "mcp-authz", "v1")
+	gwB := gatewayWithPolicyManifestAndRole(models.GatewayRoleEgress, "mcp-auth", "v1", "mcp-authz", "v1")
+	gwRepo := gatewayFixtureRepo(t, testMCPEnvUUID, []*models.Gateway{gwA, gwB})
+	svc := &MCPProxyService{gatewayRepo: gwRepo}
+	endpoints := []models.MCPProxyEndpointDTO{
+		endpointWith("https://93.184.216.34", identityEnabledSecurity()),
+	}
+
+	assert.NoError(t, svc.validateMCPEndpointSecurity(context.Background(), "org1", endpoints, nil))
+}
+
+func TestValidateMCPEndpointSecurity_TwoEgressGateways_NoDeployment_OneNonCompliantFails(t *testing.T) {
+	// Same no-anchor situation, but one of the two candidates lacks mcp-authz. The probe
+	// must fail (not silently pick the compliant one) and name the offending gateway.
+	compliant := gatewayWithPolicyManifestAndRole(models.GatewayRoleBoth, "mcp-auth", "v1", "mcp-authz", "v1")
+	nonCompliant := gatewayWithPolicyManifestAndRole(models.GatewayRoleEgress, "mcp-auth", "v1")
+	gwRepo := gatewayFixtureRepo(t, testMCPEnvUUID, []*models.Gateway{compliant, nonCompliant})
+	svc := &MCPProxyService{gatewayRepo: gwRepo}
+	endpoints := []models.MCPProxyEndpointDTO{
+		endpointWith("https://93.184.216.34", identityEnabledSecurity()),
+	}
+
+	err := svc.validateMCPEndpointSecurity(context.Background(), "org1", endpoints, nil)
+	assert.ErrorIs(t, err, utils.ErrInvalidInput)
+	assert.Contains(t, err.Error(), nonCompliant.Name)
+}
+
+// endpointBoundToGateway builds a single-environment endpoint DTO targeting testMCPEnvUUID
+// with the caller's gatewayId set (empty string leaves it unset).
+func endpointBoundToGateway(gatewayID string) models.MCPProxyEndpointDTO {
+	endpoint := endpointWith("https://93.184.216.34", nil)
+	if gatewayID != "" {
+		endpoint.Environments[0].GatewayID = &gatewayID
+	}
+	return endpoint
+}
+
+// placementService wires only what validateMCPEndpointPlacement reads.
+func placementService(gwRepo repositories.GatewayRepository, depRepo repositories.DeploymentRepository) *MCPProxyService {
+	return &MCPProxyService{gatewayRepo: gwRepo, deploymentRepo: depRepo, logger: discardLogger()}
+}
+
+// deployedTo stubs the artifact's deployed-gateway set.
+func deployedTo(gatewayIDs ...string) *repomocks.DeploymentRepositoryMock {
+	return &repomocks.DeploymentRepositoryMock{
+		GetDeployedGatewaysByProviderFunc: func(uuid.UUID, string) ([]string, error) {
+			return gatewayIDs, nil
+		},
+	}
+}
+
+// These cover the create/update pre-check that moves the four fatal placement errors ahead
+// of the write. Before it, Create committed the proxy and then 400'd from the deploy step,
+// so a client correcting its gatewayId and retrying the same POST hit 409 instead.
+func TestValidateMCPEndpointPlacement(t *testing.T) {
+	both := newGateway(t, models.GatewayRoleBoth, true)
+	egress := newGateway(t, models.GatewayRoleEgress, true)
+	ingress := newGateway(t, models.GatewayRoleIngress, true)
+
+	t.Run("naming an ingress-only gateway fails before any write", func(t *testing.T) {
+		svc := placementService(gatewayFixtureRepo(t, testMCPEnvUUID, []*models.Gateway{ingress, egress}), nil)
+		err := svc.validateMCPEndpointPlacement("org1",
+			[]models.MCPProxyEndpointDTO{endpointBoundToGateway(ingress.UUID.String())}, nil)
+		assert.ErrorIs(t, err, utils.ErrInvalidInput)
+		assert.ErrorIs(t, err, errInvalidEgressGateway)
+	})
+
+	t.Run("two egress candidates and no gatewayId is ambiguous", func(t *testing.T) {
+		svc := placementService(gatewayFixtureRepo(t, testMCPEnvUUID, []*models.Gateway{both, egress}), nil)
+		err := svc.validateMCPEndpointPlacement("org1",
+			[]models.MCPProxyEndpointDTO{endpointBoundToGateway("")}, nil)
+		assert.ErrorIs(t, err, utils.ErrInvalidInput)
+		assert.ErrorIs(t, err, errAmbiguousEgressGateway)
+	})
+
+	t.Run("naming a valid candidate passes", func(t *testing.T) {
+		svc := placementService(gatewayFixtureRepo(t, testMCPEnvUUID, []*models.Gateway{both, egress}), nil)
+		err := svc.validateMCPEndpointPlacement("org1",
+			[]models.MCPProxyEndpointDTO{endpointBoundToGateway(egress.UUID.String())}, nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("moving an already-deployed binding is placement-fixed", func(t *testing.T) {
+		// The update path's anchor: the environment's artifact is deployed to `both`, and the
+		// caller names `egress`. Surfacing this pre-write is what the anchor argument buys.
+		artifactUUID := uuid.New()
+		svc := placementService(
+			gatewayFixtureRepo(t, testMCPEnvUUID, []*models.Gateway{both, egress}),
+			deployedTo(both.UUID.String()),
+		)
+		err := svc.validateMCPEndpointPlacement("org1",
+			[]models.MCPProxyEndpointDTO{endpointBoundToGateway(egress.UUID.String())},
+			map[string]uuid.UUID{testMCPEnvUUID: artifactUUID})
+		assert.ErrorIs(t, err, utils.ErrInvalidInput)
+		assert.ErrorIs(t, err, errPlacementFixed)
+	})
+
+	t.Run("redeploying to the environment's current gateway passes", func(t *testing.T) {
+		artifactUUID := uuid.New()
+		svc := placementService(
+			gatewayFixtureRepo(t, testMCPEnvUUID, []*models.Gateway{both, egress}),
+			deployedTo(both.UUID.String()),
+		)
+		err := svc.validateMCPEndpointPlacement("org1",
+			[]models.MCPProxyEndpointDTO{endpointBoundToGateway(both.UUID.String())},
+			map[string]uuid.UUID{testMCPEnvUUID: artifactUUID})
+		assert.NoError(t, err)
+	})
+
+	t.Run("no gateway mapped to the environment is tolerated", func(t *testing.T) {
+		// Timing condition, not misconfiguration: the deploy step skips and retries later.
+		svc := placementService(gatewayFixtureRepo(t, testMCPEnvUUID, nil), nil)
+		err := svc.validateMCPEndpointPlacement("org1",
+			[]models.MCPProxyEndpointDTO{endpointBoundToGateway("")}, nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("an unresolvable anchor skips the pre-check rather than guessing", func(t *testing.T) {
+		// The anchor lookup fails, so the requested gateway cannot be judged against it.
+		// Resolving without the anchor would report ambiguity for a binding the anchor may
+		// well have resolved cleanly, so this must defer to the deploy step, not 400.
+		depRepo := &repomocks.DeploymentRepositoryMock{
+			GetDeployedGatewaysByProviderFunc: func(uuid.UUID, string) ([]string, error) {
+				return nil, errors.New("connection refused")
+			},
+		}
+		svc := placementService(gatewayFixtureRepo(t, testMCPEnvUUID, []*models.Gateway{both, egress}), depRepo)
+		err := svc.validateMCPEndpointPlacement("org1",
+			[]models.MCPProxyEndpointDTO{endpointBoundToGateway("")},
+			map[string]uuid.UUID{testMCPEnvUUID: uuid.New()})
+		assert.NoError(t, err)
+	})
+
+	t.Run("a malformed environment UUID is left to endpoint validation", func(t *testing.T) {
+		svc := placementService(gatewayFixtureRepo(t, testMCPEnvUUID, []*models.Gateway{both, egress}), nil)
+		endpoint := endpointBoundToGateway("")
+		endpoint.Environments[0].EnvironmentUUID = "not-a-uuid"
+		err := svc.validateMCPEndpointPlacement("org1", []models.MCPProxyEndpointDTO{endpoint}, nil)
+		assert.NoError(t, err)
+	})
+}
+
+func TestMCPDeployErrorIsFatal_NilError(t *testing.T) {
+	assert.False(t, mcpDeployErrorIsFatal(nil))
+}
+
+func TestMCPDeployErrorIsFatal_ToleratedError(t *testing.T) {
+	// Only errNoGatewayForEnvironment is tolerated.
+	assert.False(t, mcpDeployErrorIsFatal(errNoGatewayForEnvironment))
+}
+
+func TestMCPDeployErrorIsFatal_FatalErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"errNoEgressGatewayForEnvironment", errNoEgressGatewayForEnvironment},
+		{"errAmbiguousEgressGateway", errAmbiguousEgressGateway},
+		{"errInvalidEgressGateway", errInvalidEgressGateway},
+		{"errPlacementFixed", errPlacementFixed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.True(t, mcpDeployErrorIsFatal(tt.err), "error %q must be fatal", tt.name)
+		})
+	}
+}
+
+func TestMCPDeployErrorIsFatal_JoinedErrorsMixed(t *testing.T) {
+	// errors.Join of tolerated + fatal: the fatal takes precedence, returns true.
+	joinedMixedErrors := errors.Join(errNoGatewayForEnvironment, errInvalidEgressGateway)
+	assert.True(t, mcpDeployErrorIsFatal(joinedMixedErrors),
+		"joined error with both tolerated and fatal must return true (fatal wins)")
+}
+
+func TestMCPDeployErrorIsFatal_JoinedErrorsToleratedOnly(t *testing.T) {
+	// errors.Join of only tolerated errors: returns false.
+	joinedToleratedOnly := errors.Join(errNoGatewayForEnvironment, errNoGatewayForEnvironment)
+	assert.False(t, mcpDeployErrorIsFatal(joinedToleratedOnly),
+		"joined error with only tolerated errors must return false")
+}
+
+func TestMCPDeployErrorIsFatal_UnrelatedError(t *testing.T) {
+	// An error unrelated to any sentinel: returns false (not a fatal placement error).
+	unrelatedErr := errors.New("some other error")
+	assert.False(t, mcpDeployErrorIsFatal(unrelatedErr),
+		"unrelated error must not be fatal")
 }

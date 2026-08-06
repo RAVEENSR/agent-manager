@@ -16,9 +16,14 @@
  * under the License.
  */
 
-import { Box, Typography } from '@wso2/oxygen-ui';
-import { Clock } from '@wso2/oxygen-ui-icons-react';
+import { Clock, History, UserPen } from '@wso2/oxygen-ui-icons-react';
 import { formatDistanceToNow } from 'date-fns';
+import { PageMetaItem } from '../PageMeta';
+
+/** Shared by the timestamp rows below so they never drift in wording or format. */
+function relativeTime(value: string): string {
+  return formatDistanceToNow(new Date(value), { addSuffix: true });
+}
 
 export interface CreatedMetadataProps {
   createdAt?: string;
@@ -29,12 +34,40 @@ export function CreatedMetadata({ createdAt }: CreatedMetadataProps) {
   if (!createdAt) return null;
 
   return (
-    <Box display="flex" alignItems="center" gap={0.5}>
-      <Clock size={12} />
-      <Typography variant="caption" color="text.secondary">Created:</Typography>
-      <Typography variant="caption" fontWeight={500}>
-        {formatDistanceToNow(new Date(createdAt), { addSuffix: true })}
-      </Typography>
-    </Box>
+    <PageMetaItem icon={<Clock size={12} />} label="Created">
+      {relativeTime(createdAt)}
+    </PageMetaItem>
+  );
+}
+
+export interface UpdatedMetadataProps {
+  updatedAt?: string;
+}
+
+/** Renders "Last updated ... ago", beside the other page metadata. */
+export function UpdatedMetadata({ updatedAt }: UpdatedMetadataProps) {
+  if (!updatedAt) return null;
+
+  return (
+    <PageMetaItem icon={<History size={12} />} label="Last updated">
+      {relativeTime(updatedAt)}
+    </PageMetaItem>
+  );
+}
+
+export interface CreatedByMetadataProps {
+  /** Display name of the creator; the row is skipped when unknown. */
+  createdBy?: string;
+  label?: string;
+}
+
+/** Renders the creator's name beside the other page metadata. */
+export function CreatedByMetadata({ createdBy, label = 'Created by' }: CreatedByMetadataProps) {
+  if (!createdBy) return null;
+
+  return (
+    <PageMetaItem icon={<UserPen size={12} />} label={label}>
+      {createdBy}
+    </PageMetaItem>
   );
 }

@@ -27,7 +27,7 @@ type AgentKindConfigSchemaItem struct {
 	IsSecret bool `json:"isSecret"`
 	// Whether this value must be provided when creating an agent from this kind
 	IsMandatory bool `json:"isMandatory"`
-	// Default value if not provided by the user
+	// Default value if not provided by the user (plain text for input; for a secret item, responses never carry the real value, only a masked placeholder if a default exists, or nothing if it doesn't)
 	DefaultValue NullableString `json:"defaultValue,omitempty"`
 }
 

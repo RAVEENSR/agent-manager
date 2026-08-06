@@ -66,6 +66,35 @@ type KindConfigSchemaItem struct {
 	DefaultValue *string `json:"defaultValue,omitempty"`
 }
 
+// RedactedSecretDefaultPlaceholder replaces a secret config item's real default value
+// in any client-facing response. It exists so a client can still tell a mandatory
+// secret with a baked-in default apart from one that has none at all (and therefore
+// must be supplied by whoever creates an agent from the kind) without ever learning
+// what the real value is.
+const RedactedSecretDefaultPlaceholder = "••••••••"
+
+// RedactSecretDefaults returns a copy of schema where every secret item's real
+// DefaultValue has been replaced with RedactedSecretDefaultPlaceholder (or left empty
+// if it had none), so a secret's default value is never serialized back to a client
+// once it has been submitted. Callers needing the true default for internal use
+// (validation, applying it server-side) must read the un-redacted schema instead.
+func RedactSecretDefaults(schema []KindConfigSchemaItem) []KindConfigSchemaItem {
+	out := make([]KindConfigSchemaItem, len(schema))
+	copy(out, schema)
+	for i := range out {
+		if !out[i].IsSecret {
+			continue
+		}
+		if out[i].DefaultValue != nil && *out[i].DefaultValue != "" {
+			placeholder := RedactedSecretDefaultPlaceholder
+			out[i].DefaultValue = &placeholder
+		} else {
+			out[i].DefaultValue = nil
+		}
+	}
+	return out
+}
+
 // -----------------------------------------------------------------------------
 // Response DTOs
 // -----------------------------------------------------------------------------

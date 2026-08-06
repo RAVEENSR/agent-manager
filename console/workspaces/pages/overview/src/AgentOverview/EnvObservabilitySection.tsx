@@ -214,6 +214,14 @@ export const EnvObservabilitySection: React.FC<EnvObservabilitySectionProps> = (
         : null;
     const successRateColor: DonutColor = getDonutColorForPercent(successRate);
 
+    // The list is capped at 10 (see the useTraceList call below) — once the
+    // environment has more than that in the last 24h, the tooltip should say
+    // so instead of implying these stats cover everything in the window.
+    const isTraceListTruncated = (traceList?.totalCount ?? 0) > traces.length;
+    const tracesInfoTooltip = isTraceListTruncated
+        ? "Showing the last 10 traces from the last 24 hours."
+        : "Showing traces from the last 24 hours.";
+
     const tracesHref = generatePath(
         absoluteRouteMap.children.org.children.projects.children.agents
             .children.environment.children.observability.children.traces.path,
@@ -227,37 +235,17 @@ export const EnvObservabilitySection: React.FC<EnvObservabilitySectionProps> = (
 
     return (
         <>
-            <SectionHeader title="Recent Traces" viewAllHref={tracesHref} />
+            <SectionHeader title="Recent Traces" titleInfo={tracesInfoTooltip} viewAllHref={tracesHref} />
             <Grid container spacing={1.5}>
                 <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
                     <MetricCard
-                        label="Avg Latency"
-                        value={avgLatencyNanos !== null ? formatDuration(avgLatencyNanos) : "—"}
-                        points={latencyPoints}
-                        color={theme.vars?.palette?.info?.main}
-                        isLoading={isTracesLoading}
-                    />
-                </Grid>
-                <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
-                    <MetricCard
-                        label="Avg Tokens"
+                        label="Average Tokens"
                         value={avgTokens !== null ? formatTokens(avgTokens) : "—"}
                         points={tokenPoints}
                         color={theme.vars?.palette?.warning?.main}
                         isLoading={isTracesLoading}
                     />
                 </Grid>
-                {avgScore !== null && (
-                    <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
-                        <MetricCard
-                            label="Avg Score"
-                            value={`${(avgScore * 100).toFixed(1)}%`}
-                            points={scorePoints}
-                            color={theme.vars?.palette?.success?.main}
-                            isLoading={isTracesLoading}
-                        />
-                    </Grid>
-                )}
                 <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
                     <DonutMetricCard
                         label="Success Rate"
@@ -267,6 +255,26 @@ export const EnvObservabilitySection: React.FC<EnvObservabilitySectionProps> = (
                         isLoading={isTracesLoading}
                     />
                 </Grid>
+                <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
+                    <MetricCard
+                        label="Average Latency"
+                        value={avgLatencyNanos !== null ? formatDuration(avgLatencyNanos) : "—"}
+                        points={latencyPoints}
+                        color={theme.vars?.palette?.info?.main}
+                        isLoading={isTracesLoading}
+                    />
+                </Grid>
+                {avgScore !== null && (
+                    <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
+                        <MetricCard
+                            label="Average Score"
+                            value={`${(avgScore * 100).toFixed(1)}%`}
+                            points={scorePoints}
+                            color={theme.vars?.palette?.success?.main}
+                            isLoading={isTracesLoading}
+                        />
+                    </Grid>
+                )}
             </Grid>
         </>
     );

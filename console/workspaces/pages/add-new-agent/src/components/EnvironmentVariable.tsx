@@ -27,6 +27,21 @@ interface EnvironmentVariableProps {
   llmReservedNames?: Set<string>;
   /** Keys that cannot be edited or removed (pre-defined by the Agent Kind schema) */
   lockedKeys?: Set<string>;
+  /**
+   * Keys declared as isSecret by the Agent Kind schema. Their value is never
+   * pre-filled with the kind's real default (the backend doesn't return it), so
+   * the field renders locked/masked until the user explicitly edits it, and the
+   * "Mark as Secret" toggle is hidden since it isn't a user choice for these keys.
+   */
+  kindSecretKeys?: Set<string>;
+  /**
+   * Changing this value (e.g. the selected Agent Kind version) forces every row's
+   * editor to remount instead of reusing its previous instance. Without it, a row
+   * that was mid-edit (or had its value revealed) for one set of rows would silently
+   * carry that open/revealed state into the next set once the underlying schema
+   * changes, since editors are otherwise matched up by position, not identity.
+   */
+  resetKey?: string;
   /** Hide the Add button (e.g. in catalog flow where env vars are fully pre-defined) */
   hideAdd?: boolean;
 }
@@ -36,6 +51,8 @@ export const EnvironmentVariable = ({
   setFormData,
   llmReservedNames = new Set(),
   lockedKeys = new Set(),
+  kindSecretKeys = new Set(),
+  resetKey = "",
   hideAdd = false,
 }: EnvironmentVariableProps) => {
   const envVariables = formData.env || [];
@@ -103,6 +120,7 @@ export const EnvironmentVariable = ({
               envVariables.flatMap((e, i) => (i !== index && e.key ? [e.key] : [])),
             );
             const isLocked = !!item.key && lockedKeys.has(item.key);
+            const isKindSecret = !!item.key && kindSecretKeys.has(item.key);
             const keyError = item.key && llmReservedNames.has(item.key)
               ? "Already used as an LLM provider variable"
               : item.key && siblingKeys.has(item.key)
@@ -110,14 +128,16 @@ export const EnvironmentVariable = ({
                 : undefined;
             return (
               <EnvVariableEditor
-                key={`env-${index}`}
+                key={`env-${resetKey}-${index}`}
                 index={index}
                 keyValue={item.key || ''}
                 valueValue={item.value || ''}
                 isSensitive={item.isSensitive || false}
+                isExistingSecret={isKindSecret}
+                valueLabel={isKindSecret ? "Value (uses kind default unless edited)" : undefined}
                 onKeyChange={(value) => handleChange(index, 'key', value)}
                 onValueChange={(value) => handleChange(index, 'value', value)}
-                onSensitiveChange={(value: boolean) => handleChange(index, 'isSensitive', value)}
+                onSensitiveChange={isKindSecret ? undefined : (value: boolean) => handleChange(index, 'isSensitive', value)}
                 onRemove={isLocked ? () => {} : () => handleRemove(index)}
                 keyDisabled={isLocked}
                 keyError={keyError}

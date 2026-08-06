@@ -138,6 +138,10 @@ spec:
         amp.wso2.com/component: ${parameters.agent.name}
     spec:
       serviceAccountName: workflow-sa
+      # main gets no token; only the wait sidecar does, via workflow-sa-bound-token below.
+      automountServiceAccountToken: false
+      executor:
+        serviceAccountName: workflow-sa
       arguments:
         parameters:
           - name: monitor-name
@@ -180,6 +184,17 @@ spec:
         clusterScope: true
         name: amp-monitor-evaluation
   resources:
+    - id: workflow-sa-bound-token
+      # Name matches Argo's executor.serviceAccountName lookup convention: "<saName>.service-account-token".
+      template:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: workflow-sa.service-account-token
+          namespace: ${metadata.namespace}
+          annotations:
+            kubernetes.io/service-account.name: workflow-sa
+        type: kubernetes.io/service-account-token
     - id: amp-publisher-credentials
       template:
         apiVersion: external-secrets.io/v1

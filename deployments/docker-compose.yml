@@ -48,7 +48,7 @@ services:
       - JWT_SIGNING_PRIVATE_KEY_PATH=/app/keys/private.pem
       - JWT_SIGNING_PUBLIC_KEYS_CONFIG=/app/keys/public-keys-config.json
       - JWT_SIGNING_ACTIVE_KEY_ID=key-1
-      - JWT_SIGNING_DEFAULT_EXPIRY=8760h
+      - JWT_SIGNING_DEFAULT_EXPIRY=2160h
       - JWT_SIGNING_ISSUER=agent-manager-service
       - JWT_SIGNING_DEFAULT_ENVIRONMENT=default
       # Optional: External Service URLs (add when needed)
@@ -69,10 +69,6 @@ services:
       # token's `aud`. The Helm charts derive this; here it moves by hand.
       - KEY_MANAGER_AUDIENCE=amp,localhost,amp-publisher-*,amp-api-client,amp-console-client,amctl,am-mcp,http://localhost:9000/
       - AMP_VERSION=v0.8.0
-      # In-cluster API Platform gateway runtime Service URL convention.
-      - GATEWAY_RUNTIME_NAME_PREFIX=api-platform-
-      - GATEWAY_RUNTIME_SERVICE_SUFFIX=-gw-gateway-gateway-runtime
-      - GATEWAY_RUNTIME_PORT=22893
       - OPEN_CHOREO_BASE_URL=http://api.openchoreo.localhost:8195
       # OpenBao/Vault Secret Management Configuration
       # NOTE: Run ./deployments/setup/port-forward.sh to forward OpenBao from k3d cluster

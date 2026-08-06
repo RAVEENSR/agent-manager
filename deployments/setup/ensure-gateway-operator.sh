@@ -18,11 +18,9 @@ current_chart="$(helm list -n openchoreo-data-plane -f '^gateway-operator$' -o j
     | grep -o '"chart":"[^"]*"' | cut -d'"' -f4 || true)"
 
 if [ "$current_chart" = "$TARGET_CHART" ]; then
-    echo "⏭️  Gateway Operator already at ${TARGET_CHART}, skipping..."
-    exit 0
-fi
-
-if [ -n "$current_chart" ]; then
+    # Chart version (and thus CRDs) is already current, details like image tag might be different
+    echo "⏭️  Gateway Operator already at ${TARGET_CHART} — reapplying Helm values, CRDs unchanged..."
+elif [ -n "$current_chart" ]; then
     echo "⚠️  Gateway Operator is ${current_chart}, target is ${TARGET_CHART} — upgrading..."
     # helm upgrade never touches the chart's crds/ directory, so apply them
     # explicitly or the new CR apiVersions are never served. Safe: the chart's
@@ -43,6 +41,8 @@ helm upgrade --install gateway-operator "$OPERATOR_CHART" \
     --set gateway.values.gateway.controller.image.repository=ghcr.io/wso2/api-platform/gateway-controller \
     --set "gateway.values.gateway.gatewayRuntime.image.tag=${GATEWAY_IMAGE_VERSION}" \
     --set gateway.values.gateway.gatewayRuntime.image.repository=ghcr.io/wso2/api-platform/gateway-runtime \
+    --set gateway.values.gateway.controller.encryptionKeys.enabled=true \
+    --set "gateway.values.gateway.controller.encryptionKeys.secretName=${GATEWAY_ENCRYPTION_SECRET_NAME}" \
     --set gateway.values.gateway.controller.deployment.livenessProbe.httpGet.path=/api/admin/v1/health \
     --set gateway.values.gateway.controller.deployment.livenessProbe.httpGet.port=admin \
     --set gateway.values.gateway.controller.deployment.readinessProbe.httpGet.path=/api/admin/v1/health \

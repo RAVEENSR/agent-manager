@@ -46,7 +46,6 @@ import (
 // Provider sets
 var configProviderSet = wire.NewSet(
 	ProvideConfigFromPtr,
-	ProvideGatewayRuntimeConfig,
 	ProvideEncryptionKey,
 )
 
@@ -303,8 +302,8 @@ func ProvideGitCredentialsService(ocClient occlient.OpenChoreoClient, cfg config
 
 // ProvidePublisherProvisioner creates the publisher credential provisioner
 // for per-org Thunder OAuth app creation and secret storage via SecretManagementClient
-func ProvidePublisherProvisioner(cfg config.Config, encryptionKey []byte, logger *slog.Logger, secretClient secretmanagersvc.SecretManagementClient, ocClient occlient.OpenChoreoClient, credRepo repositories.OrgPublisherCredentialRepository) (services.PublisherCredentialProvisioner, error) {
-	return services.NewPublisherCredentialProvisioner(cfg, encryptionKey, logger, secretClient, ocClient, credRepo)
+func ProvidePublisherProvisioner(cfg config.Config, encryptionKey []byte, logger *slog.Logger, secretClient secretmanagersvc.SecretManagementClient, ocClient occlient.OpenChoreoClient, credRepo repositories.OrgPublisherCredentialRepository, schedulerCredRepo repositories.OrgSchedulerCredentialRepository) (services.PublisherCredentialProvisioner, error) {
+	return services.NewPublisherCredentialProvisioner(cfg, encryptionKey, logger, secretClient, ocClient, credRepo, schedulerCredRepo)
 }
 
 var loggerProviderSet = wire.NewSet(
@@ -333,6 +332,7 @@ var repositoryProviderSet = wire.NewSet(
 	repositories.NewAgentEnvConfigVariableRepository,
 	repositories.NewMonitorLLMMappingRepository,
 	ProvideOrgPublisherCredentialRepository,
+	ProvideOrgSchedulerCredentialRepository,
 	ProvideAIApplicationRepository,
 	ProvideAgentThunderClientRepository,
 	ProvideEnvThunderSystemClientRepository,
@@ -463,6 +463,10 @@ func ProvideOrgPublisherCredentialRepository(db *gorm.DB) repositories.OrgPublis
 	return repositories.NewOrgPublisherCredentialRepo(db)
 }
 
+func ProvideOrgSchedulerCredentialRepository(db *gorm.DB) repositories.OrgSchedulerCredentialRepository {
+	return repositories.NewOrgSchedulerCredentialRepo(db)
+}
+
 func ProvideAgentKindRepository(db *gorm.DB) repositories.AgentKindRepository {
 	return repositories.NewAgentKindRepo(db)
 }
@@ -505,7 +509,7 @@ func ProvideAgentIdentityInjectionService(
 	cfg config.Config,
 	logger *slog.Logger,
 ) services.AgentIdentityInjectionService {
-	return services.NewAgentIdentityInjectionService(repo, agentConfigRepo, mcpProxyScopeRepo, ocClient, cfg.SecretManager.RefreshInterval, logger)
+	return services.NewAgentIdentityInjectionService(repo, agentConfigRepo, mcpProxyScopeRepo, ocClient, cfg.SecretManager.AgentIdentityRefreshInterval, logger)
 }
 
 func ProvideThunderConfig(cfg config.Config) config.ThunderConfig {

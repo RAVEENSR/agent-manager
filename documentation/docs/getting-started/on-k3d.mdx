@@ -129,10 +129,17 @@ kubectl cluster-info --context k3d-amp-local
 
 ### Step 2: Apply CoreDNS Configuration
 
-Enables `*.openchoreo.localhost` DNS resolution inside the cluster:
+Enables `*.openchoreo.localhost`, `*.amp.localhost`, `*.agentmanager.localhost`, `*.am-gateway.localhost`, and `*.gateway.localhost` DNS resolution inside the cluster — required for in-cluster lookups of the Console/API/Thunder hostnames as well as agent-to-agent and AI gateway traffic:
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/openchoreo/openchoreo/v1.1.1/install/k3d/common/coredns-custom.yaml
+kubectl apply -f https://raw.githubusercontent.com/wso2/agent-manager/amp/v0.0.0-dev/deployments/k8s/coredns-amp-custom.yaml
+```
+
+CoreDNS's reload plugin can miss the override if the ConfigMap mounts after the pod's initial parse, so restart it to make sure the rewrite rules are active before anything depends on them:
+
+```bash
+kubectl rollout restart deployment/coredns -n kube-system
+kubectl rollout status deployment/coredns -n kube-system --timeout=60s
 ```
 
 ### Step 3: Install Cluster Prerequisites
@@ -333,6 +340,31 @@ kubectl wait --for=condition=Available deployment --all \
 - Gateway on HTTP port 8080 / HTTPS port 8443, TLS disabled
 
 </details>
+
+#### Patch the service-account entitlement claim (required with Thunder ≥ 0.45)
+
+Thunder 0.45+ puts the client name in the `client_id` claim (its `sub` is an opaque UUID), but OpenChoreo 1.1.1 extracts service-account entitlements from `sub`, and the chart does not expose the setting. Without this patch, every service-to-service call is **silently unauthorized** — the API returns `200` with empty lists and `403`s while all pods look healthy, and the gateway bootstrap later fails with `Environment 'default' not found`.
+
+```bash
+patched_yaml=$(kubectl get configmap openchoreo-api-config -n openchoreo-control-plane -o yaml \
+  | sed -E "s/claim:[[:space:]]*['\"]?sub['\"]?/claim: client_id/g")
+echo "$patched_yaml" | kubectl apply --server-side --field-manager=helm --force-conflicts -f -
+
+kubectl rollout restart deployment/openchoreo-api -n openchoreo-control-plane
+kubectl rollout status deployment/openchoreo-api -n openchoreo-control-plane --timeout=120s
+
+for binding in $(kubectl get clusterauthzrolebindings.openchoreo.dev -o jsonpath='{.items[*].metadata.name}'); do
+  claim=$(kubectl get clusterauthzrolebinding.openchoreo.dev "$binding" -o jsonpath='{.spec.entitlement.claim}')
+  if [ "$claim" = "sub" ]; then
+    kubectl patch clusterauthzrolebinding.openchoreo.dev "$binding" --type=merge \
+      -p '{"spec":{"entitlement":{"claim":"client_id"}}}'
+  fi
+done
+```
+
+:::note
+Re-apply this patch after any `helm upgrade` of the Control Plane chart — the upgrade reverts both the ConfigMap and the bindings. The same patch is needed a second time for the Observability Plane's `observer-auth-config` in Step 10.
+:::
 
 ### Step 8: Setup Data Plane
 
@@ -553,6 +585,16 @@ kubectl wait --for=condition=Available \
   deployment --all -n openchoreo-observability-plane --timeout=300s
 ```
 
+With Thunder ≥ 0.45, apply the same entitlement-claim patch used for the Control Plane to the observer (without it, log and trace queries return `403 Access denied`):
+
+```bash
+patched_yaml=$(kubectl get configmap observer-auth-config -n openchoreo-observability-plane -o yaml \
+  | sed -E "s/claim:[[:space:]]*['\"]?sub['\"]?/claim: client_id/g")
+echo "$patched_yaml" | kubectl apply --server-side --field-manager=helm --force-conflicts -f -
+kubectl rollout restart deployment/observer -n openchoreo-observability-plane
+kubectl rollout status deployment/observer -n openchoreo-observability-plane --timeout=120s
+```
+
 Install observability modules (logs, metrics, tracing):
 
 ```bash
@@ -653,6 +695,29 @@ All pods should be in `Running` or `Completed` state.
 With OpenChoreo running, you can now install the Agent Manager components — the API, console, identity provider, and extensions that provide the AI agent management capabilities.
 
 <AmpInstallation version="${VERSION}" rewriteJwksForK3d={true} />
+
+### Provision Thunder Identity Provider for the Default Environment
+
+Every Environment needs its own dedicated Thunder ID instance. This is separate from the platform Thunder installed in Phase 1, which only handles console and API login. This instance is what issues each agent its own OAuth2 credential (AgentID) in that Environment. Agents can still be created without it, but they will never get an AgentID there — Agent Manager keeps retrying and failing in the background, and the API Platform Gateway Extension silently skips registering its ThunderKeyManager identity provider, so the Identity Providers page stays empty with no error anywhere in the platform. Run this once the Agent Manager API is reachable at `${API_PUBLIC_URL}`:
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/wso2/agent-manager/amp/v0.0.0-dev/deployments/scripts/add-environment-thunder.sh" \
+  -o add-environment-thunder.sh
+
+ENV_NAME=default \
+DISPLAY_NAME="Default" \
+ORG_NAME=default \
+AMP_API_URL="${API_PUBLIC_URL}/api/v1" \
+IDP_TOKEN_URL="${THUNDER_PUBLIC_URL}/oauth2/token" \
+bash add-environment-thunder.sh
+```
+
+:::tip Verify
+```bash
+kubectl get pods -n amp-thunder-default-default
+# All pods should be Running
+```
+:::
 
 ---
 
@@ -788,6 +853,8 @@ All Agent Manager-specific configuration files used in this guide:
 | File | Purpose |
 |------|---------|
 | [k3d-config.yaml](https://raw.githubusercontent.com/wso2/agent-manager/amp/v0.0.0-dev/deployments/quick-start/k3d-config.yaml) | k3d cluster with all required port mappings |
+| [coredns-amp-custom.yaml](https://raw.githubusercontent.com/wso2/agent-manager/amp/v0.0.0-dev/deployments/k8s/coredns-amp-custom.yaml) | CoreDNS rewrites for `*.openchoreo.localhost`, `*.amp.localhost`, `*.agentmanager.localhost`, `*.am-gateway.localhost`, `*.gateway.localhost` |
+| [add-environment-thunder.sh](https://raw.githubusercontent.com/wso2/agent-manager/amp/v0.0.0-dev/deployments/scripts/add-environment-thunder.sh) | Provisions the per-environment Thunder identity provider |
 | [values-cp.yaml](https://raw.githubusercontent.com/wso2/agent-manager/amp/v0.0.0-dev/deployments/single-cluster/values-cp.yaml) | Control Plane — Backstage disabled, AMP Thunder OIDC |
 | [values-dp.yaml](https://raw.githubusercontent.com/wso2/agent-manager/amp/v0.0.0-dev/deployments/single-cluster/values-dp.yaml) | Data Plane — gateway ports, Fluent Bit config |
 | [values-op.yaml](https://raw.githubusercontent.com/wso2/agent-manager/amp/v0.0.0-dev/deployments/single-cluster/values-op.yaml) | Observability Plane — standalone OpenSearch, AMP Thunder OIDC |

@@ -44,6 +44,11 @@ type ScriptParams struct {
 	AMPBaseURL   string
 	IsProduction bool
 
+	// Topology overrides the ambient GATEWAY_TOPOLOGY env var when set (e.g.
+	// "split" to provision separate INGRESS/EGRESS gateways). Leave blank to
+	// use the ambient value, defaulting to "single".
+	Topology string
+
 	// Timeout bounds the whole script run (helm install + kubectl wait can be slow).
 	// Defaults to 6 minutes when zero.
 	Timeout time.Duration
@@ -110,10 +115,16 @@ func AddEnvironment(params *ScriptParams) {
 		"CHART_VERSION must be set for add-environment.sh; set it to the chart version "+
 			"the platform was installed with (see test/e2e/.env.example)")
 
+	topology := params.Topology
+	if topology == "" {
+		topology = envOr("GATEWAY_TOPOLOGY", "single")
+	}
+
 	extra := []string{
 		"DISPLAY_NAME=" + params.DisplayName,
 		"CHART_VERSION=" + chartVersion,
 		fmt.Sprintf("IS_PRODUCTION=%t", params.IsProduction),
+		"GATEWAY_TOPOLOGY=" + topology,
 		"AGENT_MANAGER_INTERNAL_BASE_URL=" + envOr("AGENT_MANAGER_INTERNAL_BASE_URL",
 			"http://amp-api.wso2-amp.svc.cluster.local:9000"),
 		"AGENT_MANAGER_INTERNAL_CP=" + envOr("AGENT_MANAGER_INTERNAL_CP",

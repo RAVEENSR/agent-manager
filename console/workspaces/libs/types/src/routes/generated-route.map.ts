@@ -145,17 +145,6 @@ export const generatedRouteMap =  {
                   }
                 }
               }
-            },
-            "appearance": {
-              "path": "/org/:orgId/settings/appearance",
-              "wildPath": "/org/:orgId/settings/appearance/*",
-              "children": {
-                "theme": {
-                  "path": "/org/:orgId/settings/appearance/theme",
-                  "wildPath": "/org/:orgId/settings/appearance/theme/*",
-                  "children": {}
-                }
-              }
             }
           }
         },

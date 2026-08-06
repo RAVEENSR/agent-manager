@@ -18,12 +18,30 @@
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-const STALE_TIME = 8000;    
+const STALE_TIME = 8000;
+const MAX_QUERY_RETRIES = 3;
+
+// Most 4xx responses (404, 401, 403, 409, ...) mean the request itself won't
+// succeed no matter how many times it's repeated, so retrying just delays the
+// error reaching the UI. 408 (Request Timeout) is the one exception — it's the
+// server giving up on that particular attempt, not rejecting the request
+// itself, so it's worth retrying like a network failure / 5xx would be.
+function shouldRetryQuery(failureCount: number, error: unknown): boolean {
+    const status = (error as { status?: number })?.status;
+    const isTerminalClientError =
+        status !== undefined && status >= 400 && status < 500 && status !== 408;
+    if (isTerminalClientError) {
+        return false;
+    }
+    return failureCount < MAX_QUERY_RETRIES;
+}
+
 const queryClient = new QueryClient({
     defaultOptions: {
         queries: {
             refetchOnWindowFocus: true,
             staleTime: STALE_TIME,
+            retry: shouldRetryQuery,
         },
     },
 });

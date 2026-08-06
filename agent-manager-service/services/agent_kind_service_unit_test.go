@@ -131,6 +131,48 @@ func TestAgentKindService_GetKind(t *testing.T) {
 		assert.Equal(t, "v2", resp.LatestVersion)
 		assert.Len(t, resp.Versions, 2)
 	})
+
+	t.Run("redacts secret config defaults without mutating the source model", func(t *testing.T) {
+		apiKey := "sk-real-secret-value"
+		modelName := "gpt-4"
+		source := &models.AgentKind{
+			ID:          kindID,
+			Name:        kindName,
+			DisplayName: "Chatbot",
+			OUID:        org,
+			Versions: []models.AgentKindVersion{
+				{
+					Version: "v1",
+					ConfigSchema: []models.KindConfigSchemaItem{
+						{Name: "OPENAI_API_KEY", IsSecret: true, IsMandatory: true, DefaultValue: &apiKey},
+						{Name: "MODEL_NAME", IsSecret: false, DefaultValue: &modelName},
+					},
+				},
+			},
+		}
+		repo := &repomocks.AgentKindRepositoryMock{
+			GetKindFunc: func(_ context.Context, _, _ string) (*models.AgentKind, error) {
+				return source, nil
+			},
+		}
+		svc := newKindService(repo, &clientmocks.OpenChoreoClientMock{})
+
+		resp, err := svc.GetKind(context.Background(), org, kindName)
+		require.NoError(t, err)
+		require.Len(t, resp.Versions, 1)
+		schema := resp.Versions[0].ConfigSchema
+		require.Len(t, schema, 2)
+		if assert.NotNil(t, schema[0].DefaultValue, "a secret item WITH a default must still signal one exists") {
+			assert.Equal(t, models.RedactedSecretDefaultPlaceholder, *schema[0].DefaultValue, "the real secret value must never reach the client")
+		}
+		if assert.NotNil(t, schema[1].DefaultValue) {
+			assert.Equal(t, modelName, *schema[1].DefaultValue, "non-secret default is unaffected")
+		}
+
+		// The GORM-loaded source model must not have been mutated by building the response.
+		require.NotNil(t, source.Versions[0].ConfigSchema[0].DefaultValue)
+		assert.Equal(t, apiKey, *source.Versions[0].ConfigSchema[0].DefaultValue)
+	})
 }
 
 // -----------------------------------------------------------------------------
@@ -263,6 +305,19 @@ func TestAgentKindService_AddVersion_Gates(t *testing.T) {
 		_, err := svc.AddVersion(context.Background(), org, kindName, req)
 
 		assert.ErrorIs(t, err, utils.ErrKindImageAlreadyPublished)
+	})
+
+	t.Run("rejects a secret default equal to the redaction placeholder", func(t *testing.T) {
+		repo := baseRepo()
+		item := spec.AgentKindConfigSchemaItem{Name: "OPENAI_API_KEY", IsSecret: true, IsMandatory: true}
+		item.SetDefaultValue(models.RedactedSecretDefaultPlaceholder)
+		placeholderReq := &spec.AddAgentKindVersionRequest{ConfigSchema: []spec.AgentKindConfigSchemaItem{item}}
+		svc := newKindService(repo, &clientmocks.OpenChoreoClientMock{})
+
+		_, err := svc.AddVersion(context.Background(), org, kindName, placeholderReq)
+
+		assert.ErrorIs(t, err, utils.ErrInvalidInput)
+		assert.Empty(t, repo.CreateVersionCalls(), "must be rejected before ever reaching persistence")
 	})
 
 	t.Run("persists a new version on the happy path", func(t *testing.T) {

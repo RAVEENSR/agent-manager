@@ -9,6 +9,7 @@ import (
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
+	"gorm.io/gorm"
 )
 
 // GatewayRepositoryMock is a mock implementation of repositories.GatewayRepository.
@@ -17,8 +18,14 @@ import (
 //
 //		// make and configure a mocked repositories.GatewayRepository
 //		mockedGatewayRepository := &GatewayRepositoryMock{
+//			AcquireEnvironmentLockFunc: func(tx *gorm.DB, environmentID string) error {
+//				panic("mock out the AcquireEnvironmentLock method")
+//			},
 //			CountActiveTokensFunc: func(gatewayId string) (int, error) {
 //				panic("mock out the CountActiveTokens method")
+//			},
+//			CountIngressCapableInEnvironmentFunc: func(tx *gorm.DB, environmentID string) (int64, error) {
+//				panic("mock out the CountIngressCapableInEnvironment method")
 //			},
 //			CountWithFiltersFunc: func(filters repositories.GatewayFilterOptions) (int64, error) {
 //				panic("mock out the CountWithFilters method")
@@ -29,8 +36,14 @@ import (
 //			CreateEnvironmentMappingFunc: func(mapping *models.GatewayEnvironmentMapping) error {
 //				panic("mock out the CreateEnvironmentMapping method")
 //			},
+//			CreateEnvironmentMappingTxFunc: func(tx *gorm.DB, mapping *models.GatewayEnvironmentMapping) error {
+//				panic("mock out the CreateEnvironmentMappingTx method")
+//			},
 //			CreateTokenFunc: func(token *models.GatewayToken) error {
 //				panic("mock out the CreateToken method")
+//			},
+//			CreateTxFunc: func(tx *gorm.DB, gateway *models.Gateway) error {
+//				panic("mock out the CreateTx method")
 //			},
 //			DeleteFunc: func(gatewayID string, ouID string) error {
 //				panic("mock out the Delete method")
@@ -101,6 +114,9 @@ import (
 //			RevokeTokenFunc: func(tokenId string) error {
 //				panic("mock out the RevokeToken method")
 //			},
+//			TransactionFunc: func(fn func(tx *gorm.DB) error) error {
+//				panic("mock out the Transaction method")
+//			},
 //			UpdateActiveStatusFunc: func(gatewayId string, isActive bool) error {
 //				panic("mock out the UpdateActiveStatus method")
 //			},
@@ -117,8 +133,14 @@ import (
 //
 //	}
 type GatewayRepositoryMock struct {
+	// AcquireEnvironmentLockFunc mocks the AcquireEnvironmentLock method.
+	AcquireEnvironmentLockFunc func(tx *gorm.DB, environmentID string) error
+
 	// CountActiveTokensFunc mocks the CountActiveTokens method.
 	CountActiveTokensFunc func(gatewayId string) (int, error)
+
+	// CountIngressCapableInEnvironmentFunc mocks the CountIngressCapableInEnvironment method.
+	CountIngressCapableInEnvironmentFunc func(tx *gorm.DB, environmentID string) (int64, error)
 
 	// CountWithFiltersFunc mocks the CountWithFilters method.
 	CountWithFiltersFunc func(filters repositories.GatewayFilterOptions) (int64, error)
@@ -129,8 +151,14 @@ type GatewayRepositoryMock struct {
 	// CreateEnvironmentMappingFunc mocks the CreateEnvironmentMapping method.
 	CreateEnvironmentMappingFunc func(mapping *models.GatewayEnvironmentMapping) error
 
+	// CreateEnvironmentMappingTxFunc mocks the CreateEnvironmentMappingTx method.
+	CreateEnvironmentMappingTxFunc func(tx *gorm.DB, mapping *models.GatewayEnvironmentMapping) error
+
 	// CreateTokenFunc mocks the CreateToken method.
 	CreateTokenFunc func(token *models.GatewayToken) error
+
+	// CreateTxFunc mocks the CreateTx method.
+	CreateTxFunc func(tx *gorm.DB, gateway *models.Gateway) error
 
 	// DeleteFunc mocks the Delete method.
 	DeleteFunc func(gatewayID string, ouID string) error
@@ -201,6 +229,9 @@ type GatewayRepositoryMock struct {
 	// RevokeTokenFunc mocks the RevokeToken method.
 	RevokeTokenFunc func(tokenId string) error
 
+	// TransactionFunc mocks the Transaction method.
+	TransactionFunc func(fn func(tx *gorm.DB) error) error
+
 	// UpdateActiveStatusFunc mocks the UpdateActiveStatus method.
 	UpdateActiveStatusFunc func(gatewayId string, isActive bool) error
 
@@ -212,10 +243,24 @@ type GatewayRepositoryMock struct {
 
 	// calls tracks calls to the methods.
 	calls struct {
+		// AcquireEnvironmentLock holds details about calls to the AcquireEnvironmentLock method.
+		AcquireEnvironmentLock []struct {
+			// Tx is the tx argument value.
+			Tx *gorm.DB
+			// EnvironmentID is the environmentID argument value.
+			EnvironmentID string
+		}
 		// CountActiveTokens holds details about calls to the CountActiveTokens method.
 		CountActiveTokens []struct {
 			// GatewayId is the gatewayId argument value.
 			GatewayId string
+		}
+		// CountIngressCapableInEnvironment holds details about calls to the CountIngressCapableInEnvironment method.
+		CountIngressCapableInEnvironment []struct {
+			// Tx is the tx argument value.
+			Tx *gorm.DB
+			// EnvironmentID is the environmentID argument value.
+			EnvironmentID string
 		}
 		// CountWithFilters holds details about calls to the CountWithFilters method.
 		CountWithFilters []struct {
@@ -232,10 +277,24 @@ type GatewayRepositoryMock struct {
 			// Mapping is the mapping argument value.
 			Mapping *models.GatewayEnvironmentMapping
 		}
+		// CreateEnvironmentMappingTx holds details about calls to the CreateEnvironmentMappingTx method.
+		CreateEnvironmentMappingTx []struct {
+			// Tx is the tx argument value.
+			Tx *gorm.DB
+			// Mapping is the mapping argument value.
+			Mapping *models.GatewayEnvironmentMapping
+		}
 		// CreateToken holds details about calls to the CreateToken method.
 		CreateToken []struct {
 			// Token is the token argument value.
 			Token *models.GatewayToken
+		}
+		// CreateTx holds details about calls to the CreateTx method.
+		CreateTx []struct {
+			// Tx is the tx argument value.
+			Tx *gorm.DB
+			// Gateway is the gateway argument value.
+			Gateway *models.Gateway
 		}
 		// Delete holds details about calls to the Delete method.
 		Delete []struct {
@@ -368,6 +427,11 @@ type GatewayRepositoryMock struct {
 			// TokenId is the tokenId argument value.
 			TokenId string
 		}
+		// Transaction holds details about calls to the Transaction method.
+		Transaction []struct {
+			// Fn is the fn argument value.
+			Fn func(tx *gorm.DB) error
+		}
 		// UpdateActiveStatus holds details about calls to the UpdateActiveStatus method.
 		UpdateActiveStatus []struct {
 			// GatewayId is the gatewayId argument value.
@@ -386,11 +450,15 @@ type GatewayRepositoryMock struct {
 			Provider *models.GatewayIdentityProvider
 		}
 	}
+	lockAcquireEnvironmentLock                   sync.RWMutex
 	lockCountActiveTokens                        sync.RWMutex
+	lockCountIngressCapableInEnvironment         sync.RWMutex
 	lockCountWithFilters                         sync.RWMutex
 	lockCreate                                   sync.RWMutex
 	lockCreateEnvironmentMapping                 sync.RWMutex
+	lockCreateEnvironmentMappingTx               sync.RWMutex
 	lockCreateToken                              sync.RWMutex
+	lockCreateTx                                 sync.RWMutex
 	lockDelete                                   sync.RWMutex
 	lockDeleteEnvironmentMapping                 sync.RWMutex
 	lockDeleteEnvironmentMappingsByEnvironmentID sync.RWMutex
@@ -414,9 +482,46 @@ type GatewayRepositoryMock struct {
 	lockListIdentityProvidersByOrg               sync.RWMutex
 	lockListWithFilters                          sync.RWMutex
 	lockRevokeToken                              sync.RWMutex
+	lockTransaction                              sync.RWMutex
 	lockUpdateActiveStatus                       sync.RWMutex
 	lockUpdateGateway                            sync.RWMutex
 	lockUpsertIdentityProvider                   sync.RWMutex
+}
+
+// AcquireEnvironmentLock calls AcquireEnvironmentLockFunc.
+func (mock *GatewayRepositoryMock) AcquireEnvironmentLock(tx *gorm.DB, environmentID string) error {
+	if mock.AcquireEnvironmentLockFunc == nil {
+		panic("GatewayRepositoryMock.AcquireEnvironmentLockFunc: method is nil but GatewayRepository.AcquireEnvironmentLock was just called")
+	}
+	callInfo := struct {
+		Tx            *gorm.DB
+		EnvironmentID string
+	}{
+		Tx:            tx,
+		EnvironmentID: environmentID,
+	}
+	mock.lockAcquireEnvironmentLock.Lock()
+	mock.calls.AcquireEnvironmentLock = append(mock.calls.AcquireEnvironmentLock, callInfo)
+	mock.lockAcquireEnvironmentLock.Unlock()
+	return mock.AcquireEnvironmentLockFunc(tx, environmentID)
+}
+
+// AcquireEnvironmentLockCalls gets all the calls that were made to AcquireEnvironmentLock.
+// Check the length with:
+//
+//	len(mockedGatewayRepository.AcquireEnvironmentLockCalls())
+func (mock *GatewayRepositoryMock) AcquireEnvironmentLockCalls() []struct {
+	Tx            *gorm.DB
+	EnvironmentID string
+} {
+	var calls []struct {
+		Tx            *gorm.DB
+		EnvironmentID string
+	}
+	mock.lockAcquireEnvironmentLock.RLock()
+	calls = mock.calls.AcquireEnvironmentLock
+	mock.lockAcquireEnvironmentLock.RUnlock()
+	return calls
 }
 
 // CountActiveTokens calls CountActiveTokensFunc.
@@ -448,6 +553,42 @@ func (mock *GatewayRepositoryMock) CountActiveTokensCalls() []struct {
 	mock.lockCountActiveTokens.RLock()
 	calls = mock.calls.CountActiveTokens
 	mock.lockCountActiveTokens.RUnlock()
+	return calls
+}
+
+// CountIngressCapableInEnvironment calls CountIngressCapableInEnvironmentFunc.
+func (mock *GatewayRepositoryMock) CountIngressCapableInEnvironment(tx *gorm.DB, environmentID string) (int64, error) {
+	if mock.CountIngressCapableInEnvironmentFunc == nil {
+		panic("GatewayRepositoryMock.CountIngressCapableInEnvironmentFunc: method is nil but GatewayRepository.CountIngressCapableInEnvironment was just called")
+	}
+	callInfo := struct {
+		Tx            *gorm.DB
+		EnvironmentID string
+	}{
+		Tx:            tx,
+		EnvironmentID: environmentID,
+	}
+	mock.lockCountIngressCapableInEnvironment.Lock()
+	mock.calls.CountIngressCapableInEnvironment = append(mock.calls.CountIngressCapableInEnvironment, callInfo)
+	mock.lockCountIngressCapableInEnvironment.Unlock()
+	return mock.CountIngressCapableInEnvironmentFunc(tx, environmentID)
+}
+
+// CountIngressCapableInEnvironmentCalls gets all the calls that were made to CountIngressCapableInEnvironment.
+// Check the length with:
+//
+//	len(mockedGatewayRepository.CountIngressCapableInEnvironmentCalls())
+func (mock *GatewayRepositoryMock) CountIngressCapableInEnvironmentCalls() []struct {
+	Tx            *gorm.DB
+	EnvironmentID string
+} {
+	var calls []struct {
+		Tx            *gorm.DB
+		EnvironmentID string
+	}
+	mock.lockCountIngressCapableInEnvironment.RLock()
+	calls = mock.calls.CountIngressCapableInEnvironment
+	mock.lockCountIngressCapableInEnvironment.RUnlock()
 	return calls
 }
 
@@ -547,6 +688,42 @@ func (mock *GatewayRepositoryMock) CreateEnvironmentMappingCalls() []struct {
 	return calls
 }
 
+// CreateEnvironmentMappingTx calls CreateEnvironmentMappingTxFunc.
+func (mock *GatewayRepositoryMock) CreateEnvironmentMappingTx(tx *gorm.DB, mapping *models.GatewayEnvironmentMapping) error {
+	if mock.CreateEnvironmentMappingTxFunc == nil {
+		panic("GatewayRepositoryMock.CreateEnvironmentMappingTxFunc: method is nil but GatewayRepository.CreateEnvironmentMappingTx was just called")
+	}
+	callInfo := struct {
+		Tx      *gorm.DB
+		Mapping *models.GatewayEnvironmentMapping
+	}{
+		Tx:      tx,
+		Mapping: mapping,
+	}
+	mock.lockCreateEnvironmentMappingTx.Lock()
+	mock.calls.CreateEnvironmentMappingTx = append(mock.calls.CreateEnvironmentMappingTx, callInfo)
+	mock.lockCreateEnvironmentMappingTx.Unlock()
+	return mock.CreateEnvironmentMappingTxFunc(tx, mapping)
+}
+
+// CreateEnvironmentMappingTxCalls gets all the calls that were made to CreateEnvironmentMappingTx.
+// Check the length with:
+//
+//	len(mockedGatewayRepository.CreateEnvironmentMappingTxCalls())
+func (mock *GatewayRepositoryMock) CreateEnvironmentMappingTxCalls() []struct {
+	Tx      *gorm.DB
+	Mapping *models.GatewayEnvironmentMapping
+} {
+	var calls []struct {
+		Tx      *gorm.DB
+		Mapping *models.GatewayEnvironmentMapping
+	}
+	mock.lockCreateEnvironmentMappingTx.RLock()
+	calls = mock.calls.CreateEnvironmentMappingTx
+	mock.lockCreateEnvironmentMappingTx.RUnlock()
+	return calls
+}
+
 // CreateToken calls CreateTokenFunc.
 func (mock *GatewayRepositoryMock) CreateToken(token *models.GatewayToken) error {
 	if mock.CreateTokenFunc == nil {
@@ -576,6 +753,42 @@ func (mock *GatewayRepositoryMock) CreateTokenCalls() []struct {
 	mock.lockCreateToken.RLock()
 	calls = mock.calls.CreateToken
 	mock.lockCreateToken.RUnlock()
+	return calls
+}
+
+// CreateTx calls CreateTxFunc.
+func (mock *GatewayRepositoryMock) CreateTx(tx *gorm.DB, gateway *models.Gateway) error {
+	if mock.CreateTxFunc == nil {
+		panic("GatewayRepositoryMock.CreateTxFunc: method is nil but GatewayRepository.CreateTx was just called")
+	}
+	callInfo := struct {
+		Tx      *gorm.DB
+		Gateway *models.Gateway
+	}{
+		Tx:      tx,
+		Gateway: gateway,
+	}
+	mock.lockCreateTx.Lock()
+	mock.calls.CreateTx = append(mock.calls.CreateTx, callInfo)
+	mock.lockCreateTx.Unlock()
+	return mock.CreateTxFunc(tx, gateway)
+}
+
+// CreateTxCalls gets all the calls that were made to CreateTx.
+// Check the length with:
+//
+//	len(mockedGatewayRepository.CreateTxCalls())
+func (mock *GatewayRepositoryMock) CreateTxCalls() []struct {
+	Tx      *gorm.DB
+	Gateway *models.Gateway
+} {
+	var calls []struct {
+		Tx      *gorm.DB
+		Gateway *models.Gateway
+	}
+	mock.lockCreateTx.RLock()
+	calls = mock.calls.CreateTx
+	mock.lockCreateTx.RUnlock()
 	return calls
 }
 
@@ -1343,6 +1556,38 @@ func (mock *GatewayRepositoryMock) RevokeTokenCalls() []struct {
 	mock.lockRevokeToken.RLock()
 	calls = mock.calls.RevokeToken
 	mock.lockRevokeToken.RUnlock()
+	return calls
+}
+
+// Transaction calls TransactionFunc.
+func (mock *GatewayRepositoryMock) Transaction(fn func(tx *gorm.DB) error) error {
+	if mock.TransactionFunc == nil {
+		panic("GatewayRepositoryMock.TransactionFunc: method is nil but GatewayRepository.Transaction was just called")
+	}
+	callInfo := struct {
+		Fn func(tx *gorm.DB) error
+	}{
+		Fn: fn,
+	}
+	mock.lockTransaction.Lock()
+	mock.calls.Transaction = append(mock.calls.Transaction, callInfo)
+	mock.lockTransaction.Unlock()
+	return mock.TransactionFunc(fn)
+}
+
+// TransactionCalls gets all the calls that were made to Transaction.
+// Check the length with:
+//
+//	len(mockedGatewayRepository.TransactionCalls())
+func (mock *GatewayRepositoryMock) TransactionCalls() []struct {
+	Fn func(tx *gorm.DB) error
+} {
+	var calls []struct {
+		Fn func(tx *gorm.DB) error
+	}
+	mock.lockTransaction.RLock()
+	calls = mock.calls.Transaction
+	mock.lockTransaction.RUnlock()
 	return calls
 }
 

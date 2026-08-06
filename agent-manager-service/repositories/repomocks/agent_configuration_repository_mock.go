@@ -51,6 +51,9 @@ import (
 //			ListByAgentAndTypeFunc: func(ctx context.Context, ouID string, projectName string, agentName string, typeID uint, limit int, offset int) ([]models.AgentConfiguration, error) {
 //				panic("mock out the ListByAgentAndType method")
 //			},
+//			ListMCPConfigsByAgentFunc: func(ctx context.Context, ouID string, projectName string, agentID string) ([]models.AgentConfiguration, error) {
+//				panic("mock out the ListMCPConfigsByAgent method")
+//			},
 //			UpdateFunc: func(ctx context.Context, tx *gorm.DB, config *models.AgentConfiguration) error {
 //				panic("mock out the Update method")
 //			},
@@ -93,6 +96,9 @@ type AgentConfigurationRepositoryMock struct {
 
 	// ListByAgentAndTypeFunc mocks the ListByAgentAndType method.
 	ListByAgentAndTypeFunc func(ctx context.Context, ouID string, projectName string, agentName string, typeID uint, limit int, offset int) ([]models.AgentConfiguration, error)
+
+	// ListMCPConfigsByAgentFunc mocks the ListMCPConfigsByAgent method.
+	ListMCPConfigsByAgentFunc func(ctx context.Context, ouID string, projectName string, agentID string) ([]models.AgentConfiguration, error)
 
 	// UpdateFunc mocks the Update method.
 	UpdateFunc func(ctx context.Context, tx *gorm.DB, config *models.AgentConfiguration) error
@@ -220,6 +226,17 @@ type AgentConfigurationRepositoryMock struct {
 			// Offset is the offset argument value.
 			Offset int
 		}
+		// ListMCPConfigsByAgent holds details about calls to the ListMCPConfigsByAgent method.
+		ListMCPConfigsByAgent []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// OuID is the ouID argument value.
+			OuID string
+			// ProjectName is the projectName argument value.
+			ProjectName string
+			// AgentID is the agentID argument value.
+			AgentID string
+		}
 		// Update holds details about calls to the Update method.
 		Update []struct {
 			// Ctx is the ctx argument value.
@@ -230,18 +247,19 @@ type AgentConfigurationRepositoryMock struct {
 			Config *models.AgentConfiguration
 		}
 	}
-	lockCount               sync.RWMutex
-	lockCountByAgent        sync.RWMutex
-	lockCountByAgentAndType sync.RWMutex
-	lockCreate              sync.RWMutex
-	lockDelete              sync.RWMutex
-	lockExists              sync.RWMutex
-	lockGetByAgentID        sync.RWMutex
-	lockGetByUUID           sync.RWMutex
-	lockList                sync.RWMutex
-	lockListByAgent         sync.RWMutex
-	lockListByAgentAndType  sync.RWMutex
-	lockUpdate              sync.RWMutex
+	lockCount                 sync.RWMutex
+	lockCountByAgent          sync.RWMutex
+	lockCountByAgentAndType   sync.RWMutex
+	lockCreate                sync.RWMutex
+	lockDelete                sync.RWMutex
+	lockExists                sync.RWMutex
+	lockGetByAgentID          sync.RWMutex
+	lockGetByUUID             sync.RWMutex
+	lockList                  sync.RWMutex
+	lockListByAgent           sync.RWMutex
+	lockListByAgentAndType    sync.RWMutex
+	lockListMCPConfigsByAgent sync.RWMutex
+	lockUpdate                sync.RWMutex
 }
 
 // Count calls CountFunc.
@@ -725,6 +743,50 @@ func (mock *AgentConfigurationRepositoryMock) ListByAgentAndTypeCalls() []struct
 	mock.lockListByAgentAndType.RLock()
 	calls = mock.calls.ListByAgentAndType
 	mock.lockListByAgentAndType.RUnlock()
+	return calls
+}
+
+// ListMCPConfigsByAgent calls ListMCPConfigsByAgentFunc.
+func (mock *AgentConfigurationRepositoryMock) ListMCPConfigsByAgent(ctx context.Context, ouID string, projectName string, agentID string) ([]models.AgentConfiguration, error) {
+	if mock.ListMCPConfigsByAgentFunc == nil {
+		panic("AgentConfigurationRepositoryMock.ListMCPConfigsByAgentFunc: method is nil but AgentConfigurationRepository.ListMCPConfigsByAgent was just called")
+	}
+	callInfo := struct {
+		Ctx         context.Context
+		OuID        string
+		ProjectName string
+		AgentID     string
+	}{
+		Ctx:         ctx,
+		OuID:        ouID,
+		ProjectName: projectName,
+		AgentID:     agentID,
+	}
+	mock.lockListMCPConfigsByAgent.Lock()
+	mock.calls.ListMCPConfigsByAgent = append(mock.calls.ListMCPConfigsByAgent, callInfo)
+	mock.lockListMCPConfigsByAgent.Unlock()
+	return mock.ListMCPConfigsByAgentFunc(ctx, ouID, projectName, agentID)
+}
+
+// ListMCPConfigsByAgentCalls gets all the calls that were made to ListMCPConfigsByAgent.
+// Check the length with:
+//
+//	len(mockedAgentConfigurationRepository.ListMCPConfigsByAgentCalls())
+func (mock *AgentConfigurationRepositoryMock) ListMCPConfigsByAgentCalls() []struct {
+	Ctx         context.Context
+	OuID        string
+	ProjectName string
+	AgentID     string
+} {
+	var calls []struct {
+		Ctx         context.Context
+		OuID        string
+		ProjectName string
+		AgentID     string
+	}
+	mock.lockListMCPConfigsByAgent.RLock()
+	calls = mock.calls.ListMCPConfigsByAgent
+	mock.lockListMCPConfigsByAgent.RUnlock()
 	return calls
 }
 

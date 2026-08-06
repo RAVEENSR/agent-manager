@@ -23,6 +23,8 @@ type MCPEndpointEnvironment struct {
 	EnvironmentUuid string `json:"environmentUuid"`
 	// Per-environment deployment status.
 	DeploymentStatus *string `json:"deploymentStatus,omitempty"`
+	// Egress gateway to deploy this endpoint→environment binding to. Optional: inferred when the environment has exactly one egress gateway, and required when it has more than one. Placement is fixed once deployed — supplying a different gateway on update is rejected. Emitted on read as the gateway the binding is actually deployed to.
+	GatewayId *string `json:"gatewayId,omitempty"`
 }
 
 // NewMCPEndpointEnvironment instantiates a new MCPEndpointEnvironment object
@@ -99,6 +101,38 @@ func (o *MCPEndpointEnvironment) SetDeploymentStatus(v string) {
 	o.DeploymentStatus = &v
 }
 
+// GetGatewayId returns the GatewayId field value if set, zero value otherwise.
+func (o *MCPEndpointEnvironment) GetGatewayId() string {
+	if o == nil || IsNil(o.GatewayId) {
+		var ret string
+		return ret
+	}
+	return *o.GatewayId
+}
+
+// GetGatewayIdOk returns a tuple with the GatewayId field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *MCPEndpointEnvironment) GetGatewayIdOk() (*string, bool) {
+	if o == nil || IsNil(o.GatewayId) {
+		return nil, false
+	}
+	return o.GatewayId, true
+}
+
+// HasGatewayId returns a boolean if a field has been set.
+func (o *MCPEndpointEnvironment) HasGatewayId() bool {
+	if o != nil && !IsNil(o.GatewayId) {
+		return true
+	}
+
+	return false
+}
+
+// SetGatewayId gets a reference to the given string and assigns it to the GatewayId field.
+func (o *MCPEndpointEnvironment) SetGatewayId(v string) {
+	o.GatewayId = &v
+}
+
 func (o MCPEndpointEnvironment) MarshalJSON() ([]byte, error) {
 	toSerialize, err := o.ToMap()
 	if err != nil {
@@ -112,6 +146,9 @@ func (o MCPEndpointEnvironment) ToMap() (map[string]interface{}, error) {
 	toSerialize["environmentUuid"] = o.EnvironmentUuid
 	if !IsNil(o.DeploymentStatus) {
 		toSerialize["deploymentStatus"] = o.DeploymentStatus
+	}
+	if !IsNil(o.GatewayId) {
+		toSerialize["gatewayId"] = o.GatewayId
 	}
 	return toSerialize, nil
 }

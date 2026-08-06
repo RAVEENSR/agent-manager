@@ -119,6 +119,10 @@ type MCPProxyEndpointEnvironment struct {
 	ArtifactUUID    uuid.UUID `gorm:"column:artifact_uuid" json:"artifactUuid"`
 	Status          string    `gorm:"column:status" json:"status"`
 	CreatedAt       time.Time `gorm:"column:created_at" json:"createdAt,omitempty"`
+	// RequestedGatewayUUID is the caller's explicit egress gateway choice for this
+	// binding. Request-scoped only: placement is derived from deployment_status on read,
+	// so there is nothing to persist. gorm:"-" keeps it out of every query.
+	RequestedGatewayUUID *string `gorm:"-" json:"-"`
 }
 
 // TableName returns the table name for the MCPProxyEndpointEnvironment model.
@@ -193,9 +197,14 @@ type MCPProxyEndpointDTO struct {
 
 // MCPEndpointEnvironmentDTO is one endpoint→environment binding. EnvironmentUUID is
 // the target environment; DeploymentStatus is response-only (Deployed/Undeployed).
+// GatewayID is the caller's explicit egress gateway choice on write (optional: inferred
+// when the environment has exactly one egress gateway, required when it has more than
+// one; placement is fixed once deployed) and is echoed back on read as the gateway the
+// binding is actually deployed to.
 type MCPEndpointEnvironmentDTO struct {
-	EnvironmentUUID  string `json:"environmentUuid"`
-	DeploymentStatus string `json:"deploymentStatus,omitempty"`
+	EnvironmentUUID  string  `json:"environmentUuid"`
+	DeploymentStatus string  `json:"deploymentStatus,omitempty"`
+	GatewayID        *string `json:"gatewayId,omitempty"`
 }
 
 // MCPPolicyAvailabilityResponse lists MCP policies reported by active gateways.

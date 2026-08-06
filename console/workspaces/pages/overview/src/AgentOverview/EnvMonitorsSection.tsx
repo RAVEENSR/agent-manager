@@ -190,7 +190,7 @@ export const EnvMonitorsSection: React.FC<EnvMonitorsSectionProps> = ({
 
     return (
         <>
-            <SectionHeader title="Agent Performance" viewAllHref={allMonitorsHref} />
+            <SectionHeader title="Evaluations" viewAllHref={allMonitorsHref} />
             {isLoading ? (
                 <Box sx={gridSx}>
                     {[1, 2, 3].map((i) => <Skeleton key={i} variant="rounded" height={96} />)}

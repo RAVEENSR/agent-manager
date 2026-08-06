@@ -109,6 +109,25 @@ data:
         logging:
           level: info
         deployment:
+          # Recreate, not the Kubernetes default RollingUpdate. The controller is a
+          # single replica holding its SQLite store on a ReadWriteOnce PVC, and a
+          # rolling update starts the replacement before the old pod is evicted
+          # (maxSurge 1 / maxUnavailable 0 at one replica). On a multi-node cluster
+          # the scheduler prefers a different node for the new pod, which then cannot
+          # attach the volume — "Multi-Attach error for volume" — while the old pod
+          # cannot be evicted until the new one is Ready. That deadlock does not time
+          # out into a rollback; it holds the APIGateway at Programmed=False until an
+          # operator deletes the old pod by hand.
+          #
+          # Recreate terminates the old pod first, so the volume is free when the new
+          # one starts. The cost is a few seconds of controller downtime per upgrade,
+          # which this component already has: it cannot run more than one replica
+          # while storage.type is sqlite.
+          #
+          # Single-node clusters never hit the deadlock, because ReadWriteOnce allows
+          # multiple pods on the same node — which is why local installs are unaffected.
+          strategy:
+            type: Recreate
           podSecurityContext:
             fsGroup: 10001
             runAsUser: 10001

@@ -25,12 +25,14 @@ import {
   useListGateways,
 } from "@agent-management-platform/api-client";
 import {
+  DeploymentStatus,
   EnvironmentCard,
   usePipelineEnvironmentsState,
 } from "@agent-management-platform/shared-component";
 import { InstrumentationDrawer } from "./InstrumentationDrawer";
 import { NoDataFound } from "@agent-management-platform/views";
 import { EnvironmentSectionsContent } from "./EnvironmentSectionsContent";
+import { EnvironmentSingleHeader } from "./EnvironmentSingleHeader";
 import { EnvironmentTabsBar } from "./EnvironmentTabsBar";
 import { UppercaseCaptionLabel } from "./SectionHeader";
 import { ENV_SEARCH_PARAM, useSelectedEnvironmentParam } from "./useSelectedEnvironmentParam";
@@ -131,14 +133,19 @@ export const ExternalAgentOverview = () => {
               projectId={projectId}
               agentId={agentId}
               environment={selectedEnvironment}
-              hideEnvTitle={!hasMultipleEnvironments}
               tabsHeader={
-                hasMultipleEnvironments && (
+                hasMultipleEnvironments ? (
                   <EnvironmentTabsBar
                     environments={sortedEnvironmentList}
                     selectedName={selectedEnvironment.name}
                     onSelect={selectEnvironment}
                     dotColor={() => "success.main"}
+                  />
+                ) : (
+                  <EnvironmentSingleHeader
+                    environment={selectedEnvironment}
+                    status={DeploymentStatus.ACTIVE}
+                    dotColor="success.main"
                   />
                 )
               }
@@ -160,7 +167,6 @@ export const ExternalAgentOverview = () => {
                   envId={selectedEnvironment.name}
                   configurations={agent?.configurations}
                   external
-                  registeredAt={agent?.createdAt}
                   isolationTier={selectedEnvironment.isolationTier}
                 />
               }

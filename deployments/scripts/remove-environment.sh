@@ -45,6 +45,12 @@ GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-${ORG_NAME}-${ENV_NAME}}"
 RELEASE_NAME="api-platform-${ORG_NAME}-${ENV_NAME}"
 RELEASE_NAME=$(echo "$RELEASE_NAME" | head -c 53 | sed 's/-*$//')
 
+# Egress names MUST match what add-environment.sh's split-topology block installs.
+# Detect rather than remember: a single-topology environment has neither, so
+# uninstalling/deleting them below is a no-op and the teardown is byte-identical.
+EGRESS_NAMESPACE="${GATEWAY_NAMESPACE}-egress"
+EGRESS_RELEASE_NAME=$(echo "api-platform-${ORG_NAME}-${ENV_NAME}-egress" | head -c 53 | sed 's/-*$//')
+
 echo "=== Removing Environment: ${ENV_NAME} ==="
 echo ""
 
@@ -118,7 +124,16 @@ if [ "${DEPROVISION_THUNDER:-true}" = "true" ]; then
     rm -f "$script_tmp"
 fi
 
-# --- Step 3: Uninstall the gateway helm release ---
+# --- Step 3: Uninstall the gateway helm release(s) ---
+# Detect rather than remember: a single-topology environment has neither, so this is a
+# no-op and the teardown is byte-identical.
+if helm status "${EGRESS_RELEASE_NAME}" --namespace "${EGRESS_NAMESPACE}" > /dev/null 2>&1; then
+    echo ""
+    echo "🌐 Uninstalling egress API Platform Gateway..."
+    helm uninstall "${EGRESS_RELEASE_NAME}" --namespace "${EGRESS_NAMESPACE}"
+    echo "✅ Egress gateway helm release uninstalled"
+fi
+
 echo ""
 echo "🌐 Uninstalling API Platform Gateway..."
 if helm status "${RELEASE_NAME}" --namespace "${GATEWAY_NAMESPACE}" > /dev/null 2>&1; then
@@ -142,6 +157,14 @@ fi
 # Only when it follows the "<org>-<env>" isolation convention — never delete a
 # shared namespace (e.g. a legacy install with GATEWAY_NAMESPACE=openchoreo-data-plane).
 if [ "${GATEWAY_NAMESPACE}" = "${ORG_NAME}-${ENV_NAME}" ]; then
+    if kubectl get namespace "${EGRESS_NAMESPACE}" > /dev/null 2>&1; then
+        echo ""
+        echo "🧹 Deleting egress gateway namespace '${EGRESS_NAMESPACE}'..."
+        kubectl delete namespace "${EGRESS_NAMESPACE}" --timeout=120s 2>/dev/null \
+            && echo "✅ Egress namespace deleted" \
+            || echo "ℹ️  Egress namespace not found or already deleting, skipping..."
+    fi
+
     echo ""
     echo "🧹 Deleting gateway namespace '${GATEWAY_NAMESPACE}'..."
     if kubectl delete namespace "${GATEWAY_NAMESPACE}" --timeout=120s 2>/dev/null; then

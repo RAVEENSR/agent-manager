@@ -266,8 +266,9 @@ export function usePromoteAgent() {
     action: { verb: 'promote', target: 'agent' },
     mutationFn: ({ params, body }) => promoteAgent(params, body, getToken),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['agent-deployments'] });
       queryClient.invalidateQueries({ queryKey: ['agent'] });
+      queryClient.invalidateQueries({ queryKey: ['agent-configurations'] });
+      queryClient.invalidateQueries({ queryKey: ['agent-deployments'] });
     },
   });
 }

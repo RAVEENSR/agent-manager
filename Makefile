@@ -346,7 +346,7 @@ setup-ai-gateway: dev-migrate
 		--set gateway.name="default" \
 		--set gateway.displayName="Default AI Gateway" \
 		--set gateway.vhost="http://ai-gateway.amp.localhost:8084" \
-		--set gateway.type="AI" \
+		--set gateway.type="EGRESS" \
 		--set apiGateway.controlPlane.host="host.k3d.internal:9243" \
 		--set developmentMode=true
 	@echo "⏳ Waiting for gateway bootstrap job..."

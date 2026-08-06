@@ -15,19 +15,21 @@ import (
 	"fmt"
 )
 
-// GatewayType Gateway type: - REGULAR: Handles incoming API traffic - AI: Handles outgoing LLM/MCP traffic (used for AI agents)
+// GatewayType Gateway placement role. Naming and placement policy, not capability — every gateway has identical runtime capabilities regardless of role. - INGRESS: handles inbound agent traffic. At most one per environment. - EGRESS: hosts outbound LLM/MCP artifacts. Uncapped per environment. - BOTH: does both. Counts against the ingress cap.  Immutable once registered. `REGULAR` and `AI` are accepted on input as deprecated aliases (REGULAR -> BOTH, AI -> EGRESS) so gateway charts pinned to an older version keep registering; responses always emit canonical values.
 type GatewayType string
 
 // List of GatewayType
 const (
-	AI      GatewayType = "AI"
-	REGULAR GatewayType = "REGULAR"
+	GATEWAYTYPE_INGRESS GatewayType = "INGRESS"
+	GATEWAYTYPE_EGRESS  GatewayType = "EGRESS"
+	GATEWAYTYPE_BOTH    GatewayType = "BOTH"
 )
 
 // All allowed values of GatewayType enum
 var AllowedGatewayTypeEnumValues = []GatewayType{
-	"AI",
-	"REGULAR",
+	"INGRESS",
+	"EGRESS",
+	"BOTH",
 }
 
 func (v *GatewayType) UnmarshalJSON(src []byte) error {

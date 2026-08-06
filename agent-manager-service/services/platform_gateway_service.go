@@ -26,7 +26,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -73,6 +76,7 @@ type GatewayResponse struct {
 	Description       string                 `json:"description"`
 	Properties        map[string]interface{} `json:"properties,omitempty"`
 	Vhost             string                 `json:"vhost"`
+	RuntimeURL        string                 `json:"runtimeUrl,omitempty"`
 	IsCritical        bool                   `json:"isCritical"`
 	FunctionalityType string                 `json:"functionalityType"`
 	IsActive          bool                   `json:"isActive"`
@@ -149,12 +153,21 @@ type Pagination struct {
 
 // RegisterGateway registers a new gateway with organization validation
 func (s *PlatformGatewayService) RegisterGateway(
-	ouID, name, displayName, description, vhost string,
+	ouID, name, displayName, description, vhost, runtimeURL string,
 	isCritical bool, functionalityType string,
 	properties map[string]interface{},
+	environmentIDs []string,
 ) (*GatewayResponse, error) {
 	// 1. Validate inputs
-	if err := s.validateGatewayInput(ouID, name, displayName, vhost, functionalityType); err != nil {
+	if err := s.validateGatewayInput(ouID, name, displayName, vhost); err != nil {
+		return nil, err
+	}
+	if err := validateGatewayRuntimeURL(runtimeURL); err != nil {
+		return nil, err
+	}
+
+	role, err := normalizeGatewayRole(functionalityType)
+	if err != nil {
 		return nil, err
 	}
 
@@ -189,15 +202,37 @@ func (s *PlatformGatewayService) RegisterGateway(
 		Description:              description,
 		Properties:               properties,
 		Vhost:                    vhost,
+		RuntimeURL:               strings.TrimSpace(runtimeURL),
 		IsCritical:               isCritical,
-		GatewayFunctionalityType: strings.ToLower(functionalityType),
+		GatewayFunctionalityType: role,
 		CreatedAt:                time.Now(),
 		UpdatedAt:                time.Now(),
 	}
 
-	err = s.gatewayRepo.Create(gateway)
-	if err != nil {
-		return nil, fmt.Errorf("error while registering gateway: %w", err)
+	// Dedupe: a repeated environment ID would re-enter assignGatewayToEnvironmentTx in the
+	// same tx, where the pooled-connection existence check cannot see the first insert.
+	seenEnvIDs := make(map[string]struct{}, len(environmentIDs))
+	uniqueEnvIDs := make([]string, 0, len(environmentIDs))
+	for _, envID := range environmentIDs {
+		if _, ok := seenEnvIDs[envID]; ok {
+			continue
+		}
+		seenEnvIDs[envID] = struct{}{}
+		uniqueEnvIDs = append(uniqueEnvIDs, envID)
+	}
+
+	if err := s.gatewayRepo.Transaction(func(tx *gorm.DB) error {
+		if err := s.gatewayRepo.CreateTx(tx, gateway); err != nil {
+			return fmt.Errorf("error while registering gateway: %w", err)
+		}
+		for _, envID := range uniqueEnvIDs {
+			if err := s.assignGatewayToEnvironmentTx(tx, gateway, envID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	response := &GatewayResponse{
@@ -208,6 +243,7 @@ func (s *PlatformGatewayService) RegisterGateway(
 		Description:       gateway.Description,
 		Properties:        gateway.Properties,
 		Vhost:             gateway.Vhost,
+		RuntimeURL:        gateway.RuntimeURL,
 		IsCritical:        gateway.IsCritical,
 		FunctionalityType: gateway.GatewayFunctionalityType,
 		IsActive:          gateway.IsActive,
@@ -220,7 +256,7 @@ func (s *PlatformGatewayService) RegisterGateway(
 
 // GatewayListFilters contains optional filters for listing gateways
 type GatewayListFilters struct {
-	FunctionalityType *string // Filter by gateway type (ai, regular, event)
+	FunctionalityType *string // Filter by gateway role (ingress, egress, both)
 	Status            *bool   // Filter by is_active status
 	EnvironmentID     *string // Filter by environment UUID
 }
@@ -238,7 +274,16 @@ func (s *PlatformGatewayService) ListGateways(ouID *string, filters *GatewayList
 	}
 
 	if filters != nil {
-		filterOpts.FunctionalityType = filters.FunctionalityType
+		if filters.FunctionalityType != nil {
+			// Route the raw query value through the same alias normalization used at
+			// registration (REGULAR -> both, AI -> egress) so the filter matches the
+			// canonical roles actually stored in the database.
+			normalized, err := normalizeGatewayRole(*filters.FunctionalityType)
+			if err != nil {
+				return nil, err
+			}
+			filterOpts.FunctionalityType = &normalized
+		}
 		filterOpts.Status = filters.Status
 		filterOpts.EnvironmentID = filters.EnvironmentID
 	}
@@ -266,6 +311,7 @@ func (s *PlatformGatewayService) ListGateways(ouID *string, filters *GatewayList
 			Description:       gw.Description,
 			Properties:        gw.Properties,
 			Vhost:             gw.Vhost,
+			RuntimeURL:        gw.RuntimeURL,
 			IsCritical:        gw.IsCritical,
 			FunctionalityType: gw.GatewayFunctionalityType,
 			IsActive:          gw.IsActive,
@@ -316,6 +362,7 @@ func (s *PlatformGatewayService) GetGateway(gatewayID, ouID string) (*GatewayRes
 		Description:       gateway.Description,
 		Properties:        gateway.Properties,
 		Vhost:             gateway.Vhost,
+		RuntimeURL:        gateway.RuntimeURL,
 		IsCritical:        gateway.IsCritical,
 		FunctionalityType: gateway.GatewayFunctionalityType,
 		IsActive:          gateway.IsActive,
@@ -348,6 +395,7 @@ func (s *PlatformGatewayService) UpdateGateway(
 	description, displayName *string,
 	isCritical *bool,
 	properties *map[string]interface{},
+	runtimeURL *string,
 ) (*GatewayResponse, error) {
 	// Get existing gateway
 	gateway, err := s.gatewayRepo.GetByUUID(gatewayID)
@@ -373,6 +421,14 @@ func (s *PlatformGatewayService) UpdateGateway(
 	if properties != nil {
 		gateway.Properties = *properties
 	}
+	// The address is mutable — unlike the role it is a fact about placement, so a stale
+	// one is simply wrong. Validated on every write for the same reason as at registration.
+	if runtimeURL != nil {
+		if err := validateGatewayRuntimeURL(*runtimeURL); err != nil {
+			return nil, err
+		}
+		gateway.RuntimeURL = strings.TrimSpace(*runtimeURL)
+	}
 	gateway.UpdatedAt = time.Now()
 
 	err = s.gatewayRepo.UpdateGateway(gateway)
@@ -388,6 +444,7 @@ func (s *PlatformGatewayService) UpdateGateway(
 		Description:       gateway.Description,
 		Properties:        gateway.Properties,
 		Vhost:             gateway.Vhost,
+		RuntimeURL:        gateway.RuntimeURL,
 		IsCritical:        gateway.IsCritical,
 		FunctionalityType: gateway.GatewayFunctionalityType,
 		IsActive:          gateway.IsActive,
@@ -865,40 +922,76 @@ func (s *PlatformGatewayService) ListIdentityProvidersByOrg(ouID string) ([]repo
 	return s.gatewayRepo.ListIdentityProvidersByOrg(ouID)
 }
 
-// AssignGatewayToEnvironment creates a mapping between a gateway and an environment
+// AssignGatewayToEnvironment maps a gateway to an environment, enforcing the
+// one-ingress-capable-gateway-per-environment cap. This is the single membership choke
+// point — RegisterGateway drives the same transactional helper.
 func (s *PlatformGatewayService) AssignGatewayToEnvironment(gatewayID, environmentID string) error {
-	// Parse UUIDs
-	gwUUID, err := uuid.Parse(gatewayID)
-	if err != nil {
-		return fmt.Errorf("invalid gateway UUID: %w", err)
+	if _, err := uuid.Parse(gatewayID); err != nil {
+		return fmt.Errorf("%w: invalid gateway UUID %q", utils.ErrBadRequest, gatewayID)
 	}
+	gateway, err := s.gatewayRepo.GetByUUID(gatewayID)
+	if err != nil {
+		return err
+	}
+	if gateway == nil {
+		return utils.ErrGatewayNotFound
+	}
+	return s.gatewayRepo.Transaction(func(tx *gorm.DB) error {
+		return s.assignGatewayToEnvironmentTx(tx, gateway, environmentID)
+	})
+}
 
+// assignGatewayToEnvironmentTx performs the capped, locked mapping insert inside an
+// existing transaction.
+//
+// The advisory lock is taken before the existence check so the check-then-insert window
+// is serialised per environment. The existence check sits inside the lock so an
+// idempotent re-assign of an already-mapped gateway returns before the count runs and
+// can never count itself.
+//
+// Egress-capable gateways are never counted or rejected: egress is uncapped.
+func (s *PlatformGatewayService) assignGatewayToEnvironmentTx(
+	tx *gorm.DB, gateway *models.Gateway, environmentID string,
+) error {
 	envUUID, err := uuid.Parse(environmentID)
 	if err != nil {
-		return fmt.Errorf("invalid environment UUID: %w", err)
+		return fmt.Errorf("%w: invalid environment UUID %q", utils.ErrBadRequest, environmentID)
+	}
+	envIDStr := envUUID.String()
+
+	if err := s.gatewayRepo.AcquireEnvironmentLock(tx, envIDStr); err != nil {
+		return fmt.Errorf("failed to lock environment %s: %w", envIDStr, err)
 	}
 
-	// Check if mapping already exists
-	exists, err := s.gatewayRepo.EnvironmentMappingExists(gatewayID, environmentID)
+	// Reads on the pooled connection (not tx) are safe here: the advisory lock is
+	// held until commit, so a competing writer has already committed by the time
+	// this lock grant returns, and READ COMMITTED guarantees that commit is visible.
+	exists, err := s.gatewayRepo.EnvironmentMappingExists(gateway.UUID.String(), envIDStr)
 	if err != nil {
 		return fmt.Errorf("failed to check existing mapping: %w", err)
 	}
-
 	if exists {
-		// Already assigned, treat as success
-		return nil
+		return nil // already assigned
 	}
 
-	// Create mapping
+	if gateway.IsIngressCapable() {
+		count, err := s.gatewayRepo.CountIngressCapableInEnvironment(tx, envIDStr)
+		if err != nil {
+			return err
+		}
+		if count > 0 {
+			return fmt.Errorf("%w: environment %s already has an ingress gateway; "+
+				"register this gateway with gatewayType EGRESS instead", utils.ErrGatewayIngressCapExceeded, envIDStr)
+		}
+	}
+
 	mapping := &models.GatewayEnvironmentMapping{
-		GatewayUUID:     gwUUID,
+		GatewayUUID:     gateway.UUID,
 		EnvironmentUUID: envUUID,
 	}
-
-	if err := s.gatewayRepo.CreateEnvironmentMapping(mapping); err != nil {
+	if err := s.gatewayRepo.CreateEnvironmentMappingTx(tx, mapping); err != nil {
 		return fmt.Errorf("failed to create gateway-environment mapping: %w", err)
 	}
-
 	return nil
 }
 
@@ -983,7 +1076,7 @@ func (s *PlatformGatewayService) DeleteGatewayEnvironmentMappings(gatewayID stri
 }
 
 // validateGatewayInput validates gateway registration inputs
-func (s *PlatformGatewayService) validateGatewayInput(ouID, name, displayName, vhost, functionalityType string) error {
+func (s *PlatformGatewayService) validateGatewayInput(ouID, name, displayName, vhost string) error {
 	// Organization ID validation
 	if strings.TrimSpace(ouID) == "" {
 		return errors.New("organization name is required")
@@ -1027,23 +1120,109 @@ func (s *PlatformGatewayService) validateGatewayInput(ouID, name, displayName, v
 		return errors.New("vhost is required")
 	}
 
-	// Gateway type validation
-	functionalityType = strings.TrimSpace(functionalityType)
-	if functionalityType == "" {
-		return errors.New("gateway functionality type is required")
-	}
-	// Normalize to lowercase for consistent validation and storage
-	normalized := strings.ToLower(functionalityType)
-	validTypes := map[string]bool{
-		"regular": true,
-		"ai":      true,
-		"event":   true,
-	}
-	if !validTypes[normalized] {
-		return fmt.Errorf("gateway type must be one of: Regular, AI, Event")
-	}
-
 	return nil
+}
+
+var dnsLabelPattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+
+// validateGatewayRuntimeURL enforces the shape of the stored in-cluster gateway address.
+// Empty is legal and means "no internal address; use vhost".
+//
+// Validated rather than treated as opaque because the value is materialized into sandboxed
+// agent pod env vars alongside the minted gateway API key. The port rule is the control that
+// matters: the sandbox NetworkPolicy permits arbitrary destinations on exactly three ports —
+// 80 and 443 via its public ipBlock rule, and 53 TCP+UDP via its DNS rule, which carries no
+// `to:` selector and so reaches every address — so all three are refused. Host shape is
+// defence in depth only, since a two-label host is indistinguishable from a public domain.
+func validateGatewayRuntimeURL(runtimeURL string) error {
+	runtimeURL = strings.TrimSpace(runtimeURL)
+	if runtimeURL == "" {
+		return nil
+	}
+	parsed, err := url.Parse(runtimeURL)
+	if err != nil {
+		return fmt.Errorf("%w: runtimeUrl is not a valid URL: %w", utils.ErrBadRequest, err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("%w: runtimeUrl scheme must be http or https", utils.ErrBadRequest)
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("%w: runtimeUrl must not carry userinfo, a query or a fragment", utils.ErrBadRequest)
+	}
+	// Any path, "/" included, would concatenate into a double slash Envoy does not merge.
+	if parsed.Path != "" {
+		return fmt.Errorf("%w: runtimeUrl must be a base URL without a path", utils.ErrBadRequest)
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("%w: runtimeUrl must specify an explicit numeric port", utils.ErrBadRequest)
+	}
+	if port == 80 || port == 443 || port == 53 {
+		return fmt.Errorf("%w: runtimeUrl must not use port 80, 443 or 53; the agent sandbox "+
+			"egress policy permits arbitrary destinations on those ports", utils.ErrBadRequest)
+	}
+	if !isClusterLocalHost(parsed.Hostname()) {
+		return fmt.Errorf("%w: runtimeUrl host must be cluster-local: a dotless Service name, "+
+			"name.namespace[.svc[.cluster.local]], or a private-range IP", utils.ErrBadRequest)
+	}
+	return nil
+}
+
+// isClusterLocalHost matches in-cluster address shapes. Shape only — a two-label host is
+// indistinguishable from a public domain, which is why the port rule above carries the weight.
+func isClusterLocalHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		// Link-local is deliberately absent: it would admit the 169.254.169.254 metadata address.
+		return ip.IsLoopback() || ip.IsPrivate()
+	}
+	labels := strings.Split(strings.TrimSuffix(host, "."), ".")
+	switch len(labels) {
+	case 1, 2: // "runtime" or "runtime.namespace"
+	case 3:
+		if labels[2] != "svc" {
+			return false
+		}
+	case 5:
+		if labels[2] != "svc" || labels[3] != "cluster" || labels[4] != "local" {
+			return false
+		}
+	default:
+		return false
+	}
+	for _, label := range labels {
+		if !dnsLabelPattern.MatchString(label) {
+			return false
+		}
+	}
+	return true
+}
+
+// normalizeGatewayRole maps wire input to the canonical stored role.
+//
+// REGULAR and AI are accepted as deprecated input-only aliases: the gateway bootstrap
+// job is the only thing that writes a role and it ships in a separately-versioned OCI
+// chart, so old-chart-against-new-AMS is a routine combination. Responses always emit
+// canonical values. REGULAR maps to "both" (not "ingress") because 100% of registrations
+// in existence send REGULAR, and an ingress-only environment has no legal LLM/MCP target.
+//
+// "event" is no longer accepted. It never worked: the CHECK constraint from migration 002
+// was IN ('regular','ai'), so an event gateway passed validation and then failed at INSERT.
+func normalizeGatewayRole(functionalityType string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(functionalityType)) {
+	case "":
+		return "", fmt.Errorf("%w: gateway functionality type is required", utils.ErrBadRequest)
+	case models.GatewayRoleIngress:
+		return models.GatewayRoleIngress, nil
+	case models.GatewayRoleEgress, "ai":
+		return models.GatewayRoleEgress, nil
+	case models.GatewayRoleBoth, "regular":
+		return models.GatewayRoleBoth, nil
+	default:
+		return "", fmt.Errorf("%w: gateway type must be one of: INGRESS, EGRESS, BOTH", utils.ErrBadRequest)
+	}
 }
 
 // Token Generation and Hashing Utilities

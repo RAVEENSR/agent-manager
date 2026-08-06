@@ -165,17 +165,6 @@ export const rootRouteMap: AppRoute = {
                                 },
                             },
                         },
-                        appearance: {
-                            path: 'appearance',
-                            index: true,
-                            children: {
-                                theme: {
-                                    path: 'theme',
-                                    index: true,
-                                    children: {},
-                                },
-                            },
-                        },
                     },
                 },
                 mcpProxies: {
