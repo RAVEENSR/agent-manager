@@ -39,7 +39,7 @@ import (
 // to the JSON workload object (including spec.container.image).
 const workflowRunWorkloadAnnotationKey = "openchoreo.dev/workload"
 
-func (c *openChoreoClient) TriggerBuild(ctx context.Context, ouID, projectName, componentName, commitID string) (*models.BuildResponse, error) {
+func (c *openChoreoClient) TriggerBuild(ctx context.Context, ouID, projectName, componentName, commitID, workflowRunName string) (*models.BuildResponse, error) {
 	namespaceName := c.NamespaceFor(ouID)
 	// Get the component to find its workflow configuration
 	compResp, err := c.ocClient.GetComponentWithResponse(ctx, namespaceName, componentName)
@@ -89,8 +89,11 @@ func (c *openChoreoClient) TriggerBuild(ctx context.Context, ouID, projectName, 
 		}
 	}
 
-	// Generate a unique name for the workflow run using timestamp
-	workflowRunName := fmt.Sprintf("%s-%d", componentName, time.Now().UnixMilli())
+	// Preserve the open-source behavior when no deployment-specific name is supplied.
+	if workflowRunName == "" {
+		workflowRunName = fmt.Sprintf("%s-%d", componentName, time.Now().UnixMilli())
+	}
+
 	apiReq := gen.CreateWorkflowRunJSONRequestBody{
 		Metadata: gen.ObjectMeta{
 			Name:      workflowRunName,

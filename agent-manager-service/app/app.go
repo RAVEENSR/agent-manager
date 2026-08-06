@@ -71,6 +71,12 @@ type Options struct {
 	// the env-Thunder system-client credential from AMS's own Postgres — that one
 	// is not read back from a key vault.
 	AgentThunderProvisioning func(db *gorm.DB, secretMgmtClient secretmanagersvc.SecretManagementClient, encryptionKey []byte) services.AgentThunderProvisioningService
+	// BuildSecretProvisioner provisions the per-run git clone secret before a source
+	// build's WorkflowRun is created. nil (the open-source default) is a no-op: private
+	// repos are cloned via the PAT-backed git secret the user created (or public repos
+	// anonymously). Cloud deployments inject an implementation that mints a short-lived
+	// token from a platform GitHub App. See services.BuildSecretProvisioner.
+	BuildSecretProvisioner services.BuildSecretProvisioner
 }
 
 // Run starts the application with the provided providers and options.
@@ -136,7 +142,7 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 		agentThunderProvisioning = opts.AgentThunderProvisioning(database, secretMgmtClientForProvisioning, encryptionKey)
 	}
 
-	dependencies, err := wiring.InitializeAppParams(cfg, database, authProvider, secretProvider, opts.GatewayConfigApplier, agentThunderProvisioning)
+	dependencies, err := wiring.InitializeAppParams(cfg, database, authProvider, secretProvider, opts.GatewayConfigApplier, agentThunderProvisioning, opts.BuildSecretProvisioner)
 	if err != nil {
 		slog.Error("failed to initialize app dependencies", "error", err)
 		os.Exit(1)

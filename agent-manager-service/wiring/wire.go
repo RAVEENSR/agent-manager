@@ -309,6 +309,13 @@ func ProvideGitCredentialsService(ocClient occlient.OpenChoreoClient, cfg config
 	return services.NewGitCredentialsService(ocClient, cfg)
 }
 
+// ProvideNilBuildSecretProvisioner supplies a nil BuildSecretProvisioner for wiring
+// paths (e.g. tests) that do not inject one. The real injector receives it as a
+// parameter instead (from app.Options); nil is the open-source default and a no-op.
+func ProvideNilBuildSecretProvisioner() services.BuildSecretProvisioner {
+	return nil
+}
+
 // ProvidePublisherProvisioner creates the publisher credential provisioner
 // for per-org Thunder OAuth app creation and secret storage via SecretManagementClient
 func ProvidePublisherProvisioner(cfg config.Config, encryptionKey []byte, logger *slog.Logger, secretClient secretmanagersvc.SecretManagementClient, ocClient occlient.OpenChoreoClient, credRepo repositories.OrgPublisherCredentialRepository) (services.PublisherCredentialProvisioner, error) {
@@ -532,7 +539,7 @@ func ProvideOrgResolver(client thundersvc.IdentityClient) middleware.OrgResolver
 
 // InitializeAppParams wires up all application dependencies. agentThunderProvisioning
 // is the deployment-injected AgentID provisioning implementation (nil to disable).
-func InitializeAppParams(cfg *config.Config, db *gorm.DB, authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Provider, gatewayApplier services.GatewayConfigApplier, agentThunderProvisioning services.AgentThunderProvisioningService) (*AppParams, error) {
+func InitializeAppParams(cfg *config.Config, db *gorm.DB, authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Provider, gatewayApplier services.GatewayConfigApplier, agentThunderProvisioning services.AgentThunderProvisioningService, buildSecretProvisioner services.BuildSecretProvisioner) (*AppParams, error) {
 	wire.Build(
 		configProviderSet,
 		clientProviderSet,
@@ -568,6 +575,7 @@ func InitializeTestAppParamsWithClientMocks(
 		controllerProviderSet,
 		configProviderSet,
 		ProvideJWTSigningConfig,
+		ProvideNilBuildSecretProvisioner,
 		wire.Struct(new(AppParams), "*"),
 	)
 	return &AppParams{}, nil
