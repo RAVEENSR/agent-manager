@@ -30,10 +30,10 @@ import (
 // In open-source deployments this is nil and the build behaves exactly as before: the
 // clone secret named "{workflowRunName}-git-secret" is materialized (when the component
 // has a non-empty repository.secretRef) by the ExternalSecret rendered from the git
-// secret the user created with a personal access token, or the clone is anonymous. Cloud
-// deployments inject an implementation (via app.Options) that mints a short-lived token
-// from a platform GitHub App and writes that same "{workflowRunName}-git-secret" secret
-// directly, so private repos can be cloned without a stored PAT.
+// secret the user created with a personal access token, or the clone is anonymous. A
+// deployment can inject an implementation (via app.Options) that mints a short-lived
+// token from a platform GitHub App and writes that same "{workflowRunName}-git-secret"
+// secret directly, so private repos can be cloned without a stored PAT.
 //
 // Implementations must be idempotent (a client retry after a partial failure re-mints
 // the same per-run secret) and must be a no-op — returning nil — when the component is

@@ -133,7 +133,7 @@ func TestCleanupGitHubAppSource_DeletesBinding(t *testing.T) {
 	assert.Equal(t, "agent-1", gotComponent)
 }
 
-func TestPrepareGitHubAppSource_RequiresCloudProvider(t *testing.T) {
+func TestPrepareGitHubAppSource_RequiresInjectedProvisioner(t *testing.T) {
 	req := githubAppCreateRequest()
 
 	err := (&agentManagerService{}).prepareGitHubAppSource(req)

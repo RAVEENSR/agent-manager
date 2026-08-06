@@ -1136,7 +1136,7 @@ func paginateSlice[T any](items []T, offset, limit int32) []T {
 	return items[offset:end]
 }
 
-// prepareGitHubAppSource validates the cloud-only source metadata against the normal
+// prepareGitHubAppSource validates the injected provider's source metadata against the normal
 // repository configuration and normalizes the values persisted by the injected
 // provider. The source metadata is intentionally absent from the OpenChoreo client
 // request; OpenChoreo only receives the repository with an explicitly empty secretRef.
@@ -1584,9 +1584,10 @@ func (s *agentManagerService) createComponentAgent(ctx context.Context, ouID, pr
 }
 
 // prepareBuild creates the WorkflowRun name and provisions its clone secret when the
-// component has a GitHub App source binding. The empty name is intentional for on-prem,
-// public-repository, and PAT-backed builds: the OpenChoreo client keeps generating the
-// run name exactly as it did before this optional cloud integration existed.
+// component has a GitHub App source binding. The empty name is intentional when no
+// provisioner is injected, and for public-repository and PAT-backed builds: the
+// OpenChoreo client keeps generating the run name exactly as it did before this
+// optional integration existed.
 func (s *agentManagerService) prepareBuild(ctx context.Context, ouID, projectName, componentName string) (string, error) {
 	if s.buildSecretProvisioner == nil {
 		return "", nil
@@ -2530,7 +2531,7 @@ func (s *agentManagerService) DeleteAgent(ctx context.Context, ouID string, proj
 	return nil
 }
 
-// cleanupGitHubAppSource removes the cloud-only source binding after the component is
+// cleanupGitHubAppSource removes the injected provider's source binding after the component is
 // confirmed absent. It is best-effort like the other post-delete cleanup operations:
 // the component deletion is already committed, and a later idempotent delete can retry.
 func (s *agentManagerService) cleanupGitHubAppSource(ctx context.Context, ouID, projectName, agentName string) {

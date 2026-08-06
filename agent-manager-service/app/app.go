@@ -74,7 +74,7 @@ type Options struct {
 	// BuildSecretProvisioner provisions the per-run git clone secret before a source
 	// build's WorkflowRun is created. nil (the open-source default) is a no-op: private
 	// repos are cloned via the PAT-backed git secret the user created (or public repos
-	// anonymously). Cloud deployments inject an implementation that mints a short-lived
+	// anonymously). A deployment can inject an implementation that mints a short-lived
 	// token from a platform GitHub App. See services.BuildSecretProvisioner.
 	BuildSecretProvisioner services.BuildSecretProvisioner
 }

@@ -44,7 +44,7 @@ interface AgentRequestBase {
   modelConfig?: ModelConfigRequest[];
   mcpConfig?: MCPConfigRequest[];
   labels?: Record<string, string>;
-  /** Cloud-only GitHub App source binding. Omitted by on-prem and PAT flows. */
+  /** Optional GitHub App source binding. Omitted by the built-in PAT flow. */
   githubApp?: GitHubAppSource;
 }
 

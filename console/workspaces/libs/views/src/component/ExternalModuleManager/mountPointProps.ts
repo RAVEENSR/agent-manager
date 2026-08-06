@@ -29,7 +29,7 @@ export interface PrivateRepoSourceValues {
   gitSecretRef?: string;
 }
 
-/** Cloud source metadata submitted atomically with agent creation. */
+/** Repository source metadata submitted atomically with agent creation. */
 export interface GitHubAppSourceBinding {
   installationId: number;
   owner: string;
@@ -53,7 +53,7 @@ export interface PrivateRepoSourceProps {
   errors: Partial<Record<keyof PrivateRepoSourceValues, string | undefined>>;
   /** Writes a single repository source field back to the parent form. */
   onFieldChange: (field: keyof PrivateRepoSourceValues, value: string) => void;
-  /** Current cloud source binding; omitted by the built-in on-prem/PAT flow. */
+  /** Current injected source binding; omitted by the built-in PAT flow. */
   sourceBinding?: GitHubAppSourceBinding;
   /** Updates the binding carried by the create request; this performs no network I/O. */
   onSourceBindingChange: (binding: GitHubAppSourceBinding | undefined) => void;
