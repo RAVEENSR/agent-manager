@@ -102,6 +102,14 @@ export const createAgentSchema = z.object({
       { message: 'App path must be a valid path (use / for root directory)' }
     ),
   gitSecretRef: z.string().trim().optional(),
+  githubApp: z.object({
+    installationId: z.number().int().positive(),
+    owner: z.string().trim().min(1),
+    repo: z.string().trim().min(1),
+    branch: z.string().trim().min(1),
+    appPath: z.string().trim().min(1),
+    repositoryUrl: z.string().url(),
+  }).optional(),
   runCommand: z.string().trim().optional(),
   language: z.string().trim().min(1, 'Language is required'),
   languageVersion: z.string().trim().optional(),
@@ -235,5 +243,4 @@ export const createAgentSchema = z.object({
 export type ConnectAgentFormValues = z.infer<typeof connectAgentSchema>;
 export type CreateAgentFormValues = z.infer<typeof createAgentSchema>;
 export type AddAgentFormValues = ConnectAgentFormValues | CreateAgentFormValues;
-
 
