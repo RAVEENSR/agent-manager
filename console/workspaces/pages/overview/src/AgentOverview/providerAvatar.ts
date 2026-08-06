@@ -16,6 +16,8 @@
  * under the License.
  */
 
+import { getEntityAvatarColor } from "@agent-management-platform/views";
+
 // Brand-ish colors for the handful of providers/config names users are most
 // likely to see here; anything else falls back to a deterministic hash color
 // so it's still stable across renders instead of random.
@@ -36,28 +38,12 @@ const KNOWN_PROVIDER_COLORS: Record<string, string> = {
     llama: "#0668E1",
 };
 
-const FALLBACK_COLORS = [
-    "#5B5FEE", "#0EA5E9", "#EC4899", "#F59E0B", "#10B981", "#8B5CF6",
-];
-
-function hashString(value: string): number {
-    let hash = 0;
-    for (let i = 0; i < value.length; i += 1) {
-        hash = (hash * 31 + value.charCodeAt(i)) | 0;
-    }
-    return Math.abs(hash);
-}
-
 /** Picks a stable avatar color for a provider/config name — a curated brand
- * color when recognized, otherwise a deterministic hash-based fallback. */
+ * color when recognized, otherwise the platform-wide deterministic fallback. */
 export function getProviderAvatarColor(name?: string): string {
-    if (!name) return FALLBACK_COLORS[0];
+    if (!name) return getEntityAvatarColor();
     const key = name.trim().toLowerCase();
     const known = Object.keys(KNOWN_PROVIDER_COLORS).find((k) => key.includes(k));
     if (known) return KNOWN_PROVIDER_COLORS[known];
-    return FALLBACK_COLORS[hashString(key) % FALLBACK_COLORS.length];
-}
-
-export function getAvatarInitial(name: string): string {
-    return name.trim().charAt(0).toUpperCase() || "?";
+    return getEntityAvatarColor(key);
 }

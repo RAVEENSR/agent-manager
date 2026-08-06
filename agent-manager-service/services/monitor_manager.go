@@ -216,7 +216,18 @@ func (s *monitorManagerService) CreateMonitor(ctx context.Context, ouID string, 
 			return nil, fmt.Errorf("invalid environment UUID: %w", err)
 		}
 
-		gateway, err := s.llmProvisioner.ResolveGateway(ctx, envUUID, ouID)
+		provider, err := s.llmProvisioner.ProviderRepo().GetByHandle(req.LLMProvider.ProviderName, ouID)
+		if err != nil {
+			if delErr := s.monitorRepo.DeleteMonitor(monitor); delErr != nil {
+				s.logger.Error("Failed to rollback monitor on error", "error", delErr)
+			}
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				err = fmt.Errorf("%w: %s", utils.ErrLLMProviderNotFound, req.LLMProvider.ProviderName)
+			}
+			return nil, fmt.Errorf("failed to resolve LLM provider %q: %w", req.LLMProvider.ProviderName, err)
+		}
+
+		gateway, err := s.resolveMonitorGateway(ctx, ouID, envUUID, provider.UUID.String())
 		if err != nil {
 			if delErr := s.monitorRepo.DeleteMonitor(monitor); delErr != nil {
 				s.logger.Error("Failed to rollback monitor on error", "error", delErr)
@@ -537,7 +548,15 @@ func (s *monitorManagerService) UpdateMonitor(ctx context.Context, ouID, project
 				return nil, fmt.Errorf("invalid environment UUID: %w", err)
 			}
 
-			gateway, err := s.llmProvisioner.ResolveGateway(ctx, envUUID, ouID)
+			provider, err := s.llmProvisioner.ProviderRepo().GetByHandle(req.LLMProvider.ProviderName, ouID)
+			if err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					err = fmt.Errorf("%w: %s", utils.ErrLLMProviderNotFound, req.LLMProvider.ProviderName)
+				}
+				return nil, fmt.Errorf("failed to resolve LLM provider %q: %w", req.LLMProvider.ProviderName, err)
+			}
+
+			gateway, err := s.resolveMonitorGateway(ctx, ouID, envUUID, provider.UUID.String())
 			if err != nil {
 				return nil, fmt.Errorf("failed to resolve gateway: %w", err)
 			}
@@ -1389,6 +1408,25 @@ func monitorProxyName(monitorID uuid.UUID, monitorName, providerName string) str
 		readable = strings.TrimRight(readable[:maxReadable], "-")
 	}
 	return fmt.Sprintf("%s-%s-proxy", readable, monitorSuffix)
+}
+
+// resolveMonitorGateway anchors on the LLM provider's existing deployment, exactly as
+// resolveGatewayForProvider does, so a second egress gateway in the environment never
+// makes monitor create/update impossible. CreateMonitorRequest and UpdateMonitorRequest
+// carry no gateway field, so inference is the only path available here.
+func (s *monitorManagerService) resolveMonitorGateway(
+	ctx context.Context, ouID string, envUUID uuid.UUID, providerUUIDStr string,
+) (*models.Gateway, error) {
+	_ = ctx
+	var deployed []string
+	if providerUUID, err := uuid.Parse(providerUUIDStr); err == nil {
+		ids, depErr := s.llmProvisioner.ProxyDeploymentService().GetDeployedGatewaysByProvider(providerUUID, ouID)
+		if depErr != nil {
+			return nil, fmt.Errorf("failed to list deployed gateways for provider %s: %w", providerUUIDStr, depErr)
+		}
+		deployed = ids
+	}
+	return resolveEgressGatewayForArtifact(s.llmProvisioner.gatewayRepo, ouID, envUUID, deployed, nil)
 }
 
 func (s *monitorManagerService) provisionLLMProxy(

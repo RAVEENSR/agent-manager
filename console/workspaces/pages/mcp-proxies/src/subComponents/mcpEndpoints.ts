@@ -197,6 +197,10 @@ export function capabilitiesToFetchedInfo(
  * environment UUIDs.
  */
 export function endpointToDraft(endpoint: MCPProxyEndpoint): EndpointDraft {
+  const gatewayByEnv: Record<string, string> = {};
+  (endpoint.environments ?? []).forEach((env) => {
+    if (env.gatewayId) gatewayByEnv[env.environmentUuid] = env.gatewayId;
+  });
   return {
     id: endpoint.id,
     name: endpoint.name ?? "",
@@ -206,6 +210,7 @@ export function endpointToDraft(endpoint: MCPProxyEndpoint): EndpointDraft {
     environments: (endpoint.environments ?? []).map(
       (env) => env.environmentUuid,
     ),
+    gatewayByEnv,
     fetchedInfo: capabilitiesToFetchedInfo(endpoint.capabilities),
   };
 }
@@ -412,6 +417,7 @@ export function draftToEndpoint(
     security: existing?.security ?? DEFAULT_ENDPOINT_SECURITY,
     environments: draft.environments.map((environmentUuid) => ({
       environmentUuid,
+      gatewayId: draft.gatewayByEnv?.[environmentUuid],
     })),
   };
 }

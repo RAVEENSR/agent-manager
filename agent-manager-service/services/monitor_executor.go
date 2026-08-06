@@ -31,7 +31,6 @@ import (
 
 	"github.com/wso2/agent-manager/agent-manager-service/catalog"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
-	"github.com/wso2/agent-manager/agent-manager-service/config"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 )
@@ -87,7 +86,7 @@ type monitorExecutor struct {
 	monitorLLMMappingRepo repositories.MonitorLLMMappingRepository
 	gatewayRepo           repositories.GatewayRepository
 	llmProviderRepo       repositories.LLMProviderRepository
-	gatewayRuntimeConfig  config.GatewayRuntimeConfig
+	deploymentRepo        repositories.DeploymentRepository
 }
 
 // NewMonitorExecutor creates a new monitor executor instance
@@ -100,7 +99,7 @@ func NewMonitorExecutor(
 	monitorLLMMappingRepo repositories.MonitorLLMMappingRepository,
 	gatewayRepo repositories.GatewayRepository,
 	llmProviderRepo repositories.LLMProviderRepository,
-	gatewayRuntimeConfig config.GatewayRuntimeConfig,
+	deploymentRepo repositories.DeploymentRepository,
 ) MonitorExecutor {
 	return &monitorExecutor{
 		ocClient:              ocClient,
@@ -111,7 +110,7 @@ func NewMonitorExecutor(
 		monitorLLMMappingRepo: monitorLLMMappingRepo,
 		gatewayRepo:           gatewayRepo,
 		llmProviderRepo:       llmProviderRepo,
-		gatewayRuntimeConfig:  gatewayRuntimeConfig,
+		deploymentRepo:        deploymentRepo,
 	}
 }
 
@@ -243,43 +242,33 @@ func (e *monitorExecutor) resolveLLMProxyConfig(ctx context.Context, monitor *mo
 }
 
 // resolveProxyURL derives the proxy base URL from the preloaded LLMProxy and the gateway
-// associated with the given environment. Uses the same AI-gateway-first preference as
-// LLMProxyProvisioner.ResolveGateway so we hit the same host the proxy was deployed to.
+// the proxy is actually deployed to in this environment. Anchoring matters here more than
+// anywhere else: this runs on every scheduled monitor execution, on resources nobody
+// touched, so re-selecting from the environment would break every pre-existing monitor
+// the moment a second egress gateway appears.
 func (e *monitorExecutor) resolveProxyURL(ctx context.Context, ouID, environmentID string, proxy *models.LLMProxy) (string, error) {
+	_ = ctx
 	if proxy == nil {
 		return "", fmt.Errorf("LLM proxy not preloaded for mapping")
 	}
-
-	activeStatus := true
-	aiType := "ai"
-
-	// Prefer AI-type gateways, mirroring the selection used during provisioning.
-	gateways, err := e.gatewayRepo.ListWithFilters(repositories.GatewayFilterOptions{
-		OrganizationID:    ouID,
-		FunctionalityType: &aiType,
-		Status:            &activeStatus,
-		EnvironmentID:     &environmentID,
-		Limit:             1,
-	})
+	envUUID, err := uuid.Parse(environmentID)
 	if err != nil {
-		return "", fmt.Errorf("failed to query AI gateways for environment %s: %w", environmentID, err)
-	}
-	if len(gateways) == 0 {
-		gateways, err = e.gatewayRepo.ListWithFilters(repositories.GatewayFilterOptions{
-			OrganizationID: ouID,
-			Status:         &activeStatus,
-			EnvironmentID:  &environmentID,
-			Limit:          1,
-		})
-		if err != nil {
-			return "", fmt.Errorf("failed to find gateway for environment %s: %w", environmentID, err)
-		}
-	}
-	if len(gateways) == 0 {
-		return "", fmt.Errorf("no active gateway found for environment %s", environmentID)
+		return "", fmt.Errorf("invalid environment UUID %q: %w", environmentID, err)
 	}
 
-	return buildProxyURL(gateways[0], proxy.Configuration.Context, true, e.gatewayRuntimeConfig), nil
+	var deployed []string
+	if e.deploymentRepo != nil {
+		ids, depErr := e.deploymentRepo.GetDeployedGatewaysByProvider(proxy.UUID, ouID)
+		if depErr != nil {
+			return "", fmt.Errorf("failed to list deployed gateways for proxy %s: %w", proxy.UUID, depErr)
+		}
+		deployed = ids
+	}
+	gateway, err := resolveEgressGatewayForArtifact(e.gatewayRepo, ouID, envUUID, deployed, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve gateway for environment %s: %w", environmentID, err)
+	}
+	return buildProxyURL(gateway, proxy.Configuration.Context, true), nil
 }
 
 // buildWorkflowRunRequest constructs the workflow run request for a monitor.

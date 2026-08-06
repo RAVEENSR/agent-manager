@@ -9,6 +9,12 @@ metadata:
 {{- include "amp-evaluation-extension.labels" . | nindent 4 }}
 spec:
   entrypoint: run-monitor
+  # Stamped onto the actual pod (unlike metadata.labels above, which only labels the CR) —
+  # the podSelector evaluation-job-networkpolicy.yaml targets.
+  podMetadata:
+    labels:
+      app.kubernetes.io/name: amp-monitor
+      app.kubernetes.io/component: evaluation-job
   arguments:
     parameters:
       - name: monitor-name

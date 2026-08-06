@@ -849,8 +849,9 @@ func ValidatePromoteAgentRequest(payload *spec.PromoteAgentRequest) error {
 			payload.EnableApiKeySecurity != nil ||
 			payload.CorsConfig != nil ||
 			payload.EnableOAuthSecurity != nil ||
-			payload.OauthConfig != nil {
-			return fmt.Errorf("useConfigFromSourceEnv=true is mutually exclusive with env, files, enableAutoInstrumentation, instrumentationVersion, enableApiKeySecurity, corsConfig, enableOAuthSecurity, and oauthConfig")
+			payload.OauthConfig != nil ||
+			payload.ResilienceTimeoutSeconds != nil {
+			return fmt.Errorf("useConfigFromSourceEnv=true is mutually exclusive with env, files, enableAutoInstrumentation, instrumentationVersion, enableApiKeySecurity, corsConfig, enableOAuthSecurity, oauthConfig, and resilienceTimeoutSeconds")
 		}
 	}
 
@@ -1423,6 +1424,39 @@ func SanitizeString(s string) string {
 	}, strings.ToLower(s))
 }
 
+// riskyEvaluatorSourcePatterns are heuristics only, not a security boundary — evaluator
+// source still runs unsandboxed regardless.
+var riskyEvaluatorSourcePatterns = []struct {
+	label   string
+	pattern *regexp.Regexp
+}{
+	{"import os", regexp.MustCompile(`(?m)^\s*(?:from\s+os\b|import\s+(?:\w+(?:\s+as\s+\w+)?\s*,\s*)*os\b)`)},
+	{"import subprocess", regexp.MustCompile(`(?m)^\s*(?:from\s+subprocess\b|import\s+(?:\w+(?:\s+as\s+\w+)?\s*,\s*)*subprocess\b)`)},
+	{"import socket", regexp.MustCompile(`(?m)^\s*(?:from\s+socket\b|import\s+(?:\w+(?:\s+as\s+\w+)?\s*,\s*)*socket\b)`)},
+	{"import ctypes", regexp.MustCompile(`(?m)^\s*(?:from\s+ctypes\b|import\s+(?:\w+(?:\s+as\s+\w+)?\s*,\s*)*ctypes\b)`)},
+	{"import importlib", regexp.MustCompile(`(?m)^\s*(?:from\s+importlib\b|import\s+(?:\w+(?:\s+as\s+\w+)?\s*,\s*)*importlib\b)`)},
+	{"import urllib", regexp.MustCompile(`(?m)^\s*(?:from\s+urllib\b|import\s+(?:\w+(?:\s+as\s+\w+)?\s*,\s*)*urllib\b)`)},
+	{"import http", regexp.MustCompile(`(?m)^\s*(?:from\s+http\b|import\s+(?:\w+(?:\s+as\s+\w+)?\s*,\s*)*http\b)`)},
+	{"import requests", regexp.MustCompile(`(?m)^\s*(?:from\s+requests\b|import\s+(?:\w+(?:\s+as\s+\w+)?\s*,\s*)*requests\b)`)},
+	{"import ftplib", regexp.MustCompile(`(?m)^\s*(?:from\s+ftplib\b|import\s+(?:\w+(?:\s+as\s+\w+)?\s*,\s*)*ftplib\b)`)},
+	{"import smtplib", regexp.MustCompile(`(?m)^\s*(?:from\s+smtplib\b|import\s+(?:\w+(?:\s+as\s+\w+)?\s*,\s*)*smtplib\b)`)},
+	{"__import__() call", regexp.MustCompile(`__import__\s*\(`)},
+}
+
+func validateEvaluatorSourceContent(source string) error {
+	for _, p := range riskyEvaluatorSourcePatterns {
+		if p.pattern.MatchString(source) {
+			return fmt.Errorf(
+				"source contains a disallowed pattern (%s); "+
+					"custom evaluator source may not import or reference os, subprocess, socket, ctypes, importlib, "+
+					"urllib, http, requests, ftplib, or smtplib, or use __import__()",
+				p.label,
+			)
+		}
+	}
+	return nil
+}
+
 func ValidateCreateCustomEvaluatorPayload(payload spec.CreateCustomEvaluatorRequest) error {
 	if strings.TrimSpace(payload.DisplayName) == "" {
 		return fmt.Errorf("display name is required")
@@ -1436,6 +1470,9 @@ func ValidateCreateCustomEvaluatorPayload(payload spec.CreateCustomEvaluatorRequ
 	if strings.TrimSpace(payload.Source) == "" {
 		return fmt.Errorf("source is required")
 	}
+	if err := validateEvaluatorSourceContent(payload.Source); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1443,8 +1480,13 @@ func ValidateUpdateCustomEvaluatorPayload(payload spec.UpdateCustomEvaluatorRequ
 	if payload.DisplayName != nil && strings.TrimSpace(*payload.DisplayName) == "" {
 		return fmt.Errorf("display name cannot be empty")
 	}
-	if payload.Source != nil && strings.TrimSpace(*payload.Source) == "" {
-		return fmt.Errorf("source cannot be empty")
+	if payload.Source != nil {
+		if strings.TrimSpace(*payload.Source) == "" {
+			return fmt.Errorf("source cannot be empty")
+		}
+		if err := validateEvaluatorSourceContent(*payload.Source); err != nil {
+			return err
+		}
 	}
 	return nil
 }

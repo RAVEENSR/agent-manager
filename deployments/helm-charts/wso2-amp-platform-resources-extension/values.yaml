@@ -149,6 +149,22 @@ apiPlatformGatewayVhost:
   # Kubernetes Service does not apply. Empty = derive the in-cluster Service.
   otelEndpointOverride: ""
 
+# Where the per-environment API Platform Gateway is installed. This must agree
+# with apiGateway.namespace in wso2-amp-api-platform-gateway-extension, because
+# the traits below address that release's gateway-runtime Service by DNS name.
+apiPlatformGateway:
+  # Empty = derive the per-org-env convention "<org>-<env>", which
+  # setup-gateway.sh and add-environment.sh create by passing
+  # --set apiGateway.namespace=<org>-<env>.
+  #
+  # Set this to a fixed namespace when the gateway extension is installed
+  # somewhere else — notably openchoreo-data-plane, which is the gateway
+  # chart's own default for apiGateway.namespace. Leaving it empty there
+  # makes the traits build a name that does not resolve, and the failure is
+  # silent: agents keep serving traffic while every span batch fails, and
+  # agent invocation has no route to the gateway runtime.
+  namespace: ""
+
 # Deployment Pipeline configuration
 deploymentPipeline:
   # Name of the default deployment pipeline

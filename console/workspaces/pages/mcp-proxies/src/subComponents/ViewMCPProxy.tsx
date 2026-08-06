@@ -31,7 +31,6 @@ import {
   absoluteRouteMap,
   type Environment,
   type MCPEndpointConfig,
-  type MCPProxy,
   type MCPProxyEndpoint,
 } from "@agent-management-platform/types";
 import {
@@ -53,13 +52,14 @@ import {
   Tooltip,
   Typography,
 } from "@wso2/oxygen-ui";
-import { AlertTriangle, Clock, Copy, Edit } from "@wso2/oxygen-ui-icons-react";
+import { AlertTriangle, Copy, Edit } from "@wso2/oxygen-ui-icons-react";
 import { generatePath, useParams, useSearchParams } from "react-router-dom";
+import { normalizeVersion } from "@agent-management-platform/shared-component";
 import {
-  formatRelativeTime,
-  normalizeVersion,
-} from "@agent-management-platform/shared-component";
-import { PageLayout } from "@agent-management-platform/views";
+  CreatedMetadata,
+  PageLayout,
+  UpdatedMetadata,
+} from "@agent-management-platform/views";
 import { MCPProxyManageToolsTab } from "./MCPProxyManageToolsTab";
 import { MCPProxyConnectionTab } from "./MCPProxyConnectionTab";
 import { MCPProxyOverviewTab } from "./MCPProxyOverviewTab";
@@ -248,6 +248,7 @@ export function ViewMCPProxy() {
   return (
     <>
       <PageLayout
+        variant="card"
         title={displayName}
         backHref={backHref}
         backLabel="Back to MCP Servers"
@@ -262,7 +263,19 @@ export function ViewMCPProxy() {
             />
           ) : undefined
         }
-        description={proxy ? <MCPProxyDescription proxy={proxy} /> : undefined}
+        description={
+          proxy?.description ? (
+            <Typography variant="body2" color="text.secondary">
+              {proxy.description}
+            </Typography>
+          ) : undefined
+        }
+        meta={
+          <>
+            <CreatedMetadata createdAt={proxy?.createdAt} />
+            <UpdatedMetadata updatedAt={proxy?.updatedAt} />
+          </>
+        }
         actions={
           proxy ? (
             <Button
@@ -497,27 +510,6 @@ export function ViewMCPProxy() {
         />
       )}
     </>
-  );
-}
-
-function MCPProxyDescription({ proxy }: { proxy: MCPProxy }) {
-  return (
-    <Stack spacing={0.75}>
-      <Typography variant="body2" color="text.secondary">
-        {proxy.description || "No description provided."}
-      </Typography>
-      {!proxy.description && (
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Typography variant="body2" color="text.secondary">
-            Last updated:
-          </Typography>
-          <Clock size={16} />
-          <Typography variant="body2">
-            {formatRelativeTime(proxy.updatedAt)}
-          </Typography>
-        </Stack>
-      )}
-    </Stack>
   );
 }
 

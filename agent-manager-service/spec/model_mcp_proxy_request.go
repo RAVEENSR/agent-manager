@@ -37,7 +37,8 @@ type MCPProxyRequest struct {
 	Endpoints []MCPProxyEndpoint `json:"endpoints,omitempty"`
 	// Whether the MCP proxy is available in the catalog
 	InCatalog *bool `json:"inCatalog,omitempty"`
-	// Gateway UUIDs to deploy the MCP proxy to after creation
+	// Deprecated and never implemented. Deployment is per (endpoint, environment), so this proxy-wide field is at the wrong granularity — use MCPEndpointEnvironment.gatewayId. Populated on read only.
+	// Deprecated
 	Gateways []string `json:"gateways,omitempty"`
 }
 
@@ -326,6 +327,7 @@ func (o *MCPProxyRequest) SetInCatalog(v bool) {
 }
 
 // GetGateways returns the Gateways field value if set, zero value otherwise.
+// Deprecated
 func (o *MCPProxyRequest) GetGateways() []string {
 	if o == nil || IsNil(o.Gateways) {
 		var ret []string
@@ -336,6 +338,7 @@ func (o *MCPProxyRequest) GetGateways() []string {
 
 // GetGatewaysOk returns a tuple with the Gateways field value if set, nil otherwise
 // and a boolean to check if the value has been set.
+// Deprecated
 func (o *MCPProxyRequest) GetGatewaysOk() ([]string, bool) {
 	if o == nil || IsNil(o.Gateways) {
 		return nil, false
@@ -353,6 +356,7 @@ func (o *MCPProxyRequest) HasGateways() bool {
 }
 
 // SetGateways gets a reference to the given []string and assigns it to the Gateways field.
+// Deprecated
 func (o *MCPProxyRequest) SetGateways(v []string) {
 	o.Gateways = v
 }

@@ -131,10 +131,20 @@ function SourceInfo({
                 <Chip label={branch} size="small" variant="outlined" sx={{ flexShrink: 0 }} />
             )}
             {buildpackLabel && (
-                <Chip label={buildpackLabel} size="small" variant="outlined" sx={{ flexShrink: 0 }} />
+                <Chip
+                    label={buildpackLabel}
+                    size="small"
+                    variant="outlined"
+                    sx={{ flexShrink: 0, display: { xs: "none", lg: "inline-flex" } }}
+                />
             )}
             {agentTypeLabel && (
-                <Chip label={agentTypeLabel} size="small" variant="outlined" sx={{ flexShrink: 0 }} />
+                <Chip
+                    label={agentTypeLabel}
+                    size="small"
+                    variant="outlined"
+                    sx={{ flexShrink: 0, display: { xs: "none", lg: "inline-flex" } }}
+                />
             )}
         </>
     );
@@ -214,7 +224,7 @@ export const AgentInfoCard: React.FC<AgentInfoCardProps> = ({
     return (
         <Card variant="outlined">
             <Box display="flex" alignItems="center" gap={1.5} minWidth={0} sx={{ px: 2, py: 1.25 }}>
-                <Box display="flex" alignItems="center" gap={1.5} minWidth={0} flexGrow={1}>
+                <Box display="flex" overflow="hidden" alignItems="center" gap={1.5} minWidth={0} flexGrow={1}>
                     <SourceInfo
                         repoLabel={repoLabel}
                         appPath={appPath}
@@ -226,7 +236,7 @@ export const AgentInfoCard: React.FC<AgentInfoCardProps> = ({
                 </Box>
 
                 <Typography variant="body2" color="text.secondary" sx={{ flexShrink: 0 }}>
-                    Last Build:
+                    Latest Build:
                 </Typography>
 
                 <Box

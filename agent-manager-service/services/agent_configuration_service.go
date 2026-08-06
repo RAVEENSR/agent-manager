@@ -33,7 +33,6 @@ import (
 
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/secretmanagersvc"
-	"github.com/wso2/agent-manager/agent-manager-service/config"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
@@ -130,7 +129,6 @@ type agentConfigurationService struct {
 	logger                    *slog.Logger
 	secretClient              secretmanagersvc.SecretManagementClient
 	encryptionKey             []byte
-	gatewayRuntimeConfig      config.GatewayRuntimeConfig
 }
 
 // rollbackResource tracks a proxy, its deployment, and API keys for cleanup
@@ -247,36 +245,33 @@ func (s *agentConfigurationService) ensureExternalAgentForAPIKey(ctx context.Con
 }
 
 // buildProxyURL constructs the proxy base URL from a gateway and an optional context path.
-// For internal (platform-hosted, sandboxed) agents it targets the in-cluster gateway runtime
-// Service directly, so pods reach the gateway via cluster DNS — which the sandbox
-// NetworkPolicy egress allows — instead of the external vhost, which a sandboxed pod cannot
-// route to. For external agents it uses the gateway's vhost (reachable from outside the cluster).
-func buildProxyURL(gateway *models.Gateway, contextPath *string, isInternal bool, runtimeConfig config.GatewayRuntimeConfig) string {
-	base := gateway.Vhost
-	if isInternal {
-		if inCluster := gatewayRuntimeInClusterURL(gateway, runtimeConfig); inCluster != "" {
-			base = inCluster
-		}
-	}
+// Internal (platform-hosted, sandboxed) agents get the gateway's stored in-cluster runtime
+// address, which cluster DNS resolves and the sandbox NetworkPolicy egress allows; external
+// agents get the vhost, which a sandboxed pod cannot route to.
+func buildProxyURL(gateway *models.Gateway, contextPath *string, isInternal bool) string {
+	base := internalBaseOrVhost(gateway, isInternal)
 	if contextPath != nil {
 		return fmt.Sprintf("%s%s", base, *contextPath)
 	}
 	return base
 }
 
-// gatewayRuntimeInClusterURL derives the in-cluster gateway runtime base URL from the
-// registered gateway name. The configurable name prefix is removed to derive the namespace;
-// the configured Service suffix and port then form the runtime address. Returns "" when the
-// gateway name doesn't follow the configured convention, so the caller falls back to the vhost.
-func gatewayRuntimeInClusterURL(gateway *models.Gateway, runtimeConfig config.GatewayRuntimeConfig) string {
-	name := strings.TrimSpace(gateway.Name)
-	namePrefix := strings.TrimSpace(runtimeConfig.NamePrefix)
-	serviceSuffix := strings.TrimSpace(runtimeConfig.ServiceSuffix)
-	namespace := strings.TrimPrefix(name, namePrefix)
-	if name == "" || namespace == "" || namespace == name {
-		return ""
+// internalBaseOrVhost picks the stored runtime address for internal consumers and the vhost
+// otherwise. An internal consumer with no stored address logs at ERROR: falling back to the
+// vhost is correct for external agents but an unreachable address for a sandboxed pod, and
+// naming that condition is what replaces the deleted name-based derivation as a diagnostic.
+func internalBaseOrVhost(gateway *models.Gateway, isInternal bool) string {
+	if !isInternal {
+		return gateway.Vhost
 	}
-	return fmt.Sprintf("http://%s%s.%s:%d", name, serviceSuffix, namespace, runtimeConfig.Port)
+	if runtimeURL := strings.TrimSpace(gateway.RuntimeURL); runtimeURL != "" {
+		return runtimeURL
+	}
+	slog.Error("gateway has no registered runtimeUrl; falling back to the externally-reachable "+
+		"vhost, which sandboxed agents cannot route to. Upgrade the gateway extension chart so "+
+		"registration supplies runtimeUrl",
+		"gatewayName", gateway.Name, "gatewayID", gateway.UUID, "vhost", gateway.Vhost)
+	return gateway.Vhost
 }
 
 // buildLLMEnvVars constructs the two env vars (URL and API key) from the env config templates.
@@ -340,18 +335,9 @@ func buildEmptyMCPEnvVars(templates []EnvConfigTemplate) []client.EnvVar {
 }
 
 // buildMCPProxyURL constructs the MCP proxy URL from a gateway and the proxy's optional
-// context path, appending the "/mcp" route. Like buildProxyURL: for internal (platform-hosted,
-// sandboxed) agents it targets the in-cluster gateway runtime Service (reachable under the
-// sandbox NetworkPolicy egress); for external agents — and for user-facing invoke URLs in API
-// responses — it uses the gateway's externally-reachable vhost.
-func buildMCPProxyURL(gateway *models.Gateway, contextPath *string, isInternal bool, runtimeConfig config.GatewayRuntimeConfig) string {
-	base := gateway.Vhost
-	if isInternal {
-		if inCluster := gatewayRuntimeInClusterURL(gateway, runtimeConfig); inCluster != "" {
-			base = inCluster
-		}
-	}
-	base = strings.TrimRight(strings.TrimSpace(base), "/")
+// context path, appending the "/mcp" route. Same internal/external split as buildProxyURL.
+func buildMCPProxyURL(gateway *models.Gateway, contextPath *string, isInternal bool) string {
+	base := strings.TrimRight(strings.TrimSpace(internalBaseOrVhost(gateway, isInternal)), "/")
 	path := "/mcp"
 	if contextPath != nil {
 		if trimmedContextPath := strings.TrimSpace(*contextPath); trimmedContextPath != "" {
@@ -781,7 +767,6 @@ func NewAgentConfigurationService(
 	logger *slog.Logger,
 	secretClient secretmanagersvc.SecretManagementClient,
 	encryptionKey []byte,
-	gatewayRuntimeConfig config.GatewayRuntimeConfig,
 ) AgentConfigurationService {
 	svc := &agentConfigurationService{
 		db:                        db,
@@ -809,7 +794,6 @@ func NewAgentConfigurationService(
 		logger:                   logger,
 		secretClient:             secretClient,
 		encryptionKey:            encryptionKey,
-		gatewayRuntimeConfig:     gatewayRuntimeConfig,
 	}
 	// Register the deletion reconciler now that this service exists; MCPProxyService is
 	// constructed first and calls back into here when a proxy is deleted to strip the
@@ -1134,7 +1118,7 @@ func (s *agentConfigurationService) createLLMConfig(ctx context.Context, ouID, p
 		if proxy != nil {
 			proxyContext = proxy.Configuration.Context
 		}
-		proxyURL := buildProxyURL(gateway, proxyContext, !isExternalAgent, s.gatewayRuntimeConfig)
+		proxyURL := buildProxyURL(gateway, proxyContext, !isExternalAgent)
 
 		// Capture credentials for external agents.
 		if isExternalAgent {
@@ -1340,12 +1324,12 @@ func (s *agentConfigurationService) createMCPConfig(ctx context.Context, ouID, p
 				"environment", envName, "mcpProxyUUID", sourceProxy.UUID)
 		}
 		if configured && sharedArtifactUUID != uuid.Nil {
-			gw, gwErr := s.resolveGatewayForEnvironment(ctx, envUUID, ouID)
-			if gwErr != nil && !errors.Is(gwErr, errNoActiveGatewayForEnvironment) {
+			gw, gwErr := s.resolveGatewayForMCPArtifact(ctx, sharedArtifactUUID, ouID, envUUID)
+			if gwErr != nil && !errors.Is(gwErr, errNoGatewayForEnvironment) {
 				s.cleanupMCPConfig(ctx, config.UUID, ouID)
 				return nil, fmt.Errorf("failed to resolve gateway for MCP environment %s: %w", envName, gwErr)
 			}
-			gateway = gw // nil when the environment has no active gateway
+			gateway = gw // nil when no gateway is mapped to the environment
 		}
 		if gateway == nil {
 			if err := s.provisionUnconfiguredMCPEnv(ctx, config, envUUID, envName, ouID, projectName, agentID,
@@ -1463,7 +1447,7 @@ func (s *agentConfigurationService) createMCPConfig(ctx context.Context, ouID, p
 			return nil, fmt.Errorf("failed to create MCP environment variables for %s: %w", envName, err)
 		}
 
-		proxyURL := buildMCPProxyURL(gateway, deployedProxy.Configuration.Context, !isExternalAgent, s.gatewayRuntimeConfig)
+		proxyURL := buildMCPProxyURL(gateway, deployedProxy.Configuration.Context, !isExternalAgent)
 		if isExternalAgent {
 			apiKey := ""
 			if proxyAPIKey != nil {
@@ -1486,6 +1470,23 @@ func (s *agentConfigurationService) createMCPConfig(ctx context.Context, ouID, p
 			}
 		}
 	}
+
+	// A newly-created MCP config changes the agent's AgentID scope union just as
+	// much as editing an existing one does (see updateMCPConfig's identical call)
+	// — refresh every environment this config was just bound to so an
+	// already-running pod picks up the new scopes right away instead of waiting
+	// for its next deploy/promote/rotation. refreshTouchedMCPEnvironments already
+	// no-ops safely for external/unprovisioned agents, so this is safe to call
+	// unconditionally rather than duplicating the isExternalAgent branch here.
+	touchedEnvNames := make(map[string]struct{}, len(req.EnvMappings))
+	for envName := range req.EnvMappings {
+		touchedEnvNames[envName] = struct{}{}
+	}
+	go func() {
+		refreshCtx, cancel := detachedRefreshContext(ctx)
+		defer cancel()
+		s.refreshTouchedMCPEnvironments(refreshCtx, ouID, projectName, agentID, touchedEnvNames)
+	}()
 
 	if isExternalAgent {
 		return s.buildExternalAgentConfigResponse(ctx, config, envCredentials)
@@ -1791,7 +1792,7 @@ func (s *agentConfigurationService) processEnvProviderChange(
 	// Internal-agent only: inject env vars into Component/ReleaseBinding.
 	// SecretReference is already created/updated by secretClient.CreateSecret above.
 	if !isExternalAgent {
-		proxyURL := buildProxyURL(gateway, proxy.Configuration.Context, true, s.gatewayRuntimeConfig)
+		proxyURL := buildProxyURL(gateway, proxy.Configuration.Context, true)
 		envVarsToInject := buildLLMEnvVars(envConfigTemplates, proxyURL, secretRefName)
 		if uvErr := s.ocClient.UpdateComponentEnvVars(ctx, ouID, config.ProjectName, config.AgentID, envVarsToInject); uvErr != nil {
 			s.logger.Error("failed to update Component CR env vars in Scenario A — Component CR in inconsistent state", "env", envName, "err", uvErr)
@@ -2047,7 +2048,7 @@ func (s *agentConfigurationService) processNewEnv(
 	// last-write-wins clobbering across multiple environments (HIGH-3).
 	if !isExternalAgent {
 		// Reuse the gateway already resolved for deployment (resolveGatewayForProvider)
-		proxyURL := buildProxyURL(gateway, proxy.Configuration.Context, true, s.gatewayRuntimeConfig)
+		proxyURL := buildProxyURL(gateway, proxy.Configuration.Context, true)
 
 		envVarsToInject := buildLLMEnvVars(envConfigTemplates, proxyURL, secretRefName)
 		// Inject per-env URL into the ReleaseBinding for this specific environment.
@@ -2286,8 +2287,8 @@ func (s *agentConfigurationService) updateMCPConfig(ctx context.Context, existin
 				"environment", envName, "mcpProxyUUID", sourceProxy.UUID)
 		}
 		if configured && sharedArtifactUUID != uuid.Nil {
-			_, gwErr := s.resolveGatewayForEnvironment(ctx, envUUID, ouID)
-			if gwErr != nil && !errors.Is(gwErr, errNoActiveGatewayForEnvironment) {
+			_, gwErr := s.resolveGatewayForMCPArtifact(ctx, sharedArtifactUUID, ouID, envUUID)
+			if gwErr != nil && !errors.Is(gwErr, errNoGatewayForEnvironment) {
 				return nil, fmt.Errorf("failed to resolve gateway for MCP environment %s: %w", envName, gwErr)
 			}
 			deployable = gwErr == nil
@@ -2453,11 +2454,35 @@ func (s *agentConfigurationService) updateMCPConfig(ctx context.Context, existin
 
 	// Detached onto its own goroutine, off the request path — cost scales
 	// with the number of touched environments, and this is already a
-	// best-effort step. context.WithoutCancel keeps request-scoped values
-	// (e.g. a correlation ID) without tying it to this handler's cancellation.
-	go s.refreshTouchedMCPEnvironments(context.WithoutCancel(ctx), ouID, projectName, agentName, touchedEnvNames)
+	// best-effort step. See detachedRefreshContext for why it's built the way
+	// it is.
+	go func() {
+		refreshCtx, cancel := detachedRefreshContext(ctx)
+		defer cancel()
+		s.refreshTouchedMCPEnvironments(refreshCtx, ouID, projectName, agentName, touchedEnvNames)
+	}()
 
 	return s.GetMCP(ctx, existingConfig.UUID, ouID, projectName, agentName)
+}
+
+// mcpRefreshTimeout bounds how long a detached refreshTouchedMCPEnvironments
+// goroutine may run after its triggering request has already returned a
+// response. The OpenChoreo HTTP client it calls through has no timeout of
+// its own, so without this bound a single hung call would tie up the
+// goroutine indefinitely; 30s matches the timeout convention already used
+// elsewhere in this codebase for external-call bounds (Thunder's HTTP
+// client).
+const mcpRefreshTimeout = 30 * time.Second
+
+// detachedRefreshContext derives the context a refreshTouchedMCPEnvironments
+// goroutine runs with: WithoutCancel so the refresh survives the triggering
+// request's own cancellation (it's deliberately best-effort work that
+// outlives the response, not tied to the handler's lifecycle) while still
+// carrying request-scoped values like a correlation ID, and WithTimeout so a
+// hung external call can't run forever. Callers must defer the returned
+// cancel func to release the timer once the goroutine finishes.
+func detachedRefreshContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), mcpRefreshTimeout)
 }
 
 // refreshTouchedMCPEnvironments brings every given environment's live AgentID
@@ -2468,10 +2493,10 @@ func (s *agentConfigurationService) updateMCPConfig(ctx context.Context, existin
 // actually change (touchedEnvNames is the union of all existing and all
 // requested mappings, so this includes plenty of no-ops) never causes a
 // needless pod rollout. Best-effort: the caller runs this on a detached
-// goroutine after the MCP config change itself already succeeded, so a
-// refresh failure here must never turn that success into an error response —
-// it's logged and the agent simply picks up the change on its next
-// deploy/promote/rotation instead.
+// goroutine (see detachedRefreshContext) after the MCP config change itself
+// already succeeded, so a refresh failure here must never turn that success
+// into an error response — it's logged and the agent simply picks up the
+// change on its next deploy/promote/rotation instead.
 func (s *agentConfigurationService) refreshTouchedMCPEnvironments(ctx context.Context, ouID, projectName, agentName string, touchedEnvNames map[string]struct{}) {
 	for envName := range touchedEnvNames {
 		if err := s.agentIdentityInjection.ReconcileForEnvironment(ctx, ouID, projectName, agentName, envName); err != nil {
@@ -2577,7 +2602,7 @@ func (s *agentConfigurationService) updateMCPConfigEnvironmentVariableNames(
 			s.logger.Warn("failed to load MCP SecretReference for env var rename", "environment", envName, "err", refErr)
 			continue
 		}
-		envVarsToInject := buildMCPEnvVars(newTemplates, buildMCPProxyURL(gateway, deployedProxy.Configuration.Context, true, s.gatewayRuntimeConfig), secretRefName)
+		envVarsToInject := buildMCPEnvVars(newTemplates, buildMCPProxyURL(gateway, deployedProxy.Configuration.Context, true), secretRefName)
 		if err := s.ocClient.ReplaceReleaseBindingEnvVars(ctx, ouID, projectName, agentName, envName, changedOldKeys, envVarsToInject); err != nil {
 			s.logger.Warn("failed to replace MCP env vars in ReleaseBinding", "environment", envName, "err", err)
 		}
@@ -2687,7 +2712,7 @@ func (s *agentConfigurationService) injectMCPMappingEnvVars(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	envVarsToInject := buildMCPEnvVars(envTemplates, buildMCPProxyURL(gateway, deployedProxy.Configuration.Context, true, s.gatewayRuntimeConfig), secretRefName)
+	envVarsToInject := buildMCPEnvVars(envTemplates, buildMCPProxyURL(gateway, deployedProxy.Configuration.Context, true), secretRefName)
 	if err := s.ocClient.UpdateReleaseBindingEnvVars(ctx, ouID, config.ProjectName, config.AgentID, envName, envVarsToInject); err != nil {
 		return err
 	}
@@ -3083,7 +3108,12 @@ func (s *agentConfigurationService) Update(ctx context.Context, configUUID uuid.
 							if parseErr != nil {
 								continue
 							}
-							gateway, gwErr := s.resolveGatewayForMCPArtifact(ctx, mapping.ArtifactUUID, ouID, envEnvUUID)
+							sharedArtifactUUID := s.resolveMCPMappingAPIID(ctx, mapping, ouID)
+							if sharedArtifactUUID == uuid.Nil {
+								s.logger.Warn("Phase 1b: missing MCP shared artifact for re-injection", "environment", envName)
+								continue
+							}
+							gateway, gwErr := s.resolveGatewayForMCPArtifact(ctx, sharedArtifactUUID, ouID, envEnvUUID)
 							if gwErr != nil {
 								s.logger.Warn("Phase 1b: failed to resolve MCP gateway for re-injection", "environment", envName, "err", gwErr)
 								continue
@@ -3095,7 +3125,7 @@ func (s *agentConfigurationService) Update(ctx context.Context, configUUID uuid.
 								s.logger.Warn("Phase 1b: failed to load MCP SecretReference for re-injection", "environment", envName, "err", refErr)
 								continue
 							}
-							envVarsToInject := buildMCPEnvVars(newEnvConfigTemplates, buildMCPProxyURL(gateway, deployedProxy.Configuration.Context, true, s.gatewayRuntimeConfig), secretRefName)
+							envVarsToInject := buildMCPEnvVars(newEnvConfigTemplates, buildMCPProxyURL(gateway, deployedProxy.Configuration.Context, true), secretRefName)
 							s.logger.Info("Phase 1b: atomically replacing MCP env vars in ReleaseBinding",
 								"environment", envName, "keysToRemove", changedOldKeys, "envVarsToAdd", len(envVarsToInject))
 							if rbErr := s.ocClient.ReplaceReleaseBindingEnvVars(ctx, ouID, projectName, agentName, envName, changedOldKeys, envVarsToInject); rbErr != nil {
@@ -3124,7 +3154,7 @@ func (s *agentConfigurationService) Update(ctx context.Context, configUUID uuid.
 								s.logger.Warn("Phase 1b: failed to resolve gateway for re-injection", "environment", envName, "err", gwErr)
 								continue
 							}
-							proxyURL := buildProxyURL(gateway, mapping.LLMProxy.Configuration.Context, true, s.gatewayRuntimeConfig)
+							proxyURL := buildProxyURL(gateway, mapping.LLMProxy.Configuration.Context, true)
 							// Use persisted SecretReference from DB rather than deriving from mutable config name.
 							envVars1b, varErr1b := s.envVariableRepo.ListByConfigAndEnv(ctx, existingConfig.UUID, mapping.EnvironmentUUID)
 							secretRefName := ""
@@ -3888,6 +3918,24 @@ func (s *agentConfigurationService) deleteMCPConfig(ctx context.Context, existin
 	}); err != nil {
 		return fmt.Errorf("failed to delete MCP configuration: %w", err)
 	}
+
+	// Removing this config drops its scopes from the agent's AgentID scope union
+	// just as much as adding one grows it (see createMCPConfig's identical call)
+	// — refresh every environment this config was bound to so an already-running
+	// pod stops requesting the now-removed MCP's scopes right away, instead of
+	// only on its next deploy/promote/rotation.
+	touchedEnvNames := make(map[string]struct{}, len(mappings))
+	for _, mapping := range mappings {
+		if envName := envIDNameMap[mapping.EnvironmentUUID.String()]; envName != "" {
+			touchedEnvNames[envName] = struct{}{}
+		}
+	}
+	go func() {
+		refreshCtx, cancel := detachedRefreshContext(ctx)
+		defer cancel()
+		s.refreshTouchedMCPEnvironments(refreshCtx, ouID, projectName, agentName, touchedEnvNames)
+	}()
+
 	return nil
 }
 
@@ -3945,139 +3993,55 @@ func (s *agentConfigurationService) deleteMCPConfigForAgentDeletion(ctx context.
 
 // Helper methods
 
-// resolveGatewayForProvider looks up the gateway where the given LLM provider is deployed.
-// This ensures the proxy is deployed to the same gateway as its provider.
-// Falls back to resolveGatewayForEnvironment if the provider has no active deployments.
-func (s *agentConfigurationService) resolveGatewayForProvider(ctx context.Context, providerUUIDStr string, ouID string, envUUID uuid.UUID) (*models.Gateway, error) {
-	providerUUID, err := uuid.Parse(providerUUIDStr)
-	if err != nil {
-		s.logger.Warn("Invalid provider UUID, falling back to environment resolution",
-			"providerUUID", providerUUIDStr, "error", err)
-		return s.resolveGatewayForEnvironment(ctx, envUUID, ouID)
-	}
-
-	gatewayIDs, err := s.llmProxyDeploymentService.GetDeployedGatewaysByProvider(providerUUID, ouID)
-	if err == nil && len(gatewayIDs) > 0 {
-		envIDStr := envUUID.String()
-		// Prefer a gateway that is mapped to the target environment
-		for _, gwID := range gatewayIDs {
-			exists, mapErr := s.gatewayRepo.EnvironmentMappingExists(gwID, envIDStr)
-			if mapErr != nil || !exists {
-				continue
-			}
-			gw, gwErr := s.gatewayRepo.GetByUUID(gwID)
-			if gwErr == nil && gw != nil {
-				return gw, nil
-			}
-		}
-		// No environment-matched gateway; try first as fallback
-		gw, gwErr := s.gatewayRepo.GetByUUID(gatewayIDs[0])
-		if gwErr == nil && gw != nil {
-			return gw, nil
-		}
-		s.logger.Warn("Gateway not found for provider deployment, falling back to environment resolution",
-			"providerUUID", providerUUID, "gatewayUUID", gatewayIDs[0], "error", gwErr)
-	}
-
-	return s.resolveGatewayForEnvironment(ctx, envUUID, ouID)
-}
-
-// resolveGatewayForProxy looks up the gateway that a proxy is actually deployed to.
-// This avoids the bug where resolveGatewayForEnvironment picks the wrong gateway
-// when multiple AI gateways are mapped to the same environment.
-// Falls back to resolveGatewayForEnvironment if no active deployment is found.
-func (s *agentConfigurationService) resolveGatewayForProxy(ctx context.Context, proxyHandle, ouID string, envUUID uuid.UUID) (*models.Gateway, error) {
-	deployedStatus := string(models.DeploymentStatusDeployed)
-	deployments, err := s.llmProxyDeploymentService.GetLLMProxyDeployments(proxyHandle, ouID, nil, &deployedStatus)
-	if err == nil && len(deployments) > 0 {
-		envIDStr := envUUID.String()
-		// Find the deployment whose gateway is mapped to the target environment
-		for _, dep := range deployments {
-			gwUUID := dep.GatewayUUID.String()
-			exists, mapErr := s.gatewayRepo.EnvironmentMappingExists(gwUUID, envIDStr)
-			if mapErr != nil || !exists {
-				continue
-			}
-			gw, gwErr := s.gatewayRepo.GetByUUID(gwUUID)
-			if gwErr == nil && gw != nil {
-				return gw, nil
-			}
-		}
-		// No environment-matched deployment found; try first deployment as fallback
-		gw, gwErr := s.gatewayRepo.GetByUUID(deployments[0].GatewayUUID.String())
-		if gwErr == nil && gw != nil {
-			return gw, nil
-		}
-		s.logger.Warn("Gateway not found for proxy deployment, falling back to environment resolution",
-			"proxyHandle", proxyHandle, "gatewayUUID", deployments[0].GatewayUUID, "error", gwErr)
-	}
-
-	return s.resolveGatewayForEnvironment(ctx, envUUID, ouID)
-}
-
-func (s *agentConfigurationService) resolveGatewayForMCPArtifact(ctx context.Context, artifactUUID uuid.UUID, ouID string, envUUID uuid.UUID) (*models.Gateway, error) {
+// resolveGatewayForProvider returns the gateway hosting this LLM provider in the given
+// environment, or the environment's single egress gateway when it has no deployment there.
+func (s *agentConfigurationService) resolveGatewayForProvider(
+	ctx context.Context, providerUUIDStr, ouID string, envUUID uuid.UUID,
+) (*models.Gateway, error) {
 	_ = ctx
-	if s.mcpProxyService != nil && s.mcpProxyService.deploymentRepo != nil {
-		gatewayIDs, err := s.mcpProxyService.deploymentRepo.GetDeployedGatewaysByProvider(artifactUUID, ouID)
-		if err == nil && len(gatewayIDs) > 0 {
-			envIDStr := envUUID.String()
-			for _, gwID := range gatewayIDs {
-				exists, mapErr := s.gatewayRepo.EnvironmentMappingExists(gwID, envIDStr)
-				if mapErr != nil || !exists {
-					continue
-				}
-				gw, gwErr := s.gatewayRepo.GetByUUID(gwID)
-				if gwErr == nil && gw != nil {
-					return gw, nil
-				}
-			}
-			gw, gwErr := s.gatewayRepo.GetByUUID(gatewayIDs[0])
-			if gwErr == nil && gw != nil {
-				return gw, nil
-			}
+	var deployed []string
+	if providerUUID, err := uuid.Parse(providerUUIDStr); err == nil {
+		ids, gwErr := s.llmProxyDeploymentService.GetDeployedGatewaysByProvider(providerUUID, ouID)
+		if gwErr != nil {
+			return nil, fmt.Errorf("failed to list deployed gateways for provider %s: %w", providerUUIDStr, gwErr)
 		}
+		deployed = ids
 	}
-	return s.resolveGatewayForEnvironment(ctx, envUUID, ouID)
+	return resolveEgressGatewayForArtifact(s.gatewayRepo, ouID, envUUID, deployed, nil)
 }
 
-// errNoActiveGatewayForEnvironment is returned by resolveGatewayForEnvironment when the
-// environment has no active gateway. MCP config creation/update treats this like an
-// environment the proxy is not configured for: no deployment, empty env vars.
-var errNoActiveGatewayForEnvironment = errors.New("no active gateway found for environment")
-
-// resolveGatewayForEnvironment selects gateway with AI-first preference
-func (s *agentConfigurationService) resolveGatewayForEnvironment(ctx context.Context, envUUID uuid.UUID, ouID string) (*models.Gateway, error) {
-	envIDStr := envUUID.String()
-	aiType := "ai"
-	activeStatus := true
-
-	// Try AI gateway first
-	gateways, err := s.gatewayRepo.ListWithFilters(repositories.GatewayFilterOptions{
-		OrganizationID:    ouID,
-		FunctionalityType: &aiType,
-		Status:            &activeStatus,
-		EnvironmentID:     &envIDStr,
-		Limit:             1,
-	})
-	if err == nil && len(gateways) > 0 {
-		return gateways[0], nil
+// resolveGatewayForProxy returns the gateway the LLM proxy is actually deployed to.
+func (s *agentConfigurationService) resolveGatewayForProxy(
+	ctx context.Context, proxyHandle, ouID string, envUUID uuid.UUID,
+) (*models.Gateway, error) {
+	_ = ctx
+	deployedStatus := string(models.DeploymentStatusDeployed)
+	var deployed []string
+	deployments, err := s.llmProxyDeploymentService.GetLLMProxyDeployments(proxyHandle, ouID, nil, &deployedStatus)
+	if err != nil && !errors.Is(err, utils.ErrLLMProxyNotFound) {
+		return nil, fmt.Errorf("failed to list deployments for proxy %s: %w", proxyHandle, err)
 	}
-
-	// Fallback to any active gateway
-	gateways, err = s.gatewayRepo.ListWithFilters(repositories.GatewayFilterOptions{
-		OrganizationID: ouID,
-		Status:         &activeStatus,
-		EnvironmentID:  &envIDStr,
-		Limit:          1,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to find gateway: %w", err)
+	for _, dep := range deployments {
+		deployed = append(deployed, dep.GatewayUUID.String())
 	}
-	if len(gateways) == 0 {
-		return nil, errNoActiveGatewayForEnvironment
-	}
+	return resolveEgressGatewayForArtifact(s.gatewayRepo, ouID, envUUID, deployed, nil)
+}
 
-	return gateways[0], nil
+// resolveGatewayForMCPArtifact returns the gateway the MCP proxy's shared per-environment
+// artifact is deployed to.
+func (s *agentConfigurationService) resolveGatewayForMCPArtifact(
+	ctx context.Context, artifactUUID uuid.UUID, ouID string, envUUID uuid.UUID,
+) (*models.Gateway, error) {
+	_ = ctx
+	var deployed []string
+	if s.mcpProxyService != nil && s.mcpProxyService.deploymentRepo != nil {
+		ids, err := s.mcpProxyService.deploymentRepo.GetDeployedGatewaysByProvider(artifactUUID, ouID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list deployed gateways for MCP artifact %s: %w", artifactUUID, err)
+		}
+		deployed = ids
+	}
+	return resolveEgressGatewayForArtifact(s.gatewayRepo, ouID, envUUID, deployed, nil)
 }
 
 // buildLLMProxyConfig constructs proxy configuration from request.
@@ -5020,11 +4984,12 @@ func (s *agentConfigurationService) buildConfigResponse(ctx context.Context, con
 				ProviderName:   utils.StrAsStrPointer(proxyName),
 				AuthHeaderName: utils.StrAsStrPointer(mcpProxyAPIKeyHeaderName(mapping.MCPProxy, mapping.EnvironmentUUID.String())),
 			}
-			if gateway, err := s.resolveGatewayForMCPArtifact(ctx, mapping.ArtifactUUID, config.OUID, mapping.EnvironmentUUID); err == nil {
+			sharedArtifactUUID := s.resolveMCPMappingAPIID(ctx, &mapping, config.OUID)
+			if gateway, err := s.resolveGatewayForMCPArtifact(ctx, sharedArtifactUUID, config.OUID, mapping.EnvironmentUUID); err == nil && sharedArtifactUUID != uuid.Nil {
 				deployedProxy := buildAgentMCPConfigProxy(config, &mapping, mapping.MCPProxy, envName, config.OUID,
 					mcpMappingProxyName(config.ProjectName, config.AgentID, config.Name, envName))
 				// User-facing invoke URL in the config response: externally-reachable vhost.
-				url := buildMCPProxyURL(gateway, deployedProxy.Configuration.Context, false, s.gatewayRuntimeConfig)
+				url := buildMCPProxyURL(gateway, deployedProxy.Configuration.Context, false)
 				proxyInfo.URL = &url
 			}
 		}
@@ -5155,6 +5120,14 @@ func (s *agentConfigurationService) buildExternalAgentConfigResponse(
 				ProviderName:   utils.StrAsStrPointer(proxyName),
 				AuthHeaderName: utils.StrAsStrPointer(mcpProxyAPIKeyHeaderName(mapping.MCPProxy, mapping.EnvironmentUUID.String())),
 			}
+			sharedArtifactUUID := s.resolveMCPMappingAPIID(ctx, &mapping, config.OUID)
+			var gateway *models.Gateway
+			var gwErr error
+			if sharedArtifactUUID != uuid.Nil {
+				gateway, gwErr = s.resolveGatewayForMCPArtifact(ctx, sharedArtifactUUID, config.OUID, mapping.EnvironmentUUID)
+			} else {
+				gwErr = errNoGatewayForEnvironment
+			}
 			if creds, ok := envCredentials[envUUID]; ok {
 				proxyInfo.URL = &creds.proxyURL
 				if creds.apiKey != "" {
@@ -5166,11 +5139,11 @@ func (s *agentConfigurationService) buildExternalAgentConfigResponse(
 					"hasProxyURL", creds.proxyURL != "",
 					"hasAPIKey", creds.apiKey != "",
 				)
-			} else if gateway, err := s.resolveGatewayForMCPArtifact(ctx, mapping.ArtifactUUID, config.OUID, mapping.EnvironmentUUID); err == nil {
+			} else if gwErr == nil {
 				deployedProxy := buildAgentMCPConfigProxy(reloadedConfig, &mapping, mapping.MCPProxy, envName, config.OUID,
 					mcpMappingProxyName(config.ProjectName, config.AgentID, config.Name, envName))
 				// External agent's invoke URL: externally-reachable vhost.
-				url := buildMCPProxyURL(gateway, deployedProxy.Configuration.Context, false, s.gatewayRuntimeConfig)
+				url := buildMCPProxyURL(gateway, deployedProxy.Configuration.Context, false)
 				proxyInfo.URL = &url
 			} else {
 				s.logger.Warn(
@@ -5389,7 +5362,7 @@ func (s *agentConfigurationService) systemManagedLLMURL(
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve gateway for LLM proxy in %s: %w", environmentName, err)
 	}
-	return buildProxyURL(gateway, mapping.LLMProxy.Configuration.Context, true, s.gatewayRuntimeConfig), nil
+	return buildProxyURL(gateway, mapping.LLMProxy.Configuration.Context, true), nil
 }
 
 func (s *agentConfigurationService) systemManagedMCPURL(
@@ -5417,7 +5390,7 @@ func (s *agentConfigurationService) systemManagedMCPURL(
 		}
 		handle := mcpMappingProxyName(config.ProjectName, config.AgentID, config.Name, environmentName)
 		deployedProxy := buildAgentMCPConfigProxy(config, mapping, mapping.MCPProxy, environmentName, ouID, handle)
-		return buildMCPProxyURL(gateway, deployedProxy.Configuration.Context, true, s.gatewayRuntimeConfig), nil
+		return buildMCPProxyURL(gateway, deployedProxy.Configuration.Context, true), nil
 	}
 	return "", nil
 }

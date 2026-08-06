@@ -246,6 +246,22 @@ type OrgPublisherCredential struct {
 
 func (OrgPublisherCredential) TableName() string { return "org_publisher_credentials" }
 
+// OrgSchedulerCredential stores per-org OAuth2 credentials for the scheduler's own OpenChoreo
+// calls; never injected into the evaluation-job pod.
+type OrgSchedulerCredential struct {
+	ID                    uuid.UUID `gorm:"column:id;primaryKey;type:uuid;default:gen_random_uuid()"`
+	OUID                  string    `gorm:"column:ou_id;not null;uniqueIndex:uq_org_scheduler_creds_ou_id"`
+	OrgUUID               string    `gorm:"column:org_uuid;not null;default:''"`
+	ClientID              string    `gorm:"column:client_id;not null"`
+	SecretKVPath          string    `gorm:"column:secret_kv_path;not null"`
+	SecretKey             string    `gorm:"column:secret_key;not null;default:'client-secret'"`
+	ClientSecretEncrypted []byte    `gorm:"column:client_secret_encrypted"`
+	CreatedAt             time.Time `gorm:"column:created_at;not null;default:NOW()"`
+	UpdatedAt             time.Time `gorm:"column:updated_at;not null;default:NOW()"`
+}
+
+func (OrgSchedulerCredential) TableName() string { return "org_scheduler_credentials" }
+
 // Default values
 const (
 	DefaultIntervalMinutes = 60

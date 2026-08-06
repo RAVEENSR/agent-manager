@@ -15,7 +15,7 @@
 // under the License.
 
 // TODO: refactor — LLMProxyProvisioner duplicates proxy lifecycle logic that lives inline in
-// agentConfigurationService (buildLLMProxyConfig, rollbackProxies, resolveGatewayForEnvironment,
+// agentConfigurationService (buildLLMProxyConfig, rollbackProxies, resolveEgressGatewayForEnvironment,
 // sanitizeForK8sName, etc.). Once this PR lands, consolidate both into the provisioner and
 // have agentConfigurationService delegate to it the same way monitorManagerService does.
 package services
@@ -31,7 +31,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/wso2/agent-manager/agent-manager-service/clients/secretmanagersvc"
-	"github.com/wso2/agent-manager/agent-manager-service/config"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
@@ -111,7 +110,6 @@ type LLMProxyProvisioner struct {
 	llmProviderAPIKeyService  *LLMProviderAPIKeyService
 	secretClient              secretmanagersvc.SecretManagementClient
 	encryptionKey             []byte
-	gatewayRuntimeConfig      config.GatewayRuntimeConfig
 }
 
 // NewLLMProxyProvisioner creates a new LLMProxyProvisioner.
@@ -125,7 +123,6 @@ func NewLLMProxyProvisioner(
 	llmProviderAPIKeyService *LLMProviderAPIKeyService,
 	secretClient secretmanagersvc.SecretManagementClient,
 	encryptionKey []byte,
-	gatewayRuntimeConfig config.GatewayRuntimeConfig,
 ) *LLMProxyProvisioner {
 	return &LLMProxyProvisioner{
 		logger:                    logger,
@@ -137,7 +134,6 @@ func NewLLMProxyProvisioner(
 		llmProviderAPIKeyService:  llmProviderAPIKeyService,
 		secretClient:              secretClient,
 		encryptionKey:             encryptionKey,
-		gatewayRuntimeConfig:      gatewayRuntimeConfig,
 	}
 }
 
@@ -157,41 +153,6 @@ func (p *LLMProxyProvisioner) ProxyDeploymentService() *LLMProxyDeploymentServic
 
 func (p *LLMProxyProvisioner) SecretClient() secretmanagersvc.SecretManagementClient {
 	return p.secretClient
-}
-
-// ResolveGateway selects an active gateway for the given environment, preferring AI gateways.
-func (p *LLMProxyProvisioner) ResolveGateway(ctx context.Context, envUUID uuid.UUID, ouID string) (*models.Gateway, error) {
-	envIDStr := envUUID.String()
-	aiType := "ai"
-	activeStatus := true
-
-	gateways, err := p.gatewayRepo.ListWithFilters(repositories.GatewayFilterOptions{
-		OrganizationID:    ouID,
-		FunctionalityType: &aiType,
-		Status:            &activeStatus,
-		EnvironmentID:     &envIDStr,
-		Limit:             1,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to query AI gateways: %w", err)
-	}
-	if len(gateways) > 0 {
-		return gateways[0], nil
-	}
-
-	gateways, err = p.gatewayRepo.ListWithFilters(repositories.GatewayFilterOptions{
-		OrganizationID: ouID,
-		Status:         &activeStatus,
-		EnvironmentID:  &envIDStr,
-		Limit:          1,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to find gateway: %w", err)
-	}
-	if len(gateways) == 0 {
-		return nil, errors.New("no active gateway found for environment")
-	}
-	return gateways[0], nil
 }
 
 // ProvisionProxy runs the full proxy provisioning sequence:
@@ -325,7 +286,7 @@ func (p *LLMProxyProvisioner) ProvisionProxy(ctx context.Context, params Provisi
 		rb.ProxySecretLoc = &proxySecretLoc
 	}
 
-	proxyURL := buildProxyURL(params.Gateway, proxy.Configuration.Context, true, p.gatewayRuntimeConfig)
+	proxyURL := buildProxyURL(params.Gateway, proxy.Configuration.Context, true)
 
 	p.logger.Info(
 		"Provisioned LLM proxy",

@@ -106,7 +106,7 @@ func (c *gatewayController) resolveEnvironmentUUID(ctx context.Context, ouID, en
 		}
 	}
 
-	return "", fmt.Errorf("environment not found: %s", envIdentifier)
+	return "", fmt.Errorf("%w: %s", utils.ErrEnvironmentNotFound, envIdentifier)
 }
 
 func handleGatewayErrors(w http.ResponseWriter, err error, fallbackMsg string) {
@@ -117,6 +117,10 @@ func handleGatewayErrors(w http.ResponseWriter, err error, fallbackMsg string) {
 		utils.WriteErrorResponse(w, http.StatusConflict, "Gateway already exists")
 	case errors.Is(err, utils.ErrGatewayHasDeployments):
 		utils.WriteErrorResponse(w, http.StatusConflict, err.Error())
+	case errors.Is(err, utils.ErrGatewayIngressCapExceeded):
+		utils.WriteErrorResponse(w, http.StatusConflict, err.Error())
+	case errors.Is(err, utils.ErrBadRequest):
+		utils.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, utils.ErrEnvironmentNotFound):
 		utils.WriteErrorResponse(w, http.StatusNotFound, "Environment not found")
 	case errors.Is(err, utils.ErrInvalidInput):
@@ -184,30 +188,27 @@ func (c *gatewayController) RegisterGateway(w http.ResponseWriter, r *http.Reque
 	}
 	var properties map[string]interface{}
 
+	runtimeURL := ""
+	if req.RuntimeUrl != nil {
+		runtimeURL = *req.RuntimeUrl
+	}
+
 	gateway, err := c.gatewayService.RegisterGateway(
 		ouID,
 		req.Name,
 		req.DisplayName,
 		description,
 		req.Vhost,
+		runtimeURL,
 		isCritical,
 		functionalityType,
 		properties,
+		req.EnvironmentIds,
 	)
 	if err != nil {
 		log.Error("RegisterGateway: failed to create gateway", "error", err)
 		handleGatewayErrors(w, err, "Failed to register gateway")
 		return
-	}
-
-	// Assign to environments if provided (using gateway_environment_mappings table)
-	if len(req.EnvironmentIds) > 0 {
-		for _, envID := range req.EnvironmentIds {
-			if err := c.gatewayService.AssignGatewayToEnvironment(gateway.ID, envID); err != nil {
-				log.Warn("RegisterGateway: failed to assign gateway to environment", "envID", envID, "error", err)
-				// Continue with other environments
-			}
-		}
 	}
 
 	// Get environments for response
@@ -262,11 +263,10 @@ func (c *gatewayController) ListGateways(w http.ResponseWriter, r *http.Request)
 	// Parse filter parameters
 	filters := &services.GatewayListFilters{}
 
-	// Filter by type (functionality type)
+	// Filter by type (functionality type). Alias normalization (REGULAR/AI) and
+	// lowercasing happen in the service layer via normalizeGatewayRole.
 	if typeParam := r.URL.Query().Get("type"); typeParam != "" {
-		// Normalize to lowercase for consistent storage/comparison
-		normalizedType := strings.ToLower(typeParam)
-		filters.FunctionalityType = &normalizedType
+		filters.FunctionalityType = &typeParam
 	}
 
 	// Filter by status
@@ -291,7 +291,7 @@ func (c *gatewayController) ListGateways(w http.ResponseWriter, r *http.Request)
 	gatewaysResp, err := c.gatewayService.ListGateways(&ouID, filters, limit, offset)
 	if err != nil {
 		log.Error("ListGateways: failed to list gateways", "error", err)
-		utils.WriteErrorResponse(w, http.StatusInternalServerError, "Failed to list gateways")
+		handleGatewayErrors(w, err, "Failed to list gateways")
 		return
 	}
 
@@ -343,7 +343,7 @@ func (c *gatewayController) UpdateGateway(w http.ResponseWriter, r *http.Request
 	// Update using local service
 	var properties *map[string]interface{}
 	var description *string // Description not in spec
-	gateway, err := c.gatewayService.UpdateGateway(gatewayID, ouID, description, req.DisplayName, req.IsCritical, properties)
+	gateway, err := c.gatewayService.UpdateGateway(gatewayID, ouID, description, req.DisplayName, req.IsCritical, properties, req.RuntimeUrl)
 	if err != nil {
 		log.Error("UpdateGateway: failed to update gateway", "error", err)
 		handleGatewayErrors(w, err, "Failed to update gateway")
@@ -386,8 +386,15 @@ func (c *gatewayController) AssignGatewayToEnvironment(w http.ResponseWriter, r 
 		return
 	}
 
+	resolvedEnvID, err := c.resolveEnvironmentUUID(ctx, ouID, envID)
+	if err != nil {
+		log.Error("AssignGatewayToEnvironment: failed to resolve environment", "envID", envID, "error", err)
+		handleGatewayErrors(w, err, "Failed to resolve environment")
+		return
+	}
+
 	// Assign via service
-	if err := c.gatewayService.AssignGatewayToEnvironment(gatewayID, envID); err != nil {
+	if err := c.gatewayService.AssignGatewayToEnvironment(gatewayID, resolvedEnvID); err != nil {
 		log.Error("AssignGatewayToEnvironment: failed to assign", "error", err)
 		handleGatewayErrors(w, err, "Failed to assign gateway to environment")
 		return
@@ -399,11 +406,26 @@ func (c *gatewayController) AssignGatewayToEnvironment(w http.ResponseWriter, r 
 func (c *gatewayController) RemoveGatewayFromEnvironment(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	log := logger.GetLogger(ctx)
+	ouID := middleware.OUIDFromRequest(r)
 	gatewayID := strings.TrimSpace(r.PathValue("gatewayID"))
 	envID := strings.TrimSpace(r.PathValue("envID"))
 
+	// Verify gateway exists and belongs to the caller's org
+	if _, err := c.gatewayService.GetGateway(gatewayID, ouID); err != nil {
+		log.Error("RemoveGatewayFromEnvironment: gateway not found", "error", err)
+		handleGatewayErrors(w, err, "Failed to remove gateway from environment")
+		return
+	}
+
+	resolvedEnvID, err := c.resolveEnvironmentUUID(ctx, ouID, envID)
+	if err != nil {
+		log.Error("RemoveGatewayFromEnvironment: failed to resolve environment", "envID", envID, "error", err)
+		handleGatewayErrors(w, err, "Failed to resolve environment")
+		return
+	}
+
 	// Remove via service
-	if err := c.gatewayService.RemoveGatewayFromEnvironment(gatewayID, envID); err != nil {
+	if err := c.gatewayService.RemoveGatewayFromEnvironment(gatewayID, resolvedEnvID); err != nil {
 		log.Error("RemoveGatewayFromEnvironment: failed to remove mapping", "error", err)
 		if errors.Is(err, gorm.ErrRecordNotFound) || strings.Contains(err.Error(), "mapping not found") {
 			utils.WriteErrorResponse(w, http.StatusNotFound, "Gateway-environment mapping not found")
@@ -685,13 +707,19 @@ func (c *gatewayController) matchGatewayEnvironments(
 
 // Helper conversion functions
 
+// canonicalGatewayType uppercases the stored lowercase role for the wire enum.
+func canonicalGatewayType(role string) spec.GatewayType {
+	return spec.GatewayType(strings.ToUpper(role))
+}
+
 func convertGatewayToSpecResponse(gw *services.GatewayResponse, ouID string, environments []models.GatewayEnvironmentResponse) spec.GatewayResponse {
 	response := spec.GatewayResponse{
 		Uuid:        gw.ID,
 		Name:        gw.Name,
 		DisplayName: gw.DisplayName,
-		GatewayType: spec.GatewayType(gw.FunctionalityType),
+		GatewayType: canonicalGatewayType(gw.FunctionalityType),
 		Vhost:       gw.Vhost,
+		RuntimeUrl:  runtimeURLPtr(gw.RuntimeURL),
 		IsCritical:  gw.IsCritical,
 		Status:      convertStatusToGatewayStatus(gw.IsActive),
 		CreatedAt:   gw.CreatedAt,
@@ -708,6 +736,14 @@ func convertGatewayToSpecResponse(gw *services.GatewayResponse, ouID string, env
 	}
 
 	return response
+}
+
+// runtimeURLPtr omits an unset runtime URL from the response rather than emitting "".
+func runtimeURLPtr(runtimeURL string) *string {
+	if runtimeURL == "" {
+		return nil
+	}
+	return &runtimeURL
 }
 
 func convertStatusToGatewayStatus(isActive bool) spec.GatewayStatus {

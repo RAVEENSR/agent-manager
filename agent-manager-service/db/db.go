@@ -132,6 +132,15 @@ func GetDB() *gorm.DB {
 
 func makeConnString(p config.POSTGRESQL) string {
 	params := url.Values{}
+	// Only set the TLS parameters when configured. Omitting them keeps the DSN
+	// byte-identical to earlier builds, so pgx's libpq-compatible "prefer"
+	// default (and any PGSSLMODE/PGSSLROOTCERT in the environment) still apply.
+	if p.SSLMode != "" {
+		params.Set("sslmode", p.SSLMode)
+	}
+	if p.SSLRootCert != "" {
+		params.Set("sslrootcert", p.SSLRootCert)
+	}
 	conn := &url.URL{
 		Scheme:   "postgres",
 		User:     url.UserPassword(p.User, p.Password),

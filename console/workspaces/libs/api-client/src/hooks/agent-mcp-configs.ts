@@ -104,6 +104,13 @@ export function useCreateAgentMCPConfig() {
       queryClient.invalidateQueries({
         queryKey: ["agent-mcp-proxies", toAgentPathParams(variables.params)],
       });
+      // A new MCP config changes the agent's AgentID scope union (see
+      // agent_configuration_service.go's refreshTouchedMCPEnvironments) — the
+      // deploy cards' displayed AMP_AGENTID_SCOPES value comes from this query,
+      // so it must invalidate too or it keeps showing the pre-change scope list.
+      queryClient.invalidateQueries({
+        queryKey: ["agent-configurations", toAgentPathParams(variables.params)],
+      });
     },
   });
 }
@@ -127,6 +134,10 @@ export function useUpdateAgentMCPConfig() {
       queryClient.invalidateQueries({
         queryKey: ["agent-mcp-proxies", toAgentPathParams(variables.params)],
       });
+      // See useCreateAgentMCPConfig's identical invalidation for why.
+      queryClient.invalidateQueries({
+        queryKey: ["agent-configurations", toAgentPathParams(variables.params)],
+      });
     },
   });
 }
@@ -141,6 +152,10 @@ export function useDeleteAgentMCPConfig() {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEY] });
       queryClient.invalidateQueries({
         queryKey: ["agent-mcp-proxies", toAgentPathParams(variables)],
+      });
+      // See useCreateAgentMCPConfig's identical invalidation for why.
+      queryClient.invalidateQueries({
+        queryKey: ["agent-configurations", toAgentPathParams(variables)],
       });
     },
   });

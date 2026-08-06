@@ -90,3 +90,26 @@ Parameters:
   {{- fail (printf "Buildpack image with id '%s' not found in buildpackCache.images" $id) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Namespace-qualified DNS name of the per-environment gateway runtime Service.
+
+The Service name always follows the apiGatewayName convention
+("api-platform-<org>-<env>-gw-gateway-gateway-runtime"), but the namespace it
+lives in is a deployment choice: setup-gateway.sh and add-environment.sh install
+the gateway extension into "<org>-<env>", while the extension chart's own
+apiGateway.namespace default is openchoreo-data-plane. Callers set
+apiPlatformGateway.namespace to match wherever they installed it; empty keeps the
+per-org-env convention.
+
+Emits an OpenChoreo trait placeholder expression, so ${metadata.*} is resolved by
+the controller rather than by Helm.
+*/}}
+{{- define "amp.gatewayRuntimeHost" -}}
+{{- $svc := "api-platform-${metadata.componentNamespace}-${metadata.environmentName}-gw-gateway-gateway-runtime" -}}
+{{- if .Values.apiPlatformGateway.namespace -}}
+{{- printf "%s.%s" $svc .Values.apiPlatformGateway.namespace -}}
+{{- else -}}
+{{- printf "%s.${metadata.componentNamespace}-${metadata.environmentName}" $svc -}}
+{{- end -}}
+{{- end -}}

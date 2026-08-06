@@ -17,9 +17,9 @@
  */
 
 import { Box, Typography } from "@wso2/oxygen-ui";
-import { CollapsibleSection } from "@agent-management-platform/shared-component";
+import { CollapsibleSection, OverviewSectionCard } from "@agent-management-platform/shared-component";
 import type { AgentModelConfigListItem } from "@agent-management-platform/types";
-import { SectionHeader } from "./SectionHeader";
+import { AddConfigCard } from "./AddConfigCard";
 import { useEnvFilteredConfigs, type ConfigResolution } from "./useEnvFilteredConfigs";
 
 export interface ConfigCardProps {
@@ -46,6 +46,10 @@ interface EnvConfigGroupProps {
     listError?: boolean;
     title: string;
     viewAllHref: string;
+    /** Destination for the trailing "add" tile — the "add config" flow, not the listing. */
+    addHref: string;
+    /** Tooltip label for the trailing "add" tile, e.g. "Configure LLM" / "Configure MCP". */
+    addLabel: string;
     previewLimit: number;
     CardComponent: React.ComponentType<ConfigCardProps>;
 }
@@ -66,7 +70,7 @@ interface EnvConfigGroupProps {
  */
 export const EnvConfigGroup: React.FC<EnvConfigGroupProps> = ({
     orgId, projectId, agentId, envId, configs, listError,
-    title, viewAllHref, previewLimit, CardComponent,
+    title, viewAllHref, addHref, addLabel, previewLimit, CardComponent,
 }) => {
     const {
         visible, reportResolved, isSettled, extraCount, hasError,
@@ -82,34 +86,36 @@ export const EnvConfigGroup: React.FC<EnvConfigGroupProps> = ({
 
     return (
         <CollapsibleSection show={show}>
-            <SectionHeader title={title} viewAllHref={viewAllHref} />
-            {hasAnyError ? (
-                <Typography variant="body2" color="error" sx={{ mb: 1.5 }}>
-                    Unable to load {title.toLowerCase()}. Try again later.
-                </Typography>
-            ) : (
-                <>
-                    <Box display="flex" flexDirection="column" gap={1} sx={{ mb: extraCount > 0 ? 0.5 : 1.5 }}>
-                        {activeConfigs.map((config) => (
-                            <CardComponent
-                                key={config.uuid}
-                                orgId={orgId}
-                                projectId={projectId}
-                                agentId={agentId}
-                                envId={envId}
-                                config={config}
-                                visible={visible.some((c) => c.uuid === config.uuid)}
-                                onResolved={reportResolved}
-                            />
-                        ))}
-                    </Box>
-                    {extraCount > 0 && (
-                        <Typography variant="caption" color="text.disabled" sx={{ display: "block", mb: 1.5 }}>
-                            +{extraCount} more
-                        </Typography>
-                    )}
-                </>
-            )}
+            <OverviewSectionCard title={title} actionHref={viewAllHref} sx={{ mb: 1.5 }}>
+                {hasAnyError ? (
+                    <Typography variant="body2" color="error">
+                        Unable to load {title.toLowerCase()}. Try again later.
+                    </Typography>
+                ) : (
+                    <>
+                        <Box display="flex" flexWrap="wrap" gap={1} sx={{ mb: extraCount > 0 ? 0.5 : 0 }}>
+                            {activeConfigs.map((config) => (
+                                <CardComponent
+                                    key={config.uuid}
+                                    orgId={orgId}
+                                    projectId={projectId}
+                                    agentId={agentId}
+                                    envId={envId}
+                                    config={config}
+                                    visible={visible.some((c) => c.uuid === config.uuid)}
+                                    onResolved={reportResolved}
+                                />
+                            ))}
+                            <AddConfigCard label={addLabel} href={addHref} />
+                        </Box>
+                        {extraCount > 0 && (
+                            <Typography variant="caption" color="text.disabled" sx={{ display: "block" }}>
+                                +{extraCount} more
+                            </Typography>
+                        )}
+                    </>
+                )}
+            </OverviewSectionCard>
         </CollapsibleSection>
     );
 };

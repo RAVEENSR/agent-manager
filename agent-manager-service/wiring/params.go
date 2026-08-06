@@ -108,10 +108,6 @@ func ProvideConfigFromPtr(config *config.Config) config.Config {
 	return *config
 }
 
-func ProvideGatewayRuntimeConfig(cfg config.Config) config.GatewayRuntimeConfig {
-	return cfg.GatewayRuntime
-}
-
 func ProvideAuthMiddleware(config config.Config) jwtassertion.Middleware {
 	var resourceMetadataURL string
 	if config.ServerPublicURL != "" {

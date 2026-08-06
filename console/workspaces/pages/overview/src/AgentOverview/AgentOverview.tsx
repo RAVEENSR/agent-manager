@@ -16,19 +16,21 @@
  * under the License.
  */
 
-import { useGetAgent } from "@agent-management-platform/api-client";
+import { useGetAgent, useUserDisplayName } from "@agent-management-platform/api-client";
 import { InternalAgentOverview } from "./InternalAgentOverview";
 import { useParams } from "react-router-dom";
 import { ExternalAgentOverview } from "./ExternalAgentOverview";
 import { useState } from "react";
-import { Box, Button, Chip, Skeleton, Stack } from "@wso2/oxygen-ui";
-import { Edit } from "@wso2/oxygen-ui-icons-react";
+import { Box, Button, Chip, Divider, Skeleton, Stack } from "@wso2/oxygen-ui";
+import { Edit, Tag } from "@wso2/oxygen-ui-icons-react";
 import { EditAgentDrawer } from "./EditAgentDrawer";
 import {
     PageLayout,
     displayProvisionTypes,
     DescriptionCard,
     CreatedMetadata,
+    CreatedByMetadata,
+    PageMetaItem,
 } from "@agent-management-platform/views";
 import { LabelChips } from "@agent-management-platform/shared-component";
 
@@ -48,24 +50,46 @@ export function AgentOverview() {
         projName: projectId,
         agentName: agentId,
     });
+    // The agent record only carries the creator's id (plus a best-effort
+    // username); the profile lookup turns that into their real name.
+    const resolvedName = useUserDisplayName({
+        orgName: orgId ?? "",
+        userId: agent?.createdBy?.id ?? "",
+    });
+    const createdByName = resolvedName ?? agent?.createdBy?.display ?? agent?.createdBy?.id;
 
     return (
         <>
             <PageLayout
+                variant="card"
                 title={agent?.displayName ?? "Agent"}
-                description={agent ? <CreatedMetadata createdAt={agent.createdAt} /> : undefined}
                 isLoading={isAgentLoading}
                 titleTail={
-                    <Stack direction="row" spacing={0.5} alignItems="center" sx={{ width: "100%", minWidth: 0 }}>
-                        <Chip
-                            label={displayProvisionTypes(agent?.provisioning?.type)}
-                            color="default"
-                            size="small"
-                            variant="outlined"
-                            sx={{ flexShrink: 0 }}
-                        />
-                        <LabelChips labels={agent?.labels} />
-                    </Stack>
+                    <Chip
+                        label={displayProvisionTypes(agent?.provisioning?.type)}
+                        color="default"
+                        size="small"
+                        variant="outlined"
+                        sx={{ flexShrink: 0 }}
+                    />
+                }
+                meta={
+                    <>
+                        {agent?.labels && Object.keys(agent.labels).length > 0 && (
+                            <PageMetaItem icon={<Tag size={12} />} label="Custom tags">
+                                <LabelChips labels={agent.labels} />
+                            </PageMetaItem>
+                        )}
+                        <Stack
+                            direction="row"
+                            spacing={1}
+                            alignItems="center"
+                            divider={<Divider orientation="vertical" flexItem />}
+                        >
+                            <CreatedMetadata createdAt={agent?.createdAt} />
+                            <CreatedByMetadata createdBy={createdByName} />
+                        </Stack>
+                    </>
                 }
                 actions={
                     <Button

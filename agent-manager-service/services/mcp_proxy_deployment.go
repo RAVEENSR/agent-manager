@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -248,15 +247,32 @@ func (s *MCPProxyService) deployMCPProxyEndpoints(ctx context.Context, proxy *mo
 				errs = append(errs, fmt.Errorf("endpoint %q environment %q: missing artifact id", endpoint.Handle, envID))
 				continue
 			}
-			gateway, err := s.resolveGatewayForEnvironment(ctx, ee.EnvironmentUUID, ouID)
-			if errors.Is(err, errNoActiveGatewayForEnvironment) {
-				s.logger.Info("Skipping MCP proxy endpoint deploy; no active gateway",
+			// Anchor on the gateway this (endpoint, environment) pair is already deployed
+			// to, so a second egress gateway in the environment never re-homes an existing
+			// binding. Only a genuinely new binding reaches inference.
+			var deployed []string
+			if s.deploymentRepo != nil {
+				ids, depErr := s.deploymentRepo.GetDeployedGatewaysByProvider(ee.ArtifactUUID, ouID)
+				if depErr != nil {
+					errs = append(errs, fmt.Errorf("endpoint %q environment %q: failed to list existing deployments: %w", endpoint.Handle, envID, depErr))
+					continue
+				}
+				deployed = ids
+			}
+			gateway, err := resolveEgressGatewayForArtifact(s.gatewayRepo, ouID, ee.EnvironmentUUID, deployed, ee.RequestedGatewayUUID)
+			if errors.Is(err, errNoGatewayForEnvironment) {
+				s.logger.Info("Skipping MCP proxy endpoint deploy; no gateway mapped to environment",
 					"proxyUUID", proxy.UUID, "endpoint", endpoint.Handle, "environment", envID)
 				continue
 			}
 			if err != nil {
 				errs = append(errs, fmt.Errorf("endpoint %q environment %q: resolve gateway: %w", endpoint.Handle, envID, err))
 				continue
+			}
+			if !gateway.IsActive {
+				s.logger.Warn("Deploying MCP proxy endpoint to a currently offline gateway; "+
+					"delivery is durable through the event hub",
+					"proxyUUID", proxy.UUID, "endpoint", endpoint.Handle, "gateway", gateway.Name)
 			}
 			deployProxy := buildMCPProxyEnvArtifact(proxy, endpoint, ee)
 			if err := s.ensureMCPProxyEnvArtifactRow(deployProxy, ouID); err != nil {
@@ -311,40 +327,6 @@ func (s *MCPProxyService) deleteMCPProxyEnvironmentArtifacts(ctx context.Context
 		}
 	}
 	return errors.Join(errs...)
-}
-
-// resolveGatewayForEnvironment selects the environment's gateway with AI-first preference,
-// returning errNoActiveGatewayForEnvironment when the environment has no active gateway.
-func (s *MCPProxyService) resolveGatewayForEnvironment(ctx context.Context, envUUID uuid.UUID, ouID string) (*models.Gateway, error) {
-	_ = ctx
-	envIDStr := envUUID.String()
-	aiType := "ai"
-	activeStatus := true
-
-	gateways, err := s.gatewayRepo.ListWithFilters(repositories.GatewayFilterOptions{
-		OrganizationID:    ouID,
-		FunctionalityType: &aiType,
-		Status:            &activeStatus,
-		EnvironmentID:     &envIDStr,
-		Limit:             1,
-	})
-	if err == nil && len(gateways) > 0 {
-		return gateways[0], nil
-	}
-
-	gateways, err = s.gatewayRepo.ListWithFilters(repositories.GatewayFilterOptions{
-		OrganizationID: ouID,
-		Status:         &activeStatus,
-		EnvironmentID:  &envIDStr,
-		Limit:          1,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to find gateway: %w", err)
-	}
-	if len(gateways) == 0 {
-		return nil, errNoActiveGatewayForEnvironment
-	}
-	return gateways[0], nil
 }
 
 func (s *MCPProxyService) BroadcastMCPArtifactDeletion(ctx context.Context, artifactUUID uuid.UUID, ouID string) {
@@ -439,7 +421,7 @@ func (s *MCPProxyService) buildMCPProxyDeploymentYAML(proxy *models.MCPProxy, pr
 	upstream := MCPProxyUpstream{}
 	var upstreamAuth *models.UpstreamAuth
 	if proxy.Configuration.Upstream.Main != nil {
-		upstream.URL = normalizeMCPUpstreamURLForDeployment(proxy.Configuration.Upstream.Main.URL)
+		upstream.URL = strings.TrimSpace(proxy.Configuration.Upstream.Main.URL)
 		upstreamAuth = proxy.Configuration.Upstream.Main.Auth
 	}
 	if strings.TrimSpace(upstream.URL) == "" {
@@ -768,31 +750,6 @@ func cloneStringInterfaceMap(in map[string]interface{}) map[string]interface{} {
 		out[key] = value
 	}
 	return out
-}
-
-func normalizeMCPUpstreamURLForDeployment(rawURL string) string {
-	trimmed := strings.TrimSpace(rawURL)
-	parsed, err := url.Parse(trimmed)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return trimmed
-	}
-
-	path := strings.TrimRight(parsed.Path, "/")
-	if path == "" {
-		return trimmed
-	}
-	segments := strings.Split(path, "/")
-	if len(segments) == 0 || segments[len(segments)-1] != "mcp" {
-		return trimmed
-	}
-
-	segments = segments[:len(segments)-1]
-	parsed.Path = strings.Join(segments, "/")
-	if parsed.Path == "" {
-		parsed.Path = "/"
-	}
-	parsed.RawPath = ""
-	return parsed.String()
 }
 
 func deploymentName(proxy *models.MCPProxy) string {

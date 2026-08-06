@@ -92,6 +92,22 @@ RoleBinding, Job) are derived from this to avoid collisions across releases.
 {{- end }}
 
 {{/*
+In-cluster base URL of this release's gateway runtime, POSTed to AMS at registration and
+stored verbatim. AMS no longer derives this from the gateway name, so this template is the
+only producer. `-gw-gateway-gateway-runtime` and port 22893 are the gateway-operator's
+Service convention — the same pair gateway-kgateway-route.yaml already depends on, and this
+chart ships in lockstep with that operator where AMS config did not.
+*/}}
+{{- define "wso2-amp-gateway-extension.runtimeUrl" -}}
+{{- if .Values.gateway.runtimeUrl }}
+{{- /* AMS rejects any path, "/" included, so an override's trailing slash never reaches it. */}}
+{{- .Values.gateway.runtimeUrl | trimSuffix "/" }}
+{{- else }}
+{{- printf "http://%s-gw-gateway-gateway-runtime.%s:22893" (include "wso2-amp-gateway-extension.apiGatewayName" .) .Values.apiGateway.namespace }}
+{{- end }}
+{{- end }}
+
+{{/*
 Resolve the IDP client ID from secret or direct value
 */}}
 {{- define "wso2-amp-gateway-extension.idpClientIdEnv" -}}

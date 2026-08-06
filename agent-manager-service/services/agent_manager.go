@@ -86,6 +86,7 @@ type agentManagerService struct {
 	agentThunderProvisioning  AgentThunderProvisioningService
 	monitorManagerService     MonitorManagerService
 	agentIdentityInjection    AgentIdentityInjectionService
+	identityClient            thundersvc.IdentityClient
 	logger                    *slog.Logger
 }
 
@@ -104,6 +105,7 @@ func NewAgentManagerService(
 	agentThunderProvisioning AgentThunderProvisioningService,
 	monitorManagerService MonitorManagerService,
 	agentIdentityInjection AgentIdentityInjectionService,
+	identityClient thundersvc.IdentityClient,
 	logger *slog.Logger,
 ) AgentManagerService {
 	return &agentManagerService{
@@ -118,6 +120,7 @@ func NewAgentManagerService(
 		agentThunderProvisioning:  agentThunderProvisioning,
 		monitorManagerService:     monitorManagerService,
 		agentIdentityInjection:    agentIdentityInjection,
+		identityClient:            identityClient,
 		artifactRepo:              artifactRepo,
 		aiApplicationService:      aiApplicationService,
 		gatewayRepo:               gatewayRepo,
@@ -328,6 +331,29 @@ func mapInputInterface(specInterface *spec.InputInterface) *client.InputInterfac
 	return config
 }
 
+// resolveResilienceTimeoutSeconds resolves the effective resilience timeout from
+// (in precedence order) an explicit request value, the persisted config, and the
+// default. An explicitly requested value outside [MinResilienceTimeoutSeconds,
+// MaxResilienceTimeoutSeconds] is rejected rather than silently discarded — unlike
+// an omitted (nil) request, which falls through to the existing/default value.
+func resolveResilienceTimeoutSeconds(existingConfig *models.AgentConfig, requested *int32, withDefaults bool) (int32, error) {
+	resolved := int32(0)
+	if withDefaults {
+		resolved = client.DefaultResilienceTimeoutSeconds
+	}
+	if existingConfig != nil && existingConfig.ResilienceTimeoutSeconds != nil {
+		resolved = *existingConfig.ResilienceTimeoutSeconds
+	}
+	if requested != nil {
+		if *requested < client.MinResilienceTimeoutSeconds || *requested > client.MaxResilienceTimeoutSeconds {
+			return 0, fmt.Errorf("%w: resilienceTimeoutSeconds must be between %d and %d seconds, got %d",
+				utils.ErrInvalidInput, client.MinResilienceTimeoutSeconds, client.MaxResilienceTimeoutSeconds, *requested)
+		}
+		resolved = *requested
+	}
+	return resolved, nil
+}
+
 // buildCreateTraitRequests collects all traits needed during agent creation into a single
 // list so they can be attached in one GET-UPDATE cycle, avoiding resource version conflicts.
 // artifactID is the UUID of the agent's artifact record (used for api-configuration trait).
@@ -498,7 +524,7 @@ func (s *agentManagerService) lookupAgentAutoInstrumentation(ctx context.Context
 	if lowestEnv == "" {
 		return true, nil
 	}
-	cfg, err := s.agentConfigRepo.Get(ouID, projectName, agentName, lowestEnv)
+	cfg, err := s.agentConfigRepo.Get(ctx, ouID, projectName, agentName, lowestEnv)
 	if errors.Is(err, repositories.ErrAgentConfigNotFound) {
 		return true, nil
 	}
@@ -527,7 +553,7 @@ func (s *agentManagerService) lookupAgentInstrumentationVersion(ctx context.Cont
 	if lowestEnv == "" {
 		return nil, ErrInstrumentationVersionNotPinned
 	}
-	cfg, err := s.agentConfigRepo.Get(ouID, projectName, agentName, lowestEnv)
+	cfg, err := s.agentConfigRepo.Get(ctx, ouID, projectName, agentName, lowestEnv)
 	if errors.Is(err, repositories.ErrAgentConfigNotFound) {
 		return nil, ErrInstrumentationVersionNotPinned
 	}
@@ -748,7 +774,7 @@ func (s *agentManagerService) persistInstrumentationConfig(ctx context.Context, 
 		OAuthAuthHeaderPrefix: models.DefaultOAuthAuthHeaderPrefix,
 	}
 
-	if err := s.agentConfigRepo.Upsert(agentConfig); err != nil {
+	if err := s.agentConfigRepo.Upsert(ctx, agentConfig); err != nil {
 		s.logger.Warn("Failed to persist instrumentation config to database", "agentName", agentName, "error", err)
 	} else {
 		s.logger.Debug("Persisted instrumentation config to database", "agentName", agentName, "environment", lowestEnv, "enableAutoInstrumentation", enableAutoInstrumentation, "instrumentationVersion", instrumentationVersion)
@@ -943,13 +969,14 @@ func (s *agentManagerService) GetAgent(ctx context.Context, ouID string, project
 	if pipelineErr == nil && len(pipeline.PromotionPaths) > 0 {
 		lowestEnv := findLowestEnvironment(pipeline.PromotionPaths)
 		if lowestEnv != "" {
-			agentConfig, configErr := s.agentConfigRepo.Get(ouID, projectName, agentName, lowestEnv)
+			agentConfig, configErr := s.agentConfigRepo.Get(ctx, ouID, projectName, agentName, lowestEnv)
 			if errors.Is(configErr, repositories.ErrAgentConfigNotFound) {
 				// No config in DB - use defaults for display purposes
 				defaultEnabled := true
 				defaultCORSEnabled := true
 				defaultOAuthDisabled := false
 				defCORS := config.GetAgentWorkloadConfig().CORS
+				defaultResilience := client.DefaultResilienceTimeoutSeconds
 				agent.Configurations = &models.Configurations{
 					EnableAutoInstrumentation: &defaultEnabled,
 					EnableApiKeySecurity:      &defaultEnabled,
@@ -960,10 +987,12 @@ func (s *agentManagerService) GetAgent(ctx context.Context, ouID string, project
 						AllowHeaders:     strings.Split(defCORS.AllowHeaders, ","),
 						AllowCredentials: &defCORS.AllowCredentials,
 					},
-					EnableOAuthSecurity: &defaultOAuthDisabled,
+					EnableOAuthSecurity:      &defaultOAuthDisabled,
+					ResilienceTimeoutSeconds: &defaultResilience,
 				}
 			} else if configErr != nil {
-				s.logger.Warn("Failed to read agent config from database", "agentName", agentName, "environment", lowestEnv, "error", configErr)
+				s.logger.Error("Failed to read agent config from database", "agentName", agentName, "environment", lowestEnv, "error", configErr)
+				return nil, fmt.Errorf("failed to read agent config for environment %q: %w", lowestEnv, configErr)
 			} else {
 				agent.Configurations = &models.Configurations{
 					EnableAutoInstrumentation: &agentConfig.EnableAutoInstrumentation,
@@ -976,8 +1005,9 @@ func (s *agentManagerService) GetAgent(ctx context.Context, ouID string, project
 						AllowHeaders:     agentConfig.CORSAllowHeaders,
 						AllowCredentials: &agentConfig.CORSAllowCredentials,
 					},
-					EnableOAuthSecurity: &agentConfig.EnableOAuthSecurity,
-					OAuthConfig:         oauthConfigFromAgentConfig(agentConfig),
+					EnableOAuthSecurity:      &agentConfig.EnableOAuthSecurity,
+					OAuthConfig:              oauthConfigFromAgentConfig(agentConfig),
+					ResilienceTimeoutSeconds: agentConfig.ResilienceTimeoutSeconds,
 				}
 			}
 
@@ -1000,8 +1030,52 @@ func (s *agentManagerService) GetAgent(ctx context.Context, ouID string, project
 		}
 	}
 
+	s.populateCreatedBy(ctx, ouID, projectName, agentName, agent)
+
 	s.logger.Info("Fetched agent successfully from oc", "agentName", agent.Name, "ouID", ouID, "projectName", projectName, "provisioningType", agent.Provisioning.Type)
 	return agent, nil
+}
+
+// populateCreatedBy best-effort resolves and attaches who created this agent.
+func (s *agentManagerService) populateCreatedBy(ctx context.Context, ouID, projectName, agentName string, agent *models.AgentResponse) {
+	if s.agentThunderProvisioning == nil || s.identityClient == nil {
+		return
+	}
+	views, err := s.agentThunderProvisioning.GetIdentityViews(ctx, ouID, projectName, agentName)
+	if err != nil {
+		s.logger.Warn("Failed to fetch agent identity views for createdBy", "agentName", agentName, "ouID", ouID, "error", err)
+		return
+	}
+	// requestedBy is captured once at creation time and copied to every
+	// environment's binding, so any non-empty value is equivalent.
+	var requestedBy string
+	for _, v := range views {
+		if v.RequestedBy != "" {
+			requestedBy = v.RequestedBy
+			break
+		}
+	}
+	if requestedBy == "" {
+		return
+	}
+
+	createdBy := &models.AgentCreatedBy{ID: requestedBy}
+	user, err := s.identityClient.GetUser(ctx, requestedBy)
+	// A nil user with no error shouldn't happen, but this path is best-effort
+	// decoration of a GetAgent response — never let it panic the request.
+	if err != nil || user == nil {
+		if err != nil && !thundersvc.IsNotFound(err) {
+			s.logger.Warn("Failed to resolve agent creator", "agentName", agentName, "requestedBy", requestedBy, "error", err)
+		}
+		agent.CreatedBy = createdBy
+		return
+	}
+	if username, ok := user.Attributes["username"].(string); ok && username != "" {
+		createdBy.Display = username
+	} else {
+		createdBy.Display = user.Display
+	}
+	agent.CreatedBy = createdBy
 }
 
 func (s *agentManagerService) ListAgents(ctx context.Context, ouID string, projName string, labelFilter map[string]string, limit int32, offset int32) ([]*models.AgentResponse, int32, error) {
@@ -1084,9 +1158,21 @@ func (s *agentManagerService) CreateAgent(ctx context.Context, ouID string, proj
 		if req.Configurations != nil {
 			envVars = req.Configurations.Env
 		}
+		if err := RejectDuplicateEnvKeys(envVars); err != nil {
+			return err
+		}
 		if err := ValidateKindConfigValues(kindVersion.ConfigSchema, envVars); err != nil {
 			return err
 		}
+		// The kind's own config schema carries the authoritative default for each
+		// parameter, including secret ones, which a client is never shown once set.
+		// Applying it here — rather than expecting the client to send it back — is
+		// what lets someone accept a kind's defaults without retyping them.
+		envVars = ApplySecretConfigDefaults(kindVersion.ConfigSchema, envVars)
+		if req.Configurations == nil {
+			req.Configurations = &spec.Configurations{}
+		}
+		req.Configurations.Env = envVars
 		if kindVersion.ImageId == "" {
 			return fmt.Errorf("kind version %q has no stored image; re-publish the kind from a successfully built agent", req.Provisioning.AgentKind.Version)
 		}
@@ -1221,6 +1307,14 @@ func (s *agentManagerService) createComponentAgent(ctx context.Context, ouID, pr
 				ev.SetValue(f.GetValue())
 				ev.SetIsSensitive(true)
 				allSecretVars = append(allSecretVars, ev)
+			}
+		}
+		// A sensitive var with neither a value nor a secretRef would otherwise be
+		// silently persisted as an empty secret (e.g. if a kind-declared secret's
+		// default backfill above ever has a gap). Fail loudly instead.
+		for _, env := range allSecretVars {
+			if env.GetIsSensitive() && env.GetValue() == "" && !env.HasSecretRef() {
+				return fmt.Errorf("%w: sensitive environment variable %q requires either a value or secretRef", utils.ErrInvalidInput, env.Key)
 			}
 		}
 		secretReference, err = s.saveSecretsAndCreateReference(ctx, secretLocation, allSecretVars)
@@ -2307,7 +2401,7 @@ func (s *agentManagerService) DeleteAgent(ctx context.Context, ouID string, proj
 		translatedErr := translateAgentError(err)
 		if errors.Is(translatedErr, utils.ErrAgentNotFound) {
 			s.logger.Warn("Agent not found during deletion, delete is idempotent", "agentName", agentName, "ouID", ouID, "projectName", projectName)
-			if configErr := s.agentConfigRepo.DeleteAllByAgent(ouID, projectName, agentName); configErr != nil {
+			if configErr := s.agentConfigRepo.DeleteAllByAgent(ctx, ouID, projectName, agentName); configErr != nil {
 				s.logger.Warn("Failed to delete agent configs from database", "agentName", agentName, "error", configErr)
 			}
 			s.deleteAgentAPIArtifact(ctx, ouID, projectName, agentName)
@@ -2331,7 +2425,7 @@ func (s *agentManagerService) DeleteAgent(ctx context.Context, ouID string, proj
 	}
 
 	// Cleanup agent configs from database
-	if configErr := s.agentConfigRepo.DeleteAllByAgent(ouID, projectName, agentName); configErr != nil {
+	if configErr := s.agentConfigRepo.DeleteAllByAgent(ctx, ouID, projectName, agentName); configErr != nil {
 		s.logger.Warn("Failed to delete agent configs from database", "agentName", agentName, "error", configErr)
 		// Don't fail the deletion - configs will be orphaned but harmless
 	}
@@ -2624,12 +2718,12 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 	// fields from DB and preserve pinned instrumentation_version during Upsert.
 	var existingConfig *models.AgentConfig
 	if targetEnv != nil {
-		cfg, configErr := s.agentConfigRepo.Get(ouID, projectName, agentName, targetEnv.Name)
+		cfg, configErr := s.agentConfigRepo.Get(ctx, ouID, projectName, agentName, targetEnv.Name)
 		switch {
 		case errors.Is(configErr, repositories.ErrAgentConfigNotFound):
 			s.logger.Debug("No config in database, using defaults", "agentName", agentName, "environment", targetEnv.Name)
 		case configErr != nil:
-			s.logger.Warn("Failed to read config from database", "agentName", agentName, "environment", targetEnv.Name, "error", configErr)
+			return "", fmt.Errorf("failed to read agent config for environment %q: %w", targetEnv.Name, configErr)
 		default:
 			existingConfig = cfg
 			s.logger.Debug("Read config from database", "agentName", agentName, "environment", targetEnv.Name,
@@ -2642,6 +2736,10 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 	// Resolve config values: request > DB > defaults
 	tracingCfg := resolveTracingConfig(existingConfig, req.EnableAutoInstrumentation, true)
 	apiCfg := resolveAPIConfig(existingConfig, req.EnableApiKeySecurity, req.CorsConfig, req.EnableOAuthSecurity, req.OauthConfig, true)
+	resilienceTimeoutSeconds, err := resolveResilienceTimeoutSeconds(existingConfig, nil, true)
+	if err != nil {
+		return "", err
+	}
 	if err := validateAuthExclusivity(apiCfg); err != nil {
 		return "", err
 	}
@@ -2707,7 +2805,7 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 	if err != nil {
 		return "", err
 	}
-	deployTraitEnvConfigs := buildTraitEnvConfigs(agentName, policies, "", isPythonBuildpack, isBallerinaBuildpack, enableAutoInstrumentation, deployInstrumentationImage)
+	deployTraitEnvConfigs := buildTraitEnvConfigs(agentName, policies, "", resilienceTimeoutSeconds, isPythonBuildpack, isBallerinaBuildpack, enableAutoInstrumentation, deployInstrumentationImage)
 
 	// Replace Component CR workflow parameters with env vars and file mounts from deploy request
 	// This replaces all existing env vars to ensure the component CR matches the deploy request
@@ -2746,6 +2844,9 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 			traitOpts = append(traitOpts, client.WithUpstreamBasePath(agent.InputInterface.BasePath))
 		} else {
 			traitOpts = append(traitOpts, client.WithUpstreamBasePath(config.GetConfig().DefaultChatAPI.DefaultBasePath))
+		}
+		if resilienceTimeoutSeconds > 0 {
+			traitOpts = append(traitOpts, client.WithResilienceTimeout(resilienceTimeoutSeconds))
 		}
 		traitOpts = append(traitOpts, client.WithPolicies(policies))
 
@@ -2800,6 +2901,10 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 	// Upsert — the repo's DoUpdates map includes that column, so omitting
 	// the value would NULL out a customer's pin on every redeploy.
 	if targetEnv != nil {
+		var deployResilienceTimeoutSeconds *int32
+		if resilienceTimeoutSeconds > 0 {
+			deployResilienceTimeoutSeconds = &resilienceTimeoutSeconds
+		}
 		agentConfig := &models.AgentConfig{
 			OUID:                      ouID,
 			ProjectName:               projectName,
@@ -2819,12 +2924,13 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 			OAuthHeaderName:           apiCfg.OAuthHeaderName,
 			OAuthAuthHeaderPrefix:     apiCfg.OAuthAuthHeaderPrefix,
 			OAuthForwardToken:         apiCfg.OAuthForwardToken,
+			ResilienceTimeoutSeconds:  deployResilienceTimeoutSeconds,
 		}
-		if configErr := s.agentConfigRepo.Upsert(agentConfig); configErr != nil {
-			s.logger.Error("Failed to persist instrumentation config to database", "agentName", agentName, "environment", lowestEnv, "error", configErr)
-		} else {
-			s.logger.Debug("Persisted instrumentation config to database", "agentName", agentName, "environment", lowestEnv, "enableAutoInstrumentation", enableAutoInstrumentation, "instrumentationVersion", existingInstrumentationVersion)
+		if configErr := s.agentConfigRepo.Upsert(ctx, agentConfig); configErr != nil {
+			s.logger.Error("Failed to persist agent config after deploy", "agentName", agentName, "environment", lowestEnv, "error", configErr)
+			return "", fmt.Errorf("agent deployed to %q but failed to persist its config (retry to reconcile): %w", lowestEnv, configErr)
 		}
+		s.logger.Debug("Persisted instrumentation config to database", "agentName", agentName, "environment", lowestEnv, "enableAutoInstrumentation", enableAutoInstrumentation, "instrumentationVersion", existingInstrumentationVersion)
 	}
 
 	s.logger.Info("Agent deployed successfully to "+lowestEnv, "agentName", agentName, "ouID", org.Name, "projectName", projectName, "environment", lowestEnv)
@@ -3100,7 +3206,7 @@ func buildComponentTypeEnvConfigs(env *models.EnvironmentResponse) map[string]in
 // instrumentationImage, when non-empty, pins the OTEL init-container image for this environment
 // (overriding the Component's create-time default) so the AMP instrumentation version can be
 // changed per-environment on deploy/promote without re-attaching the Component trait.
-func buildTraitEnvConfigs(agentName string, policies []map[string]interface{}, artifactID string, isPythonBuildpack, isBallerinaBuildpack bool, autoInstrumentation bool, instrumentationImage string) map[string]interface{} {
+func buildTraitEnvConfigs(agentName string, policies []map[string]interface{}, artifactID string, resilienceTimeoutSeconds int32, isPythonBuildpack, isBallerinaBuildpack bool, autoInstrumentation bool, instrumentationImage string) map[string]interface{} {
 	instanceName := func(traitType client.TraitType) string {
 		return agentName + "-" + string(traitType)
 	}
@@ -3109,6 +3215,9 @@ func buildTraitEnvConfigs(agentName string, policies []map[string]interface{}, a
 	}
 	if artifactID != "" {
 		apiTraitCfg["artifactId"] = artifactID
+	}
+	if resilienceTimeoutSeconds > 0 {
+		apiTraitCfg["resilienceTimeout"] = client.FormatResilienceTimeout(resilienceTimeoutSeconds)
 	}
 	traitEnvConfigs := map[string]interface{}{
 		instanceName(client.TraitAPIManagement): apiTraitCfg,
@@ -3635,19 +3744,28 @@ func (s *agentManagerService) PromoteAgent(ctx context.Context, ouID string, pro
 	if isAPIAgent {
 		// Resolve config values: request > source env DB > defaults
 		var existingConfig *models.AgentConfig
-		cfg, configErr := s.agentConfigRepo.Get(ouID, projectName, agentName, req.SourceEnvironment)
-		if configErr == nil {
+		cfg, configErr := s.agentConfigRepo.Get(ctx, ouID, projectName, agentName, req.SourceEnvironment)
+		switch {
+		case errors.Is(configErr, repositories.ErrAgentConfigNotFound):
+			// No saved config for the source env — fall back to request/defaults.
+		case configErr != nil:
+			return fmt.Errorf("failed to read source environment %q config: %w", req.SourceEnvironment, configErr)
+		default:
 			existingConfig = cfg
 		}
 
-		// Deploy-settings precedence (CORS, API key security, auto instrumentation):
-		//   request fields → source env's saved AgentConfig → off.
+		// Deploy-settings precedence (CORS, API key security, auto instrumentation,
+		// resilience timeout): request fields → source env's saved AgentConfig → off.
 		// When useConfigFromSourceEnv=true, the validator guarantees the request fields
 		// are nil, so the resolved settings fall through to the source env's saved
 		// AgentConfig. When useConfigFromSourceEnv=false the request takes precedence
 		// where set; any unset field falls back to the source env's values.
 		tracingCfg := resolveTracingConfig(existingConfig, req.EnableAutoInstrumentation, false)
 		apiCfg := resolveAPIConfig(existingConfig, req.EnableApiKeySecurity, req.CorsConfig, req.EnableOAuthSecurity, req.OauthConfig, false)
+		resilienceTimeoutSeconds, err := resolveResilienceTimeoutSeconds(existingConfig, req.ResilienceTimeoutSeconds, false)
+		if err != nil {
+			return err
+		}
 		if err := validateAuthExclusivity(apiCfg); err != nil {
 			return err
 		}
@@ -3692,7 +3810,7 @@ func (s *agentManagerService) PromoteAgent(ctx context.Context, ouID string, pro
 		if resolveErr != nil {
 			return resolveErr
 		}
-		traitEnvConfigs = buildTraitEnvConfigs(agentName, policies, targetArtifactID, promotePythonBuildpack, promoteBallerinaBuildpack, tracingCfg.EnableAutoInstrumentation, promoteInstrumentationImage)
+		traitEnvConfigs = buildTraitEnvConfigs(agentName, policies, targetArtifactID, resilienceTimeoutSeconds, promotePythonBuildpack, promoteBallerinaBuildpack, tracingCfg.EnableAutoInstrumentation, promoteInstrumentationImage)
 		promoteCTConfigs = buildComponentTypeEnvConfigs(targetEnv)
 
 		apiKey, apiKeyErr := s.generateAgentAPIKey(ctx, ouID, projectName, agentName, req.TargetEnvironment)
@@ -3704,6 +3822,10 @@ func (s *agentManagerService) PromoteAgent(ctx context.Context, ouID string, pro
 			injectAgentAPIKeySecretRef(traitEnvConfigs, agentName, apiKeySecretRef, apiKeySecretProperty)
 		}
 
+		var promoteResilienceTimeoutSeconds *int32
+		if resilienceTimeoutSeconds > 0 {
+			promoteResilienceTimeoutSeconds = &resilienceTimeoutSeconds
+		}
 		// Persist config for the target environment
 		agentConfig := &models.AgentConfig{
 			OUID:                      ouID,
@@ -3724,9 +3846,11 @@ func (s *agentManagerService) PromoteAgent(ctx context.Context, ouID string, pro
 			OAuthHeaderName:           apiCfg.OAuthHeaderName,
 			OAuthAuthHeaderPrefix:     apiCfg.OAuthAuthHeaderPrefix,
 			OAuthForwardToken:         apiCfg.OAuthForwardToken,
+			ResilienceTimeoutSeconds:  promoteResilienceTimeoutSeconds,
 		}
-		if upsertErr := s.agentConfigRepo.Upsert(agentConfig); upsertErr != nil {
+		if upsertErr := s.agentConfigRepo.Upsert(ctx, agentConfig); upsertErr != nil {
 			s.logger.Error("Failed to persist agent config for target environment", "agentName", agentName, "environment", req.TargetEnvironment, "error", upsertErr)
+			return fmt.Errorf("failed to persist agent config for target environment %q: %w", req.TargetEnvironment, upsertErr)
 		}
 	}
 
@@ -3875,11 +3999,20 @@ func (s *agentManagerService) UpdateAgentDeploySettings(ctx context.Context, ouI
 
 	// Resolve final settings: precedence is request → existing DB
 	var existingConfig *models.AgentConfig
-	if cfg, getErr := s.agentConfigRepo.Get(ouID, projectName, agentName, req.EnvironmentName); getErr == nil {
+	switch cfg, getErr := s.agentConfigRepo.Get(ctx, ouID, projectName, agentName, req.EnvironmentName); {
+	case errors.Is(getErr, repositories.ErrAgentConfigNotFound):
+		// No existing config for this env — request values / defaults apply.
+	case getErr != nil:
+		return fmt.Errorf("failed to read agent config for environment %q: %w", req.EnvironmentName, getErr)
+	default:
 		existingConfig = cfg
 	}
 	tracingCfg := resolveTracingConfig(existingConfig, req.EnableAutoInstrumentation, false)
 	apiCfg := resolveAPIConfig(existingConfig, req.EnableApiKeySecurity, req.CorsConfig, req.EnableOAuthSecurity, req.OauthConfig, false)
+	resilienceTimeoutSeconds, err := resolveResilienceTimeoutSeconds(existingConfig, req.ResilienceTimeoutSeconds, false)
+	if err != nil {
+		return err
+	}
 	if err := validateAuthExclusivity(apiCfg); err != nil {
 		return err
 	}
@@ -3919,7 +4052,7 @@ func (s *agentManagerService) UpdateAgentDeploySettings(ctx context.Context, ouI
 	if resolveErr != nil {
 		return resolveErr
 	}
-	traitEnvConfigs := buildTraitEnvConfigs(agentName, policies, artifact.UUID.String(), isPythonBuildpack, isBallerinaBuildpack, tracingCfg.EnableAutoInstrumentation, instrumentationImage)
+	traitEnvConfigs := buildTraitEnvConfigs(agentName, policies, artifact.UUID.String(), resilienceTimeoutSeconds, isPythonBuildpack, isBallerinaBuildpack, tracingCfg.EnableAutoInstrumentation, instrumentationImage)
 
 	// Apply to the release binding (atomic: trait configs + component-type configs + restartedAt in a single update).
 	settingsCTConfigs := buildComponentTypeEnvConfigs(targetEnv)
@@ -3928,6 +4061,10 @@ func (s *agentManagerService) UpdateAgentDeploySettings(ctx context.Context, ouI
 		return fmt.Errorf("failed to update deploy settings: %w", updateErr)
 	}
 
+	var settingsResilienceTimeoutSeconds *int32
+	if resilienceTimeoutSeconds > 0 {
+		settingsResilienceTimeoutSeconds = &resilienceTimeoutSeconds
+	}
 	// Persist resolved config so subsequent deploy/promote calls see the current values.
 	agentConfig := &models.AgentConfig{
 		OUID:                      ouID,
@@ -3948,8 +4085,9 @@ func (s *agentManagerService) UpdateAgentDeploySettings(ctx context.Context, ouI
 		OAuthHeaderName:           apiCfg.OAuthHeaderName,
 		OAuthAuthHeaderPrefix:     apiCfg.OAuthAuthHeaderPrefix,
 		OAuthForwardToken:         apiCfg.OAuthForwardToken,
+		ResilienceTimeoutSeconds:  settingsResilienceTimeoutSeconds,
 	}
-	if upsertErr := s.agentConfigRepo.Upsert(agentConfig); upsertErr != nil {
+	if upsertErr := s.agentConfigRepo.Upsert(ctx, agentConfig); upsertErr != nil {
 		s.logger.Error("Failed to persist agent deploy settings", "agentName", agentName, "environment", req.EnvironmentName, "error", upsertErr)
 		return fmt.Errorf("failed to persist agent deploy settings: %w", upsertErr)
 	}
@@ -4805,8 +4943,8 @@ func (s *agentManagerService) GetAgentFileMounts(ctx context.Context, ouID strin
 // — tracing/instrumentation plus CORS and endpoint-authentication settings — or nil when none is
 // persisted yet. Unlike GetAgent (which reads only the lowest environment's config), this is scoped
 // to the requested environment so the console seeds the correct per-env values.
-func (s *agentManagerService) GetAgentEnvConfig(_ context.Context, ouID, projectName, agentName, environment string) (*models.AgentConfig, error) {
-	cfg, err := s.agentConfigRepo.Get(ouID, projectName, agentName, environment)
+func (s *agentManagerService) GetAgentEnvConfig(ctx context.Context, ouID, projectName, agentName, environment string) (*models.AgentConfig, error) {
+	cfg, err := s.agentConfigRepo.Get(ctx, ouID, projectName, agentName, environment)
 	if errors.Is(err, repositories.ErrAgentConfigNotFound) {
 		return nil, nil //nolint:nilnil // "no config yet" is a valid, expected state distinct from an error
 	}

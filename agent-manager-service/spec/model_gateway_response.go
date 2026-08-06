@@ -29,6 +29,8 @@ type GatewayResponse struct {
 	GatewayType GatewayType `json:"gatewayType"`
 	// Virtual host for the gateway
 	Vhost string `json:"vhost"`
+	// In-cluster base URL of the gateway runtime, used by sandboxed platform-hosted agents. Empty means no internal address is registered and the vhost is used instead. Must carry an explicit port other than 80 or 443 and a cluster-local host.
+	RuntimeUrl *string `json:"runtimeUrl,omitempty"`
 	// Deployment region
 	Region *string `json:"region,omitempty"`
 	// Flag indicating if this is a critical production gateway
@@ -186,6 +188,38 @@ func (o *GatewayResponse) GetVhostOk() (*string, bool) {
 // SetVhost sets field value
 func (o *GatewayResponse) SetVhost(v string) {
 	o.Vhost = v
+}
+
+// GetRuntimeUrl returns the RuntimeUrl field value if set, zero value otherwise.
+func (o *GatewayResponse) GetRuntimeUrl() string {
+	if o == nil || IsNil(o.RuntimeUrl) {
+		var ret string
+		return ret
+	}
+	return *o.RuntimeUrl
+}
+
+// GetRuntimeUrlOk returns a tuple with the RuntimeUrl field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *GatewayResponse) GetRuntimeUrlOk() (*string, bool) {
+	if o == nil || IsNil(o.RuntimeUrl) {
+		return nil, false
+	}
+	return o.RuntimeUrl, true
+}
+
+// HasRuntimeUrl returns a boolean if a field has been set.
+func (o *GatewayResponse) HasRuntimeUrl() bool {
+	if o != nil && !IsNil(o.RuntimeUrl) {
+		return true
+	}
+
+	return false
+}
+
+// SetRuntimeUrl gets a reference to the given string and assigns it to the RuntimeUrl field.
+func (o *GatewayResponse) SetRuntimeUrl(v string) {
+	o.RuntimeUrl = &v
 }
 
 // GetRegion returns the Region field value if set, zero value otherwise.
@@ -363,6 +397,9 @@ func (o GatewayResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize["displayName"] = o.DisplayName
 	toSerialize["gatewayType"] = o.GatewayType
 	toSerialize["vhost"] = o.Vhost
+	if !IsNil(o.RuntimeUrl) {
+		toSerialize["runtimeUrl"] = o.RuntimeUrl
+	}
 	if !IsNil(o.Region) {
 		toSerialize["region"] = o.Region
 	}

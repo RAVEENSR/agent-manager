@@ -99,6 +99,24 @@ echo "🌐 Installing gateway chart..."
 kubectl create namespace "${GATEWAY_NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f - > /dev/null
 kubectl label namespace "${GATEWAY_NAMESPACE}" "amp.wso2.com/api-platform-gateway=true" --overwrite > /dev/null
 
+GATEWAY_ENCRYPTION_SECRET_NAME="${GATEWAY_ENCRYPTION_SECRET_NAME:-gateway-encryption-keys}"
+GATEWAY_ENCRYPTION_SECRET_KEY="${GATEWAY_ENCRYPTION_SECRET_KEY:-default-aesgcm256-v1.bin}"
+key_tmp="$(mktemp)"
+trap 'rm -f "${key_tmp}"' EXIT INT TERM
+openssl rand 32 > "${key_tmp}"
+enc_create_out="$(kubectl create secret generic "${GATEWAY_ENCRYPTION_SECRET_NAME}" -n "${GATEWAY_NAMESPACE}" \
+    "--from-file=${GATEWAY_ENCRYPTION_SECRET_KEY}=${key_tmp}" 2>&1)" && enc_create_rc=0 || enc_create_rc=$?
+rm -f "${key_tmp}" # normal cleanup: don't leave the plaintext key on disk
+trap - EXIT INT TERM
+if [ "${enc_create_rc}" -eq 0 ]; then
+    echo "✅ Gateway encryption key secret created in '${GATEWAY_NAMESPACE}'"
+elif printf '%s\n' "${enc_create_out}" | grep -q "AlreadyExists"; then
+    echo "⏭️  Gateway encryption key secret '${GATEWAY_ENCRYPTION_SECRET_NAME}' already exists in '${GATEWAY_NAMESPACE}', leaving it untouched."
+else
+    echo "❌ Failed to create gateway encryption key secret '${GATEWAY_ENCRYPTION_SECRET_NAME}' in '${GATEWAY_NAMESPACE}': ${enc_create_out}" >&2
+    exit 1
+fi
+
 helm "${HELM_ARGS[@]}"
 
 echo "⏳ Waiting for Gateway to be ready..."

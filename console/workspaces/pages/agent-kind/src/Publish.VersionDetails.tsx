@@ -304,7 +304,7 @@ export const PublishVersionDetails: React.FC = () => {
                           </ListingTable.Cell>
                           <ListingTable.Cell>
                             <Typography variant="body2" color="text.secondary">
-                              {item.defaultValue ?? "—"}
+                              {item.defaultValue ? (item.isSecret ? "••••••••••••••••" : item.defaultValue) : "—"}
                             </Typography>
                           </ListingTable.Cell>
                         </ListingTable.Row>

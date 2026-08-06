@@ -203,6 +203,16 @@ spec:
                     protocol: UDP
                   - port: 53
                     protocol: TCP
+              # AgentID's per-env Thunder instance (amp-thunder-<org>-<env>) issues
+              # OAuth2 tokens on this port. Agents attach an AgentID bearer-token auth
+              # step to every MCP/LLM proxy call, so this egress is needed even though
+              # the proxy traffic itself goes out via the gateway rule below. Thunder
+              # namespaces carry no distinguishing label today (unlike the gateway rule's
+              # amp.wso2.com/api-platform-gateway), so this is scoped by port only, not
+              # by namespace.
+              - ports:
+                  - port: 8090
+                    protocol: TCP
               - to:
                   - namespaceSelector:
                       matchLabels:
@@ -326,6 +336,7 @@ spec:
             backendRefs:
             - name: ${metadata.componentName}
               port: ${workload.endpoints[endpoint].port}
+            # Overwritten to 0s by the api-configuration trait's HTTPRoute patch
             timeouts:
               request: 30s
 

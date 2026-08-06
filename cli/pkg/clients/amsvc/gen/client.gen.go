@@ -17427,7 +17427,6 @@ type GetAgentKindResp struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *AgentKindResponse
-	JSON404      *ErrorResponse
 	JSON500      *ErrorResponse
 }
 
@@ -17475,7 +17474,6 @@ type ListAgentKindVersionsResp struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *[]AgentKindVersionResponse
-	JSON404      *ErrorResponse
 	JSON500      *ErrorResponse
 }
 
@@ -25327,13 +25325,6 @@ func ParseGetAgentKindResp(rsp *http.Response) (*GetAgentKindResp, error) {
 		}
 		response.JSON200 = &dest
 
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest ErrorResponse
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
-
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -25406,13 +25397,6 @@ func ParseListAgentKindVersionsResp(rsp *http.Response) (*ListAgentKindVersionsR
 			return nil, err
 		}
 		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest ErrorResponse
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest ErrorResponse

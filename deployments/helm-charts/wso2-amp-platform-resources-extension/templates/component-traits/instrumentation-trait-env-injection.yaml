@@ -105,7 +105,7 @@ spec:
             # install fronts a single public gateway host on :443, where the
             # per-env in-cluster Service does not apply). Leave empty for the
             # default in-cluster runtime endpoint.
-            value: {{ if .Values.apiPlatformGatewayVhost.otelEndpointOverride }}{{ .Values.apiPlatformGatewayVhost.otelEndpointOverride | quote }}{{ else }}"http://api-platform-${metadata.componentNamespace}-${metadata.environmentName}-gw-gateway-gateway-runtime.${metadata.componentNamespace}-${metadata.environmentName}:22893/otel"{{ end }}
+            value: {{ if .Values.apiPlatformGatewayVhost.otelEndpointOverride }}{{ .Values.apiPlatformGatewayVhost.otelEndpointOverride | quote }}{{ else }}"http://{{ include "amp.gatewayRuntimeHost" . }}:22893/otel"{{ end }}
         - op: add
           path: /spec/podTemplate/spec/containers/0/env/-
           value:

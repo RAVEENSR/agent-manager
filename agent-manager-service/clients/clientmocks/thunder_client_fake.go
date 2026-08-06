@@ -20,8 +20,14 @@ import (
 //			DeleteAgentIdentityFunc: func(ctx context.Context, thunderAgentID string) (bool, error) {
 //				panic("mock out the DeleteAgentIdentity method")
 //			},
+//			DeleteAppFunc: func(ctx context.Context, appName string) (bool, error) {
+//				panic("mock out the DeleteApp method")
+//			},
 //			DeletePublisherAppFunc: func(ctx context.Context, orgName string) (bool, error) {
 //				panic("mock out the DeletePublisherApp method")
+//			},
+//			EnsureAppFunc: func(ctx context.Context, appName string, orgUUID string) (string, string, bool, error) {
+//				panic("mock out the EnsureApp method")
 //			},
 //			EnsurePublisherAppFunc: func(ctx context.Context, orgName string, orgUUID string) (string, string, bool, error) {
 //				panic("mock out the EnsurePublisherApp method")
@@ -31,6 +37,9 @@ import (
 //			},
 //			RegenerateAgentSecretFunc: func(ctx context.Context, thunderAgentID string) (string, error) {
 //				panic("mock out the RegenerateAgentSecret method")
+//			},
+//			RegenerateAppClientSecretFunc: func(ctx context.Context, appName string) (string, error) {
+//				panic("mock out the RegenerateAppClientSecret method")
 //			},
 //			RegenerateClientSecretFunc: func(ctx context.Context, orgName string) (string, error) {
 //				panic("mock out the RegenerateClientSecret method")
@@ -48,8 +57,14 @@ type ThunderClientMock struct {
 	// DeleteAgentIdentityFunc mocks the DeleteAgentIdentity method.
 	DeleteAgentIdentityFunc func(ctx context.Context, thunderAgentID string) (bool, error)
 
+	// DeleteAppFunc mocks the DeleteApp method.
+	DeleteAppFunc func(ctx context.Context, appName string) (bool, error)
+
 	// DeletePublisherAppFunc mocks the DeletePublisherApp method.
 	DeletePublisherAppFunc func(ctx context.Context, orgName string) (bool, error)
+
+	// EnsureAppFunc mocks the EnsureApp method.
+	EnsureAppFunc func(ctx context.Context, appName string, orgUUID string) (string, string, bool, error)
 
 	// EnsurePublisherAppFunc mocks the EnsurePublisherApp method.
 	EnsurePublisherAppFunc func(ctx context.Context, orgName string, orgUUID string) (string, string, bool, error)
@@ -59,6 +74,9 @@ type ThunderClientMock struct {
 
 	// RegenerateAgentSecretFunc mocks the RegenerateAgentSecret method.
 	RegenerateAgentSecretFunc func(ctx context.Context, thunderAgentID string) (string, error)
+
+	// RegenerateAppClientSecretFunc mocks the RegenerateAppClientSecret method.
+	RegenerateAppClientSecretFunc func(ctx context.Context, appName string) (string, error)
 
 	// RegenerateClientSecretFunc mocks the RegenerateClientSecret method.
 	RegenerateClientSecretFunc func(ctx context.Context, orgName string) (string, error)
@@ -83,12 +101,28 @@ type ThunderClientMock struct {
 			// ThunderAgentID is the thunderAgentID argument value.
 			ThunderAgentID string
 		}
+		// DeleteApp holds details about calls to the DeleteApp method.
+		DeleteApp []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// AppName is the appName argument value.
+			AppName string
+		}
 		// DeletePublisherApp holds details about calls to the DeletePublisherApp method.
 		DeletePublisherApp []struct {
 			// Ctx is the ctx argument value.
 			Ctx context.Context
 			// OrgName is the orgName argument value.
 			OrgName string
+		}
+		// EnsureApp holds details about calls to the EnsureApp method.
+		EnsureApp []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// AppName is the appName argument value.
+			AppName string
+			// OrgUUID is the orgUUID argument value.
+			OrgUUID string
 		}
 		// EnsurePublisherApp holds details about calls to the EnsurePublisherApp method.
 		EnsurePublisherApp []struct {
@@ -111,6 +145,13 @@ type ThunderClientMock struct {
 			// ThunderAgentID is the thunderAgentID argument value.
 			ThunderAgentID string
 		}
+		// RegenerateAppClientSecret holds details about calls to the RegenerateAppClientSecret method.
+		RegenerateAppClientSecret []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// AppName is the appName argument value.
+			AppName string
+		}
 		// RegenerateClientSecret holds details about calls to the RegenerateClientSecret method.
 		RegenerateClientSecret []struct {
 			// Ctx is the ctx argument value.
@@ -119,13 +160,16 @@ type ThunderClientMock struct {
 			OrgName string
 		}
 	}
-	lockCreateAgentIdentity    sync.RWMutex
-	lockDeleteAgentIdentity    sync.RWMutex
-	lockDeletePublisherApp     sync.RWMutex
-	lockEnsurePublisherApp     sync.RWMutex
-	lockGetDefaultOUID         sync.RWMutex
-	lockRegenerateAgentSecret  sync.RWMutex
-	lockRegenerateClientSecret sync.RWMutex
+	lockCreateAgentIdentity       sync.RWMutex
+	lockDeleteAgentIdentity       sync.RWMutex
+	lockDeleteApp                 sync.RWMutex
+	lockDeletePublisherApp        sync.RWMutex
+	lockEnsureApp                 sync.RWMutex
+	lockEnsurePublisherApp        sync.RWMutex
+	lockGetDefaultOUID            sync.RWMutex
+	lockRegenerateAgentSecret     sync.RWMutex
+	lockRegenerateAppClientSecret sync.RWMutex
+	lockRegenerateClientSecret    sync.RWMutex
 }
 
 // CreateAgentIdentity calls CreateAgentIdentityFunc.
@@ -208,6 +252,42 @@ func (mock *ThunderClientMock) DeleteAgentIdentityCalls() []struct {
 	return calls
 }
 
+// DeleteApp calls DeleteAppFunc.
+func (mock *ThunderClientMock) DeleteApp(ctx context.Context, appName string) (bool, error) {
+	if mock.DeleteAppFunc == nil {
+		panic("ThunderClientMock.DeleteAppFunc: method is nil but ThunderClient.DeleteApp was just called")
+	}
+	callInfo := struct {
+		Ctx     context.Context
+		AppName string
+	}{
+		Ctx:     ctx,
+		AppName: appName,
+	}
+	mock.lockDeleteApp.Lock()
+	mock.calls.DeleteApp = append(mock.calls.DeleteApp, callInfo)
+	mock.lockDeleteApp.Unlock()
+	return mock.DeleteAppFunc(ctx, appName)
+}
+
+// DeleteAppCalls gets all the calls that were made to DeleteApp.
+// Check the length with:
+//
+//	len(mockedThunderClient.DeleteAppCalls())
+func (mock *ThunderClientMock) DeleteAppCalls() []struct {
+	Ctx     context.Context
+	AppName string
+} {
+	var calls []struct {
+		Ctx     context.Context
+		AppName string
+	}
+	mock.lockDeleteApp.RLock()
+	calls = mock.calls.DeleteApp
+	mock.lockDeleteApp.RUnlock()
+	return calls
+}
+
 // DeletePublisherApp calls DeletePublisherAppFunc.
 func (mock *ThunderClientMock) DeletePublisherApp(ctx context.Context, orgName string) (bool, error) {
 	if mock.DeletePublisherAppFunc == nil {
@@ -241,6 +321,46 @@ func (mock *ThunderClientMock) DeletePublisherAppCalls() []struct {
 	mock.lockDeletePublisherApp.RLock()
 	calls = mock.calls.DeletePublisherApp
 	mock.lockDeletePublisherApp.RUnlock()
+	return calls
+}
+
+// EnsureApp calls EnsureAppFunc.
+func (mock *ThunderClientMock) EnsureApp(ctx context.Context, appName string, orgUUID string) (string, string, bool, error) {
+	if mock.EnsureAppFunc == nil {
+		panic("ThunderClientMock.EnsureAppFunc: method is nil but ThunderClient.EnsureApp was just called")
+	}
+	callInfo := struct {
+		Ctx     context.Context
+		AppName string
+		OrgUUID string
+	}{
+		Ctx:     ctx,
+		AppName: appName,
+		OrgUUID: orgUUID,
+	}
+	mock.lockEnsureApp.Lock()
+	mock.calls.EnsureApp = append(mock.calls.EnsureApp, callInfo)
+	mock.lockEnsureApp.Unlock()
+	return mock.EnsureAppFunc(ctx, appName, orgUUID)
+}
+
+// EnsureAppCalls gets all the calls that were made to EnsureApp.
+// Check the length with:
+//
+//	len(mockedThunderClient.EnsureAppCalls())
+func (mock *ThunderClientMock) EnsureAppCalls() []struct {
+	Ctx     context.Context
+	AppName string
+	OrgUUID string
+} {
+	var calls []struct {
+		Ctx     context.Context
+		AppName string
+		OrgUUID string
+	}
+	mock.lockEnsureApp.RLock()
+	calls = mock.calls.EnsureApp
+	mock.lockEnsureApp.RUnlock()
 	return calls
 }
 
@@ -349,6 +469,42 @@ func (mock *ThunderClientMock) RegenerateAgentSecretCalls() []struct {
 	mock.lockRegenerateAgentSecret.RLock()
 	calls = mock.calls.RegenerateAgentSecret
 	mock.lockRegenerateAgentSecret.RUnlock()
+	return calls
+}
+
+// RegenerateAppClientSecret calls RegenerateAppClientSecretFunc.
+func (mock *ThunderClientMock) RegenerateAppClientSecret(ctx context.Context, appName string) (string, error) {
+	if mock.RegenerateAppClientSecretFunc == nil {
+		panic("ThunderClientMock.RegenerateAppClientSecretFunc: method is nil but ThunderClient.RegenerateAppClientSecret was just called")
+	}
+	callInfo := struct {
+		Ctx     context.Context
+		AppName string
+	}{
+		Ctx:     ctx,
+		AppName: appName,
+	}
+	mock.lockRegenerateAppClientSecret.Lock()
+	mock.calls.RegenerateAppClientSecret = append(mock.calls.RegenerateAppClientSecret, callInfo)
+	mock.lockRegenerateAppClientSecret.Unlock()
+	return mock.RegenerateAppClientSecretFunc(ctx, appName)
+}
+
+// RegenerateAppClientSecretCalls gets all the calls that were made to RegenerateAppClientSecret.
+// Check the length with:
+//
+//	len(mockedThunderClient.RegenerateAppClientSecretCalls())
+func (mock *ThunderClientMock) RegenerateAppClientSecretCalls() []struct {
+	Ctx     context.Context
+	AppName string
+} {
+	var calls []struct {
+		Ctx     context.Context
+		AppName string
+	}
+	mock.lockRegenerateAppClientSecret.RLock()
+	calls = mock.calls.RegenerateAppClientSecret
+	mock.lockRegenerateAppClientSecret.RUnlock()
 	return calls
 }
 

@@ -81,12 +81,13 @@ export async function listAgentKinds(
 }
 
 /**
- * Get details of an Agent Kind
+ * Get details of an Agent Kind. Resolves to `null` (200 response) if no Agent
+ * Kind has been published under this name yet — that's not an error case.
  */
 export async function getAgentKind(
   params: GetAgentKindPathParams,
   getToken?: () => Promise<string>,
-): Promise<AgentKindResponse> {
+): Promise<AgentKindResponse | null> {
   const { orgName = "default", kindName } = params;
 
   const token = getToken ? await getToken() : undefined;

@@ -27,7 +27,7 @@ import {
   absoluteRouteMap,
   type UpdateLLMProviderRequest,
 } from "@agent-management-platform/types";
-import { PageLayout } from "@agent-management-platform/views";
+import { CreatedMetadata, PageLayout } from "@agent-management-platform/views";
 import {
   Box,
   Card,
@@ -134,6 +134,7 @@ export const ViewLLMProvider: React.FC = () => {
 
   return (
     <PageLayout
+      variant="card"
       title={providerName}
       description={description}
       backHref={generatePath(
@@ -142,6 +143,13 @@ export const ViewLLMProvider: React.FC = () => {
       )}
       backLabel="Back to LLM Providers"
       isLoading={isLoading}
+      // The template's own logo identifies the provider better than a letter
+      // tile; `transparent` keeps the logo on the card surface.
+      avatar={
+        templateLogoUrl
+          ? { src: templateLogoUrl, alt: templateDisplayName, color: "transparent" }
+          : undefined
+      }
       titleTail={
         <Stack direction="row" spacing={1} alignItems="center" sx={{ ml: 1 }}>
           {templateDisplayName && (
@@ -166,6 +174,7 @@ export const ViewLLMProvider: React.FC = () => {
           {version && <Chip label={version} size="small" variant="outlined" />}
         </Stack>
       }
+      meta={<CreatedMetadata createdAt={providerData?.createdAt} />}
     >
       <Stack spacing={3}>
         {/* Tabbed content card */}

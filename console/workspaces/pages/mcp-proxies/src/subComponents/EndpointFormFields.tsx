@@ -17,9 +17,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { debounce } from "lodash";
-import { useFetchMCPProxyServerInfo } from "@agent-management-platform/api-client";
+import {
+  useFetchMCPProxyServerInfo,
+  useListGateways,
+} from "@agent-management-platform/api-client";
 import {
   type Environment,
+  type GatewayResponse,
   type MCPServerInfoFetchResponse,
 } from "@agent-management-platform/types";
 import {
@@ -36,6 +40,8 @@ import {
   Form,
   FormControl,
   FormLabel,
+  MenuItem,
+  Select,
   Stack,
   TextField,
   Tooltip,
@@ -59,6 +65,11 @@ export interface EndpointDraft {
   authValue: string;
   // Environment UUIDs (not names) this endpoint serves — stable across renames.
   environments: string[];
+  // Egress gateway chosen per environment UUID, for environments with 2+
+  // egress-capable gateways (a single candidate is inferred server-side, so it's
+  // omitted here). Once a binding is deployed, its entry is the deployed gateway
+  // and is locked; entries for undeployed bindings are the user's in-form pick.
+  gatewayByEnv?: Record<string, string>;
   fetchedInfo: MCPServerInfoFetchResponse;
   serverName?: string;
   serverVersion?: string;
@@ -113,6 +124,17 @@ export function EndpointFormFields({
   const [selectedEnvIds, setSelectedEnvIds] = useState<string[]>(
     initialDraft?.environments ?? [],
   );
+  // Gateway ids the endpoint is already deployed to, per environment — read once
+  // from initialDraft (GET only echoes gatewayId for a binding that's actually
+  // deployed), so this never changes for the life of the form and locks the select.
+  const deployedGatewayByEnv = useMemo(
+    () => initialDraft?.gatewayByEnv ?? {},
+    [initialDraft],
+  );
+  // User's in-form gateway pick per environment, for bindings not yet deployed.
+  const [selectedGatewayByEnv, setSelectedGatewayByEnv] = useState<
+    Record<string, string>
+  >({});
   const [fetchedInfo, setFetchedInfo] =
     useState<MCPServerInfoFetchResponse | null>(
       initialDraft?.fetchedInfo ?? null,
@@ -128,6 +150,45 @@ export function EndpointFormFields({
     if (!onlyEnvId) return;
     setSelectedEnvIds((prev) => (prev.length === 0 ? [onlyEnvId] : prev));
   }, [availableEnvironments]);
+
+  const { data: gatewaysData } = useListGateways({ orgName: orgId });
+
+  // Egress-capable gateways (EGRESS or BOTH), grouped by the environment UUIDs
+  // they're attached to. An environment with 0-1 candidates needs no picker: the
+  // server infers the sole candidate, or there's genuinely nothing to deploy to.
+  const egressGatewaysByEnv = useMemo(() => {
+    const map: Record<string, GatewayResponse[]> = {};
+    (gatewaysData?.gateways ?? []).forEach((gateway) => {
+      if (gateway.gatewayType !== "EGRESS" && gateway.gatewayType !== "BOTH") {
+        return;
+      }
+      (gateway.environments ?? []).forEach((env) => {
+        if (!env.id) return;
+        (map[env.id] ??= []).push(gateway);
+      });
+    });
+    return map;
+  }, [gatewaysData]);
+
+  const environmentNameById = useMemo(() => {
+    const map: Record<string, string> = {};
+    availableEnvironments.forEach((env) => {
+      if (env.id) map[env.id] = env.displayName || env.name;
+    });
+    return map;
+  }, [availableEnvironments]);
+
+  // Per-environment gateway actually sent on save: the locked deployed gateway
+  // where one exists, otherwise the user's in-form pick. Environments left
+  // unset are simply absent, so the payload omits gatewayId for them.
+  const effectiveGatewayByEnv = useMemo(() => {
+    const map: Record<string, string> = {};
+    selectedEnvIds.forEach((envId) => {
+      const value = deployedGatewayByEnv[envId] ?? selectedGatewayByEnv[envId];
+      if (value) map[envId] = value;
+    });
+    return map;
+  }, [selectedEnvIds, deployedGatewayByEnv, selectedGatewayByEnv]);
 
   const trimmedUrl = url.trim();
   const isFetched = Boolean(fetchedInfo);
@@ -150,8 +211,18 @@ export function EndpointFormFields({
     effectiveAuthHeader !== initialDraft.authHeader ||
     Boolean(resolvedAuthValue) ||
     !sameIdSet(selectedEnvIds, initialDraft.environments) ||
+    !sameGatewayMap(effectiveGatewayByEnv, initialDraft.gatewayByEnv ?? {}) ||
     capabilitiesChanged(fetchedInfo, initialDraft.fetchedInfo);
-  const canSave = canAdd && hasChanges;
+  // An environment with 2+ egress candidates and no pick would be rejected by the
+  // server as ambiguous, so require a selection wherever the picker renders.
+  const hasGatewaySelection = selectedEnvIds.every((envId) => {
+    const candidates = egressGatewaysByEnv[envId] ?? [];
+    return (
+      candidates.length <= 1 ||
+      Boolean(deployedGatewayByEnv[envId] ?? selectedGatewayByEnv[envId])
+    );
+  });
+  const canSave = canAdd && hasChanges && hasGatewaySelection;
 
   const clearFetched = useCallback(() => {
     setFetchedInfo(null);
@@ -286,6 +357,7 @@ export function EndpointFormFields({
       authHeader: effectiveAuthHeader,
       authValue: resolvedAuthValue,
       environments: selectedEnvIds,
+      gatewayByEnv: effectiveGatewayByEnv,
       fetchedInfo,
       serverName:
         getServerInfoValue(fetchedInfo.serverInfo, "name") ??
@@ -297,6 +369,7 @@ export function EndpointFormFields({
   }, [
     effectiveAuthHeader,
     resolvedAuthValue,
+    effectiveGatewayByEnv,
     fetchedInfo,
     initialDraft,
     name,
@@ -445,6 +518,54 @@ export function EndpointFormFields({
         </FormControl>
       )}
 
+      {selectedEnvIds.map((envId) => {
+        const candidates = egressGatewaysByEnv[envId] ?? [];
+        // 0 or 1 candidate needs no picker: the server infers the sole one (or
+        // there's nothing to deploy to yet — the ingress-only case).
+        if (candidates.length <= 1) return null;
+        const deployed = deployedGatewayByEnv[envId];
+        return (
+          <FormControl fullWidth key={envId}>
+            <FormLabel required>
+              Egress gateway — {environmentNameById[envId] ?? envId}
+            </FormLabel>
+            <Select
+              size="small"
+              value={deployed ?? selectedGatewayByEnv[envId] ?? ""}
+              disabled={Boolean(deployed)}
+              onChange={(e) =>
+                setSelectedGatewayByEnv({
+                  ...selectedGatewayByEnv,
+                  [envId]: e.target.value as string,
+                })
+              }
+            >
+              {candidates.map((gw) => (
+                <MenuItem key={gw.uuid} value={gw.uuid}>
+                  {gw.displayName || gw.name}
+                </MenuItem>
+              ))}
+            </Select>
+            {deployed ? (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ mt: 0.5 }}
+              >
+                Placement is fixed once deployed. Delete and recreate the
+                binding to change it.
+              </Typography>
+            ) : (
+              !selectedGatewayByEnv[envId] && (
+                <Typography variant="caption" color="error" sx={{ mt: 0.5 }}>
+                  Select an egress gateway for this environment.
+                </Typography>
+              )
+            )}
+          </FormControl>
+        );
+      })}
+
       <Collapse in={isFetching || isFetched} timeout="auto" unmountOnExit>
         <Stack spacing={2}>
           <Divider />
@@ -515,6 +636,17 @@ function sameIdSet(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   const setB = new Set(b);
   return a.every((id) => setB.has(id));
+}
+
+// Whether the per-environment gateway selection matches the stored one.
+function sameGatewayMap(
+  a: Record<string, string>,
+  b: Record<string, string>,
+): boolean {
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((key) => a[key] === b[key]);
 }
 
 // Whether a re-fetch produced capabilities that differ from the stored ones. Only the

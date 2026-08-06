@@ -33,6 +33,8 @@ export * from './JSONView';
 export * from './MarkdownView';
 export * from './DescriptionCard';
 export * from './CreatedMetadata';
+export * from './EntityAvatar';
+export * from './PageMeta';
 export * from './Logo';
 export * from './LogsPanel';
 export * from './SnackBar';

@@ -339,7 +339,7 @@ type ApiListGatewaysRequest struct {
 	orgName     string
 	limit       *int32
 	offset      *int32
-	type_       *string
+	type_       *GatewayTypeInput
 	status      *string
 	environment *string
 }
@@ -356,8 +356,8 @@ func (r ApiListGatewaysRequest) Offset(offset int32) ApiListGatewaysRequest {
 	return r
 }
 
-// Filter by gateway type
-func (r ApiListGatewaysRequest) Type_(type_ string) ApiListGatewaysRequest {
+// Filter by gateway type. &#x60;REGULAR&#x60; and &#x60;AI&#x60; are deprecated aliases (REGULAR -&gt; BOTH, AI -&gt; EGRESS) kept for backward compatibility.
+func (r ApiListGatewaysRequest) Type_(type_ GatewayTypeInput) ApiListGatewaysRequest {
 	r.type_ = &type_
 	return r
 }

@@ -20,10 +20,10 @@ type AgentThunderStatus string
 
 // List of AgentThunderStatus
 const (
-	PENDING     AgentThunderStatus = "pending"
-	IN_PROGRESS AgentThunderStatus = "in_progress"
-	COMPLETED   AgentThunderStatus = "completed"
-	FAILED      AgentThunderStatus = "failed"
+	AGENTTHUNDERSTATUS_PENDING     AgentThunderStatus = "pending"
+	AGENTTHUNDERSTATUS_IN_PROGRESS AgentThunderStatus = "in_progress"
+	AGENTTHUNDERSTATUS_COMPLETED   AgentThunderStatus = "completed"
+	AGENTTHUNDERSTATUS_FAILED      AgentThunderStatus = "failed"
 )
 
 // All allowed values of AgentThunderStatus enum

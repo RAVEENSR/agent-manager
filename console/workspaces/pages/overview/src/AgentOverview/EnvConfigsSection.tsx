@@ -25,7 +25,10 @@ import type {
     ListAgentModelConfigsPathParams,
     ListAgentModelConfigsQuery,
 } from "@agent-management-platform/types";
-import { buildConfigureTabHref } from "./configureTabLink";
+import {
+    buildAddLLMProviderHref,
+    buildConfigureTabHref,
+} from "./configureTabLink";
 import { EnvConfigGroup } from "./EnvConfigGroup";
 import { LLMProviderConfigCard } from "./LLMProviderConfigCard";
 import { MCPProxyConfigCard } from "./MCPProxyConfigCard";
@@ -37,7 +40,7 @@ interface EnvConfigsSectionProps {
     envId: string;
 }
 
-const PREVIEW_LIMIT = 2;
+const PREVIEW_LIMIT = 3;
 // Configs are agent-wide but only some are deployed to any given environment
 // (see useEnvFilteredConfigs), so the applicable ones for this environment
 // could be anywhere in the full list — an arbitrary first-page cap risks
@@ -111,6 +114,8 @@ export const EnvConfigsSection: React.FC<EnvConfigsSectionProps> = ({
                 listError={isModelListError}
                 title="LLM Providers"
                 viewAllHref={buildConfigureTabHref(orgId, projectId, agentId, "llm")}
+                addHref={buildAddLLMProviderHref(orgId, projectId, agentId)}
+                addLabel="Configure LLM"
                 previewLimit={PREVIEW_LIMIT}
                 CardComponent={LLMProviderConfigCard}
             />
@@ -123,6 +128,8 @@ export const EnvConfigsSection: React.FC<EnvConfigsSectionProps> = ({
                 listError={isMcpListError}
                 title="MCP Servers"
                 viewAllHref={buildConfigureTabHref(orgId, projectId, agentId, "tools")}
+                addHref={buildConfigureTabHref(orgId, projectId, agentId, "tools")}
+                addLabel="Configure MCP"
                 previewLimit={PREVIEW_LIMIT}
                 CardComponent={MCPProxyConfigCard}
             />

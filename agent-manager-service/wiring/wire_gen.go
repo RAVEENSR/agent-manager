@@ -93,8 +93,7 @@ func InitializeAppParams(cfg *config.Config, db *gorm.DB, authProvider client.Au
 	llmProviderAPIKeyService := services.NewLLMProviderAPIKeyService(llmProviderRepository, gatewayRepository, gatewayEventsService, apiKeyRepository)
 	aiApplicationRepository := ProvideAIApplicationRepository(db)
 	aiApplicationService := services.NewAIApplicationService(aiApplicationRepository, gatewayRepository, gatewayEventsService, logger)
-	gatewayRuntimeConfig := ProvideGatewayRuntimeConfig(configConfig)
-	agentConfigurationService := services.NewAgentConfigurationService(db, agentConfigurationRepository, envAgentModelMappingRepository, envAgentMCPMappingRepository, agentEnvConfigVariableRepository, llmProviderRepository, mcpProxyRepository, gatewayRepository, llmProxyService, mcpProxyService, llmProxyDeploymentService, llmProxyAPIKeyService, gatewayEventsService, apiKeyRepository, infraResourceManager, openChoreoClient, llmProviderAPIKeyService, aiApplicationService, agentIdentityInjectionService, logger, secretManagementClient, v, gatewayRuntimeConfig)
+	agentConfigurationService := services.NewAgentConfigurationService(db, agentConfigurationRepository, envAgentModelMappingRepository, envAgentMCPMappingRepository, agentEnvConfigVariableRepository, llmProviderRepository, mcpProxyRepository, gatewayRepository, llmProxyService, mcpProxyService, llmProxyDeploymentService, llmProxyAPIKeyService, gatewayEventsService, apiKeyRepository, infraResourceManager, openChoreoClient, llmProviderAPIKeyService, aiApplicationService, agentIdentityInjectionService, logger, secretManagementClient, v)
 	agentKindRepository := ProvideAgentKindRepository(db)
 	agentKindService := services.NewAgentKindService(agentKindRepository, openChoreoClient)
 	artifactRepository := ProvideArtifactRepository(db)
@@ -106,16 +105,17 @@ func InitializeAppParams(cfg *config.Config, db *gorm.DB, authProvider client.Au
 	customEvaluatorRepository := ProvideCustomEvaluatorRepository(db)
 	orgPublisherCredentialRepository := ProvideOrgPublisherCredentialRepository(db)
 	monitorLLMMappingRepository := repositories.NewMonitorLLMMappingRepository(db)
-	monitorExecutor := services.NewMonitorExecutor(openChoreoClient, logger, monitorRepository, customEvaluatorRepository, orgPublisherCredentialRepository, monitorLLMMappingRepository, gatewayRepository, llmProviderRepository, gatewayRuntimeConfig)
+	monitorExecutor := services.NewMonitorExecutor(openChoreoClient, logger, monitorRepository, customEvaluatorRepository, orgPublisherCredentialRepository, monitorLLMMappingRepository, gatewayRepository, llmProviderRepository, deploymentRepository)
 	evaluatorManagerService := services.NewEvaluatorManagerService(logger, customEvaluatorRepository, monitorRepository)
 	scoreRepository := ProvideScoreRepository(db)
-	llmProxyProvisioner := services.NewLLMProxyProvisioner(logger, llmProviderRepository, gatewayRepository, llmProxyService, llmProxyDeploymentService, llmProxyAPIKeyService, llmProviderAPIKeyService, secretManagementClient, v, gatewayRuntimeConfig)
-	publisherCredentialProvisioner, err := ProvidePublisherProvisioner(configConfig, v, logger, secretManagementClient, openChoreoClient, orgPublisherCredentialRepository)
+	llmProxyProvisioner := services.NewLLMProxyProvisioner(logger, llmProviderRepository, gatewayRepository, llmProxyService, llmProxyDeploymentService, llmProxyAPIKeyService, llmProviderAPIKeyService, secretManagementClient, v)
+	orgSchedulerCredentialRepository := ProvideOrgSchedulerCredentialRepository(db)
+	publisherCredentialProvisioner, err := ProvidePublisherProvisioner(configConfig, v, logger, secretManagementClient, openChoreoClient, orgPublisherCredentialRepository, orgSchedulerCredentialRepository)
 	if err != nil {
 		return nil, err
 	}
 	monitorManagerService := services.NewMonitorManagerService(logger, db, openChoreoClient, observerSvcClient, monitorExecutor, evaluatorManagerService, monitorRepository, scoreRepository, llmProxyProvisioner, monitorLLMMappingRepository, publisherCredentialProvisioner)
-	agentManagerService := services.NewAgentManagerService(db, openChoreoClient, secretManagementClient, repositoryService, agentTokenManagerService, agentConfigRepository, agentConfigurationService, agentKindService, artifactRepository, aiApplicationService, gatewayRepository, agentThunderProvisioning, monitorManagerService, agentIdentityInjectionService, logger)
+	agentManagerService := services.NewAgentManagerService(db, openChoreoClient, secretManagementClient, repositoryService, agentTokenManagerService, agentConfigRepository, agentConfigurationService, agentKindService, artifactRepository, aiApplicationService, gatewayRepository, agentThunderProvisioning, monitorManagerService, agentIdentityInjectionService, identityClient, logger)
 	agentController := controllers.NewAgentController(agentManagerService, agentKindService)
 	agentKindController := controllers.NewAgentKindController(agentKindService)
 	infraResourceController := controllers.NewInfraResourceController(infraResourceManager)
@@ -271,27 +271,27 @@ func InitializeTestAppParamsWithClientMocks(cfg *config.Config, db *gorm.DB, aut
 	llmProviderAPIKeyService := services.NewLLMProviderAPIKeyService(llmProviderRepository, gatewayRepository, gatewayEventsService, apiKeyRepository)
 	aiApplicationRepository := ProvideAIApplicationRepository(db)
 	aiApplicationService := services.NewAIApplicationService(aiApplicationRepository, gatewayRepository, gatewayEventsService, logger)
-	gatewayRuntimeConfig := ProvideGatewayRuntimeConfig(configConfig)
-	agentConfigurationService := services.NewAgentConfigurationService(db, agentConfigurationRepository, envAgentModelMappingRepository, envAgentMCPMappingRepository, agentEnvConfigVariableRepository, llmProviderRepository, mcpProxyRepository, gatewayRepository, llmProxyService, mcpProxyService, llmProxyDeploymentService, llmProxyAPIKeyService, gatewayEventsService, apiKeyRepository, infraResourceManager, openChoreoClient, llmProviderAPIKeyService, aiApplicationService, agentIdentityInjectionService, logger, secretManagementClient, v, gatewayRuntimeConfig)
+	agentConfigurationService := services.NewAgentConfigurationService(db, agentConfigurationRepository, envAgentModelMappingRepository, envAgentMCPMappingRepository, agentEnvConfigVariableRepository, llmProviderRepository, mcpProxyRepository, gatewayRepository, llmProxyService, mcpProxyService, llmProxyDeploymentService, llmProxyAPIKeyService, gatewayEventsService, apiKeyRepository, infraResourceManager, openChoreoClient, llmProviderAPIKeyService, aiApplicationService, agentIdentityInjectionService, logger, secretManagementClient, v)
 	agentKindRepository := ProvideAgentKindRepository(db)
 	agentKindService := services.NewAgentKindService(agentKindRepository, openChoreoClient)
 	artifactRepository := ProvideArtifactRepository(db)
-	agentThunderProvisioningService := services.NewAgentThunderProvisioningService(agentThunderClientRepository, envThunderResolver, secretManagementClient, agentIdentityInjectionService, logger)
+	agentThunderProvisioningService := services.NewAgentThunderProvisioningService(agentThunderClientRepository, envThunderResolver, secretManagementClient, openChoreoClient, agentIdentityInjectionService, logger)
 	observerSvcClient := ProvideTestObserverClient(testClients)
 	monitorRepository := ProvideMonitorRepository(db)
 	customEvaluatorRepository := ProvideCustomEvaluatorRepository(db)
 	orgPublisherCredentialRepository := ProvideOrgPublisherCredentialRepository(db)
 	monitorLLMMappingRepository := repositories.NewMonitorLLMMappingRepository(db)
-	monitorExecutor := services.NewMonitorExecutor(openChoreoClient, logger, monitorRepository, customEvaluatorRepository, orgPublisherCredentialRepository, monitorLLMMappingRepository, gatewayRepository, llmProviderRepository, gatewayRuntimeConfig)
+	monitorExecutor := services.NewMonitorExecutor(openChoreoClient, logger, monitorRepository, customEvaluatorRepository, orgPublisherCredentialRepository, monitorLLMMappingRepository, gatewayRepository, llmProviderRepository, deploymentRepository)
 	evaluatorManagerService := services.NewEvaluatorManagerService(logger, customEvaluatorRepository, monitorRepository)
 	scoreRepository := ProvideScoreRepository(db)
-	llmProxyProvisioner := services.NewLLMProxyProvisioner(logger, llmProviderRepository, gatewayRepository, llmProxyService, llmProxyDeploymentService, llmProxyAPIKeyService, llmProviderAPIKeyService, secretManagementClient, v, gatewayRuntimeConfig)
-	publisherCredentialProvisioner, err := ProvidePublisherProvisioner(configConfig, v, logger, secretManagementClient, openChoreoClient, orgPublisherCredentialRepository)
+	llmProxyProvisioner := services.NewLLMProxyProvisioner(logger, llmProviderRepository, gatewayRepository, llmProxyService, llmProxyDeploymentService, llmProxyAPIKeyService, llmProviderAPIKeyService, secretManagementClient, v)
+	orgSchedulerCredentialRepository := ProvideOrgSchedulerCredentialRepository(db)
+	publisherCredentialProvisioner, err := ProvidePublisherProvisioner(configConfig, v, logger, secretManagementClient, openChoreoClient, orgPublisherCredentialRepository, orgSchedulerCredentialRepository)
 	if err != nil {
 		return nil, err
 	}
 	monitorManagerService := services.NewMonitorManagerService(logger, db, openChoreoClient, observerSvcClient, monitorExecutor, evaluatorManagerService, monitorRepository, scoreRepository, llmProxyProvisioner, monitorLLMMappingRepository, publisherCredentialProvisioner)
-	agentManagerService := services.NewAgentManagerService(db, openChoreoClient, secretManagementClient, repositoryService, agentTokenManagerService, agentConfigRepository, agentConfigurationService, agentKindService, artifactRepository, aiApplicationService, gatewayRepository, agentThunderProvisioningService, monitorManagerService, agentIdentityInjectionService, logger)
+	agentManagerService := services.NewAgentManagerService(db, openChoreoClient, secretManagementClient, repositoryService, agentTokenManagerService, agentConfigRepository, agentConfigurationService, agentKindService, artifactRepository, aiApplicationService, gatewayRepository, agentThunderProvisioningService, monitorManagerService, agentIdentityInjectionService, identityClient, logger)
 	agentController := controllers.NewAgentController(agentManagerService, agentKindService)
 	agentKindController := controllers.NewAgentKindController(agentKindService)
 	infraResourceController := controllers.NewInfraResourceController(infraResourceManager)
@@ -398,7 +398,6 @@ func InitializeTestAppParamsWithClientMocks(cfg *config.Config, db *gorm.DB, aut
 // Provider sets
 var configProviderSet = wire.NewSet(
 	ProvideConfigFromPtr,
-	ProvideGatewayRuntimeConfig,
 	ProvideEncryptionKey,
 )
 
@@ -579,8 +578,8 @@ func ProvideGitCredentialsService(ocClient client.OpenChoreoClient, cfg config.C
 
 // ProvidePublisherProvisioner creates the publisher credential provisioner
 // for per-org Thunder OAuth app creation and secret storage via SecretManagementClient
-func ProvidePublisherProvisioner(cfg config.Config, encryptionKey []byte, logger *slog.Logger, secretClient secretmanagersvc.SecretManagementClient, ocClient client.OpenChoreoClient, credRepo repositories.OrgPublisherCredentialRepository) (services.PublisherCredentialProvisioner, error) {
-	return services.NewPublisherCredentialProvisioner(cfg, encryptionKey, logger, secretClient, ocClient, credRepo)
+func ProvidePublisherProvisioner(cfg config.Config, encryptionKey []byte, logger *slog.Logger, secretClient secretmanagersvc.SecretManagementClient, ocClient client.OpenChoreoClient, credRepo repositories.OrgPublisherCredentialRepository, schedulerCredRepo repositories.OrgSchedulerCredentialRepository) (services.PublisherCredentialProvisioner, error) {
+	return services.NewPublisherCredentialProvisioner(cfg, encryptionKey, logger, secretClient, ocClient, credRepo, schedulerCredRepo)
 }
 
 var loggerProviderSet = wire.NewSet(
@@ -601,6 +600,7 @@ var repositoryProviderSet = wire.NewSet(
 	ProvideAgentConfigRepository,
 	ProvideCustomEvaluatorRepository,
 	ProvideAPIKeyRepository, repositories.NewAgentConfigurationRepository, repositories.NewEnvAgentModelMappingRepository, repositories.NewEnvAgentMCPMappingRepository, repositories.NewAgentEnvConfigVariableRepository, repositories.NewMonitorLLMMappingRepository, ProvideOrgPublisherCredentialRepository,
+	ProvideOrgSchedulerCredentialRepository,
 	ProvideAIApplicationRepository,
 	ProvideAgentThunderClientRepository,
 	ProvideEnvThunderSystemClientRepository, repositories.NewMCPProxyScopeRepository,
@@ -728,6 +728,10 @@ func ProvideOrgPublisherCredentialRepository(db *gorm.DB) repositories.OrgPublis
 	return repositories.NewOrgPublisherCredentialRepo(db)
 }
 
+func ProvideOrgSchedulerCredentialRepository(db *gorm.DB) repositories.OrgSchedulerCredentialRepository {
+	return repositories.NewOrgSchedulerCredentialRepo(db)
+}
+
 func ProvideAgentKindRepository(db *gorm.DB) repositories.AgentKindRepository {
 	return repositories.NewAgentKindRepo(db)
 }
@@ -770,7 +774,7 @@ func ProvideAgentIdentityInjectionService(
 	cfg config.Config,
 	logger *slog.Logger,
 ) services.AgentIdentityInjectionService {
-	return services.NewAgentIdentityInjectionService(repo, agentConfigRepo, mcpProxyScopeRepo, ocClient, cfg.SecretManager.RefreshInterval, logger)
+	return services.NewAgentIdentityInjectionService(repo, agentConfigRepo, mcpProxyScopeRepo, ocClient, cfg.SecretManager.AgentIdentityRefreshInterval, logger)
 }
 
 func ProvideThunderConfig(cfg config.Config) config.ThunderConfig {

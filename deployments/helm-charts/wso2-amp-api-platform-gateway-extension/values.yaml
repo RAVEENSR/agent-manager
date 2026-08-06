@@ -43,13 +43,21 @@ gateway:
   # Virtual host (FQDN or IP) that the gateway is reachable on. All access is
   # hostname-routed through kgateway — never the runtime Service directly.
   vhost: "http://default-default.gateway.localhost:19080"
+  # In-cluster base URL sandboxed agents use to reach this gateway runtime. Empty derives
+  # "http://<apiGatewayName>-gw-gateway-gateway-runtime.<apiGateway.namespace>:22893".
+  # AMS validates it: http/https, explicit port that is not 80 or 443, cluster-local host.
+  runtimeUrl: ""
   # Hostname for routing traffic to this gateway through kgateway.
   # All traffic (LLM proxy, OTEL, etc.) matching this hostname on kgateway
   # is forwarded to this gateway's runtime service.
   # Defaults to "<environment>-<orgName>.gateway.localhost" if empty.
   hostname: ""
-  # Gateway type: REGULAR, AI, or EVENT (must match GatewayType enum in Agent Manager API)
-  type: "REGULAR"
+  # Gateway placement role: INGRESS, EGRESS, or BOTH (must match GatewayType enum in
+  # Agent Manager API). BOTH is correct for single topology, where the chart is installed
+  # once per environment; split topology sets this explicitly on both releases from
+  # add-environment.sh. Immutable after first registration — changing it later only logs
+  # a drift warning.
+  type: "BOTH"
   # Environment name in Agent Manager to associate this gateway with.
   # The bootstrap job looks up environments by this name.
   environment: "default"
@@ -62,8 +70,7 @@ gateway:
     key: "token"
 
 # APIGateway CR configuration (deployed by gateway-operator)
-# Development mode: relaxes security checks (e.g. auto-generates encryption keys).
-# Set to false in production and configure gateway.controller.encryptionKeys instead.
+# Development mode
 developmentMode: true
 
 # kgateway ingress the gw-route HTTPRoute attaches to. This is the shared
@@ -209,6 +216,11 @@ apiGateway:
     systemEnv: {}
 
 # Bootstrap Job configuration
+#
+# The job runs as a pre-install, pre-upgrade AND pre-rollback hook, so `helm rollback` now
+# runs it too and can fail (leaving the release in pending-rollback) when Agent Manager is
+# unreachable — rollbacks could not fail before. Recovery: re-run `helm rollback`, or
+# `helm rollback --no-hooks` to skip the job entirely.
 bootstrap:
   enabled: true
   backoffLimit: 3

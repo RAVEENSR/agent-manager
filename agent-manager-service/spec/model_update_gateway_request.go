@@ -22,7 +22,9 @@ type UpdateGatewayRequest struct {
 	// Updated display name
 	DisplayName *string `json:"displayName,omitempty"`
 	// Updated critical flag
-	IsCritical *bool          `json:"isCritical,omitempty"`
+	IsCritical *bool `json:"isCritical,omitempty"`
+	// In-cluster base URL of the gateway runtime, used by sandboxed platform-hosted agents. Empty means no internal address is registered and the vhost is used instead. Must carry an explicit port other than 80 or 443 and a cluster-local host.
+	RuntimeUrl *string        `json:"runtimeUrl,omitempty"`
 	Status     *GatewayStatus `json:"status,omitempty"`
 }
 
@@ -107,6 +109,38 @@ func (o *UpdateGatewayRequest) SetIsCritical(v bool) {
 	o.IsCritical = &v
 }
 
+// GetRuntimeUrl returns the RuntimeUrl field value if set, zero value otherwise.
+func (o *UpdateGatewayRequest) GetRuntimeUrl() string {
+	if o == nil || IsNil(o.RuntimeUrl) {
+		var ret string
+		return ret
+	}
+	return *o.RuntimeUrl
+}
+
+// GetRuntimeUrlOk returns a tuple with the RuntimeUrl field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *UpdateGatewayRequest) GetRuntimeUrlOk() (*string, bool) {
+	if o == nil || IsNil(o.RuntimeUrl) {
+		return nil, false
+	}
+	return o.RuntimeUrl, true
+}
+
+// HasRuntimeUrl returns a boolean if a field has been set.
+func (o *UpdateGatewayRequest) HasRuntimeUrl() bool {
+	if o != nil && !IsNil(o.RuntimeUrl) {
+		return true
+	}
+
+	return false
+}
+
+// SetRuntimeUrl gets a reference to the given string and assigns it to the RuntimeUrl field.
+func (o *UpdateGatewayRequest) SetRuntimeUrl(v string) {
+	o.RuntimeUrl = &v
+}
+
 // GetStatus returns the Status field value if set, zero value otherwise.
 func (o *UpdateGatewayRequest) GetStatus() GatewayStatus {
 	if o == nil || IsNil(o.Status) {
@@ -154,6 +188,9 @@ func (o UpdateGatewayRequest) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.IsCritical) {
 		toSerialize["isCritical"] = o.IsCritical
+	}
+	if !IsNil(o.RuntimeUrl) {
+		toSerialize["runtimeUrl"] = o.RuntimeUrl
 	}
 	if !IsNil(o.Status) {
 		toSerialize["status"] = o.Status

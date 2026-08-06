@@ -47,8 +47,8 @@ func main() {
 	secretProvider := openchoreo.NewProvider()
 
 	// Open-source: DB-backed AgentID provisioning (env-Thunder credential read
-	// from Postgres, not a key vault — see NewDBBackedAgentThunderProvisioning)
-	agentThunderProvisioning := services.NewDBBackedAgentThunderProvisioning()
+	// from Postgres, not a key vault — see DBBackedAgentThunderProvisioning)
+	agentThunderProvisioning := services.DBBackedAgentThunderProvisioning()
 
 	app.Run(authProvider, secretProvider, app.Options{
 		Server:                   *serverFlag,

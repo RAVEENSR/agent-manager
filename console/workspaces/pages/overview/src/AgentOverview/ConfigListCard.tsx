@@ -17,6 +17,8 @@
  */
 
 import { Avatar, Box, Card, CardContent, Skeleton, Typography, useTheme } from "@wso2/oxygen-ui";
+import { ChevronRight } from "@wso2/oxygen-ui-icons-react";
+import { Link } from "react-router-dom";
 
 interface ConfigListCardProps {
     avatarLabel: string;
@@ -30,6 +32,9 @@ interface ConfigListCardProps {
     providerLabel?: string;
     subtitle?: string;
     isLoadingSubtitle?: boolean;
+    /** When set, the whole card becomes a link to this config's view page and
+     * a trailing chevron is shown to signal it's clickable. */
+    href?: string;
 }
 
 /**
@@ -41,14 +46,39 @@ interface ConfigListCardProps {
  * hand-styled Box.
  */
 export const ConfigListCard: React.FC<ConfigListCardProps> = ({
-    avatarLabel, avatarColor, avatarSrc, title, providerLabel, subtitle, isLoadingSubtitle,
+    avatarLabel, avatarColor, avatarSrc, title, providerLabel, subtitle, isLoadingSubtitle, href,
 }) => {
     const theme = useTheme();
     const avatarBgcolor = avatarSrc ? theme.palette.grey[100] : avatarColor;
     const avatarTextColor = theme.palette.getContrastText(avatarBgcolor);
 
+    // A bounded, flexible tile so a group's cards wrap into a tidy grid rather
+    // than one full-width row each; minWidth: 0 lets the noWrap text below
+    // actually ellipsis-truncate instead of forcing the tile wider. When href
+    // is set the whole card is a router Link — hence the reset of link colors
+    // and the hover affordance.
+    const linkProps = href
+        ? {
+            component: Link,
+            to: href,
+            sx: {
+                flex: "1 1 240px",
+                minWidth: 0,
+                maxWidth: 340,
+                textDecoration: "none",
+                color: "inherit",
+                display: "block",
+                transition: "border-color 120ms, background-color 120ms",
+                "&:hover": {
+                    borderColor: "primary.main",
+                    backgroundColor: "action.hover",
+                },
+            },
+        }
+        : { sx: { flex: "1 1 240px", minWidth: 0, maxWidth: 340 } };
+
     return (
-    <Card variant="outlined">
+    <Card variant="outlined" {...linkProps}>
         <CardContent sx={{ display: "flex", alignItems: "center", gap: 1.5, "&:last-child": { pb: 2 } }}>
             <Avatar
                 src={avatarSrc}
@@ -58,11 +88,12 @@ export const ConfigListCard: React.FC<ConfigListCardProps> = ({
                     width: 36,
                     height: 36,
                     fontSize: 14,
+                    flexShrink: 0,
                 }}
             >
                 {avatarLabel}
             </Avatar>
-            <Box minWidth={0}>
+            <Box sx={{ flex: 1, minWidth: 0 }}>
                 <Box display="flex" alignItems="baseline" gap={0.75} minWidth={0}>
                     <Typography variant="body2" fontWeight={600} noWrap>
                         {title}
@@ -81,6 +112,13 @@ export const ConfigListCard: React.FC<ConfigListCardProps> = ({
                     </Typography>
                 ) : null}
             </Box>
+            {href && (
+                <ChevronRight
+                    size={22}
+                    color={theme.palette.text.secondary}
+                    style={{ flexShrink: 0 }}
+                />
+            )}
         </CardContent>
     </Card>
     );

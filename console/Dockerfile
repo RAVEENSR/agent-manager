@@ -24,8 +24,11 @@ COPY apps/ apps/
 COPY workspaces/ workspaces/
 
 # Install dependencies using Rush
-# This will install all dependencies for all projects in the monorepo
-RUN rush update --full
+# This will install all dependencies for all projects in the monorepo.
+# `rush install` resolves from the committed lockfile so image builds are
+# reproducible; `rush update` would float every semver range to the newest
+# published version at build time.
+RUN rush install
 
 # Build all projects
 # This compiles TypeScript and generates production-ready builds

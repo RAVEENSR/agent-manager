@@ -114,11 +114,25 @@ func convertToInternalAgentResponse(component *models.AgentResponse) spec.AgentR
 			}
 			return &component.KindName
 		}(),
+		CreatedBy: convertToCreatedBy(component.CreatedBy),
 	}
 	if len(component.Labels) > 0 {
 		response.SetLabels(component.Labels)
 	}
 	return response
+}
+
+// convertToCreatedBy maps the best-effort agent-creator info resolved in
+// AgentManagerService.GetAgent onto the wire type. Nil when unresolved.
+func convertToCreatedBy(createdBy *models.AgentCreatedBy) *spec.AgentCreatedBy {
+	if createdBy == nil {
+		return nil
+	}
+	result := &spec.AgentCreatedBy{Id: createdBy.ID}
+	if createdBy.Display != "" {
+		result.Display = &createdBy.Display
+	}
+	return result
 }
 
 func convertToConfigurations(configs *models.Configurations) *spec.Configurations {
@@ -129,6 +143,7 @@ func convertToConfigurations(configs *models.Configurations) *spec.Configuration
 		EnableAutoInstrumentation: configs.EnableAutoInstrumentation,
 		EnableApiKeySecurity:      configs.EnableApiKeySecurity,
 		EnableOAuthSecurity:       configs.EnableOAuthSecurity,
+		ResilienceTimeoutSeconds:  configs.ResilienceTimeoutSeconds,
 	}
 	// Surface the pinned AMP instrumentation version on reads so the deploy/promote
 	// UI shows the currently-applied version instead of falling back to the platform
@@ -171,6 +186,7 @@ func PopulateConfigurationResponseFromAgentConfig(resp *spec.ConfigurationRespon
 	resp.InstrumentationVersion = cfg.InstrumentationVersion
 	resp.EnableApiKeySecurity = spec.PtrBool(cfg.EnableApiKeySecurity)
 	resp.EnableOAuthSecurity = spec.PtrBool(cfg.EnableOAuthSecurity)
+	resp.ResilienceTimeoutSeconds = cfg.ResilienceTimeoutSeconds
 	resp.CorsConfig = &spec.CORSConfig{
 		Enabled:          spec.PtrBool(cfg.CORSEnabled),
 		AllowOrigin:      cfg.CORSAllowOrigins,
@@ -202,6 +218,7 @@ func convertToExternalAgentResponse(component *models.AgentResponse) spec.AgentR
 		AgentType: spec.AgentType{
 			Type: component.Type.Type,
 		},
+		CreatedBy: convertToCreatedBy(component.CreatedBy),
 	}
 	if len(component.Labels) > 0 {
 		response.SetLabels(component.Labels)

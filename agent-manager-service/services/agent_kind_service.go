@@ -365,6 +365,10 @@ func (s *agentKindService) publishVersion(
 	configSchema []spec.AgentKindConfigSchemaItem,
 	metadata json.RawMessage,
 ) (*models.AgentKindVersionResponse, error) {
+	if err := RejectPlaceholderSecretDefaults(configSchema); err != nil {
+		return nil, err
+	}
+
 	// Check version doesn't already exist
 	existing, err := s.kindRepo.GetVersion(ctx, kind.ID, versionTag)
 	if existing != nil {
@@ -437,6 +441,24 @@ func marshalMetadata(m map[string]interface{}) (json.RawMessage, error) {
 	return b, nil
 }
 
+// RejectPlaceholderSecretDefaults errors if a secret item's submitted default value is
+// models.RedactedSecretDefaultPlaceholder. That string is the server's own stand-in for
+// a hidden secret default (see models.RedactSecretDefaults) — a client can only have
+// gotten it by reading a previous response, never by knowing a real secret value.
+// Storing it here would let it later be applied to an agent as its actual secret,
+// which is never a legitimate default.
+func RejectPlaceholderSecretDefaults(items []spec.AgentKindConfigSchemaItem) error {
+	for _, item := range items {
+		if !item.GetIsSecret() {
+			continue
+		}
+		if v, ok := item.GetDefaultValueOk(); ok && v != nil && *v == models.RedactedSecretDefaultPlaceholder {
+			return fmt.Errorf("%w: default value for secret item %q cannot be the reserved placeholder", utils.ErrInvalidInput, item.GetName())
+		}
+	}
+	return nil
+}
+
 func toModelConfigSchema(items []spec.AgentKindConfigSchemaItem) []models.KindConfigSchemaItem {
 	result := make([]models.KindConfigSchemaItem, len(items))
 	for i, item := range items {
@@ -459,7 +481,7 @@ func toAgentKindVersionResponse(v *models.AgentKindVersion) models.AgentKindVers
 		Version:      v.Version,
 		BuildName:    v.BuildName,
 		ImageId:      v.ImageId,
-		ConfigSchema: v.ConfigSchema,
+		ConfigSchema: models.RedactSecretDefaults(v.ConfigSchema),
 		Metadata:     v.Metadata,
 		CreatedAt:    v.CreatedAt,
 	}
@@ -476,7 +498,7 @@ func toAgentKindVersionSummary(v *models.AgentKindVersion) models.AgentKindVersi
 		Version:      v.Version,
 		BuildName:    v.BuildName,
 		ImageId:      v.ImageId,
-		ConfigSchema: v.ConfigSchema,
+		ConfigSchema: models.RedactSecretDefaults(v.ConfigSchema),
 		CreatedAt:    v.CreatedAt,
 	}
 	if v.Kind != nil {
@@ -537,4 +559,55 @@ func ValidateKindConfigValues(schema []models.KindConfigSchemaItem, envVars []sp
 		}
 	}
 	return nil
+}
+
+// RejectDuplicateEnvKeys errors if envVars names the same key more than once. There
+// is exactly one process environment per name, so a duplicate is always invalid
+// input, not a matter of "last one wins" — silently picking one would let the wrong
+// entry govern which value (and whether it's treated as sensitive) actually applies.
+func RejectDuplicateEnvKeys(envVars []spec.EnvironmentVariable) error {
+	seen := make(map[string]bool, len(envVars))
+	for _, v := range envVars {
+		key := v.GetKey()
+		if seen[key] {
+			return fmt.Errorf("%w: duplicate environment variable key %q", utils.ErrInvalidInput, key)
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+// ApplySecretConfigDefaults fills in each IsSecret schema item's stored default value
+// for any item the caller didn't submit (or submitted empty), and forces IsSensitive
+// on every env var that matches a secret schema item regardless of what the caller
+// sent. The server is the only party that still holds a secret's real default (see
+// models.RedactSecretDefaults), so applying it here is what lets someone accept a
+// kind's default without ever having it round-tripped through their browser.
+// Precondition: envVars has no duplicate keys — call RejectDuplicateEnvKeys first.
+func ApplySecretConfigDefaults(schema []models.KindConfigSchemaItem, envVars []spec.EnvironmentVariable) []spec.EnvironmentVariable {
+	indexByKey := make(map[string]int, len(envVars))
+	for i, v := range envVars {
+		indexByKey[v.GetKey()] = i
+	}
+
+	result := envVars
+	for _, item := range schema {
+		if !item.IsSecret {
+			continue
+		}
+		if i, ok := indexByKey[item.Name]; ok {
+			result[i].SetIsSensitive(true)
+			if result[i].GetValue() == "" && item.DefaultValue != nil && *item.DefaultValue != "" {
+				result[i].SetValue(*item.DefaultValue)
+			}
+			continue
+		}
+		if item.DefaultValue != nil && *item.DefaultValue != "" {
+			ev := spec.EnvironmentVariable{Key: item.Name}
+			ev.SetValue(*item.DefaultValue)
+			ev.SetIsSensitive(true)
+			result = append(result, ev)
+		}
+	}
+	return result
 }

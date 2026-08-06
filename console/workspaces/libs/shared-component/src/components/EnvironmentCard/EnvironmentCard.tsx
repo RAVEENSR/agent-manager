@@ -49,52 +49,25 @@ import {
 import { NoDataFound } from "@agent-management-platform/views";
 import { generatePath, Link } from "react-router-dom";
 
-// Every section in bottomContent is built on pages/overview's SectionHeader,
-// which draws its own leading divider (marked with
-// `data-section-leading-divider`) to separate it from the section before it.
-// Whichever section ends up rendering first — usually Capabilities, but any
-// section can be first if earlier ones are empty (e.g. EnvDeploymentStatusSection
-// for external agents, since EnvCapabilitiesSection never renders for them) —
-// would otherwise double up with the header/tabs divider this card already
-// draws above bottomContent. Scoped to `:first-child` (not just
-// `hr:first-of-type`) so it only touches the very first top-level section,
-// not every section's own leading divider, and keyed off the data attribute
-// (not a plain `hr` selector) so it can't catch an unrelated Divider a
-// section renders further down in its own content (e.g.
-// EnvCapabilitiesSection's Invoke URL divider). Two alternatives, since the
-// marked divider sits at different depths depending on the section: sections
-// wrapped in CollapsibleSection nest it a few levels inside their Collapse
-// wrapper (the descendant form matches), while a section like
-// EnvDeploymentStatusSection that isn't collapsible renders it as the
-// literal first child (the direct-match form matches). Hidden via
-// `visibility: hidden` rather than `display: none` — the latter also
-// collapses the divider's own `mt` margin, leaving the first section's title
-// jammed against the header divider with no breathing room above it.
-const HIDE_FIRST_SECTION_DIVIDER_SX = {
-  "& > :first-child[data-section-leading-divider], & > :first-child [data-section-leading-divider]":
-    { visibility: "hidden" },
-} as const;
-
-/**
- * The divider + suppression wrapper shared by every render branch below that
- * shows `bottomContent`.
- */
-const BottomContent = ({ children }: { children: React.ReactNode }) => (
-  <>
-    <Divider />
-    <Box sx={HIDE_FIRST_SECTION_DIVIDER_SX}>{children}</Box>
-  </>
-);
-
 /**
  * The agent's Deploy page — shared by every "Go to Deployment" / "Promote" /
- * "View Deployment" link on this card, and by EnvDeploymentStatusSection's
- * "View Deployment" section link.
+ * "View Deployment" link on this card.
  */
 export function getAgentDeploymentPath(orgId: string, projectId: string, agentId: string): string {
   return generatePath(
     absoluteRouteMap.children.org.children.projects.children.agents.children.deployment.path,
     { orgId, projectId, agentId },
+  );
+}
+
+/** The agent's per-environment Security (API key) page. */
+export function getAgentSecurityPath(
+  orgId: string, projectId: string, agentId: string, envId: string,
+): string {
+  return generatePath(
+    absoluteRouteMap.children.org.children.projects.children.agents
+      .children.environment.children.security.path,
+    { orgId, projectId, agentId, envId },
   );
 }
 
@@ -114,7 +87,7 @@ export interface EnvironmentCardProps {
   agentId: string;
   actions?: React.ReactNode;
   /**
-   * Rendered below the header/tabs divider, in every render branch
+   * Rendered below the header/tabs row, in every render branch
    * (external, not-yet-deployed, deployed) regardless of deployment status.
    * This card no longer lists `currentDeployment.endpoints` itself (see
    * EnvironmentCard.tsx history) — a caller that wants endpoint/invoke-URL
@@ -276,7 +249,7 @@ export const EnvironmentCard = (props: EnvironmentCardProps) => {
               {actions}
             </Box>
           </Box>
-          <BottomContent>{bottomContent}</BottomContent>
+          {bottomContent}
         </CardContent>
       </Card>
     );
@@ -292,7 +265,7 @@ export const EnvironmentCard = (props: EnvironmentCardProps) => {
               {!hideEnvTitle && (tabsHeader ?? <Typography variant="h6">{envTitle}</Typography>)}
             </Box>
           </Box>
-          <BottomContent>{bottomContent}</BottomContent>
+          {bottomContent}
         </CardContent>
       </Card>
     );
@@ -398,7 +371,7 @@ export const EnvironmentCard = (props: EnvironmentCardProps) => {
             {currentDeployment?.status === DeploymentStatus.ACTIVE && actions}
           </Box>
         </Box>
-        <BottomContent>{bottomContent}</BottomContent>
+        {bottomContent}
         {statusMessage && (
           <>
             <Divider />

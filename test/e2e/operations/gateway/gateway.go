@@ -93,3 +93,55 @@ func WaitForActiveGatewayForEnvWithEnvUUID(client *framework.AMPClient, orgName,
 
 	return gatewayUUID, envUUID
 }
+
+// WaitForActiveGatewaysForEnv polls the gateways API until expectedCount
+// gateways are associated with the given environment and every one of them
+// reports status ACTIVE, then returns all of them. Unlike
+// WaitForActiveGatewayForEnv (which returns the first match), this is for
+// split topologies where an environment has more than one gateway (one
+// INGRESS, one EGRESS) and callers need to assert on the full set. Polling
+// on the count matters: the gateways register with the control plane
+// independently, so a subset can be ACTIVE before the rest have registered.
+func WaitForActiveGatewaysForEnv(client *framework.AMPClient, orgName, envName string, expectedCount int, timeout time.Duration) []framework.GatewayResponse {
+	if timeout == 0 {
+		timeout = 3 * time.Minute
+	}
+
+	path := fmt.Sprintf("/api/v1/orgs/%s/gateways", orgName)
+	scope := fmt.Sprintf("org=%s env=%s", orgName, envName)
+
+	var lastDiag string
+	framework.AttachOnFailure("env-gateways: last poll result", func() string { return lastDiag })
+
+	var matched []framework.GatewayResponse
+	Eventually(func(g Gomega) {
+		resp, err := client.Get(path)
+		g.Expect(err).NotTo(HaveOccurred(), "list gateways request failed (%s)", scope)
+		defer resp.Body.Close()
+
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			lastDiag = fmt.Sprintf("%s | list gateways returned %d (non-retryable)", scope, resp.StatusCode)
+			StopTrying(fmt.Sprintf("list gateways returned %d (%s)", resp.StatusCode, scope)).Now()
+		}
+
+		gateways := framework.ExpectStatusAndDecode[framework.GatewayListResponse](g, resp, 200)
+
+		matched = nil
+		for _, gw := range gateways.Gateways {
+			for _, env := range gw.Environments {
+				if env.Name == envName {
+					matched = append(matched, gw)
+					break
+				}
+			}
+		}
+
+		lastDiag = fmt.Sprintf("%s | matched %d gateway(s) among %d, want %d", scope, len(matched), len(gateways.Gateways), expectedCount)
+		g.Expect(matched).To(HaveLen(expectedCount), "expected %d gateway(s) for environment %q among %d gateway(s)", expectedCount, envName, len(gateways.Gateways))
+		for _, gw := range matched {
+			g.Expect(gw.Status).To(Equal("ACTIVE"), "gateway %q for env %q exists but is not ACTIVE yet (status=%s)", gw.Name, envName, gw.Status)
+		}
+	}).WithTimeout(timeout).WithPolling(10 * time.Second).Should(Succeed())
+
+	return matched
+}

@@ -36,8 +36,10 @@ jobs:
           ALL_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
           CHANGED_FILES=$(echo "$ALL_CHANGED_FILES" | grep '^deployments/helm-charts/' || true)
 
-          # If shared helm tooling changed, test all charts
-          SHARED_CHANGES=$(echo "$ALL_CHANGED_FILES" | grep -E '^\.github/(actions/setup-helm-chart/|workflows/helm-charts-pr-check\.yml)' || true)
+          # If shared helm tooling changed, test all charts. deployments/helm-charts/tests/
+          # holds assertions applied to every chart, so a change there is shared tooling
+          # and not a change to one chart.
+          SHARED_CHANGES=$(echo "$ALL_CHANGED_FILES" | grep -E '^(\.github/(actions/setup-helm-chart/|workflows/helm-charts-pr-check\.yml)|deployments/helm-charts/tests/)' || true)
 
           if [ -n "$SHARED_CHANGES" ]; then
             echo "Shared Helm tooling changed, testing all charts"
@@ -55,8 +57,10 @@ jobs:
           DETECTED_CHARTS=""
 
           for chart in $CHART_NAMES; do
-            # CRITICAL: Only add if the directory exists in the current branch
-            if [ -d "deployments/helm-charts/$chart" ]; then
+            # CRITICAL: keying on Chart.yaml rather than the directory drops both charts
+            # deleted in this branch and sibling directories that are not charts at all
+            # (deployments/helm-charts/tests/). A non-chart in the matrix fails helm lint.
+            if [ -f "deployments/helm-charts/$chart/Chart.yaml" ]; then
               DETECTED_CHARTS+="$chart "
             fi
           done
@@ -146,6 +150,17 @@ jobs:
             --set resources.limits.cpu=200m > /tmp/templated-manifests-resources.yaml || true
 
           echo "Successfully templated common scenarios"
+        shell: bash
+
+      - name: Assert no template zero values are rendered
+        env:
+          CHART: ${{ matrix.chart }}
+        run: |
+          # Applies to every chart, unlike the per-chart assertions below: a manifest
+          # shipping "<nil>" instead of a value stays valid YAML and passes lint and
+          # kubeconform, so nothing else in this workflow can catch it.
+          env -i PATH="$PATH" HOME="$HOME" bash deployments/helm-charts/tests/no-nil-render.sh \
+            "deployments/helm-charts/$CHART"
         shell: bash
 
       - name: Run chart render assertions

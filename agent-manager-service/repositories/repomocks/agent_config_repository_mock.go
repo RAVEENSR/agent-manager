@@ -4,6 +4,7 @@
 package repomocks
 
 import (
+	"context"
 	"sync"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
@@ -15,13 +16,13 @@ import (
 //
 //		// make and configure a mocked repositories.AgentConfigRepository
 //		mockedAgentConfigRepository := &AgentConfigRepositoryMock{
-//			DeleteAllByAgentFunc: func(ouID string, projectName string, agentName string) error {
+//			DeleteAllByAgentFunc: func(ctx context.Context, ouID string, projectName string, agentName string) error {
 //				panic("mock out the DeleteAllByAgent method")
 //			},
-//			GetFunc: func(ouID string, projectName string, agentName string, environmentName string) (*models.AgentConfig, error) {
+//			GetFunc: func(ctx context.Context, ouID string, projectName string, agentName string, environmentName string) (*models.AgentConfig, error) {
 //				panic("mock out the Get method")
 //			},
-//			UpsertFunc: func(config *models.AgentConfig) error {
+//			UpsertFunc: func(ctx context.Context, config *models.AgentConfig) error {
 //				panic("mock out the Upsert method")
 //			},
 //		}
@@ -32,18 +33,20 @@ import (
 //	}
 type AgentConfigRepositoryMock struct {
 	// DeleteAllByAgentFunc mocks the DeleteAllByAgent method.
-	DeleteAllByAgentFunc func(ouID string, projectName string, agentName string) error
+	DeleteAllByAgentFunc func(ctx context.Context, ouID string, projectName string, agentName string) error
 
 	// GetFunc mocks the Get method.
-	GetFunc func(ouID string, projectName string, agentName string, environmentName string) (*models.AgentConfig, error)
+	GetFunc func(ctx context.Context, ouID string, projectName string, agentName string, environmentName string) (*models.AgentConfig, error)
 
 	// UpsertFunc mocks the Upsert method.
-	UpsertFunc func(config *models.AgentConfig) error
+	UpsertFunc func(ctx context.Context, config *models.AgentConfig) error
 
 	// calls tracks calls to the methods.
 	calls struct {
 		// DeleteAllByAgent holds details about calls to the DeleteAllByAgent method.
 		DeleteAllByAgent []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
 			// OuID is the ouID argument value.
 			OuID string
 			// ProjectName is the projectName argument value.
@@ -53,6 +56,8 @@ type AgentConfigRepositoryMock struct {
 		}
 		// Get holds details about calls to the Get method.
 		Get []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
 			// OuID is the ouID argument value.
 			OuID string
 			// ProjectName is the projectName argument value.
@@ -64,6 +69,8 @@ type AgentConfigRepositoryMock struct {
 		}
 		// Upsert holds details about calls to the Upsert method.
 		Upsert []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
 			// Config is the config argument value.
 			Config *models.AgentConfig
 		}
@@ -74,15 +81,17 @@ type AgentConfigRepositoryMock struct {
 }
 
 // DeleteAllByAgent calls DeleteAllByAgentFunc.
-func (mock *AgentConfigRepositoryMock) DeleteAllByAgent(ouID string, projectName string, agentName string) error {
+func (mock *AgentConfigRepositoryMock) DeleteAllByAgent(ctx context.Context, ouID string, projectName string, agentName string) error {
 	if mock.DeleteAllByAgentFunc == nil {
 		panic("AgentConfigRepositoryMock.DeleteAllByAgentFunc: method is nil but AgentConfigRepository.DeleteAllByAgent was just called")
 	}
 	callInfo := struct {
+		Ctx         context.Context
 		OuID        string
 		ProjectName string
 		AgentName   string
 	}{
+		Ctx:         ctx,
 		OuID:        ouID,
 		ProjectName: projectName,
 		AgentName:   agentName,
@@ -90,7 +99,7 @@ func (mock *AgentConfigRepositoryMock) DeleteAllByAgent(ouID string, projectName
 	mock.lockDeleteAllByAgent.Lock()
 	mock.calls.DeleteAllByAgent = append(mock.calls.DeleteAllByAgent, callInfo)
 	mock.lockDeleteAllByAgent.Unlock()
-	return mock.DeleteAllByAgentFunc(ouID, projectName, agentName)
+	return mock.DeleteAllByAgentFunc(ctx, ouID, projectName, agentName)
 }
 
 // DeleteAllByAgentCalls gets all the calls that were made to DeleteAllByAgent.
@@ -98,11 +107,13 @@ func (mock *AgentConfigRepositoryMock) DeleteAllByAgent(ouID string, projectName
 //
 //	len(mockedAgentConfigRepository.DeleteAllByAgentCalls())
 func (mock *AgentConfigRepositoryMock) DeleteAllByAgentCalls() []struct {
+	Ctx         context.Context
 	OuID        string
 	ProjectName string
 	AgentName   string
 } {
 	var calls []struct {
+		Ctx         context.Context
 		OuID        string
 		ProjectName string
 		AgentName   string
@@ -114,16 +125,18 @@ func (mock *AgentConfigRepositoryMock) DeleteAllByAgentCalls() []struct {
 }
 
 // Get calls GetFunc.
-func (mock *AgentConfigRepositoryMock) Get(ouID string, projectName string, agentName string, environmentName string) (*models.AgentConfig, error) {
+func (mock *AgentConfigRepositoryMock) Get(ctx context.Context, ouID string, projectName string, agentName string, environmentName string) (*models.AgentConfig, error) {
 	if mock.GetFunc == nil {
 		panic("AgentConfigRepositoryMock.GetFunc: method is nil but AgentConfigRepository.Get was just called")
 	}
 	callInfo := struct {
+		Ctx             context.Context
 		OuID            string
 		ProjectName     string
 		AgentName       string
 		EnvironmentName string
 	}{
+		Ctx:             ctx,
 		OuID:            ouID,
 		ProjectName:     projectName,
 		AgentName:       agentName,
@@ -132,7 +145,7 @@ func (mock *AgentConfigRepositoryMock) Get(ouID string, projectName string, agen
 	mock.lockGet.Lock()
 	mock.calls.Get = append(mock.calls.Get, callInfo)
 	mock.lockGet.Unlock()
-	return mock.GetFunc(ouID, projectName, agentName, environmentName)
+	return mock.GetFunc(ctx, ouID, projectName, agentName, environmentName)
 }
 
 // GetCalls gets all the calls that were made to Get.
@@ -140,12 +153,14 @@ func (mock *AgentConfigRepositoryMock) Get(ouID string, projectName string, agen
 //
 //	len(mockedAgentConfigRepository.GetCalls())
 func (mock *AgentConfigRepositoryMock) GetCalls() []struct {
+	Ctx             context.Context
 	OuID            string
 	ProjectName     string
 	AgentName       string
 	EnvironmentName string
 } {
 	var calls []struct {
+		Ctx             context.Context
 		OuID            string
 		ProjectName     string
 		AgentName       string
@@ -158,19 +173,21 @@ func (mock *AgentConfigRepositoryMock) GetCalls() []struct {
 }
 
 // Upsert calls UpsertFunc.
-func (mock *AgentConfigRepositoryMock) Upsert(config *models.AgentConfig) error {
+func (mock *AgentConfigRepositoryMock) Upsert(ctx context.Context, config *models.AgentConfig) error {
 	if mock.UpsertFunc == nil {
 		panic("AgentConfigRepositoryMock.UpsertFunc: method is nil but AgentConfigRepository.Upsert was just called")
 	}
 	callInfo := struct {
+		Ctx    context.Context
 		Config *models.AgentConfig
 	}{
+		Ctx:    ctx,
 		Config: config,
 	}
 	mock.lockUpsert.Lock()
 	mock.calls.Upsert = append(mock.calls.Upsert, callInfo)
 	mock.lockUpsert.Unlock()
-	return mock.UpsertFunc(config)
+	return mock.UpsertFunc(ctx, config)
 }
 
 // UpsertCalls gets all the calls that were made to Upsert.
@@ -178,9 +195,11 @@ func (mock *AgentConfigRepositoryMock) Upsert(config *models.AgentConfig) error 
 //
 //	len(mockedAgentConfigRepository.UpsertCalls())
 func (mock *AgentConfigRepositoryMock) UpsertCalls() []struct {
+	Ctx    context.Context
 	Config *models.AgentConfig
 } {
 	var calls []struct {
+		Ctx    context.Context
 		Config *models.AgentConfig
 	}
 	mock.lockUpsert.RLock()

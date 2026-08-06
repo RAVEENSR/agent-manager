@@ -64,10 +64,17 @@ export interface MCPEndpointConfig {
  * MCPEndpointEnvironment is one endpoint→environment binding. deploymentStatus is
  * response-only: it reports whether this environment's gateway artifact is currently
  * deployed ("Deployed") or not ("Undeployed"). Computed on read; never sent.
+ *
+ * gatewayId is the egress gateway to deploy this binding to. Optional: inferred
+ * server-side when the environment has exactly one egress-capable gateway, required
+ * (400s) when it has more than one. Placement is fixed once deployed — the server
+ * rejects a different gatewayId on update. Create/Update responses do NOT echo it;
+ * only GET/list derives it as the gateway the binding is actually deployed to.
  */
 export interface MCPEndpointEnvironment {
   environmentUuid: string;
   deploymentStatus?: "Deployed" | "Undeployed";
+  gatewayId?: string;
 }
 
 /**

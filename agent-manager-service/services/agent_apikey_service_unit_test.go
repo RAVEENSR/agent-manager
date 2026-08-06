@@ -80,6 +80,7 @@ type apiKeyServiceFixture struct {
 	upsertedKeys *[]*models.StoredAPIKey
 	lookedUpName *string
 	connChecker  *stubConnChecker
+	gateway      *models.Gateway
 }
 
 // newAPIKeyServiceFixture wires an AgentAPIKeyService whose artifact/env/gateway
@@ -102,14 +103,9 @@ func newAPIKeyServiceFixture(t *testing.T, existing *models.StoredAPIKey) *apiKe
 			return &models.Artifact{UUID: artifactUUID, Kind: models.KindAgent}, nil
 		},
 	}
-	gatewayRepo := &repomocks.GatewayRepositoryMock{
-		GetEnvironmentMappingsByEnvironmentIDFunc: func(_ string) ([]models.GatewayEnvironmentMapping, error) {
-			return []models.GatewayEnvironmentMapping{{GatewayUUID: gatewayUUID}}, nil
-		},
-		GetByUUIDFunc: func(_ string) (*models.Gateway, error) {
-			return &models.Gateway{UUID: gatewayUUID}, nil
-		},
-	}
+	gateway := newGateway(t, models.GatewayRoleIngress, true)
+	gateway.UUID = gatewayUUID
+	gatewayRepo := gatewayFixtureRepo(t, envUUID, []*models.Gateway{gateway})
 
 	upserted := &[]*models.StoredAPIKey{}
 	lookedUp := new(string)
@@ -135,6 +131,7 @@ func newAPIKeyServiceFixture(t *testing.T, existing *models.StoredAPIKey) *apiKe
 		upsertedKeys: upserted,
 		lookedUpName: lookedUp,
 		connChecker:  connChecker,
+		gateway:      gateway,
 	}
 }
 
@@ -204,11 +201,29 @@ func TestAgentAPIKeyService_IssueTestAPIKey_PerUser(t *testing.T) {
 		require.NotNil(t, resp.GatewayConnected)
 		assert.True(t, *resp.GatewayConnected)
 
+		// Only when both the local registry and is_active say otherwise is the
+		// gateway reported disconnected.
 		fx.connChecker.connected = false
+		fx.gateway.IsActive = false
 		resp, err = fx.svc.IssueTestAPIKey(context.Background(), org, proj, agent, env, "user-a-sub")
 		require.NoError(t, err)
 		require.NotNil(t, resp.GatewayConnected)
 		assert.False(t, *resp.GatewayConnected)
+	})
+
+	t.Run("falls back to is_active when this replica does not hold the websocket", func(t *testing.T) {
+		// A gateway holds its websocket with exactly one replica, so a replica
+		// without the socket sees an empty local registry for a live gateway.
+		// Reporting disconnected there is a false negative that the console acts
+		// on, so is_active — written by the holding replica — decides instead.
+		fx := newAPIKeyServiceFixture(t, nil)
+		fx.connChecker.connected = false
+		fx.gateway.IsActive = true
+
+		resp, err := fx.svc.IssueTestAPIKey(context.Background(), org, proj, agent, env, "user-a-sub")
+		require.NoError(t, err)
+		require.NotNil(t, resp.GatewayConnected)
+		assert.True(t, *resp.GatewayConnected)
 	})
 
 	t.Run("rejects reissue when the existing row is not a test key", func(t *testing.T) {
@@ -222,6 +237,44 @@ func TestAgentAPIKeyService_IssueTestAPIKey_PerUser(t *testing.T) {
 		_, err := fx.svc.IssueTestAPIKey(context.Background(), org, proj, agent, env, "user-a-sub")
 
 		assert.ErrorIs(t, err, utils.ErrBadRequest)
+	})
+}
+
+func TestResolveEnvGateways_IngressOnly(t *testing.T) {
+	env := uuid.New().String()
+	ingress := newGateway(t, models.GatewayRoleIngress, true)
+	both := newGateway(t, models.GatewayRoleBoth, true)
+	egress := newGateway(t, models.GatewayRoleEgress, true)
+	inactiveIngress := newGateway(t, models.GatewayRoleIngress, false)
+
+	t.Run("returns ingress-capable only", func(t *testing.T) {
+		svc := &AgentAPIKeyService{gatewayRepo: gatewayFixtureRepo(t, env, []*models.Gateway{ingress, egress})}
+		got, err := svc.resolveEnvGateways(env)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		require.Equal(t, ingress.UUID, got[0].UUID)
+	})
+
+	t.Run("both counts as ingress-capable", func(t *testing.T) {
+		svc := &AgentAPIKeyService{gatewayRepo: gatewayFixtureRepo(t, env, []*models.Gateway{both, egress})}
+		got, err := svc.resolveEnvGateways(env)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+	})
+
+	t.Run("inactive ingress gateways still receive keys", func(t *testing.T) {
+		// Keys are distributed regardless of is_active today; filtering on WebSocket
+		// liveness would intermittently starve a live gateway of keys.
+		svc := &AgentAPIKeyService{gatewayRepo: gatewayFixtureRepo(t, env, []*models.Gateway{inactiveIngress})}
+		got, err := svc.resolveEnvGateways(env)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+	})
+
+	t.Run("egress-only environment yields ErrGatewayNotFound", func(t *testing.T) {
+		svc := &AgentAPIKeyService{gatewayRepo: gatewayFixtureRepo(t, env, []*models.Gateway{egress})}
+		_, err := svc.resolveEnvGateways(env)
+		require.ErrorIs(t, err, utils.ErrGatewayNotFound)
 	})
 }
 
@@ -240,6 +293,7 @@ func TestAgentAPIKeyService_CreateAPIKey_ReservedTestKeyPrefix(t *testing.T) {
 	t.Run("reports gateway websocket connectivity in the response", func(t *testing.T) {
 		fx := newAPIKeyServiceFixture(t, nil)
 		fx.connChecker.connected = false
+		fx.gateway.IsActive = false
 
 		resp, err := fx.svc.CreateAPIKey(context.Background(), org, proj, agent, env,
 			&models.CreateAPIKeyRequest{Name: "my-key"})
@@ -247,5 +301,18 @@ func TestAgentAPIKeyService_CreateAPIKey_ReservedTestKeyPrefix(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, resp.GatewayConnected)
 		assert.False(t, *resp.GatewayConnected)
+	})
+
+	t.Run("falls back to is_active when this replica does not hold the websocket", func(t *testing.T) {
+		fx := newAPIKeyServiceFixture(t, nil)
+		fx.connChecker.connected = false
+		fx.gateway.IsActive = true
+
+		resp, err := fx.svc.CreateAPIKey(context.Background(), org, proj, agent, env,
+			&models.CreateAPIKeyRequest{Name: "my-key"})
+
+		require.NoError(t, err)
+		require.NotNil(t, resp.GatewayConnected)
+		assert.True(t, *resp.GatewayConnected)
 	})
 }
