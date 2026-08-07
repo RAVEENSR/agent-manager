@@ -16,7 +16,10 @@
  * under the License.
  */
 
-import type { Configurations } from "@agent-management-platform/types";
+import {
+  type Configurations,
+  isAgentIdentityEnabled,
+} from "@agent-management-platform/types";
 import type { DeploymentStatus } from "@agent-management-platform/shared-component";
 import { EnvAgentInterfaceCard } from "./EnvAgentInterfaceCard";
 import { EnvAgentRolesGroupsSection } from "./EnvAgentRolesGroupsSection";
@@ -27,14 +30,14 @@ import { EnvObservabilitySection } from "./EnvObservabilitySection";
 import { Divider, Grid } from "@wso2/oxygen-ui";
 
 interface EnvironmentSectionsContentProps {
-    orgId: string;
-    projectId: string;
-    agentId: string;
-    envId: string;
-    configurations?: Configurations;
-    external?: boolean;
-    isolationTier?: string;
-    deploymentStatus?: DeploymentStatus;
+  orgId: string;
+  projectId: string;
+  agentId: string;
+  envId: string;
+  configurations?: Configurations;
+  external?: boolean;
+  isolationTier?: string;
+  deploymentStatus?: DeploymentStatus;
 }
 
 /**
@@ -46,68 +49,79 @@ interface EnvironmentSectionsContentProps {
  * since both are compact per-environment identity/interface summaries.
  */
 export function EnvironmentSectionsContent({
-    orgId, projectId, agentId, envId, configurations, external, isolationTier, deploymentStatus,
+  orgId,
+  projectId,
+  agentId,
+  envId,
+  configurations,
+  external,
+  isolationTier,
+  deploymentStatus,
 }: EnvironmentSectionsContentProps) {
-    return (
-        <>
-            <Divider sx={{ my: 1.5 }} />
-            <EnvCapabilitiesSection
-                orgId={orgId}
-                projectId={projectId}
-                agentId={agentId}
-                envId={envId}
-                configurations={configurations}
-                external={external}
-                isolationTier={isolationTier}
-                deploymentStatus={deploymentStatus}
+  const agentIdEnabled = isAgentIdentityEnabled();
+
+  return (
+    <>
+      <Divider sx={{ my: 1.5 }} />
+      <EnvCapabilitiesSection
+        orgId={orgId}
+        projectId={projectId}
+        agentId={agentId}
+        envId={envId}
+        configurations={configurations}
+        external={external}
+        isolationTier={isolationTier}
+        deploymentStatus={deploymentStatus}
+      />
+      <Grid container spacing={2} sx={{ mb: 1.5 }}>
+        {agentIdEnabled && (
+          /* EnvAgentInterfaceCard renders nothing for external agents
+                       (they aren't deployed through this platform), so Agent ID
+                       takes the full row instead of leaving an empty half. */
+          <Grid size={{ xs: 12, md: external ? 12 : 6 }}>
+            <EnvAgentRolesGroupsSection
+              orgId={orgId}
+              projectId={projectId}
+              agentId={agentId}
+              envId={envId}
             />
-            <Grid container spacing={2} sx={{ mb: 1.5 }}>
-                {/* EnvAgentInterfaceCard renders nothing for external agents
-                    (they aren't deployed through this platform), so Agent ID
-                    takes the full row instead of leaving an empty half. */}
-                <Grid size={{ xs: 12, md: external ? 12 : 6 }}>
-                    <EnvAgentRolesGroupsSection
-                        orgId={orgId}
-                        projectId={projectId}
-                        agentId={agentId}
-                        envId={envId}
-                    />
-                </Grid>
-                <Grid size={{ xs: 12, md: 6 }}>
-                    <EnvAgentInterfaceCard
-                        orgId={orgId}
-                        projectId={projectId}
-                        agentId={agentId}
-                        envId={envId}
-                        external={external}
-                        deploymentStatus={deploymentStatus}
-                    />
-                </Grid>
-            </Grid>
-            <EnvConfigsSection
-                orgId={orgId}
-                projectId={projectId}
-                agentId={agentId}
-                envId={envId}
-            />
-            {/* Monitors/Observability below still use a plain loading Skeleton
+          </Grid>
+        )}
+        <Grid size={{ xs: 12, md: agentIdEnabled ? 6 : 12 }}>
+          <EnvAgentInterfaceCard
+            orgId={orgId}
+            projectId={projectId}
+            agentId={agentId}
+            envId={envId}
+            external={external}
+            deploymentStatus={deploymentStatus}
+          />
+        </Grid>
+      </Grid>
+      <EnvConfigsSection
+        orgId={orgId}
+        projectId={projectId}
+        agentId={agentId}
+        envId={envId}
+      />
+      {/* Monitors/Observability below still use a plain loading Skeleton
                 rather than CollapsibleSection, deliberately — their skeletons
                 are already sized close to the real content (metric tiles,
                 per-card skeletons), so there's no mismatched-height jump to
                 fix for them. */}
-            <EnvMonitorsSection
-                orgId={orgId}
-                projectId={projectId}
-                agentId={agentId}
-                envId={envId}
-            />
-            <EnvObservabilitySection
-                orgId={orgId}
-                projectId={projectId}
-                agentId={agentId}
-                envId={envId}
-                external={external}
-            />
-        </>
-    );
+      <EnvMonitorsSection
+        orgId={orgId}
+        projectId={projectId}
+        agentId={agentId}
+        envId={envId}
+      />
+      <EnvObservabilitySection
+        orgId={orgId}
+        projectId={projectId}
+        agentId={agentId}
+        envId={envId}
+        external={external}
+      />
+    </>
+  );
 }
