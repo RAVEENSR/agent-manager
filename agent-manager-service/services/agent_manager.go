@@ -183,6 +183,15 @@ func translatePipelineError(err error) error {
 	return err
 }
 
+// requiresGitSecretValidation reports whether the repository names a git secret that
+// has to exist. Two different states both mean "no PAT-backed secret" and must not be
+// validated: an absent secretRef (public repository) and an explicitly empty one, which
+// prepareGitHubAppSource sets so the checkout workflow skips the ExternalSecret while
+// the build secret provisioner writes the per-run secret itself.
+func requiresGitSecretValidation(repository *spec.RepositoryConfig) bool {
+	return repository != nil && repository.GetSecretRef() != ""
+}
+
 // validateGitSecretExists checks if the specified git secret exists in the organization
 func (s *agentManagerService) validateGitSecretExists(ctx context.Context, ouID string, secretRef string) error {
 	if secretRef == "" {
@@ -1285,7 +1294,7 @@ func (s *agentManagerService) createComponentAgent(ctx context.Context, ouID, pr
 		return translateOrgError(err)
 	}
 
-	if req.Provisioning.Repository != nil && req.Provisioning.Repository.SecretRef.Get() != nil {
+	if requiresGitSecretValidation(req.Provisioning.Repository) {
 		if err := s.validateGitSecretExists(ctx, ouID, req.Provisioning.Repository.GetSecretRef()); err != nil {
 			return err
 		}
@@ -1901,8 +1910,8 @@ func (s *agentManagerService) UpdateAgentBuildParameters(ctx context.Context, ou
 		return nil, translateProjectError(err)
 	}
 
-	// Validate git secret exists if specified
-	if req.Provisioning.Repository != nil && req.Provisioning.Repository.SecretRef.Get() != nil {
+	// Validate git secret exists if specified.
+	if requiresGitSecretValidation(req.Provisioning.Repository) {
 		if err := s.validateGitSecretExists(ctx, ouID, req.Provisioning.Repository.GetSecretRef()); err != nil {
 			return nil, err
 		}
