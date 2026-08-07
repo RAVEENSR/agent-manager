@@ -182,3 +182,36 @@ func githubAppCreateRequest() *spec.CreateAgentRequest {
 		},
 	}
 }
+
+// A GitHub App source clears secretRef to an explicit empty string, which is a
+// non-nil pointer. Guarding git-secret validation on "not nil" therefore rejected
+// every GitHub App agent with "git secret reference is empty", while public repos
+// (nil ref) were unaffected. Each half was covered on its own; nothing pinned the
+// two together, so the contradiction survived.
+func TestRequiresGitSecretValidation_SkipsGitHubAppClearedSecretRef(t *testing.T) {
+	req := githubAppCreateRequest()
+	s := &agentManagerService{buildSecretProvisioner: &buildSecretProvisionerStub{}}
+
+	require.NoError(t, s.prepareGitHubAppSource(req))
+
+	// Precondition: the ref really is present-but-empty, not absent.
+	require.NotNil(t, req.Provisioning.Repository.SecretRef.Get())
+	require.Empty(t, *req.Provisioning.Repository.SecretRef.Get())
+
+	assert.False(t, requiresGitSecretValidation(req.Provisioning.Repository),
+		"an explicitly empty secretRef must not be validated as a git secret")
+}
+
+func TestRequiresGitSecretValidation_PublicAndPATRepositories(t *testing.T) {
+	assert.False(t, requiresGitSecretValidation(nil),
+		"no repository means nothing to validate")
+
+	public := &spec.RepositoryConfig{Url: "https://github.com/acme/demo"}
+	assert.False(t, requiresGitSecretValidation(public),
+		"a public repository leaves secretRef absent")
+
+	pat := &spec.RepositoryConfig{Url: "https://github.com/acme/demo"}
+	pat.SetSecretRef("my-git-secret")
+	assert.True(t, requiresGitSecretValidation(pat),
+		"a named git secret must still be validated")
+}
