@@ -48,7 +48,17 @@ export function useListCommits(
 ) {
   const { getToken } = useAuthHooks();
   return useApiQuery<ListCommitsResponse>({
-    queryKey: ["commits", body.owner, body.repo, body.branch, body.orgName, body.secretRef, query],
+    queryKey: [
+      "commits",
+      body.owner,
+      body.repo,
+      body.branch,
+      body.orgName,
+      body.secretRef,
+      body.projectName,
+      body.componentName,
+      query,
+    ],
     queryFn: () => listCommits(body, query, getToken),
     enabled: enabled && !!body.owner && !!body.repo,
   });

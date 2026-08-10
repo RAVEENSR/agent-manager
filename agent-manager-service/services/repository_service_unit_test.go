@@ -43,6 +43,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -57,6 +58,14 @@ import (
 // a test that reaches this method unexpectedly fails loudly.
 type gitCredsStub struct {
 	GetGitCredentialsFunc func(ctx context.Context, ouID, secretRef string) (*GitCredentials, error)
+}
+
+type commitProviderStub struct {
+	ListCommitsFunc func(ctx context.Context, projectName, componentName string, opts gitprovider.ListCommitsOptions) (*gitprovider.ListCommitsResponse, bool, error)
+}
+
+func (s *commitProviderStub) ListCommits(ctx context.Context, projectName, componentName string, opts gitprovider.ListCommitsOptions) (*gitprovider.ListCommitsResponse, bool, error) {
+	return s.ListCommitsFunc(ctx, projectName, componentName, opts)
 }
 
 func (s *gitCredsStub) GetGitCredentials(ctx context.Context, ouID, secretRef string) (*GitCredentials, error) {
@@ -172,12 +181,99 @@ func TestRepositoryService_ListBranches(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// ListCommits — same pre-network branches as ListBranches. The commit-to-spec
-// transformation (short SHA truncation, author avatar mapping) needs a live
-// remote to feed it data and is covered by integration tests.
+// ListCommits — deployment-provider selection and mapping, followed by the same
+// pre-network credential/provider branches as ListBranches.
 // -----------------------------------------------------------------------------
 
 func TestRepositoryService_ListCommits(t *testing.T) {
+	t.Run("uses deployment commit provider for a bound component", func(t *testing.T) {
+		timestamp := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+		provider := &commitProviderStub{
+			ListCommitsFunc: func(_ context.Context, projectName, componentName string, opts gitprovider.ListCommitsOptions) (*gitprovider.ListCommitsResponse, bool, error) {
+				assert.Equal(t, "default", projectName)
+				assert.Equal(t, "private-agent", componentName)
+				assert.Equal(t, "main", opts.SHA)
+				assert.Equal(t, 10, opts.PerPage)
+				assert.Equal(t, 2, opts.Page)
+				return &gitprovider.ListCommitsResponse{
+					Commits: []gitprovider.Commit{{
+						SHA:       "0123456789abcdef",
+						Message:   "private commit",
+						Timestamp: timestamp,
+						IsLatest:  true,
+						Author: gitprovider.Author{
+							Name:      "Octo Cat",
+							Email:     "octo@example.com",
+							AvatarURL: "https://example.com/avatar.png",
+						},
+					}},
+				}, true, nil
+			},
+		}
+		svc := newRepoService(&gitCredsStub{})
+		svc.SetCommitProvider(provider)
+		req := spec.ListCommitsRequest{
+			Owner:         "acme",
+			Repo:          "private-repo",
+			Branch:        strPtr("main"),
+			ProjectName:   strPtr("default"),
+			ComponentName: strPtr("private-agent"),
+		}
+
+		response, err := svc.ListCommits(context.Background(), req, gitprovider.ProviderGitHub, 10, 10)
+
+		require.NoError(t, err)
+		require.Len(t, response.Commits, 1)
+		assert.Equal(t, "0123456", response.Commits[0].ShortSha)
+		assert.Equal(t, "private commit", response.Commits[0].Message)
+		assert.Equal(t, timestamp, response.Commits[0].Timestamp)
+		assert.Equal(t, "https://example.com/avatar.png", response.Commits[0].Author.GetAvatarUrl())
+	})
+
+	t.Run("falls back to the standard provider when component has no binding", func(t *testing.T) {
+		provider := &commitProviderStub{
+			ListCommitsFunc: func(_ context.Context, _, _ string, _ gitprovider.ListCommitsOptions) (*gitprovider.ListCommitsResponse, bool, error) {
+				return nil, false, nil
+			},
+		}
+		svc := newRepoService(&gitCredsStub{})
+		svc.SetCommitProvider(provider)
+		req := spec.ListCommitsRequest{
+			Owner:         "acme",
+			Repo:          "public-repo",
+			ProjectName:   strPtr("default"),
+			ComponentName: strPtr("public-agent"),
+		}
+
+		_, err := svc.ListCommits(context.Background(), req, gitprovider.ProviderType("gitlab"), 10, 0)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported git provider")
+	})
+
+	t.Run("propagates deployment commit provider errors", func(t *testing.T) {
+		boom := errors.New("git app unavailable")
+		provider := &commitProviderStub{
+			ListCommitsFunc: func(_ context.Context, _, _ string, _ gitprovider.ListCommitsOptions) (*gitprovider.ListCommitsResponse, bool, error) {
+				return nil, false, boom
+			},
+		}
+		svc := newRepoService(&gitCredsStub{})
+		svc.SetCommitProvider(provider)
+		req := spec.ListCommitsRequest{
+			Owner:         "acme",
+			Repo:          "private-repo",
+			ProjectName:   strPtr("default"),
+			ComponentName: strPtr("private-agent"),
+		}
+
+		_, err := svc.ListCommits(context.Background(), req, gitprovider.ProviderGitHub, 10, 0)
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, boom)
+		assert.Contains(t, err.Error(), "component repository binding")
+	})
+
 	t.Run("propagates credential-fetch error", func(t *testing.T) {
 		boom := errors.New("openbao unreachable")
 		creds := &gitCredsStub{
