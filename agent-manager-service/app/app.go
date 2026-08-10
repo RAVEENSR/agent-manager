@@ -77,6 +77,10 @@ type Options struct {
 	// anonymously). A deployment can inject an implementation that mints a short-lived
 	// token from a platform GitHub App. See services.BuildSecretProvisioner.
 	BuildSecretProvisioner services.BuildSecretProvisioner
+	// RepositoryCommitProvider optionally resolves commit history from a
+	// deployment-specific component source binding. nil preserves the standard
+	// anonymous/static-token and PAT-backed repository behavior.
+	RepositoryCommitProvider services.RepositoryCommitProvider
 }
 
 // Run starts the application with the provided providers and options.
@@ -160,6 +164,7 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 	if setter, ok := agentThunderProvisioning.(services.WorkloadInjectorSetter); ok {
 		setter.SetWorkloadInjector(dependencies.AgentIdentityInjectionService)
 	}
+	dependencies.RepositoryService.SetCommitProvider(opts.RepositoryCommitProvider)
 
 	// So a rotated agent's deferred pod rollout (see RefreshAfterRotation)
 	// stops waiting, or aborts an in-flight roll, once shutdown starts below

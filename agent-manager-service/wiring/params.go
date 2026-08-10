@@ -79,6 +79,7 @@ type AppParams struct {
 	LLMTemplateStore              *services.LLMTemplateStore
 	InfraResourceManager          services.InfraResourceManager
 	AgentManagerService           services.AgentManagerService
+	RepositoryService             services.RepositoryService
 	AgentTokenManagerService      services.AgentTokenManagerService
 	AgentIdentityInjectionService services.AgentIdentityInjectionService
 	EnvironmentService            services.EnvironmentService

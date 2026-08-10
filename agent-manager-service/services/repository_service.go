@@ -18,6 +18,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/wso2/agent-manager/agent-manager-service/clients/gitprovider"
@@ -32,13 +33,24 @@ type RepositoryService interface {
 	ListBranches(ctx context.Context, req spec.ListBranchesRequest, providerType gitprovider.ProviderType, limit, offset int) (*spec.ListBranchesResponse, error)
 	// ListCommits returns commits for a repository
 	ListCommits(ctx context.Context, req spec.ListCommitsRequest, providerType gitprovider.ProviderType, limit, offset int) (*spec.ListCommitsResponse, error)
+	// SetCommitProvider installs an optional deployment-specific commit source.
+	// It is called once during startup, before the HTTP server begins serving.
+	SetCommitProvider(provider RepositoryCommitProvider)
 	// GetLatestCommit returns the latest commit SHA for a given branch
 	GetLatestCommit(ctx context.Context, owner, repo, branch string) (string, error)
 }
 
 type repositoryService struct {
 	gitCredentialsService GitCredentialsService
+	commitProvider        RepositoryCommitProvider
 	logger                *slog.Logger
+}
+
+// RepositoryCommitProvider lists commits for a deployment-specific component
+// source binding. handled=false means no binding exists and the standard
+// public/PAT repository path must be used unchanged.
+type RepositoryCommitProvider interface {
+	ListCommits(ctx context.Context, projectName, componentName string, opts gitprovider.ListCommitsOptions) (result *gitprovider.ListCommitsResponse, handled bool, err error)
 }
 
 // NewRepositoryService creates a new repository service
@@ -47,6 +59,10 @@ func NewRepositoryService(gitCredentialsService GitCredentialsService, logger *s
 		gitCredentialsService: gitCredentialsService,
 		logger:                logger,
 	}
+}
+
+func (s *repositoryService) SetCommitProvider(provider RepositoryCommitProvider) {
+	s.commitProvider = provider
 }
 
 // getGitProviderConfig returns the git provider configuration with token from server config
@@ -134,6 +150,27 @@ func (s *repositoryService) ListBranches(ctx context.Context, req spec.ListBranc
 
 // ListCommits returns commits for a repository
 func (s *repositoryService) ListCommits(ctx context.Context, req spec.ListCommitsRequest, providerType gitprovider.ProviderType, limit, offset int) (*spec.ListCommitsResponse, error) {
+	opts := gitprovider.ListCommitsOptions{
+		SHA:    req.GetBranch(),
+		Path:   req.GetPath(),
+		Author: req.GetAuthor(),
+		Since:  req.Since,
+		Until:  req.Until,
+	}
+
+	if s.commitProvider != nil && req.HasProjectName() && req.HasComponentName() {
+		componentOpts := opts
+		componentOpts.PerPage = limit
+		componentOpts.Page = offset/limit + 1
+		result, handled, err := s.commitProvider.ListCommits(ctx, req.GetProjectName(), req.GetComponentName(), componentOpts)
+		if err != nil {
+			return nil, fmt.Errorf("list commits from component repository binding: %w", err)
+		}
+		if handled {
+			return mapListCommitsResponse(result, limit, offset), nil
+		}
+	}
+
 	// Determine git provider configuration
 	providerConfig := getGitProviderConfig()
 
@@ -157,21 +194,19 @@ func (s *repositoryService) ListCommits(ctx context.Context, req spec.ListCommit
 	if err != nil {
 		return nil, err
 	}
-	// Build options
-	opts := gitprovider.ListCommitsOptions{
-		SHA:    req.GetBranch(),
-		Path:   req.GetPath(),
-		Author: req.GetAuthor(),
-		Since:  req.Since,
-		Until:  req.Until,
-	}
-
 	// List commits
 	result, err := provider.ListCommits(ctx, req.Owner, req.Repo, opts)
 	if err != nil {
 		return nil, err
 	}
 
+	return mapListCommitsResponse(result, limit, offset), nil
+}
+
+func mapListCommitsResponse(result *gitprovider.ListCommitsResponse, limit, offset int) *spec.ListCommitsResponse {
+	if result == nil {
+		result = &gitprovider.ListCommitsResponse{}
+	}
 	// Convert to response model
 	commits := make([]spec.Commit, len(result.Commits))
 	for i, c := range result.Commits {
@@ -207,7 +242,7 @@ func (s *repositoryService) ListCommits(ctx context.Context, req spec.ListCommit
 		nextOffset := int32(offset + limit)
 		response.NextOffset = &nextOffset
 	}
-	return response, nil
+	return response
 }
 
 // GetLatestCommit returns the latest commit SHA for a given branch
