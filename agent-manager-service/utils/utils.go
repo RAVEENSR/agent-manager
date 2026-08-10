@@ -1355,6 +1355,22 @@ func ValidateListCommitsRequest(payload *spec.ListCommitsRequest) error {
 	if payload.HasSecretRef() && (payload.GetSecretRef() == "" || payload.GetOrgName() == "") {
 		return fmt.Errorf("secretRef and orgName cannot be empty")
 	}
+
+	if payload.HasProjectName() != payload.HasComponentName() {
+		return fmt.Errorf("projectName and componentName must be provided together")
+	}
+	if payload.HasProjectName() {
+		projectName := strings.TrimSpace(payload.GetProjectName())
+		componentName := strings.TrimSpace(payload.GetComponentName())
+		if projectName == "" || componentName == "" {
+			return fmt.Errorf("projectName and componentName cannot be empty")
+		}
+		if !isValidGitHubIdentifier(projectName) || !isValidGitHubIdentifier(componentName) {
+			return fmt.Errorf("projectName or componentName contains invalid characters or path traversal patterns")
+		}
+		payload.ProjectName = &projectName
+		payload.ComponentName = &componentName
+	}
 	return nil
 }
 
