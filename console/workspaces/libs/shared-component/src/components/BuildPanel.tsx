@@ -84,6 +84,8 @@ export function BuildPanel({
       owner: repoInfo?.owner || "",
       repo: repoInfo?.repo || "",
       branch: selectedBranch || undefined,
+      projectName: projName,
+      componentName: agentName,
       // Include orgName and secretRef for private repo support
       ...(secretRef ? { orgName: orgName, secretRef: secretRef } : {}),
     },

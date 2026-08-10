@@ -220,7 +220,7 @@ func TestRepositoryService_ListCommits(t *testing.T) {
 			ComponentName: strPtr("private-agent"),
 		}
 
-		response, err := svc.ListCommits(context.Background(), req, "acme", gitprovider.ProviderGitHub, 10, 10)
+		response, err := svc.ListCommits(context.Background(), req, gitprovider.ProviderGitHub, 10, 10)
 
 		require.NoError(t, err)
 		require.Len(t, response.Commits, 1)
@@ -245,7 +245,7 @@ func TestRepositoryService_ListCommits(t *testing.T) {
 			ComponentName: strPtr("public-agent"),
 		}
 
-		_, err := svc.ListCommits(context.Background(), req, "acme", gitprovider.ProviderType("gitlab"), 10, 0)
+		_, err := svc.ListCommits(context.Background(), req, gitprovider.ProviderType("gitlab"), 10, 0)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unsupported git provider")
@@ -267,7 +267,7 @@ func TestRepositoryService_ListCommits(t *testing.T) {
 			ComponentName: strPtr("private-agent"),
 		}
 
-		_, err := svc.ListCommits(context.Background(), req, "acme", gitprovider.ProviderGitHub, 10, 0)
+		_, err := svc.ListCommits(context.Background(), req, gitprovider.ProviderGitHub, 10, 0)
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, boom)
