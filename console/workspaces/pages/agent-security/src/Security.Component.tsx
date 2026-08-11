@@ -22,9 +22,10 @@ import { Alert, Button, ListingTable, Skeleton } from "@wso2/oxygen-ui";
 import { KeyRound, Rocket, ShieldOff } from "@wso2/oxygen-ui-icons-react";
 import {
   useCreateAgentAPIKey,
-  useGetAgent,
+  useGetAgentConfigurations,
   useListAgentDeployments,
   useListAgentAPIKeys,
+  useListIdentityProviders,
   useRevokeAgentAPIKey,
 } from "@agent-management-platform/api-client";
 import {
@@ -38,11 +39,18 @@ import { absoluteRouteMap } from "@agent-management-platform/types";
 export const SecurityComponent: React.FC = () => {
   const { orgId, projectId, agentId, envId } = useParams();
 
-  const { data: agent, isLoading: isLoadingAgent } = useGetAgent({
-    orgName: orgId,
-    projName: projectId,
-    agentName: agentId,
-  });
+  // GetAgent returns only the lowest environment's config, so read per-env here.
+  const { data: envConfig, isLoading: isLoadingConfig } =
+    useGetAgentConfigurations(
+      {
+        orgName: orgId,
+        projName: projectId,
+        agentName: agentId,
+      },
+      {
+        environment: envId ?? "",
+      },
+    );
   const { data: deployments, isLoading: isLoadingDeployments } =
     useListAgentDeployments({
       orgName: orgId,
@@ -50,12 +58,23 @@ export const SecurityComponent: React.FC = () => {
       agentName: agentId,
     });
 
-  const securityEnabled = agent?.configurations?.enableApiKeySecurity ?? true;
-  const oauthEnabled = agent?.configurations?.enableOAuthSecurity ?? false;
+  const securityEnabled = envConfig?.enableApiKeySecurity ?? true;
+  const oauthEnabled = envConfig?.enableOAuthSecurity ?? false;
+
+  // OAuth is enforced by an identity provider registered on the environment's
+  // *gateway* — unrelated to Agent ID. Resolve that gateway so the empty state can
+  // deep-link to it. Only the org-wide listing carries gateway/environment context
+  // (see enrichSpecIdentityProvider), so filter it by the current environment.
+  const { data: identityProviders } = useListIdentityProviders({
+    orgName: oauthEnabled ? orgId : undefined,
+  });
+  const oauthGatewayId = identityProviders?.list?.find(
+    (p) => p.environmentName === envId && !!p.gatewayId,
+  )?.gatewayId;
   const currentDeployment = envId ? deployments?.[envId] : undefined;
   const hasActiveDeployment = currentDeployment?.status === "active";
   const shouldLoadKeys =
-    !isLoadingAgent &&
+    !isLoadingConfig &&
     !isLoadingDeployments &&
     hasActiveDeployment &&
     securityEnabled &&
@@ -71,7 +90,7 @@ export const SecurityComponent: React.FC = () => {
     envId: shouldLoadKeys ? envId : undefined,
   });
   const isLoading =
-    isLoadingAgent || isLoadingDeployments || (shouldLoadKeys && isLoadingKeys);
+    isLoadingConfig || isLoadingDeployments || (shouldLoadKeys && isLoadingKeys);
 
   const { mutateAsync: createKey, isPending: isCreating } =
     useCreateAgentAPIKey();
@@ -113,15 +132,20 @@ export const SecurityComponent: React.FC = () => {
         illustration: <KeyRound size={48} />,
         title: "This agent uses OAuth",
         description: "Manage OAuth authentication from the configured identity provider.",
-        action: orgId && envId ? (
+        action: orgId ? (
           <Button
             variant="outlined"
             component={Link}
-            to={generatePath(
-              absoluteRouteMap.children.org.children.environments.children.view.children
-                .identityProvider.path,
-              { orgId, envName: envId },
-            )}
+            to={
+              oauthGatewayId
+                ? generatePath(
+                    absoluteRouteMap.children.org.children.gateways.children.view.path,
+                    { orgId, gatewayId: oauthGatewayId },
+                  )
+                : generatePath(absoluteRouteMap.children.org.children.gateways.path, {
+                    orgId,
+                  })
+            }
           >
             View Identity Provider
           </Button>
