@@ -27,7 +27,7 @@ import {
 } from "@wso2/oxygen-ui";
 import { MessageCircle, Send } from "@wso2/oxygen-ui-icons-react";
 import {
-  useGetAgent,
+  useGetAgentConfigurations,
   useGetAgentEndpoints,
   useTestAgentAPIKey,
 } from "@agent-management-platform/api-client";
@@ -78,15 +78,20 @@ export function AgentChat() {
         environment: envId ?? "",
       },
     );
-  const { data: agent } = useGetAgent({
-    orgName: orgId,
-    projName: projectId,
-    agentName: agentId,
-  });
-  const securityEnabled = agent?.configurations?.enableApiKeySecurity ?? true;
+  // GetAgent returns only the lowest environment's config, so read per-env here.
+  const { data: envConfig } = useGetAgentConfigurations(
+    {
+      orgName: orgId,
+      projName: projectId,
+      agentName: agentId,
+    },
+    {
+      environment: envId ?? "",
+    },
+  );
+  const securityEnabled = envConfig?.enableApiKeySecurity ?? true;
   const oauthOnly = !!(
-    agent?.configurations?.enableOAuthSecurity &&
-    !agent?.configurations?.enableApiKeySecurity
+    envConfig?.enableOAuthSecurity && !envConfig?.enableApiKeySecurity
   );
   const {
     data: testKey,

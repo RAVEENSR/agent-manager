@@ -17,7 +17,7 @@
  */
 
 import {
-  useGetAgent,
+  useGetAgentConfigurations,
   useGetAgentEndpoints,
   useTestAgentAPIKey,
 } from "@agent-management-platform/api-client";
@@ -59,15 +59,21 @@ export function Swagger() {
     }
   );
 
-  const { data: agent } = useGetAgent({
-    orgName: orgId,
-    projName: projectId,
-    agentName: agentId,
-  });
-  const securityEnabled = !!agent?.configurations?.enableApiKeySecurity;
+  // GetAgent returns only the lowest environment's config, so read per-env here.
+  const { data: envConfig } = useGetAgentConfigurations(
+    {
+      orgName: orgId,
+      projName: projectId,
+      agentName: agentId,
+    },
+    {
+      environment: envId ?? "",
+    }
+  );
+  // Absent means no per-env config row yet, so assume a key is required.
+  const securityEnabled = envConfig?.enableApiKeySecurity ?? true;
   const oauthOnly = !!(
-    agent?.configurations?.enableOAuthSecurity &&
-    !agent?.configurations?.enableApiKeySecurity
+    envConfig?.enableOAuthSecurity && !envConfig?.enableApiKeySecurity
   );
   const {
     data: testKey,
