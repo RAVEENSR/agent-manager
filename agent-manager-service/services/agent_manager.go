@@ -2701,6 +2701,19 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 		return "", fmt.Errorf("deploy operation is not supported for agent type: '%s'", agent.Provisioning.Type)
 	}
 
+	// Refuse a deploy the Component controller cannot act on. Every write below succeeds at the
+	// API regardless, and the restartedAt bump still rolls the pods, so without this the caller
+	// sees a successful deploy that silently kept running the previous image and env.
+	if block, blockErr := s.ocClient.GetComponentReconcileBlock(ctx, ouID, agentName); blockErr != nil {
+		// Best-effort: a failed pre-flight must not block an otherwise valid deploy.
+		s.logger.Warn("deploy pre-flight: failed to read component conditions",
+			"agentName", agentName, "ouID", ouID, "error", blockErr)
+	} else if block != nil {
+		s.logger.Error("deploy rejected: component cannot be reconciled",
+			"agentName", agentName, "ouID", ouID, "reason", block.Reason, "message", block.Message)
+		return "", fmt.Errorf("%w: %s: %s", utils.ErrComponentNotReconcilable, block.Reason, block.Message)
+	}
+
 	pipeline, err := s.ocClient.GetProjectDeploymentPipeline(ctx, ouID, projectName)
 	if err != nil {
 		s.logger.Error("Failed to fetch deployment pipeline", "ouID", ouID, "projectName", projectName, "error", err)

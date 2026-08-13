@@ -182,6 +182,9 @@ func handleCommonErrors(w http.ResponseWriter, err error, fallbackMsg string) {
 	case errors.Is(err, utils.ErrDeploymentInProgress):
 		utils.WriteErrorResponseWithReason(w, http.StatusConflict,
 			"A deployment is already in progress", err.Error(), utils.ErrCodeConflict)
+	case errors.Is(err, utils.ErrComponentNotReconcilable):
+		utils.WriteErrorResponseWithReason(w, http.StatusConflict,
+			"Agent cannot be deployed in its current state", err.Error(), utils.ErrCodeConflict)
 
 	// Authorization errors
 	case errors.Is(err, utils.ErrUnauthorized):
