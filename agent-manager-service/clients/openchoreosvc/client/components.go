@@ -568,11 +568,18 @@ func (c *openChoreoClient) GetComponentReconcileBlock(ctx context.Context, ouID,
 			JSON500: resp.JSON500,
 		})
 	}
-	if resp.JSON200 == nil || resp.JSON200.Status == nil || resp.JSON200.Status.Conditions == nil {
+	if resp.JSON200 == nil || resp.JSON200.Status == nil {
 		return nil, nil
 	}
+	return reconcileBlockFromConditions(resp.JSON200.Status.Conditions), nil
+}
 
-	for _, cond := range *resp.JSON200.Status.Conditions {
+// reconcileBlockFromConditions returns the blocking Ready condition, or nil when none applies.
+func reconcileBlockFromConditions(conditions *[]gen.Condition) *ComponentReconcileBlock {
+	if conditions == nil {
+		return nil
+	}
+	for _, cond := range *conditions {
 		if cond.Type != BindingStatusReady || cond.Status != "False" {
 			continue
 		}
@@ -583,9 +590,9 @@ func (c *openChoreoClient) GetComponentReconcileBlock(ctx context.Context, ouID,
 		if cond.Message != nil {
 			block.Message = *cond.Message
 		}
-		return block, nil
+		return block
 	}
-	return nil, nil
+	return nil
 }
 
 func (c *openChoreoClient) GetComponent(ctx context.Context, ouID, projectName, componentName string) (*models.AgentResponse, error) {
