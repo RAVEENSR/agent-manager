@@ -69,25 +69,25 @@ func IsValidationError(err error) *ValidationError {
 
 var (
 	// Resource not found errors
-	ErrProjectNotFound                = errors.New("project not found")
-	ErrAgentAlreadyExists             = errors.New("agent already exists")
-	ErrAgentNotFound                  = errors.New("agent not found")
-	ErrTraitNotFound                  = errors.New("trait not found")
-	ErrOrganizationNotFound           = errors.New("organization not found")
-	ErrBuildNotFound                  = errors.New("build not found")
-	ErrEnvironmentNotFound            = errors.New("environment not found")
-	ErrAgentIdentityNotProvisioned    = errors.New("agent identity not yet provisioned for this environment")
-	ErrOrganizationAlreadyExists      = errors.New("organization already exists")
-	ErrProjectAlreadyExists           = errors.New("project already exists")
-	ErrDeploymentPipelineNotFound     = errors.New("deployment pipeline not found")
-	ErrDeploymentPipelineInUse        = errors.New("deployment pipeline is referenced by one or more projects")
-	ErrDeploymentInProgress           = errors.New("a deployment is already in progress")
-	ErrProjectHasAssociatedAgents     = errors.New("project has associated agents")
+	ErrProjectNotFound             = errors.New("project not found")
+	ErrAgentAlreadyExists          = errors.New("agent already exists")
+	ErrAgentNotFound               = errors.New("agent not found")
+	ErrTraitNotFound               = errors.New("trait not found")
+	ErrOrganizationNotFound        = errors.New("organization not found")
+	ErrBuildNotFound               = errors.New("build not found")
+	ErrEnvironmentNotFound         = errors.New("environment not found")
+	ErrAgentIdentityNotProvisioned = errors.New("agent identity not yet provisioned for this environment")
+	ErrOrganizationAlreadyExists   = errors.New("organization already exists")
+	ErrProjectAlreadyExists        = errors.New("project already exists")
+	ErrDeploymentPipelineNotFound  = errors.New("deployment pipeline not found")
+	ErrDeploymentPipelineInUse     = errors.New("deployment pipeline is referenced by one or more projects")
+	ErrDeploymentInProgress        = errors.New("a deployment is already in progress")
+	ErrProjectHasAssociatedAgents  = errors.New("project has associated agents")
 	// ErrComponentNotReconcilable reports that OpenChoreo cannot reconcile the agent's Component,
 	// so a deploy would be silently discarded: the writes land on the Component and Workload, but
 	// no new ComponentRelease is cut, so the pods restart on the previous snapshot with the old
 	// image and env. Deploying is refused up front rather than reporting a success that did nothing.
-	ErrComponentNotReconcilable = errors.New("agent cannot be deployed in its current state")
+	ErrComponentNotReconcilable       = errors.New("agent cannot be deployed in its current state")
 	ErrMonitorNotFound                = errors.New("monitor not found")
 	ErrMonitorAlreadyExists           = errors.New("monitor already exists")
 	ErrMonitorRunNotFound             = errors.New("monitor run not found")
