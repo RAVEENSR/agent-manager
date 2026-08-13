@@ -775,9 +775,12 @@ export function useNavigationItems(): Array<
           pathname,
         ),
       },
-      ...(navVisibility.identityUsers ||
-      navVisibility.identityRoles ||
-      navVisibility.identityGroups
+      // Settings is shown only when profile management is enabled, and then only if RBAC
+      // grants access to at least one of its identity surfaces.
+      ...(globalConfig.featureFlags?.enableProfileManagement === true &&
+      (navVisibility.identityUsers ||
+        navVisibility.identityRoles ||
+        navVisibility.identityGroups)
         ? [
             {
               label: "Settings",
