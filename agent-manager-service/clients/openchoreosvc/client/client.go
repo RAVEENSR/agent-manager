@@ -68,6 +68,9 @@ type OpenChoreoClient interface {
 	// Component Operations
 	CreateComponent(ctx context.Context, ouID, projectName string, req CreateComponentRequest) error
 	GetComponent(ctx context.Context, ouID, projectName, componentName string) (*models.AgentResponse, error)
+	// GetComponentReconcileBlock reports why OpenChoreo cannot reconcile the component, or nil when
+	// nothing is blocking it. Used to refuse writes the Component controller would silently discard.
+	GetComponentReconcileBlock(ctx context.Context, ouID, componentName string) (*ComponentReconcileBlock, error)
 	UpdateComponentBasicInfo(ctx context.Context, ouID, projectName, componentName string, req UpdateComponentBasicInfoRequest) error
 	GetEnvResourceConfigs(ctx context.Context, ouID, projectName, componentName, environment string) (*ComponentResourceConfigsResponse, error)
 	UpdateEnvResourceConfigs(ctx context.Context, ouID, projectName, componentName, environment string, req UpdateComponentResourceConfigsRequest) error

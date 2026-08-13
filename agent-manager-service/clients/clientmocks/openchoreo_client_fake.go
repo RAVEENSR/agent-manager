@@ -102,6 +102,9 @@ import (
 //			GetComponentFileMountsFunc: func(ctx context.Context, ouID string, projectName string, componentName string, environment string) ([]models.FileMountEntry, error) {
 //				panic("mock out the GetComponentFileMounts method")
 //			},
+//			GetComponentReconcileBlockFunc: func(ctx context.Context, ouID string, componentName string) (*client.ComponentReconcileBlock, error) {
+//				panic("mock out the GetComponentReconcileBlock method")
+//			},
 //			GetDeploymentsFunc: func(ctx context.Context, ouID string, pipelineName string, projectName string, componentName string) ([]*models.DeploymentResponse, error) {
 //				panic("mock out the GetDeployments method")
 //			},
@@ -330,6 +333,9 @@ type OpenChoreoClientMock struct {
 
 	// GetComponentFileMountsFunc mocks the GetComponentFileMounts method.
 	GetComponentFileMountsFunc func(ctx context.Context, ouID string, projectName string, componentName string, environment string) ([]models.FileMountEntry, error)
+
+	// GetComponentReconcileBlockFunc mocks the GetComponentReconcileBlock method.
+	GetComponentReconcileBlockFunc func(ctx context.Context, ouID string, componentName string) (*client.ComponentReconcileBlock, error)
 
 	// GetDeploymentsFunc mocks the GetDeployments method.
 	GetDeploymentsFunc func(ctx context.Context, ouID string, pipelineName string, projectName string, componentName string) ([]*models.DeploymentResponse, error)
@@ -772,6 +778,15 @@ type OpenChoreoClientMock struct {
 			ComponentName string
 			// Environment is the environment argument value.
 			Environment string
+		}
+		// GetComponentReconcileBlock holds details about calls to the GetComponentReconcileBlock method.
+		GetComponentReconcileBlock []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// OuID is the ouID argument value.
+			OuID string
+			// ComponentName is the componentName argument value.
+			ComponentName string
 		}
 		// GetDeployments holds details about calls to the GetDeployments method.
 		GetDeployments []struct {
@@ -1324,6 +1339,7 @@ type OpenChoreoClientMock struct {
 	lockGetComponentConfigurations             sync.RWMutex
 	lockGetComponentEndpoints                  sync.RWMutex
 	lockGetComponentFileMounts                 sync.RWMutex
+	lockGetComponentReconcileBlock             sync.RWMutex
 	lockGetDeployments                         sync.RWMutex
 	lockGetEnvResourceConfigs                  sync.RWMutex
 	lockGetEnvironment                         sync.RWMutex
@@ -2589,6 +2605,46 @@ func (mock *OpenChoreoClientMock) GetComponentFileMountsCalls() []struct {
 	mock.lockGetComponentFileMounts.RLock()
 	calls = mock.calls.GetComponentFileMounts
 	mock.lockGetComponentFileMounts.RUnlock()
+	return calls
+}
+
+// GetComponentReconcileBlock calls GetComponentReconcileBlockFunc.
+func (mock *OpenChoreoClientMock) GetComponentReconcileBlock(ctx context.Context, ouID string, componentName string) (*client.ComponentReconcileBlock, error) {
+	if mock.GetComponentReconcileBlockFunc == nil {
+		panic("OpenChoreoClientMock.GetComponentReconcileBlockFunc: method is nil but OpenChoreoClient.GetComponentReconcileBlock was just called")
+	}
+	callInfo := struct {
+		Ctx           context.Context
+		OuID          string
+		ComponentName string
+	}{
+		Ctx:           ctx,
+		OuID:          ouID,
+		ComponentName: componentName,
+	}
+	mock.lockGetComponentReconcileBlock.Lock()
+	mock.calls.GetComponentReconcileBlock = append(mock.calls.GetComponentReconcileBlock, callInfo)
+	mock.lockGetComponentReconcileBlock.Unlock()
+	return mock.GetComponentReconcileBlockFunc(ctx, ouID, componentName)
+}
+
+// GetComponentReconcileBlockCalls gets all the calls that were made to GetComponentReconcileBlock.
+// Check the length with:
+//
+//	len(mockedOpenChoreoClient.GetComponentReconcileBlockCalls())
+func (mock *OpenChoreoClientMock) GetComponentReconcileBlockCalls() []struct {
+	Ctx           context.Context
+	OuID          string
+	ComponentName string
+} {
+	var calls []struct {
+		Ctx           context.Context
+		OuID          string
+		ComponentName string
+	}
+	mock.lockGetComponentReconcileBlock.RLock()
+	calls = mock.calls.GetComponentReconcileBlock
+	mock.lockGetComponentReconcileBlock.RUnlock()
 	return calls
 }
 
