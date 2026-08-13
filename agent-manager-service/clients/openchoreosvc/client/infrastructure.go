@@ -352,7 +352,7 @@ func (c *openChoreoClient) GetProjectDeploymentPipeline(ctx context.Context, ouI
 		})
 	}
 	if projectResp.JSON200 == nil || projectResp.JSON200.Spec == nil || projectResp.JSON200.Spec.DeploymentPipelineRef == nil {
-		return nil, fmt.Errorf("project does not have a deployment pipeline reference")
+		return nil, fmt.Errorf("%w: project %s has no deployment pipeline reference", utils.ErrDeploymentPipelineNotFound, projectName)
 	}
 
 	pipelineName := projectResp.JSON200.Spec.DeploymentPipelineRef.Name

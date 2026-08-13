@@ -577,13 +577,14 @@ func TestUpdateAgentConfigurations_IdentityInjectionError_AbortsUpdate(t *testin
 }
 
 // stubAgentConfigurationServiceForPromote implements AgentConfigurationService
-// by embedding the (nil) interface and overriding only the two methods
-// PromoteAgent actually calls — any other method call panics on the nil
-// embed, which is fine since these tests never exercise them.
+// by embedding the (nil) interface and overriding only the methods PromoteAgent
+// actually calls — any other method call panics on the nil embed, which is fine
+// since these tests never exercise them.
 type stubAgentConfigurationServiceForPromote struct {
 	AgentConfigurationService
-	SystemKeysFunc func(ctx context.Context, agentID, ouID, projectName, environmentName string) (map[string]bool, error)
-	SystemVarsFunc func(ctx context.Context, agentID, ouID, projectName, environmentName string) ([]client.EnvVar, error)
+	SystemKeysFunc     func(ctx context.Context, agentID, ouID, projectName, environmentName string) (map[string]bool, error)
+	SystemVarsFunc     func(ctx context.Context, agentID, ouID, projectName, environmentName string) ([]client.EnvVar, error)
+	UnresolvedMCPsFunc func(ctx context.Context, agentID, ouID, projectName, environmentName string) (map[string]struct{}, error)
 }
 
 func (s *stubAgentConfigurationServiceForPromote) ListSystemManagedEnvVarKeys(ctx context.Context, agentID, ouID, projectName, environmentName string) (map[string]bool, error) {
@@ -592,6 +593,15 @@ func (s *stubAgentConfigurationServiceForPromote) ListSystemManagedEnvVarKeys(ct
 
 func (s *stubAgentConfigurationServiceForPromote) BuildSystemManagedEnvVarsFromConfig(ctx context.Context, agentID, ouID, projectName, environmentName string) ([]client.EnvVar, error) {
 	return s.SystemVarsFunc(ctx, agentID, ouID, projectName, environmentName)
+}
+
+// Defaults to "every MCP connection resolves", so tests that predate the promotion
+// binding check are unaffected by it.
+func (s *stubAgentConfigurationServiceForPromote) ListUnresolvedMCPBindings(ctx context.Context, agentID, ouID, projectName, environmentName string) (map[string]struct{}, error) {
+	if s.UnresolvedMCPsFunc == nil {
+		return map[string]struct{}{}, nil
+	}
+	return s.UnresolvedMCPsFunc(ctx, agentID, ouID, projectName, environmentName)
 }
 
 // shrinkPromotionIdentityPollForTest overrides the poll interval/budget
@@ -697,6 +707,93 @@ type provisionForEnvIfMissingStub struct {
 
 func (s *provisionForEnvIfMissingStub) ProvisionForEnvironmentIfMissing(_ context.Context, _, _, _, _ string, _ models.AgentProvisioningType, _ string) (bool, error) {
 	return false, nil
+}
+
+// An MCP connection that resolves in the source but not the target would promote with its
+// URL and API key injected as empty strings — the agent starts, then fails on every tool
+// call. The promotion must be refused instead, before the component is promoted.
+func TestPromoteAgent_BlocksWhenMCPConnectionUnresolvableInTarget(t *testing.T) {
+	s, promoteCalled := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+	agentConfigSvc, ok := s.agentConfigurationService.(*stubAgentConfigurationServiceForPromote)
+	require.True(t, ok)
+	agentConfigSvc.UnresolvedMCPsFunc = func(_ context.Context, _, _, _, envName string) (map[string]struct{}, error) {
+		if envName == "staging" {
+			return map[string]struct{}{"booking": {}}, nil
+		}
+		return map[string]struct{}{}, nil
+	}
+
+	err := s.PromoteAgent(context.Background(), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, utils.ErrInvalidInput)
+	assert.Contains(t, err.Error(), "booking")
+	assert.False(t, *promoteCalled,
+		"promotion must be refused before PromoteComponent — otherwise the agent is already running with an empty MCP URL by the time this error is returned")
+}
+
+// A connection unresolved in BOTH environments is simply not offered anywhere; this
+// promotion does not break it, so it must not be blocked.
+func TestPromoteAgent_AllowsMCPConnectionUnresolvableInBothEnvironments(t *testing.T) {
+	s, promoteCalled := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+	agentConfigSvc, ok := s.agentConfigurationService.(*stubAgentConfigurationServiceForPromote)
+	require.True(t, ok)
+	agentConfigSvc.UnresolvedMCPsFunc = func(_ context.Context, _, _, _, _ string) (map[string]struct{}, error) {
+		return map[string]struct{}{"booking": {}}, nil
+	}
+
+	err := s.PromoteAgent(context.Background(), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	require.NoError(t, err)
+	assert.True(t, *promoteCalled)
+}
+
+// Not knowing whether the target's MCP connections resolve is not the same as knowing they
+// do. A lookup failure must abort the promotion rather than wave it through — otherwise a
+// transient database blip is all it takes to ship an agent with an empty MCP URL.
+func TestPromoteAgent_BlocksWhenMCPBindingLookupFails(t *testing.T) {
+	s, promoteCalled := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+	agentConfigSvc, ok := s.agentConfigurationService.(*stubAgentConfigurationServiceForPromote)
+	require.True(t, ok)
+	agentConfigSvc.UnresolvedMCPsFunc = func(_ context.Context, _, _, _, _ string) (map[string]struct{}, error) {
+		return nil, errors.New("database unavailable")
+	}
+
+	err := s.PromoteAgent(context.Background(), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	require.Error(t, err)
+	assert.False(t, *promoteCalled)
+}
+
+// Several broken connections are listed in a stable order, so the same rejection produces
+// the same message on every run instead of reshuffling with Go's map iteration order.
+func TestPromoteAgent_ListsBrokenMCPConnectionsInStableOrder(t *testing.T) {
+	s, _ := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+	agentConfigSvc, ok := s.agentConfigurationService.(*stubAgentConfigurationServiceForPromote)
+	require.True(t, ok)
+	agentConfigSvc.UnresolvedMCPsFunc = func(_ context.Context, _, _, _, envName string) (map[string]struct{}, error) {
+		if envName == "staging" {
+			return map[string]struct{}{"payments": {}, "booking": {}}, nil
+		}
+		return map[string]struct{}{}, nil
+	}
+
+	err := s.PromoteAgent(context.Background(), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "booking, payments")
 }
 
 func TestPromoteAgent_BlocksWhenTargetIdentityNotReady(t *testing.T) {
