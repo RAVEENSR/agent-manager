@@ -287,15 +287,15 @@ func (c *agentAPIKeyController) IssueTestAPIKey(w http.ResponseWriter, r *http.R
 	if err != nil {
 		switch {
 		case errors.Is(err, utils.ErrArtifactNotFound):
-			log.Warn("IssueTestAPIKey: agent not found", "ouID", ouID, "agentName", agentName)
+			log.Warn("IssueTestAPIKey: agent not found", "ouID", ouID, "agentName", agentName, "error", err)
 			utils.WriteErrorResponse(w, http.StatusNotFound, "Agent not found")
 			return
 		case errors.Is(err, utils.ErrEnvironmentNotFound):
-			log.Warn("IssueTestAPIKey: environment not found", "ouID", ouID, "agentName", agentName, "envID", envID)
+			log.Warn("IssueTestAPIKey: environment not found", "ouID", ouID, "agentName", agentName, "envID", envID, "error", err)
 			utils.WriteErrorResponse(w, http.StatusNotFound, "Environment not found")
 			return
 		case errors.Is(err, utils.ErrGatewayNotFound):
-			log.Error("IssueTestAPIKey: no gateways found", "ouID", ouID)
+			log.Error("IssueTestAPIKey: no gateways found", "ouID", ouID, "error", err)
 			utils.WriteErrorResponse(w, http.StatusServiceUnavailable, "No gateway connections available")
 			return
 		default:
