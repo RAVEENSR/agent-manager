@@ -3673,6 +3673,21 @@ func (s *agentManagerService) PromoteAgent(ctx context.Context, ouID string, pro
 		return fmt.Errorf("promote operation is not supported for agent type: '%s'", agent.Provisioning.Type)
 	}
 
+	// Refuse a promote the Component controller cannot act on, for the same reason DeployAgent
+	// does: PromoteComponent's writes land on the Component regardless, but no new release is
+	// cut for the target environment, so the caller sees a successful promote that changed
+	// nothing. The block is component-scoped, so a blocked component blocks every environment.
+	if block, blockErr := s.ocClient.GetComponentReconcileBlock(ctx, ouID, agentName); blockErr != nil {
+		// Best-effort: a failed pre-flight must not block an otherwise valid promote.
+		s.logger.Warn("promote pre-flight: failed to read component conditions",
+			"agentName", agentName, "ouID", ouID, "error", blockErr)
+	} else if block != nil {
+		s.logger.Error("promote rejected: component cannot be reconciled",
+			"agentName", agentName, "ouID", ouID, "targetEnvironment", req.TargetEnvironment,
+			"reason", block.Reason, "message", block.Message)
+		return fmt.Errorf("%w: %s: %s", utils.ErrComponentNotReconcilable, block.Reason, block.Message)
+	}
+
 	// Validate promotion path exists: get deployment pipeline and verify source → target is valid
 	pipeline, err := s.ocClient.GetProjectDeploymentPipeline(ctx, ouID, projectName)
 	if err != nil {
