@@ -21,6 +21,9 @@ import (
 //			AttachTraitsFunc: func(ctx context.Context, ouID string, projectName string, componentName string, traitRequests []client.TraitRequest) error {
 //				panic("mock out the AttachTraits method")
 //			},
+//			ClearComponentBaseWorkloadConfigFunc: func(ctx context.Context, ouID string, projectName string, componentName string) error {
+//				panic("mock out the ClearComponentBaseWorkloadConfig method")
+//			},
 //			ComponentExistsFunc: func(ctx context.Context, ouID string, projectName string, componentName string) (bool, error) {
 //				panic("mock out the ComponentExists method")
 //			},
@@ -252,6 +255,9 @@ import (
 type OpenChoreoClientMock struct {
 	// AttachTraitsFunc mocks the AttachTraits method.
 	AttachTraitsFunc func(ctx context.Context, ouID string, projectName string, componentName string, traitRequests []client.TraitRequest) error
+
+	// ClearComponentBaseWorkloadConfigFunc mocks the ClearComponentBaseWorkloadConfig method.
+	ClearComponentBaseWorkloadConfigFunc func(ctx context.Context, ouID string, projectName string, componentName string) error
 
 	// ComponentExistsFunc mocks the ComponentExists method.
 	ComponentExistsFunc func(ctx context.Context, ouID string, projectName string, componentName string) (bool, error)
@@ -489,6 +495,17 @@ type OpenChoreoClientMock struct {
 			ComponentName string
 			// TraitRequests is the traitRequests argument value.
 			TraitRequests []client.TraitRequest
+		}
+		// ClearComponentBaseWorkloadConfig holds details about calls to the ClearComponentBaseWorkloadConfig method.
+		ClearComponentBaseWorkloadConfig []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// OuID is the ouID argument value.
+			OuID string
+			// ProjectName is the projectName argument value.
+			ProjectName string
+			// ComponentName is the componentName argument value.
+			ComponentName string
 		}
 		// ComponentExists holds details about calls to the ComponentExists method.
 		ComponentExists []struct {
@@ -1312,6 +1329,7 @@ type OpenChoreoClientMock struct {
 		}
 	}
 	lockAttachTraits                           sync.RWMutex
+	lockClearComponentBaseWorkloadConfig       sync.RWMutex
 	lockComponentExists                        sync.RWMutex
 	lockCreateComponent                        sync.RWMutex
 	lockCreateDeploymentPipeline               sync.RWMutex
@@ -1433,6 +1451,50 @@ func (mock *OpenChoreoClientMock) AttachTraitsCalls() []struct {
 	mock.lockAttachTraits.RLock()
 	calls = mock.calls.AttachTraits
 	mock.lockAttachTraits.RUnlock()
+	return calls
+}
+
+// ClearComponentBaseWorkloadConfig calls ClearComponentBaseWorkloadConfigFunc.
+func (mock *OpenChoreoClientMock) ClearComponentBaseWorkloadConfig(ctx context.Context, ouID string, projectName string, componentName string) error {
+	if mock.ClearComponentBaseWorkloadConfigFunc == nil {
+		panic("OpenChoreoClientMock.ClearComponentBaseWorkloadConfigFunc: method is nil but OpenChoreoClient.ClearComponentBaseWorkloadConfig was just called")
+	}
+	callInfo := struct {
+		Ctx           context.Context
+		OuID          string
+		ProjectName   string
+		ComponentName string
+	}{
+		Ctx:           ctx,
+		OuID:          ouID,
+		ProjectName:   projectName,
+		ComponentName: componentName,
+	}
+	mock.lockClearComponentBaseWorkloadConfig.Lock()
+	mock.calls.ClearComponentBaseWorkloadConfig = append(mock.calls.ClearComponentBaseWorkloadConfig, callInfo)
+	mock.lockClearComponentBaseWorkloadConfig.Unlock()
+	return mock.ClearComponentBaseWorkloadConfigFunc(ctx, ouID, projectName, componentName)
+}
+
+// ClearComponentBaseWorkloadConfigCalls gets all the calls that were made to ClearComponentBaseWorkloadConfig.
+// Check the length with:
+//
+//	len(mockedOpenChoreoClient.ClearComponentBaseWorkloadConfigCalls())
+func (mock *OpenChoreoClientMock) ClearComponentBaseWorkloadConfigCalls() []struct {
+	Ctx           context.Context
+	OuID          string
+	ProjectName   string
+	ComponentName string
+} {
+	var calls []struct {
+		Ctx           context.Context
+		OuID          string
+		ProjectName   string
+		ComponentName string
+	}
+	mock.lockClearComponentBaseWorkloadConfig.RLock()
+	calls = mock.calls.ClearComponentBaseWorkloadConfig
+	mock.lockClearComponentBaseWorkloadConfig.RUnlock()
 	return calls
 }
 

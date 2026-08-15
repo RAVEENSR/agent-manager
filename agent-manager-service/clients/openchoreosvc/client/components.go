@@ -351,10 +351,18 @@ func getWorkflowName(build *BuildConfig) (string, error) {
 	return "", fmt.Errorf("invalid build configuration: unsupported build type '%s'", build.Type)
 }
 
+// Build workflow parameter names carrying the agent's runtime env vars and file mounts. They are
+// seeded once at agent creation and cleared on the first successful deploy — see
+// ClearComponentBaseWorkloadConfig for why they must not outlive that.
+const (
+	workflowParamEnvironmentVariables = "environmentVariables"
+	workflowParamFileMounts           = "fileMounts"
+)
+
 func buildWorkflowParameters(req CreateComponentRequest) (map[string]any, error) {
 	params := map[string]any{
-		"environmentVariables": buildEnvironmentVariables(req),
-		"fileMounts":           buildFileMounts(req),
+		workflowParamEnvironmentVariables: buildEnvironmentVariables(req),
+		workflowParamFileMounts:           buildFileMounts(req),
 	}
 
 	// Add repository details in nested format expected by ClusterWorkflow
@@ -1815,6 +1823,130 @@ func (c *openChoreoClient) ReplaceComponentFileMounts(ctx context.Context, ouID,
 		})
 	}
 
+	return nil
+}
+
+// ClearComponentBaseWorkloadConfig removes user-managed env vars and file mounts from the
+// component-wide base: the Component's build workflow parameters and the Workload's container spec.
+//
+// Runtime env vars and file mounts belong on each environment's ReleaseBinding workloadOverrides.
+// A copy left in the base leaks into every other environment (each environment renders
+// base + its own overrides) and makes removal impossible, because an override can never unset a
+// base key — mergeEnvConfigs/mergeFileConfigs fall back to the base whenever the override list
+// omits it, and return the base outright when the override list is empty.
+//
+// Both halves must be cleared. The build's generate-workload step rebuilds the Workload from the
+// workflow parameters and PUTs it wholesale, so clearing only the Workload would be undone by the
+// next build. Clearing the parameters leaves them to resolve to the workflow schema's `default: []`.
+//
+// Safe to call when there is nothing to clear, and when no Workload exists yet (never built).
+func (c *openChoreoClient) ClearComponentBaseWorkloadConfig(ctx context.Context, ouID, projectName, componentName string) error {
+	if err := c.clearComponentWorkflowConfigParams(ctx, ouID, componentName); err != nil {
+		return fmt.Errorf("failed to clear component workflow config parameters: %w", err)
+	}
+	if err := c.clearWorkloadContainerConfig(ctx, ouID, componentName); err != nil {
+		return fmt.Errorf("failed to clear workload container config: %w", err)
+	}
+	return nil
+}
+
+// clearComponentWorkflowConfigParams drops the environmentVariables and fileMounts build workflow
+// parameters from the Component CR. They are seeded once at agent creation (the only carrier for
+// create-time config, since no Workload or ReleaseBinding exists yet) and are dead weight once the
+// first deploy has copied them onto the environment's binding.
+func (c *openChoreoClient) clearComponentWorkflowConfigParams(ctx context.Context, ouID, componentName string) error {
+	namespaceName := c.NamespaceFor(ouID)
+	resp, err := c.ocClient.GetComponentWithResponse(ctx, namespaceName, componentName)
+	if err != nil {
+		return fmt.Errorf("failed to get component: %w", err)
+	}
+	if resp.StatusCode() != http.StatusOK {
+		return handleErrorResponse(resp.StatusCode(), ErrorResponses{
+			JSON401: resp.JSON401,
+			JSON403: resp.JSON403,
+			JSON404: resp.JSON404,
+			JSON500: resp.JSON500,
+		})
+	}
+	if resp.JSON200 == nil || resp.JSON200.Spec == nil {
+		return fmt.Errorf("invalid component response")
+	}
+
+	component := resp.JSON200
+	if component.Spec.Workflow == nil || component.Spec.Workflow.Parameters == nil {
+		return nil
+	}
+	params := *component.Spec.Workflow.Parameters
+	_, hasEnvVars := params[workflowParamEnvironmentVariables]
+	_, hasFileMounts := params[workflowParamFileMounts]
+	if !hasEnvVars && !hasFileMounts {
+		return nil
+	}
+	delete(params, workflowParamEnvironmentVariables)
+	delete(params, workflowParamFileMounts)
+
+	component.Status = nil
+	updateResp, err := c.ocClient.UpdateComponentWithResponse(ctx, namespaceName, componentName, *component)
+	if err != nil {
+		return fmt.Errorf("failed to update component: %w", err)
+	}
+	if updateResp.StatusCode() != http.StatusOK {
+		return handleErrorResponse(updateResp.StatusCode(), ErrorResponses{
+			JSON401: updateResp.JSON401,
+			JSON403: updateResp.JSON403,
+			JSON404: updateResp.JSON404,
+			JSON500: updateResp.JSON500,
+		})
+	}
+	return nil
+}
+
+// clearWorkloadContainerConfig drops env vars and file mounts from the component's Workload, the
+// shared render base. Returns nil when no Workload exists yet — the agent has not been built, so
+// there is nothing to clear.
+func (c *openChoreoClient) clearWorkloadContainerConfig(ctx context.Context, ouID, componentName string) error {
+	namespaceName := c.NamespaceFor(ouID)
+	workloadResp, err := c.ocClient.ListWorkloadsWithResponse(ctx, namespaceName, &gen.ListWorkloadsParams{
+		Component: &componentName,
+		Limit:     &defaultListLimit,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list workloads: %w", err)
+	}
+	if workloadResp.StatusCode() != http.StatusOK {
+		return handleErrorResponse(workloadResp.StatusCode(), ErrorResponses{
+			JSON401: workloadResp.JSON401,
+			JSON403: workloadResp.JSON403,
+			JSON404: workloadResp.JSON404,
+			JSON500: workloadResp.JSON500,
+		})
+	}
+	if workloadResp.JSON200 == nil || len(workloadResp.JSON200.Items) == 0 {
+		return nil
+	}
+
+	workload := workloadResp.JSON200.Items[0]
+	if workload.Spec == nil || workload.Spec.Container == nil {
+		return nil
+	}
+	if workload.Spec.Container.Env == nil && workload.Spec.Container.Files == nil {
+		return nil
+	}
+	workload.Spec.Container.Env = nil
+	workload.Spec.Container.Files = nil
+
+	updateResp, err := c.ocClient.UpdateWorkloadWithResponse(ctx, namespaceName, workload.Metadata.Name, workload)
+	if err != nil {
+		return fmt.Errorf("failed to update workload: %w", err)
+	}
+	if updateResp.StatusCode() != http.StatusOK {
+		return handleErrorResponse(updateResp.StatusCode(), ErrorResponses{
+			JSON401: updateResp.JSON401,
+			JSON403: updateResp.JSON403,
+			JSON404: updateResp.JSON404,
+			JSON500: updateResp.JSON500,
+		})
+	}
 	return nil
 }
 
