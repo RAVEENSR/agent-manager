@@ -373,7 +373,11 @@ func (s *PlatformGatewayService) GetGateway(gatewayID, ouID string) (*GatewayRes
 	return response, nil
 }
 
-// SaveGatewayPolicyManifest stores the latest gateway-reported policy manifest.
+// SaveGatewayPolicyManifest stores the latest gateway-reported policy manifest in the
+// in-process cache. Gateways re-push their full manifest on every heartbeat, so writing
+// it to the jsonb column cost a large row update per push for data that is regenerated
+// on the next push anyway. Every gateway runs the same policy bundle, so the cache keeps
+// a single newest copy shared by all of them.
 func (s *PlatformGatewayService) SaveGatewayPolicyManifest(gatewayID string, manifest map[string]interface{}) error {
 	gateway, err := s.gatewayRepo.GetByUUID(gatewayID)
 	if err != nil {
@@ -383,10 +387,9 @@ func (s *PlatformGatewayService) SaveGatewayPolicyManifest(gatewayID string, man
 		return utils.ErrGatewayNotFound
 	}
 
-	gateway.Manifest = manifest
-	gateway.UpdatedAt = time.Now().UTC()
+	gatewayManifestCache.Set(manifest)
 
-	return s.gatewayRepo.UpdateGateway(gateway)
+	return nil
 }
 
 // UpdateGateway updates gateway details
@@ -487,7 +490,9 @@ func (s *PlatformGatewayService) DeleteGateway(gatewayID, ouID string) error {
 		return err
 	}
 
-	// Invalidate all cached tokens for this gateway
+	// Invalidate all cached tokens for this gateway. The cached policy manifest is not
+	// touched: it is one shared copy describing every gateway's policy bundle, so the
+	// gateways that remain still need it.
 	s.tokenCache.InvalidateGateway(gateway.UUID)
 	slog.Info("gateway deleted and cache invalidated", "gatewayID", gatewayID)
 

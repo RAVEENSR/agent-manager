@@ -295,7 +295,7 @@ func (s *MCPProxyService) ListAvailableMCPPolicies(ctx context.Context, orgUUID 
 			continue
 		}
 		gatewayPolicies := map[string]models.MCPPolicyAvailableItem{}
-		for _, policy := range extractGatewayPolicyManifestItems(gateway.Manifest) {
+		for _, policy := range extractGatewayPolicyManifestItems(gatewayManifest(gateway)) {
 			if policy.Name == "" || policy.Version == "" {
 				continue
 			}
@@ -1382,7 +1382,7 @@ func egressCandidatesForEnvironment(repo repositories.GatewayRepository, ouID st
 // advertises both mcp-auth v1 and mcp-authz v1 (the policies identity mode emits).
 func gatewayHasMCPIdentityPolicies(gateway *models.Gateway) bool {
 	need := map[string]bool{"mcp-auth\x00v1": false, "mcp-authz\x00v1": false}
-	for _, item := range extractGatewayPolicyManifestItems(gateway.Manifest) {
+	for _, item := range extractGatewayPolicyManifestItems(gatewayManifest(gateway)) {
 		key := item.Name + "\x00" + normalizePolicyVersionToMajor(item.Version)
 		if _, ok := need[key]; ok {
 			need[key] = true

@@ -61,7 +61,7 @@ func intersectActiveGatewayLLMPolicies(gatewayRepo repositories.GatewayRepositor
 			continue
 		}
 		gatewayPolicies := map[string]llmPolicyManifestItem{}
-		for _, policy := range extractLLMPolicyManifestItems(gateway.Manifest) {
+		for _, policy := range extractLLMPolicyManifestItems(gatewayManifest(gateway)) {
 			if policy.Name == "" || policy.Version == "" {
 				continue
 			}
