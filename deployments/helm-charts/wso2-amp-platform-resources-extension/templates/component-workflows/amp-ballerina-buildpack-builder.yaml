@@ -120,6 +120,36 @@ spec:
                         type: string
                         description: "Key within the secret"
 
+        fileMounts:
+          type: array
+          default: []
+          description: "List of file mounts"
+          items:
+            type: object
+            required: [key, mountPath]
+            properties:
+              key:
+                type: string
+                description: "File mount key; also the ConfigMap/Secret data key"
+              mountPath:
+                type: string
+                description: "Absolute path the file is mounted at inside the container"
+              value:
+                type: string
+                description: "Inline file content (optional if valueFrom is set)"
+              valueFrom:
+                type: object
+                properties:
+                  secretKeyRef:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                        description: "Name of the K8s secret"
+                      key:
+                        type: string
+                        description: "Key within the secret"
+
   runTemplate:
     apiVersion: argoproj.io/v1alpha1
     kind: Workflow

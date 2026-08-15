@@ -1791,17 +1791,23 @@ func (s *agentConfigurationService) processEnvProviderChange(
 		oldProxyHandle = existingMapping.LLMProxy.Handle
 	}
 
-	// Internal-agent only: inject env vars into Component/ReleaseBinding.
+	// Internal-agent only: inject env vars into ReleaseBinding/Component.
 	// SecretReference is already created/updated by secretClient.CreateSecret above.
+	//
+	// The ReleaseBinding for THIS environment is the target — the proxy URL and API key ref are
+	// per-environment, and the Component CR is component-wide, so writing them there for anything
+	// but a bootstrap default is last-write-wins across environments. The Component CR write is
+	// therefore scoped to the first environment, matching every other injection site in this file.
 	if !isExternalAgent {
 		proxyURL := buildProxyURL(gateway, proxy.Configuration.Context, true)
 		envVarsToInject := buildLLMEnvVars(envConfigTemplates, proxyURL, secretRefName)
-		if uvErr := s.ocClient.UpdateComponentEnvVars(ctx, ouID, config.ProjectName, config.AgentID, envVarsToInject); uvErr != nil {
-			s.logger.Error("failed to update Component CR env vars in Scenario A — Component CR in inconsistent state", "env", envName, "err", uvErr)
+		if rbErr := s.ocClient.UpdateReleaseBindingEnvVars(ctx, ouID, config.ProjectName, config.AgentID, envName, envVarsToInject); rbErr != nil {
+			s.logger.Warn("failed to patch ReleaseBinding in Scenario A", "env", envName, "err", rbErr)
 		}
+		// Bootstrap default for agents with no ReleaseBinding yet.
 		if firstEnvName != "" && envName == firstEnvName {
-			if rbErr := s.ocClient.UpdateReleaseBindingEnvVars(ctx, ouID, config.ProjectName, config.AgentID, firstEnvName, envVarsToInject); rbErr != nil {
-				s.logger.Warn("failed to patch ReleaseBinding in Scenario A", "env", envName, "err", rbErr)
+			if uvErr := s.ocClient.UpdateComponentEnvVars(ctx, ouID, config.ProjectName, config.AgentID, envVarsToInject); uvErr != nil {
+				s.logger.Error("failed to update Component CR env vars in Scenario A — Component CR in inconsistent state", "env", envName, "err", uvErr)
 			}
 		}
 	}

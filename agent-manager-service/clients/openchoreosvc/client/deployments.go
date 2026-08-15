@@ -560,15 +560,17 @@ func (c *openChoreoClient) PromoteComponent(ctx context.Context, ouID, projectNa
 		return fmt.Errorf("failed to check target release binding: %w", err)
 	}
 
-	// Build workload overrides if env/file overrides are provided
+	// Build workload overrides if env/file overrides are provided.
+	// Nil means "the caller supplied nothing"; an empty slice means "this environment has none"
+	// and must still be written, so the target does not silently inherit the component-wide base.
 	var workloadOverrides *gen.WorkloadOverrides
-	if len(envOverrides) > 0 || len(fileOverrides) > 0 {
+	if envOverrides != nil || fileOverrides != nil {
 		container := &gen.ContainerOverride{}
-		if len(envOverrides) > 0 {
+		if envOverrides != nil {
 			envVars := toGenEnvVars(envOverrides)
 			container.Env = &envVars
 		}
-		if len(fileOverrides) > 0 {
+		if fileOverrides != nil {
 			fileVars := toGenFileVars(fileOverrides)
 			container.Files = &fileVars
 		}
