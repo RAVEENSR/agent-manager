@@ -280,16 +280,6 @@ func buildProxyURL(gateway *models.Gateway, contextPath *string, isInternal bool
 // vhost is correct for external agents but an unreachable address for a sandboxed pod, and
 // naming that condition is what replaces the deleted name-based derivation as a diagnostic.
 func internalBaseOrVhost(gateway *models.Gateway, isInternal bool) string {
-	if !isInternal {
-		return gateway.Vhost
-	}
-	if runtimeURL := strings.TrimSpace(gateway.RuntimeURL); runtimeURL != "" {
-		return runtimeURL
-	}
-	slog.Error("gateway has no registered runtimeUrl; falling back to the externally-reachable "+
-		"vhost, which sandboxed agents cannot route to. Upgrade the gateway extension chart so "+
-		"registration supplies runtimeUrl",
-		"gatewayName", gateway.Name, "gatewayID", gateway.UUID, "vhost", gateway.Vhost)
 	return gateway.Vhost
 }
 
