@@ -2725,10 +2725,14 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 		return "", fmt.Errorf("no environment found in deployment pipeline")
 	}
 
-	// Convert to deploy request with user-provided env vars
+	// Image only. Env vars and file mounts go to the environment's ReleaseBinding
+	// (applyEnvScopedWorkloadConfig below), not to the component-wide Workload.
+	//
+	// Environment is intentionally unset: it exists solely to make Deploy stamp restartedAt on the
+	// binding, and the override write already does that. Setting it here would stamp the same
+	// binding twice per deploy and can roll the pod twice.
 	deployReq := client.DeployRequest{
-		ImageID:     req.ImageId,
-		Environment: lowestEnv,
+		ImageID: req.ImageId,
 	}
 
 	// Log deploy request env var details for debugging
@@ -2917,9 +2921,9 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 		return "", fmt.Errorf("%w for agent %s in environment %s", utils.ErrDeploymentInProgress, agentName, lowestEnv)
 	}
 
-	componentDeployConfig := client.ComponentDeploymentConfigRequest{
-		Env: deployReq.Env,
-	}
+	// Traits only. Env is left nil so the Component's build workflow parameters are not rewritten
+	// here — this deploy's env vars go to the environment's ReleaseBinding instead.
+	componentDeployConfig := client.ComponentDeploymentConfigRequest{}
 	requiresComponentConfig := false
 	isAPIAgent := agent.Type.Type == string(utils.AgentTypeAPI)
 

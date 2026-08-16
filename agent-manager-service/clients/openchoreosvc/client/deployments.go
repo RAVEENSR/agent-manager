@@ -170,7 +170,7 @@ func (c *openChoreoClient) Deploy(ctx context.Context, ouID, projectName, compon
 	workload := workloadResp.JSON200.Items[0]
 	workloadName := workload.Metadata.Name
 
-	// Update the container image and environment variables
+	// Update the container image
 	if workload.Spec == nil {
 		workload.Spec = &gen.WorkloadSpec{}
 	}
@@ -178,20 +178,7 @@ func (c *openChoreoClient) Deploy(ctx context.Context, ouID, projectName, compon
 		workload.Spec.Container = &gen.WorkloadContainer{}
 	}
 
-	// Update image
 	workload.Spec.Container.Image = req.ImageID
-
-	// Update environment variables if provided (nil means no change, empty slice means clear all)
-	if req.Env != nil {
-		envVars := toGenEnvVars(req.Env)
-		workload.Spec.Container.Env = &envVars
-	}
-
-	// Update file mounts if provided
-	if req.Files != nil {
-		fileVars := toGenFileVars(req.Files)
-		workload.Spec.Container.Files = &fileVars
-	}
 
 	// Update workload
 	updateResp, err := c.ocClient.UpdateWorkloadWithResponse(ctx, namespaceName, workloadName, workload)
@@ -208,15 +195,9 @@ func (c *openChoreoClient) Deploy(ctx context.Context, ouID, projectName, compon
 		})
 	}
 
-	// Set restartedAt on the ReleaseBinding to force a pod rollout.
-	// This ensures pods pick up updated secret values, since secret references
-	// in the spec don't change when the underlying secret value changes.
-	if req.Environment != "" {
-		if err := c.setRestartedAt(ctx, namespaceName, componentName, req.Environment); err != nil {
-			return fmt.Errorf("failed to set restartedAt: %w", err)
-		}
-	}
-
+	// No restartedAt stamp here. The pod rollout is triggered by the write that follows this one —
+	// ReplaceReleaseBindingWorkloadOverrides bumps restartedAt in the same update that applies the
+	// environment's env vars and file mounts, so the rollout and the config change land together.
 	return nil
 }
 
@@ -325,25 +306,6 @@ func bumpRestartedAt(rb *gen.ReleaseBinding) {
 		rb.Spec.ComponentTypeEnvironmentConfigs = &overrides
 	}
 	(*rb.Spec.ComponentTypeEnvironmentConfigs)["restartedAt"] = time.Now().Format(time.RFC3339Nano)
-}
-
-// setRestartedAt updates restartedAt on the ReleaseBinding for the given environment to trigger a pod rollout.
-// It uses a List/Get/Update cycle: List finds the binding name, then retryReleaseBindingUpdate handles
-// the Get/Update with retry on resource-version conflicts.
-func (c *openChoreoClient) setRestartedAt(ctx context.Context, namespaceName, componentName, envName string) error {
-	binding, err := c.findReleaseBindingForEnv(ctx, namespaceName, componentName, envName)
-	if err != nil {
-		return err
-	}
-	if binding == nil {
-		slog.Warn("no release binding found for environment during deploy, pod rollout may not be triggered",
-			"component", componentName, "environment", envName)
-		return nil
-	}
-
-	return c.retryReleaseBindingUpdate(ctx, namespaceName, binding.Metadata.Name, func(rb *gen.ReleaseBinding) {
-		bumpRestartedAt(rb)
-	})
 }
 
 // UpdateReleaseBindingTraitConfigs updates traitEnvironmentConfigs AND sets restartedAt on a

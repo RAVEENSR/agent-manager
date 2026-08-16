@@ -256,11 +256,11 @@ type GatewayListenerSpec struct {
 }
 
 // DeployRequest contains data for deploying a component
+// Env vars and file mounts are deliberately not here: they are per-environment and belong on the
+// environment's ReleaseBinding workloadOverrides, not on the component-wide Workload that every
+// environment renders from.
 type DeployRequest struct {
-	ImageID     string
-	Env         []EnvVar
-	Files       []FileVar
-	Environment string
+	ImageID string
 }
 
 // EnvVar represents an environment variable for deployment
