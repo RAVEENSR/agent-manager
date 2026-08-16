@@ -2991,25 +2991,75 @@ func (c *openChoreoClient) GetComponentFileMounts(ctx context.Context, ouID, pro
 		})
 	}
 
-	var fileMounts []models.FileMountEntry
+	// Base file mounts from the Workload, keyed so the environment's overrides can replace them.
+	// Order is tracked separately: a map alone would return the mounts in a different order on
+	// every call, which reshuffles the list the console renders.
+	fileMountMap := make(map[string]models.FileMountEntry)
+	var order []string
+	appendMount := func(f gen.FileVar) {
+		isSensitive := f.ValueFrom != nil && f.ValueFrom.SecretKeyRef != nil
+		secretRef := ""
+		if isSensitive && f.ValueFrom.SecretKeyRef.Name != nil {
+			secretRef = *f.ValueFrom.SecretKeyRef.Name
+		}
+		if _, seen := fileMountMap[f.Key]; !seen {
+			order = append(order, f.Key)
+		}
+		fileMountMap[f.Key] = models.FileMountEntry{
+			Key:         f.Key,
+			MountPath:   f.MountPath,
+			Value:       utils.StrPointerAsStr(f.Value, ""),
+			IsSensitive: isSensitive,
+			SecretRef:   secretRef,
+		}
+	}
+
 	if workloadResp.JSON200 != nil && len(workloadResp.JSON200.Items) > 0 {
 		workload := workloadResp.JSON200.Items[0]
 		if workload.Spec != nil && workload.Spec.Container != nil && workload.Spec.Container.Files != nil {
 			for _, f := range *workload.Spec.Container.Files {
-				isSensitive := f.ValueFrom != nil && f.ValueFrom.SecretKeyRef != nil
-				secretRef := ""
-				if isSensitive && f.ValueFrom.SecretKeyRef.Name != nil {
-					secretRef = *f.ValueFrom.SecretKeyRef.Name
-				}
-				fileMounts = append(fileMounts, models.FileMountEntry{
-					Key:         f.Key,
-					MountPath:   f.MountPath,
-					Value:       utils.StrPointerAsStr(f.Value, ""),
-					IsSensitive: isSensitive,
-					SecretRef:   secretRef,
-				})
+				appendMount(f)
 			}
 		}
+	}
+
+	// Overlay this environment's release binding overrides. Deploy writes the effective set here
+	// and clears the Workload base, so without this the mounts vanish from the console after the
+	// first deploy even though they are mounted on the pod. Mirrors GetComponentConfigurations.
+	releaseBindingResp, err := c.ocClient.ListReleaseBindingsWithResponse(ctx, namespaceName, &gen.ListReleaseBindingsParams{
+		Component: &componentName,
+		Limit:     &defaultListLimit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list release bindings: %w", err)
+	}
+	if releaseBindingResp.StatusCode() != http.StatusOK {
+		return nil, handleErrorResponse(releaseBindingResp.StatusCode(), ErrorResponses{
+			JSON401: releaseBindingResp.JSON401,
+			JSON403: releaseBindingResp.JSON403,
+			JSON404: releaseBindingResp.JSON404,
+			JSON500: releaseBindingResp.JSON500,
+		})
+	}
+
+	if releaseBindingResp.JSON200 != nil {
+		for _, binding := range releaseBindingResp.JSON200.Items {
+			if binding.Spec == nil || binding.Spec.Environment != environment {
+				continue
+			}
+			if binding.Spec.WorkloadOverrides != nil && binding.Spec.WorkloadOverrides.Container != nil &&
+				binding.Spec.WorkloadOverrides.Container.Files != nil {
+				for _, f := range *binding.Spec.WorkloadOverrides.Container.Files {
+					appendMount(f)
+				}
+			}
+			break
+		}
+	}
+
+	var fileMounts []models.FileMountEntry
+	for _, key := range order {
+		fileMounts = append(fileMounts, fileMountMap[key])
 	}
 
 	return fileMounts, nil
