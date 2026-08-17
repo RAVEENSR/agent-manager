@@ -186,6 +186,28 @@ func TestEnsureCredentials_ExistingOrg_ReverifiesOnlySchedulerBinding(t *testing
 	assert.Equal(t, "amp-scheduler-acme", boundClientIDs[0])
 }
 
+// An empty orgUUID makes Thunder create the application under the platform's default
+// organization unit. Because the OU is written once at creation and findApp matches by
+// name across all OUs, that misparenting is permanent and invisible — so refuse the input
+// rather than hand Thunder a value that silently means "somebody else's organization".
+func TestEnsureCredentials_EmptyOrgUUID_RefusesToProvision(t *testing.T) {
+	// Every collaborator is empty: the mocks panic if anything is provisioned.
+	p := &publisherCredentialProvisioner{
+		thunderClient:     &clientmocks.ThunderClientMock{},
+		secretClient:      &clientmocks.SecretManagementClientMock{},
+		ocClient:          &clientmocks.OpenChoreoClientMock{},
+		credRepo:          &repomocks.OrgPublisherCredentialRepositoryMock{},
+		schedulerCredRepo: &repomocks.OrgSchedulerCredentialRepositoryMock{},
+		logger:            discardLogger(),
+		encryptionKey:     testEncryptionKey,
+		orgOCClients:      make(map[string]occlient.OpenChoreoClient),
+	}
+
+	_, err := p.EnsureCredentials(context.Background(), "acme", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "orgUUID is required")
+}
+
 // credRepo has no GetByOrgNameFunc — the mock panics if GetOCClientForOrg ever touches it.
 func TestGetOCClientForOrg_ReadsFromSchedulerCredRepo(t *testing.T) {
 	encryptedSecret, err := utils.EncryptBytes([]byte("scheduler-secret-value"), testEncryptionKey)

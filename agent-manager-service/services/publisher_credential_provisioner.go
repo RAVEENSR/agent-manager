@@ -218,8 +218,19 @@ func (p *publisherCredentialProvisioner) resolveSecretRef(ctx context.Context, o
 
 // EnsureCredentials provisions per-org publisher and scheduler credentials.
 // Uses singleflight to deduplicate concurrent provisioning calls for the same org.
+//
+// orgUUID is required. Thunder's EnsureApp falls back to the platform's default
+// organization unit when it is empty, and the OU is written once at application
+// creation: findApp then matches by name across all OUs, so a misparented app is found
+// forever after and its OU is never revisited. An empty value here would therefore mint
+// a per-org credential belonging to another organization, permanently and silently.
 func (p *publisherCredentialProvisioner) EnsureCredentials(ctx context.Context, ouID, orgUUID string) (*PublisherCredentials, error) {
 	p.logger.Debug("EnsureCredentials called", "ouID", ouID, "orgUUID", orgUUID)
+
+	if orgUUID == "" {
+		return nil, fmt.Errorf("cannot provision credentials for org %s: orgUUID is required, "+
+			"since an empty value would create the Thunder application under the default organization unit", ouID)
+	}
 
 	result, err, _ := p.sfg.Do("provision:"+ouID, func() (any, error) {
 		pubCreds, err := p.provisionPublisherCredentials(ctx, ouID, orgUUID)
