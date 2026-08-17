@@ -82,13 +82,15 @@ func TestEnsureCredentials_NewOrg_BindsOnlySchedulerCredential(t *testing.T) {
 		},
 	}
 
-	var schedulerUpserts []*models.OrgSchedulerCredential
+	var schedulerUpserts []models.OrgSchedulerCredential
 	schedulerCredRepo := &repomocks.OrgSchedulerCredentialRepositoryMock{
 		GetByOrgNameFunc: func(_ string) (*models.OrgSchedulerCredential, error) {
 			return nil, gorm.ErrRecordNotFound
 		},
 		UpsertFunc: func(cred *models.OrgSchedulerCredential) error {
-			schedulerUpserts = append(schedulerUpserts, cred)
+			// Snapshot by value: the caller reuses one struct across both writes, so
+			// storing the pointer would make every assertion read post-mutation state.
+			schedulerUpserts = append(schedulerUpserts, *cred)
 			return nil
 		},
 	}
@@ -123,6 +125,8 @@ func TestEnsureCredentials_NewOrg_BindsOnlySchedulerCredential(t *testing.T) {
 	assert.Equal(t, "amp-scheduler-acme", schedulerUpserts[0].ClientID)
 	assert.NotEmpty(t, schedulerUpserts[0].ClientSecretEncrypted,
 		"the first write must already carry the secret")
+	assert.Empty(t, schedulerUpserts[0].SecretKVPath,
+		"the first write lands before the reference fields are resolved")
 	assert.NotEmpty(t, schedulerUpserts[1].SecretKVPath)
 	assert.NotEmpty(t, schedulerUpserts[1].SecretKey)
 
@@ -360,13 +364,16 @@ func TestProvisionSchedulerCredentials_ConcurrentCallsForOneOrgCollapse(t *testi
 	var mu sync.Mutex
 	rotations := 0
 
-	entered := make(chan struct{})
+	// EnsureApp signals on every entry and then parks, so while the first call is parked a
+	// second signal can only mean a second call got through. Waiting for that signal, rather
+	// than sleeping and hoping the second call got far enough, inverts the timing risk: a
+	// starved runner can make this test pass spuriously but never fail spuriously.
+	entries := make(chan struct{}, 4)
 	release := make(chan struct{})
-	var enterOnce sync.Once
 
 	thunderMock := &clientmocks.ThunderClientMock{
 		EnsureAppFunc: func(_ context.Context, appName, _ string) (string, string, bool, error) {
-			enterOnce.Do(func() { close(entered) })
+			entries <- struct{}{}
 			<-release
 			return appName, "", false, nil // app exists, secret unavailable → forces a rotation
 		},
@@ -412,7 +419,7 @@ func TestProvisionSchedulerCredentials_ConcurrentCallsForOneOrgCollapse(t *testi
 		assert.NoError(t, p.provisionSchedulerCredentials(context.Background(), "acme", "org-uuid-1"))
 	}()
 
-	<-entered // the first call is inside the critical section and holds the org's slot
+	<-entries // the first call is parked inside EnsureApp and holds the org's slot
 
 	wg.Add(1)
 	go func() {
@@ -420,13 +427,21 @@ func TestProvisionSchedulerCredentials_ConcurrentCallsForOneOrgCollapse(t *testi
 		assert.NoError(t, p.provisionSchedulerCredentials(context.Background(), "acme", "org-uuid-1"))
 	}()
 
-	// Give the second call time to reach the deduplication point. Generous margin: the
-	// assertion below is what fails on a regression, not this wait.
-	time.Sleep(200 * time.Millisecond)
+	select {
+	case <-entries:
+		close(release)
+		wg.Wait()
+		t.Fatal("the second call reached Thunder while the first was still in flight: " +
+			"provisioning for one org was not deduplicated")
+	case <-time.After(500 * time.Millisecond):
+		// No second entry while the first is parked — the second call was deduplicated.
+	}
+
 	close(release)
 	wg.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
 	assert.Equal(t, 1, rotations, "concurrent provisioning of one org must rotate its secret once")
+	assert.Empty(t, entries, "EnsureApp must be reached exactly once for one org")
 }

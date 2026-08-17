@@ -18,6 +18,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -159,6 +160,16 @@ func (s *monitorSchedulerService) triggerPendingMonitors(ctx context.Context) er
 
 	for _, monitor := range monitors {
 		if err := s.triggerMonitor(ctx, &monitor); err != nil {
+			// An org with no usable scheduler credential is an expected state, not a
+			// malfunction: credentials are provisioned on the request path, and this
+			// recurs every cycle until one is. Kept at Warn rather than Debug — the
+			// monitor genuinely is not running, and a condition nobody sees is how this
+			// class of failure stays invisible for weeks.
+			if errors.Is(err, ErrSchedulerCredentialNotFound) {
+				s.logger.Warn("Skipping monitor: organization has no usable scheduler credential",
+					"monitor", monitor.Name, "ouID", monitor.OUID)
+				continue
+			}
 			s.logger.Error("Failed to trigger monitor", "monitor", monitor.Name, "error", err)
 		}
 	}
@@ -239,6 +250,14 @@ func (s *monitorSchedulerService) syncRunStatus(ctx context.Context) error {
 
 	for _, run := range runs {
 		if err := s.syncSingleRunStatus(ctx, &run); err != nil {
+			// Debug rather than the Warn used when triggering: the org-level condition is
+			// already reported there once per cycle, and repeating it per pending run —
+			// up to the batch limit — would bury the message it duplicates.
+			if errors.Is(err, ErrSchedulerCredentialNotFound) {
+				s.logger.Debug("Skipping run status sync: organization has no usable scheduler credential",
+					"runID", run.ID)
+				continue
+			}
 			s.logger.Error("Failed to sync run status", "runID", run.ID, "error", err)
 		}
 	}

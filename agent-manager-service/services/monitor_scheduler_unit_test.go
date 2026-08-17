@@ -39,6 +39,10 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -113,6 +117,50 @@ func newScheduler(
 	repo *repomocks.MonitorRepositoryMock,
 ) *monitorSchedulerService {
 	return NewMonitorSchedulerService(oc, prov, discardLogger(), exec, repo).(*monitorSchedulerService)
+}
+
+// recordingHandler captures emitted records so a test can assert the level a condition is
+// reported at. The scheduler survives every per-monitor error by design, so "the batch kept
+// going" proves nothing about whether an expected state is being shouted about once a minute.
+type recordingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h *recordingHandler) WithGroup(string) slog.Handler { return h }
+
+// levelsFor returns the levels of every record whose message contains substr.
+func (h *recordingHandler) levelsFor(substr string) []slog.Level {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var levels []slog.Level
+	for _, r := range h.records {
+		if strings.Contains(r.Message, substr) {
+			levels = append(levels, r.Level)
+		}
+	}
+	return levels
+}
+
+func newSchedulerWithLogger(
+	oc *clientmocks.OpenChoreoClientMock,
+	prov PublisherCredentialProvisioner,
+	exec MonitorExecutor,
+	repo *repomocks.MonitorRepositoryMock,
+	logger *slog.Logger,
+) *monitorSchedulerService {
+	return NewMonitorSchedulerService(oc, prov, logger, exec, repo).(*monitorSchedulerService)
 }
 
 func intPtrU(i int) *int { return &i }
@@ -398,6 +446,48 @@ func TestMonitorScheduler_triggerPendingMonitors(t *testing.T) {
 		require.NoError(t, s.triggerPendingMonitors(context.Background()))
 		// m1 succeeded; m2 failed before reaching the executor.
 		assert.Equal(t, 1, executed)
+	})
+
+	t.Run("skips an org with no usable scheduler credential without stalling the batch", func(t *testing.T) {
+		unprovisioned := futureMonitor("org-unprovisioned", 10, time.Now())
+		healthy := futureMonitor("org-healthy", 10, time.Now())
+
+		repo := &repomocks.MonitorRepositoryMock{
+			ListDueMonitorsFunc: func(_ string, _ time.Time) ([]models.Monitor, error) {
+				return []models.Monitor{unprovisioned, healthy}, nil
+			},
+		}
+		prov := &fakeProvisioner{
+			IsThunderModeFunc: func() bool { return true },
+			GetOCClientForOrgFunc: func(_ context.Context, ouID string) (client.OpenChoreoClient, error) {
+				if ouID == unprovisioned.OUID {
+					return nil, fmt.Errorf("%w for org %s", ErrSchedulerCredentialNotFound, ouID)
+				}
+				return &clientmocks.OpenChoreoClientMock{}, nil
+			},
+		}
+
+		executedFor := []string{}
+		exec := &fakeMonitorExecutor{
+			ExecuteMonitorRunFunc: func(_ context.Context, params ExecuteMonitorRunParams) (*ExecuteMonitorRunResult, error) {
+				executedFor = append(executedFor, params.OUID)
+				return &ExecuteMonitorRunResult{Name: "run"}, nil
+			},
+			UpdateNextRunTimeFunc: func(_ context.Context, _ uuid.UUID, _ time.Time) error { return nil },
+		}
+		handler := &recordingHandler{}
+		s := newSchedulerWithLogger(&clientmocks.OpenChoreoClientMock{}, prov, exec, repo, slog.New(handler))
+
+		require.NoError(t, s.triggerPendingMonitors(context.Background()))
+
+		// The unprovisioned org is skipped; the healthy one behind it still runs.
+		assert.Equal(t, []string{healthy.OUID}, executedFor)
+
+		// Reported once, as a skip. Logging it at Error would repeat every cycle for as
+		// long as the org stays unprovisioned, which is an expected state, not a fault.
+		assert.Equal(t, []slog.Level{slog.LevelWarn}, handler.levelsFor("Skipping monitor"))
+		assert.Empty(t, handler.levelsFor("Failed to trigger monitor"),
+			"a missing credential is not a trigger failure")
 	})
 }
 
