@@ -458,7 +458,7 @@ func (p *publisherCredentialProvisioner) GetOCClientForOrg(ctx context.Context, 
 			}
 			// Provision on demand: the periodic scheduler calls this directly and never calls EnsureCredentials.
 			p.logger.Info("No scheduler credentials found for org, provisioning on demand", "ouID", ouID)
-			if provErr := p.provisionSchedulerCredentials(ctx, ouID, ""); provErr != nil {
+			if provErr := p.provisionSchedulerCredentials(ctx, ouID, ouID); provErr != nil {
 				return nil, fmt.Errorf("failed to provision scheduler credentials for org %s: %w", ouID, provErr)
 			}
 			cred, err = p.schedulerCredRepo.GetByOrgName(ouID)
