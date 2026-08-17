@@ -19,7 +19,9 @@ package services
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -115,8 +117,14 @@ func TestEnsureCredentials_NewOrg_BindsOnlySchedulerCredential(t *testing.T) {
 	require.Len(t, publisherUpserts, 1)
 	assert.Equal(t, "amp-publisher-acme", publisherUpserts[0].ClientID)
 
-	require.Len(t, schedulerUpserts, 1)
+	// Two upserts: the secret is recorded as soon as it is known, then the SecretReference
+	// fields are filled in once resolved. See provisionSchedulerCredentials for why.
+	require.Len(t, schedulerUpserts, 2)
 	assert.Equal(t, "amp-scheduler-acme", schedulerUpserts[0].ClientID)
+	assert.NotEmpty(t, schedulerUpserts[0].ClientSecretEncrypted,
+		"the first write must already carry the secret")
+	assert.NotEmpty(t, schedulerUpserts[1].SecretKVPath)
+	assert.NotEmpty(t, schedulerUpserts[1].SecretKey)
 
 	require.Len(t, boundClientIDs, 1, "EnsureClusterRoleBinding should be called exactly once")
 	assert.Equal(t, "amp-scheduler-acme", boundClientIDs[0])
@@ -127,6 +135,11 @@ func TestEnsureCredentials_NewOrg_BindsOnlySchedulerCredential(t *testing.T) {
 func TestEnsureCredentials_ExistingOrg_ReverifiesOnlySchedulerBinding(t *testing.T) {
 	var boundClientIDs []string
 
+	// A healthy row carries a usable secret; without one it would be re-provisioned instead.
+	schedulerSecret, err := utils.EncryptBytes([]byte("scheduler-secret-value"), testEncryptionKey)
+	require.NoError(t, err)
+
+	// Empty: re-verifying an existing credential must not touch Thunder.
 	thunderMock := &clientmocks.ThunderClientMock{}
 	ocMock := &clientmocks.OpenChoreoClientMock{
 		EnsureClusterRoleBindingFunc: func(_ context.Context, clientID string, _ string) error {
@@ -146,6 +159,7 @@ func TestEnsureCredentials_ExistingOrg_ReverifiesOnlySchedulerBinding(t *testing
 		GetByOrgNameFunc: func(_ string) (*models.OrgSchedulerCredential, error) {
 			return &models.OrgSchedulerCredential{
 				ClientID: "amp-scheduler-acme", SecretKVPath: "kv/scheduler", SecretKey: "client-secret",
+				ClientSecretEncrypted: schedulerSecret,
 			}, nil
 		},
 	}
@@ -199,46 +213,21 @@ func TestGetOCClientForOrg_ReadsFromSchedulerCredRepo(t *testing.T) {
 	assert.NotNil(t, ocClient)
 }
 
-// Orgs whose monitors predate the credential split have no scheduler credential yet —
-// GetOCClientForOrg must provision one on demand rather than fail permanently.
-func TestGetOCClientForOrg_ProvisionsOnDemand_WhenSchedulerCredMissing(t *testing.T) {
-	var upserted *models.OrgSchedulerCredential
-
+// Provisioning writes to the secret store, and that write authenticates with a JWT taken
+// from the request context. The scheduler has no request context, so provisioning from
+// here could only ever fail — after it had already rotated the org's Thunder secret. Fail
+// fast on a sentinel instead, and touch neither Thunder nor the secret store.
+func TestGetOCClientForOrg_MissingSchedulerCred_DoesNotProvision(t *testing.T) {
 	schedulerCredRepo := &repomocks.OrgSchedulerCredentialRepositoryMock{
-		GetByOrgNameFunc: func(ouID string) (*models.OrgSchedulerCredential, error) {
-			if upserted == nil {
-				return nil, gorm.ErrRecordNotFound
-			}
-			return upserted, nil
+		GetByOrgNameFunc: func(_ string) (*models.OrgSchedulerCredential, error) {
+			return nil, gorm.ErrRecordNotFound
 		},
-		UpsertFunc: func(cred *models.OrgSchedulerCredential) error {
-			upserted = cred
-			return nil
-		},
+		// No UpsertFunc: the mock panics if anything tries to persist from this path.
 	}
-
-	var boundClientID string
-	thunderMock := &clientmocks.ThunderClientMock{
-		EnsureAppFunc: func(_ context.Context, appName, _ string) (string, string, bool, error) {
-			assert.Equal(t, "amp-scheduler-acme", appName)
-			return appName, "scheduler-secret", true, nil
-		},
-	}
-	ocMock := &clientmocks.OpenChoreoClientMock{
-		EnsureClusterRoleBindingFunc: func(_ context.Context, clientID string, roleName string) error {
-			boundClientID = clientID
-			assert.Equal(t, schedulerRoleName, roleName)
-			return nil
-		},
-		GetSecretReferenceFunc: func(_ context.Context, _ string, secretRefName string) (*occlient.SecretReferenceInfo, error) {
-			return newTestSecretRef("kv/"+secretRefName, "client-secret"), nil
-		},
-	}
-	secretClient := &clientmocks.SecretManagementClientMock{
-		CreateSecretFunc: func(_ context.Context, location secretmanagersvc.SecretLocation, _ map[string]string) (string, error) {
-			return "ref-" + location.EntityName, nil
-		},
-	}
+	// Every mock below is deliberately empty — any call panics the test.
+	thunderMock := &clientmocks.ThunderClientMock{}
+	secretClient := &clientmocks.SecretManagementClientMock{}
+	ocMock := &clientmocks.OpenChoreoClientMock{}
 
 	p := &publisherCredentialProvisioner{
 		thunderClient:     thunderMock,
@@ -252,32 +241,147 @@ func TestGetOCClientForOrg_ProvisionsOnDemand_WhenSchedulerCredMissing(t *testin
 		orgOCClients:      make(map[string]occlient.OpenChoreoClient),
 	}
 
-	ocClient, err := p.GetOCClientForOrg(context.Background(), "acme")
-	require.NoError(t, err)
-	assert.NotNil(t, ocClient)
-	require.NotNil(t, upserted, "the missing scheduler credential should have been provisioned")
-	assert.Equal(t, "amp-scheduler-acme", upserted.ClientID)
-	assert.Equal(t, "amp-scheduler-acme", boundClientID)
+	_, err := p.GetOCClientForOrg(context.Background(), "acme")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSchedulerCredentialNotFound)
+	assert.Empty(t, p.orgOCClients, "nothing should be cached for an unprovisioned org")
 }
 
-// A real DB error on the post-provisioning recheck must not be reported as "genuinely absent".
-func TestGetOCClientForOrg_RealDBErrorOnRecheck_NotMisreportedAsNotFound(t *testing.T) {
-	dbTimeout := errors.New("db timeout")
-	calls := 0
+// Same reasoning for a row that exists but carries no usable secret: repairing it means
+// rotating in Thunder and writing the secret store, so the scheduler must not attempt it.
+func TestGetOCClientForOrg_EmptyEncryptedSecret_DoesNotRepair(t *testing.T) {
 	schedulerCredRepo := &repomocks.OrgSchedulerCredentialRepositoryMock{
 		GetByOrgNameFunc: func(_ string) (*models.OrgSchedulerCredential, error) {
-			calls++
-			if calls == 1 {
-				return nil, gorm.ErrRecordNotFound
-			}
+			return &models.OrgSchedulerCredential{
+				ClientID:              "amp-scheduler-acme",
+				ClientSecretEncrypted: nil,
+			}, nil
+		},
+	}
+	thunderMock := &clientmocks.ThunderClientMock{}
+	secretClient := &clientmocks.SecretManagementClientMock{}
+
+	p := &publisherCredentialProvisioner{
+		thunderClient:     thunderMock,
+		secretClient:      secretClient,
+		schedulerCredRepo: schedulerCredRepo,
+		logger:            discardLogger(),
+		encryptionKey:     testEncryptionKey,
+		idpTokenURL:       "http://thunder.test/oauth2/token",
+		ocBaseURL:         "http://openchoreo.test",
+		orgOCClients:      make(map[string]occlient.OpenChoreoClient),
+	}
+
+	_, err := p.GetOCClientForOrg(context.Background(), "acme")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSchedulerCredentialNotFound)
+}
+
+// A real DB error must not be reported as "genuinely absent".
+func TestGetOCClientForOrg_RealDBError_NotMisreportedAsNotFound(t *testing.T) {
+	dbTimeout := errors.New("db timeout")
+	schedulerCredRepo := &repomocks.OrgSchedulerCredentialRepositoryMock{
+		GetByOrgNameFunc: func(_ string) (*models.OrgSchedulerCredential, error) {
 			return nil, dbTimeout
 		},
-		UpsertFunc: func(_ *models.OrgSchedulerCredential) error { return nil },
+	}
+
+	p := &publisherCredentialProvisioner{
+		schedulerCredRepo: schedulerCredRepo,
+		logger:            discardLogger(),
+		encryptionKey:     testEncryptionKey,
+		orgOCClients:      make(map[string]occlient.OpenChoreoClient),
+	}
+
+	_, err := p.GetOCClientForOrg(context.Background(), "acme")
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, ErrSchedulerCredentialNotFound),
+		"a real DB error must not be reported as the not-found sentinel")
+	assert.ErrorIs(t, err, dbTimeout)
+}
+
+// Rotating the Thunder secret is destructive and irreversible, while every step after it
+// can fail. If the encrypted secret were only persisted at the end, a failure in between
+// would leave Thunder holding a secret nothing has a record of — which is how an org ends
+// up permanently unable to mint a token.
+func TestProvisionSchedulerCredentials_PersistsSecretBeforeFallibleSteps(t *testing.T) {
+	storeDown := errors.New("no JWT token found in context")
+
+	var upserts []*models.OrgSchedulerCredential
+	schedulerCredRepo := &repomocks.OrgSchedulerCredentialRepositoryMock{
+		GetByOrgNameFunc: func(_ string) (*models.OrgSchedulerCredential, error) {
+			return nil, gorm.ErrRecordNotFound
+		},
+		UpsertFunc: func(cred *models.OrgSchedulerCredential) error {
+			upserts = append(upserts, cred)
+			return nil
+		},
 	}
 	thunderMock := &clientmocks.ThunderClientMock{
 		EnsureAppFunc: func(_ context.Context, appName, _ string) (string, string, bool, error) {
-			return appName, "scheduler-secret", true, nil
+			return appName, "", false, nil // app exists, secret unavailable → forces a rotation
 		},
+		RegenerateAppClientSecretFunc: func(_ context.Context, _ string) (string, error) {
+			return "rotated-secret", nil
+		},
+	}
+	secretClient := &clientmocks.SecretManagementClientMock{
+		CreateSecretFunc: func(_ context.Context, _ secretmanagersvc.SecretLocation, _ map[string]string) (string, error) {
+			return "", storeDown
+		},
+	}
+	ocMock := &clientmocks.OpenChoreoClientMock{}
+
+	p := &publisherCredentialProvisioner{
+		thunderClient:     thunderMock,
+		secretClient:      secretClient,
+		ocClient:          ocMock,
+		schedulerCredRepo: schedulerCredRepo,
+		logger:            discardLogger(),
+		encryptionKey:     testEncryptionKey,
+		orgOCClients:      make(map[string]occlient.OpenChoreoClient),
+	}
+
+	err := p.provisionSchedulerCredentials(context.Background(), "acme", "org-uuid-1")
+	require.Error(t, err, "the secret-store failure must still surface")
+	assert.ErrorIs(t, err, storeDown)
+
+	require.NotEmpty(t, upserts, "the rotated secret must be recorded before the store write")
+	decrypted, decErr := utils.DecryptBytes(upserts[0].ClientSecretEncrypted, testEncryptionKey)
+	require.NoError(t, decErr)
+	assert.Equal(t, "rotated-secret", string(decrypted),
+		"the persisted secret must match what Thunder now holds")
+}
+
+// Provisioning rotates a secret in Thunder, so running it twice over for one org leaves
+// Thunder holding the second rotation while the DB records the first. Whatever the entry
+// point, concurrent provisioning of the same org must collapse to a single run.
+func TestProvisionSchedulerCredentials_ConcurrentCallsForOneOrgCollapse(t *testing.T) {
+	var mu sync.Mutex
+	rotations := 0
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var enterOnce sync.Once
+
+	thunderMock := &clientmocks.ThunderClientMock{
+		EnsureAppFunc: func(_ context.Context, appName, _ string) (string, string, bool, error) {
+			enterOnce.Do(func() { close(entered) })
+			<-release
+			return appName, "", false, nil // app exists, secret unavailable → forces a rotation
+		},
+		RegenerateAppClientSecretFunc: func(_ context.Context, _ string) (string, error) {
+			mu.Lock()
+			rotations++
+			mu.Unlock()
+			return "rotated-secret", nil
+		},
+	}
+	schedulerCredRepo := &repomocks.OrgSchedulerCredentialRepositoryMock{
+		GetByOrgNameFunc: func(_ string) (*models.OrgSchedulerCredential, error) {
+			return nil, gorm.ErrRecordNotFound
+		},
+		UpsertFunc: func(_ *models.OrgSchedulerCredential) error { return nil },
 	}
 	ocMock := &clientmocks.OpenChoreoClientMock{
 		EnsureClusterRoleBindingFunc: func(_ context.Context, _ string, _ string) error { return nil },
@@ -298,14 +402,31 @@ func TestGetOCClientForOrg_RealDBErrorOnRecheck_NotMisreportedAsNotFound(t *test
 		schedulerCredRepo: schedulerCredRepo,
 		logger:            discardLogger(),
 		encryptionKey:     testEncryptionKey,
-		idpTokenURL:       "http://thunder.test/oauth2/token",
-		ocBaseURL:         "http://openchoreo.test",
 		orgOCClients:      make(map[string]occlient.OpenChoreoClient),
 	}
 
-	_, err := p.GetOCClientForOrg(context.Background(), "acme")
-	require.Error(t, err)
-	assert.False(t, errors.Is(err, ErrSchedulerCredentialNotFound),
-		"a real DB error must not be reported as the not-found sentinel")
-	assert.ErrorIs(t, err, dbTimeout)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		assert.NoError(t, p.provisionSchedulerCredentials(context.Background(), "acme", "org-uuid-1"))
+	}()
+
+	<-entered // the first call is inside the critical section and holds the org's slot
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		assert.NoError(t, p.provisionSchedulerCredentials(context.Background(), "acme", "org-uuid-1"))
+	}()
+
+	// Give the second call time to reach the deduplication point. Generous margin: the
+	// assertion below is what fails on a regression, not this wait.
+	time.Sleep(200 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, 1, rotations, "concurrent provisioning of one org must rotate its secret once")
 }
