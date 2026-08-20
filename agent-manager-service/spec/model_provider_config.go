@@ -23,6 +23,8 @@ type ProviderConfig struct {
 	ProviderName string `json:"providerName"`
 	// UUID of the proxy created
 	ProxyUuid string `json:"proxyUuid"`
+	// UUID of the org-level LLM provider this config is based on
+	ProviderUuid *string `json:"providerUuid,omitempty"`
 	// Name/handle of the MCP proxy
 	ProxyName *string `json:"proxyName,omitempty"`
 	// ID/handle of the MCP proxy
@@ -36,6 +38,9 @@ type ProviderConfig struct {
 	AuthInfo *AuthInfo `json:"authInfo,omitempty"`
 	// Provider-specific policy configurations
 	Policies []LLMPolicy `json:"policies,omitempty"`
+	// Guardrails configured on the org-level LLM provider this config is based on; applied in addition to the config's own policies
+	ProviderPolicies []LLMPolicy `json:"providerPolicies,omitempty"`
+	Resilience       *Resilience `json:"resilience,omitempty"`
 	// Status of the proxy
 	Status *string `json:"status,omitempty"`
 }
@@ -106,6 +111,38 @@ func (o *ProviderConfig) GetProxyUuidOk() (*string, bool) {
 // SetProxyUuid sets field value
 func (o *ProviderConfig) SetProxyUuid(v string) {
 	o.ProxyUuid = v
+}
+
+// GetProviderUuid returns the ProviderUuid field value if set, zero value otherwise.
+func (o *ProviderConfig) GetProviderUuid() string {
+	if o == nil || IsNil(o.ProviderUuid) {
+		var ret string
+		return ret
+	}
+	return *o.ProviderUuid
+}
+
+// GetProviderUuidOk returns a tuple with the ProviderUuid field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *ProviderConfig) GetProviderUuidOk() (*string, bool) {
+	if o == nil || IsNil(o.ProviderUuid) {
+		return nil, false
+	}
+	return o.ProviderUuid, true
+}
+
+// HasProviderUuid returns a boolean if a field has been set.
+func (o *ProviderConfig) HasProviderUuid() bool {
+	if o != nil && !IsNil(o.ProviderUuid) {
+		return true
+	}
+
+	return false
+}
+
+// SetProviderUuid gets a reference to the given string and assigns it to the ProviderUuid field.
+func (o *ProviderConfig) SetProviderUuid(v string) {
+	o.ProviderUuid = &v
 }
 
 // GetProxyName returns the ProxyName field value if set, zero value otherwise.
@@ -324,6 +361,70 @@ func (o *ProviderConfig) SetPolicies(v []LLMPolicy) {
 	o.Policies = v
 }
 
+// GetProviderPolicies returns the ProviderPolicies field value if set, zero value otherwise.
+func (o *ProviderConfig) GetProviderPolicies() []LLMPolicy {
+	if o == nil || IsNil(o.ProviderPolicies) {
+		var ret []LLMPolicy
+		return ret
+	}
+	return o.ProviderPolicies
+}
+
+// GetProviderPoliciesOk returns a tuple with the ProviderPolicies field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *ProviderConfig) GetProviderPoliciesOk() ([]LLMPolicy, bool) {
+	if o == nil || IsNil(o.ProviderPolicies) {
+		return nil, false
+	}
+	return o.ProviderPolicies, true
+}
+
+// HasProviderPolicies returns a boolean if a field has been set.
+func (o *ProviderConfig) HasProviderPolicies() bool {
+	if o != nil && !IsNil(o.ProviderPolicies) {
+		return true
+	}
+
+	return false
+}
+
+// SetProviderPolicies gets a reference to the given []LLMPolicy and assigns it to the ProviderPolicies field.
+func (o *ProviderConfig) SetProviderPolicies(v []LLMPolicy) {
+	o.ProviderPolicies = v
+}
+
+// GetResilience returns the Resilience field value if set, zero value otherwise.
+func (o *ProviderConfig) GetResilience() Resilience {
+	if o == nil || IsNil(o.Resilience) {
+		var ret Resilience
+		return ret
+	}
+	return *o.Resilience
+}
+
+// GetResilienceOk returns a tuple with the Resilience field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *ProviderConfig) GetResilienceOk() (*Resilience, bool) {
+	if o == nil || IsNil(o.Resilience) {
+		return nil, false
+	}
+	return o.Resilience, true
+}
+
+// HasResilience returns a boolean if a field has been set.
+func (o *ProviderConfig) HasResilience() bool {
+	if o != nil && !IsNil(o.Resilience) {
+		return true
+	}
+
+	return false
+}
+
+// SetResilience gets a reference to the given Resilience and assigns it to the Resilience field.
+func (o *ProviderConfig) SetResilience(v Resilience) {
+	o.Resilience = &v
+}
+
 // GetStatus returns the Status field value if set, zero value otherwise.
 func (o *ProviderConfig) GetStatus() string {
 	if o == nil || IsNil(o.Status) {
@@ -368,6 +469,9 @@ func (o ProviderConfig) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["providerName"] = o.ProviderName
 	toSerialize["proxyUuid"] = o.ProxyUuid
+	if !IsNil(o.ProviderUuid) {
+		toSerialize["providerUuid"] = o.ProviderUuid
+	}
 	if !IsNil(o.ProxyName) {
 		toSerialize["proxyName"] = o.ProxyName
 	}
@@ -386,6 +490,12 @@ func (o ProviderConfig) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.Policies) {
 		toSerialize["policies"] = o.Policies
+	}
+	if !IsNil(o.ProviderPolicies) {
+		toSerialize["providerPolicies"] = o.ProviderPolicies
+	}
+	if !IsNil(o.Resilience) {
+		toSerialize["resilience"] = o.Resilience
 	}
 	if !IsNil(o.Status) {
 		toSerialize["status"] = o.Status

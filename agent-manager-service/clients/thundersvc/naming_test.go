@@ -25,20 +25,20 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/config"
 )
 
-// TestThunderHost_RespectsBaseDomainConfig locks in that a VM deployment's
+// TestThunderExternalURLs_RespectBaseDomainConfig locks in that a VM deployment's
 // THUNDER_HOST_BASE_DOMAIN override flows straight through into every URL builder —
 // this is what makes deployments/vm/lib-vm.sh setting the same value (both for
 // add-environment-thunder.sh and this Go config) keep the reported URLs and the
 // actually-deployed Thunder instance's own issuer in sync.
-func TestThunderHost_RespectsBaseDomainConfig(t *testing.T) {
+func TestThunderExternalURLs_RespectBaseDomainConfig(t *testing.T) {
 	orig := config.GetConfig().ThunderHostBaseDomain
 	defer func() { config.GetConfig().ThunderHostBaseDomain = orig }()
 
 	config.GetConfig().ThunderHostBaseDomain = "amp.203.0.113.10.sslip.io"
-	got := ThunderHost("default", "staging")
-	want := "default-staging.thunder.amp.203.0.113.10.sslip.io"
+	got := ThunderIssuerURL("x7f2q9kz")
+	want := "http://x7f2q9kz.amp.203.0.113.10.sslip.io:8080"
 	if got != want {
-		t.Errorf("ThunderHost with overridden base domain: want %q, got %q", want, got)
+		t.Errorf("ThunderIssuerURL with overridden base domain: want %q, got %q", want, got)
 	}
 }
 
@@ -57,44 +57,50 @@ func TestThunderExternalURLs_RespectTLSConfig(t *testing.T) {
 	config.GetConfig().ThunderHostBaseDomain = "amp.203.0.113.10.sslip.io"
 
 	config.GetConfig().TLSConfig.EnableTLS = false
-	if got, want := ThunderIssuerURL("default", "staging"), "http://default-staging.thunder.amp.203.0.113.10.sslip.io:8080"; got != want {
+	if got, want := ThunderIssuerURL("x7f2q9kz"), "http://x7f2q9kz.amp.203.0.113.10.sslip.io:8080"; got != want {
 		t.Errorf("ThunderIssuerURL (TLS off): want %q, got %q", want, got)
 	}
-	if got, want := ThunderExternalJWKSURL("default", "staging"), "http://default-staging.thunder.amp.203.0.113.10.sslip.io:8080/oauth2/jwks"; got != want {
+	if got, want := ThunderExternalJWKSURL("x7f2q9kz"), "http://x7f2q9kz.amp.203.0.113.10.sslip.io:8080/oauth2/jwks"; got != want {
 		t.Errorf("ThunderExternalJWKSURL (TLS off): want %q, got %q", want, got)
 	}
 
 	config.GetConfig().TLSConfig.EnableTLS = true
-	if got, want := ThunderIssuerURL("default", "staging"), "https://default-staging.thunder.amp.203.0.113.10.sslip.io"; got != want {
+	if got, want := ThunderIssuerURL("x7f2q9kz"), "https://x7f2q9kz.amp.203.0.113.10.sslip.io"; got != want {
 		t.Errorf("ThunderIssuerURL (TLS on): want %q, got %q", want, got)
 	}
-	if got, want := ThunderExternalTokenURL("default", "staging"), "https://default-staging.thunder.amp.203.0.113.10.sslip.io/oauth2/token"; got != want {
+	if got, want := ThunderExternalTokenURL("x7f2q9kz"), "https://x7f2q9kz.amp.203.0.113.10.sslip.io/oauth2/token"; got != want {
 		t.Errorf("ThunderExternalTokenURL (TLS on): want %q, got %q", want, got)
 	}
 }
 
-// These cases lock in that ThunderReleaseName/ThunderHost do NOT collapse consecutive
-// hyphens, matching the bash implementations in add-environment.sh and
-// add-environment-thunder.sh exactly. Both scripts validate ENV_NAME against
-// ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ (which permits internal "--") and use org/env raw —
-// they never slugify/collapse. If this Go code collapsed "--" to "-" (as slugify() does),
-// it would compute a different release name / hostname than what actually gets deployed
-// whenever an org or env name contains a double hyphen, causing AMS's own admin-API calls
-// to Thunder (ThunderInternalURL/ThunderTokenURL, used for per-agent client provisioning)
-// to target an address that doesn't exist.
+// TestThunderIssuerURL_PanicsOnEmptyHandle guards the fail-loud contract: a
+// caller must check for "not provisioned" (an environment with no registered
+// handle) BEFORE building a URL — thunderExternalOrigin takes only a handle,
+// with no org/env fallback to degrade to, so an empty handle panics instead
+// of producing a guessable address.
+func TestThunderIssuerURL_PanicsOnEmptyHandle(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error(`expected ThunderIssuerURL("") to panic`)
+		}
+	}()
+	ThunderIssuerURL("")
+}
+
+// TestThunderReleaseName_NoHyphenCollapsing locks in that ThunderReleaseName does
+// NOT collapse consecutive hyphens, matching add-environment-thunder.sh exactly.
+// It validates ENV_NAME against ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ (which permits
+// internal "--") and uses org/env raw — never slugify/collapse. If this Go code
+// collapsed "--" to "-" (as slugify() does), it would compute a different release
+// name than what actually gets deployed whenever an org or env name contains a
+// double hyphen, causing AMS's own admin-API calls to Thunder
+// (ThunderInternalURL/ThunderTokenURL, used for per-agent client provisioning) to
+// target an address that doesn't exist.
 func TestThunderReleaseName_NoHyphenCollapsing(t *testing.T) {
 	got := ThunderReleaseName("my--org", "env")
 	want := "amp-thunder-my--org-env"
 	if got != want {
 		t.Errorf("ThunderReleaseName must not collapse consecutive hyphens: want %q, got %q", want, got)
-	}
-}
-
-func TestThunderHost_NoHyphenCollapsing(t *testing.T) {
-	got := ThunderHost("my--org", "env")
-	want := "my--org-env.thunder.amp.localhost"
-	if got != want {
-		t.Errorf("ThunderHost must not collapse consecutive hyphens: want %q, got %q", want, got)
 	}
 }
 
@@ -117,21 +123,6 @@ func TestThunderReleaseName_BasicCases(t *testing.T) {
 		got := ThunderReleaseName(tc.org, tc.env)
 		if got != tc.want {
 			t.Errorf("ThunderReleaseName(%q, %q): want %q, got %q", tc.org, tc.env, tc.want, got)
-		}
-	}
-}
-
-func TestThunderHost_BasicCases(t *testing.T) {
-	cases := []struct {
-		org, env, want string
-	}{
-		{"default", "default", "default-default.thunder.amp.localhost"},
-		{"my-org", "staging", "my-org-staging.thunder.amp.localhost"},
-	}
-	for _, tc := range cases {
-		got := ThunderHost(tc.org, tc.env)
-		if got != tc.want {
-			t.Errorf("ThunderHost(%q, %q): want %q, got %q", tc.org, tc.env, tc.want, got)
 		}
 	}
 }
@@ -212,7 +203,7 @@ func TestResolveThunderBaseURL_PrefersClusterInternal(t *testing.T) {
 		return c.baseURL == ThunderInternalURL("acme", "staging")
 	}
 
-	got, ok := resolveThunderBaseURL(context.Background(), "acme", "staging", prober)
+	got, ok := resolveThunderBaseURL(context.Background(), "acme", "staging", "x7f2q9kz", prober)
 	if !ok {
 		t.Fatal("expected ok=true when the cluster-internal candidate is reachable")
 	}
@@ -228,12 +219,12 @@ func TestResolveThunderBaseURL_PrefersClusterInternal(t *testing.T) {
 }
 
 func TestResolveThunderBaseURL_FallsBackToExternalIngress(t *testing.T) {
-	externalBaseURL := "http://acme-staging.thunder.amp.localhost:8080"
+	externalBaseURL := "http://x7f2q9kz.amp.localhost:8080"
 	prober := func(_ context.Context, c thunderURLCandidate) bool {
 		return c.baseURL == externalBaseURL && c.resolveToHost == ""
 	}
 
-	got, ok := resolveThunderBaseURL(context.Background(), "acme", "staging", prober)
+	got, ok := resolveThunderBaseURL(context.Background(), "acme", "staging", "x7f2q9kz", prober)
 	if !ok {
 		t.Fatal("expected ok=true when the external ingress candidate is reachable")
 	}
@@ -253,12 +244,12 @@ func TestResolveThunderBaseURL_ExternalIngressCandidate_RespectsTLSConfig(t *tes
 	defer func() { config.GetConfig().TLSConfig.EnableTLS = origTLS }()
 	config.GetConfig().TLSConfig.EnableTLS = true
 
-	wantBaseURL := "https://acme-staging.thunder.amp.localhost"
+	wantBaseURL := "https://x7f2q9kz.amp.localhost"
 	prober := func(_ context.Context, c thunderURLCandidate) bool {
 		return c.baseURL == wantBaseURL && c.resolveToHost == ""
 	}
 
-	got, ok := resolveThunderBaseURL(context.Background(), "acme", "staging", prober)
+	got, ok := resolveThunderBaseURL(context.Background(), "acme", "staging", "x7f2q9kz", prober)
 	if !ok {
 		t.Fatal("expected ok=true when the TLS-aware external ingress candidate is reachable")
 	}
@@ -282,7 +273,7 @@ func TestResolveThunderBaseURL_FallsBackToDockerDesktop(t *testing.T) {
 		return c.resolveToHost == "host.docker.internal:8080"
 	}
 
-	got, ok := resolveThunderBaseURL(context.Background(), "acme", "staging", prober)
+	got, ok := resolveThunderBaseURL(context.Background(), "acme", "staging", "x7f2q9kz", prober)
 	if !ok {
 		t.Fatal("expected ok=true when only the host.docker.internal candidate is reachable")
 	}
@@ -300,7 +291,7 @@ func TestResolveThunderBaseURL_FallsBackToLoopback(t *testing.T) {
 		return c.resolveToHost == "127.0.0.1:8080"
 	}
 
-	got, ok := resolveThunderBaseURL(context.Background(), "acme", "staging", prober)
+	got, ok := resolveThunderBaseURL(context.Background(), "acme", "staging", "x7f2q9kz", prober)
 	if !ok {
 		t.Fatal("expected ok=true when only the 127.0.0.1 candidate is reachable")
 	}
@@ -312,7 +303,7 @@ func TestResolveThunderBaseURL_FallsBackToLoopback(t *testing.T) {
 func TestResolveThunderBaseURL_AllUnreachable(t *testing.T) {
 	prober := func(_ context.Context, _ thunderURLCandidate) bool { return false }
 
-	_, ok := resolveThunderBaseURL(context.Background(), "acme", "staging", prober)
+	_, ok := resolveThunderBaseURL(context.Background(), "acme", "staging", "x7f2q9kz", prober)
 	if ok {
 		t.Error("expected ok=false when no candidate is reachable")
 	}
@@ -324,7 +315,7 @@ func TestResolveThunderBaseURL_PublicWrapperUsesRealCascadeShape(t *testing.T) {
 	// definitely-unreachable org/env, rather than e.g. always returning ok=true.
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_, _, ok := ResolveThunderBaseURL(ctx, "nonexistent-org-xyz", "nonexistent-env-xyz")
+	_, _, ok := ResolveThunderBaseURL(ctx, "nonexistent-org-xyz", "nonexistent-env-xyz", "nonexistent-handle-xyz")
 	if ok {
 		t.Error("expected ok=false for an org/env with no env-Thunder deployed anywhere reachable")
 	}

@@ -80,6 +80,7 @@ type MCPProxyConfig struct {
 	Vhost        *string               `json:"vhost,omitempty"`
 	SpecVersion  string                `json:"specVersion,omitempty"`
 	Upstream     UpstreamConfig        `json:"upstream,omitempty"`
+	Resilience   *Resilience           `json:"resilience,omitempty"`
 	Policies     []MCPPolicy           `json:"policies,omitempty"`
 	Capabilities *MCPProxyCapabilities `json:"capabilities,omitempty"`
 	Security     *SecurityConfig       `json:"security,omitempty"`
@@ -138,6 +139,7 @@ func (MCPProxyEndpointEnvironment) TableName() string {
 // their own artifacts; they reference the endpoint's per-environment artifact.
 type MCPEndpointConfig struct {
 	Upstream     *UpstreamEndpoint     `json:"upstream,omitempty"`
+	Resilience   *Resilience           `json:"resilience,omitempty"`
 	Policies     []MCPPolicy           `json:"policies,omitempty"`
 	Capabilities *MCPProxyCapabilities `json:"capabilities,omitempty"`
 	Security     *SecurityConfig       `json:"security,omitempty"`
@@ -189,6 +191,7 @@ type MCPProxyEndpointDTO struct {
 	ID           string                      `json:"id"`
 	Name         string                      `json:"name,omitempty"`
 	Upstream     UpstreamConfig              `json:"upstream"`
+	Resilience   *Resilience                 `json:"resilience,omitempty"`
 	Policies     *[]MCPPolicy                `json:"policies,omitempty"`
 	Capabilities *MCPProxyCapabilities       `json:"capabilities,omitempty"`
 	Security     *SecurityConfig             `json:"security,omitempty"`

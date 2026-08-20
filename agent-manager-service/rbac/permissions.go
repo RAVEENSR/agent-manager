@@ -19,11 +19,21 @@ package rbac
 // Permission is a typed string representing an OAuth2 scope (without the resource server prefix).
 type Permission string
 
-// ResourceServer is the OAuth2 resource server identifier for Agent Manager.
+// ResourceServer is the amp resource server's Thunder resource HANDLE — the prefix Thunder
+// composes every scope string from (handle + delimiter, never the resource server's identifier),
+// so this must stay "amp" regardless of what ResourceServerIdentifier is set to.
 const ResourceServer = "amp"
 
+// ResourceServerIdentifier is the amp resource server's Thunder IDENTIFIER (RFC 8707 resource
+// indicator / the token's aud claim) — a SEPARATE field from ResourceServer above, because Thunder
+// requires resource identifiers to be absolute URIs while ResourceServer stays the bare handle
+// "amp". Must be kept in sync with 60-amp-resource-server.yaml's `identifier` in the Thunder
+// extension chart. findResourceServerID must look this value up specifically, or it silently
+// finds no match and every permission list comes back empty.
+const ResourceServerIdentifier = "urn:wso2:amp"
+
 // Scope returns the OAuth2 scope string for this permission as Thunder issues it (e.g. "amp:org:view").
-// Thunder v0.45 builds permissions as <resource-server-handle>:<resource>:<action>
+// Thunder builds permissions as <resource-server-handle>:<resource>:<action>.
 func (p Permission) Scope() string {
 	return ResourceServer + ":" + string(p)
 }

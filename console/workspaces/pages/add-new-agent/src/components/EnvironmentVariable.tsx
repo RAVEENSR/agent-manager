@@ -18,7 +18,7 @@
 
 import { Box, Button, Card, CardContent, Typography } from "@wso2/oxygen-ui";
 import { Plus as Add } from "@wso2/oxygen-ui-icons-react";
-import { EnvVariableEditor } from "@agent-management-platform/views";
+import { EnvFileUploadButton, EnvVariableEditor } from "@agent-management-platform/views";
 import { CreateAgentFormValues } from "../form/schema";
 
 interface EnvironmentVariableProps {
@@ -81,41 +81,33 @@ export const EnvironmentVariable = ({
     }));
   };
 
-  const handleInitialEdit = (field: 'key' | 'value' | 'isSensitive', value: string | boolean) => {
+  const handleEnvFileParsed = (entries: { key: string; value: string }[]) => {
     setFormData((prev) => {
-      const envList = prev.env || [];
-      if (envList.length > 0) {
-        return {
-          ...prev,
-          env: envList.map((item, i) =>
-            i === 0 ? { ...item, [field]: value } : item
-          ),
-        };
+      const nextEnv = [...(prev.env || [])].filter((e) => e.key || e.value);
+      for (const { key, value } of entries) {
+        if (lockedKeys.has(key)) continue;
+        const existingIndex = nextEnv.findIndex((e) => e.key === key);
+        if (existingIndex !== -1) {
+          nextEnv[existingIndex] = { ...nextEnv[existingIndex], key, value };
+        } else {
+          nextEnv.push({ key, value, isSensitive: false });
+        }
       }
-
-      return {
-        ...prev,
-        env: [
-          {
-            key: field === 'key' ? (value as string) : '',
-            value: field === 'value' ? (value as string) : '',
-            isSensitive: field === 'isSensitive' ? (value as boolean) : false,
-          },
-        ],
-      };
+      return { ...prev, env: nextEnv };
     });
   };
 
   return (
     <Card variant="outlined">
       <CardContent>
-        <Box display="flex" flexDirection="row" alignItems="center" gap={1}>
+        <Box display="flex" flexDirection="row" alignItems="center" justifyContent="space-between" gap={1}>
           <Typography variant="h5">
             {hideAdd ? "Environment Variables" : "Environment Variables (Optional)"}
           </Typography>
+          {!hideAdd && <EnvFileUploadButton onParsed={handleEnvFileParsed} />}
         </Box>
         <Box display="flex" flexDirection="column" py={2} gap={2}>
-          {envVariables.length ? envVariables.map((item, index) => {
+          {envVariables.map((item, index) => {
             const siblingKeys = new Set(
               envVariables.flatMap((e, i) => (i !== index && e.key ? [e.key] : [])),
             );
@@ -143,20 +135,7 @@ export const EnvironmentVariable = ({
                 keyError={keyError}
               />
             );
-          }) :
-            <EnvVariableEditor
-              key={`env-0`}
-              index={0}
-              keyValue={envVariables?.[0]?.key || ''}
-              valueValue={envVariables?.[0]?.value || ''}
-              isSensitive={envVariables?.[0]?.isSensitive || false}
-              onKeyChange={(value) => handleInitialEdit('key', value)}
-              onValueChange={(value) => handleInitialEdit('value', value)}
-              onSensitiveChange={(value: boolean) => handleInitialEdit('isSensitive', value)}
-              onRemove={() => handleRemove(0)}
-              keyError={envVariables?.[0]?.key && llmReservedNames.has(envVariables[0].key!) ? "Already used as an LLM provider variable" : undefined}
-            />
-          }
+          })}
         </Box>
         {!hideAdd && (
           <Button

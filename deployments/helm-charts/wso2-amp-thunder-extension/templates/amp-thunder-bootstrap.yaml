@@ -1,127 +1,3 @@
-{{- $scheme := ternary "http" "https" .Values.thunder.configuration.server.httpOnly }}
-{{- $port := .Values.thunder.configuration.server.port }}
-{{- $thunderUrl := printf "%s://localhost:%d" $scheme (int $port) }}
-{{/*
-Shared registration script for the two public PKCE MCP clients (am-mcp and
-am-obs-mcp). Takes a dict with:
-  client — the client's values block (amMcpClient / amObsMcpClient)
-  scopes — the list of OAuth2 scopes the client may request
-*/}}
-{{- define "amp-thunder.mcpClientScript" -}}
-#!/bin/bash
-set -e
-
-SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]:-$0}")"
-source "${SCRIPT_DIR}/common.sh"
-
-
-log_info "Checking if application '{{ .client.name }}' already exists..."
-
-# Get the default OU ID
-RESPONSE=$(api_call GET "/organization-units/tree/default")
-HTTP_CODE="${RESPONSE: -3}"
-BODY="${RESPONSE%???}"
-if [[ "$HTTP_CODE" != "200" ]]; then
-  log_error "Failed to fetch default organization unit (HTTP $HTTP_CODE)"
-  echo "Response: $BODY"
-  exit 1
-fi
-DEFAULT_OU_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-if [[ -z "$DEFAULT_OU_ID" ]]; then
-  log_error "Could not extract default organization unit ID from response"
-  echo "Response: $BODY"
-  exit 1
-fi
-log_info "Using OU ID: $DEFAULT_OU_ID"
-
-# Look up the default auth flow ID
-RESPONSE=$(api_call GET "/flows?flowType=AUTHENTICATION&limit=200")
-HTTP_CODE="${RESPONSE: -3}"
-BODY="${RESPONSE%???}"
-if [[ "$HTTP_CODE" != "200" ]]; then
-  log_error "Failed to fetch authentication flows (HTTP $HTTP_CODE)"
-  echo "Response: $BODY"
-  exit 1
-fi
-AUTH_FLOW_ID=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"handle":"default-basic-flow"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-if [[ -z "$AUTH_FLOW_ID" ]]; then
-  log_error "Could not find default-basic-flow authentication flow"
-  exit 1
-fi
-log_info "Using auth flow ID: $AUTH_FLOW_ID"
-
-# Check existing apps
-RESPONSE=$(api_call GET "/applications")
-HTTP_CODE="${RESPONSE: -3}"
-BODY="${RESPONSE%???}"
-if [[ "$HTTP_CODE" != "200" ]]; then
-  log_error "Failed to fetch applications (HTTP $HTTP_CODE)"
-  echo "Response: $BODY"
-  exit 1
-fi
-
-APP_PAYLOAD='{
-  "name": "{{ .client.name }}",
-  "description": "{{ .client.description }}",
-  "ouId": "'${DEFAULT_OU_ID}'",
-  "authFlowId": "'${AUTH_FLOW_ID}'",
-  "allowedUserTypes": {{ .client.allowedUserTypes | toJson }},
-  "inboundAuthConfig": [
-    {
-      "type": "oauth2",
-      "config": {
-        "clientId": "{{ .client.clientId }}",
-        "redirectUris": {{ .client.redirectUris | toJson }},
-        "grantTypes": {{ .client.grantTypes | toJson }},
-        "responseTypes": {{ .client.responseTypes | toJson }},
-        "tokenEndpointAuthMethod": "{{ .client.tokenEndpointAuthMethod }}",
-        "pkceRequired": {{ .client.pkceRequired }},
-        "publicClient": {{ .client.publicClient }},
-        "scopes": {{ .scopes | toJson }},
-        "token": {
-          "accessToken": {
-            "validityPeriod": {{ .client.accessTokenValidityPeriod }},
-            "userAttributes": {{ .client.userAttributes | toJson }}
-          },
-          "idToken": {
-            "validityPeriod": {{ .client.idTokenValidityPeriod }},
-            "userAttributes": {{ .client.userAttributes | toJson }}
-          }
-        }
-      }
-    }
-  ]
-}'
-
-if echo "$BODY" | grep -q '"clientId":"{{ .client.clientId }}"'; then
-  app_id=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"clientId":"{{ .client.clientId }}"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-  log_info "Application '{{ .client.name }}' already exists (id: $app_id), updating..."
-  RESPONSE=$(api_call PUT "/applications/$app_id" "$APP_PAYLOAD")
-  HTTP_CODE="${RESPONSE: -3}"
-  if [[ "$HTTP_CODE" == "200" ]]; then
-    log_info "Application '{{ .client.name }}' updated successfully"
-  else
-    log_error "Failed to update application (HTTP $HTTP_CODE)"
-    echo "Response: ${RESPONSE%???}"
-    exit 1
-  fi
-else
-  log_info "Application '{{ .client.name }}' does not exist, creating..."
-  RESPONSE=$(api_call POST "/applications" "$APP_PAYLOAD")
-  HTTP_CODE="${RESPONSE: -3}"
-  if [[ "$HTTP_CODE" == "201" ]] || [[ "$HTTP_CODE" == "200" ]]; then
-    log_info "Application '{{ .client.name }}' created successfully"
-  elif [[ "$HTTP_CODE" == "409" ]]; then
-    log_info "Application '{{ .client.name }}' already exists, skipping"
-  else
-    log_error "Failed to create application (HTTP $HTTP_CODE)"
-    echo "Response: ${RESPONSE%???}"
-    exit 1
-  fi
-fi
-{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -133,1905 +9,1147 @@ metadata:
     "helm.sh/hook": pre-install
     "helm.sh/hook-weight": "-10"
 data:
-  50-amp-api-client.sh: |
-    #!/bin/bash
-    set -e
-
-    SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]:-$0}")"
-    source "${SCRIPT_DIR}/common.sh"
-
-
-    log_info "Checking if application '{{ .Values.thunder.bootstrap.ampApiClient.name }}' already exists..."
-
-    # Get the default OU ID
-    RESPONSE=$(api_call GET "/organization-units/tree/default")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch default organization unit (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    DEFAULT_OU_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-    if [[ -z "$DEFAULT_OU_ID" ]]; then
-      log_error "Could not extract default organization unit ID from response"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    log_info "Using OU ID: $DEFAULT_OU_ID"
-
-    # Look up the default auth flow ID
-    RESPONSE=$(api_call GET "/flows?flowType=AUTHENTICATION&limit=200")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch authentication flows (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    AUTH_FLOW_ID=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"handle":"default-basic-flow"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-    if [[ -z "$AUTH_FLOW_ID" ]]; then
-      log_error "Could not find default-basic-flow authentication flow"
-      exit 1
-    fi
-    log_info "Using auth flow ID: $AUTH_FLOW_ID"
-
-    # Check if app already exists
-    RESPONSE=$(api_call GET "/applications")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch applications (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-
-    APP_PAYLOAD='{
-      "name": "{{ .Values.thunder.bootstrap.ampApiClient.name }}",
-      "description": "{{ .Values.thunder.bootstrap.ampApiClient.description }}",
-      "ouId": "'${DEFAULT_OU_ID}'",
-      "authFlowId": "'${AUTH_FLOW_ID}'",
-      "inboundAuthConfig": [
-        {
-          "type": "oauth2",
-          "config": {
-            "clientId": "{{ .Values.thunder.bootstrap.ampApiClient.clientId }}",
-            "clientSecret": "{{ .Values.thunder.bootstrap.ampApiClient.clientSecret }}",
-            "grantTypes": {{ .Values.thunder.bootstrap.ampApiClient.grantTypes | toJson }},
-            "tokenEndpointAuthMethod": "{{ .Values.thunder.bootstrap.ampApiClient.tokenEndpointAuthMethod }}",
-            "pkceRequired": {{ .Values.thunder.bootstrap.ampApiClient.pkceRequired }},
-            "publicClient": {{ .Values.thunder.bootstrap.ampApiClient.publicClient }},
-            "scopes": {{ .Values.thunder.bootstrap.ampScopes | toJson }},
-            "token": {
-              "accessToken": {
-                "validityPeriod": {{ .Values.thunder.bootstrap.ampApiClient.accessTokenValidityPeriod }}
-              }
-            }
-          }
-        }
-      ]
-    }'
-
-    if echo "$BODY" | grep -q '"clientId":"{{ .Values.thunder.bootstrap.ampApiClient.clientId }}"'; then
-      app_id=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"clientId":"{{ .Values.thunder.bootstrap.ampApiClient.clientId }}"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-      log_info "Application '{{ .Values.thunder.bootstrap.ampApiClient.name }}' already exists (id: $app_id), updating..."
-      RESPONSE=$(api_call PUT "/applications/$app_id" "$APP_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "200" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.ampApiClient.name }}' updated successfully"
-      else
-        log_error "Failed to update application (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    else
-      log_info "Application '{{ .Values.thunder.bootstrap.ampApiClient.name }}' does not exist, creating..."
-      RESPONSE=$(api_call POST "/applications" "$APP_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "201" ]] || [[ "$HTTP_CODE" == "200" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.ampApiClient.name }}' created successfully"
-      elif [[ "$HTTP_CODE" == "409" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.ampApiClient.name }}' already exists, skipping"
-      else
-        log_error "Failed to create application (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    fi
-
-  51-user-schema-and-users.sh: |
-    #!/bin/bash
-    set -e
-
-    SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]:-$0}")"
-    source "${SCRIPT_DIR}/common.sh"
-
-
-    # Get the default OU ID
-    RESPONSE=$(api_call GET "/organization-units/tree/default")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch default organization unit (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    DEFAULT_OU_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-    if [[ -z "$DEFAULT_OU_ID" ]]; then
-      log_error "Could not extract default organization unit ID from response"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    log_info "Using organization unit ID: $DEFAULT_OU_ID"
-
-    log_info "Checking if user schema '{{ .Values.thunder.bootstrap.userSchema.name }}' already exists..."
-    RESPONSE=$(api_call GET "/user-types")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch user schemas (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-
-    if echo "$BODY" | grep -q '"name":"{{ .Values.thunder.bootstrap.userSchema.name }}"'; then
-      log_info "User schema '{{ .Values.thunder.bootstrap.userSchema.name }}' already exists, checking for email attribute..."
-      SCHEMA_ID=$(echo "$BODY" | python3 -c "import sys,json; data=json.load(sys.stdin); items=data if isinstance(data,list) else data.get('types',[]); [print(s['id']) for s in items if s.get('name')=='{{ .Values.thunder.bootstrap.userSchema.name }}']" 2>/dev/null | head -1)
-      # Check 'email' on the MATCHED schema only — grepping the whole response
-      # would match another user type's email and wrongly skip patching this one.
-      SCHEMA_HAS_EMAIL=$(echo "$BODY" | python3 -c "import sys,json; data=json.load(sys.stdin); items=data if isinstance(data,list) else data.get('types',[]); print('true' if any(s.get('name')=='{{ .Values.thunder.bootstrap.userSchema.name }}' and 'email' in (s.get('schema') or {}) for s in items) else 'false')" 2>/dev/null)
-      if [[ -n "$SCHEMA_ID" ]] && [[ "$SCHEMA_HAS_EMAIL" != "true" ]]; then
-        log_info "Adding email attribute to existing schema (ID: $SCHEMA_ID)..."
-        PATCH_RESPONSE=$(api_call PATCH "/user-types/$SCHEMA_ID" "{
-          \"schema\": {
-            \"email\": {
-              \"type\": \"string\",
-              \"displayName\": \"Email\"
-            }
-          }
-        }")
-        PATCH_CODE="${PATCH_RESPONSE: -3}"
-        if [[ "$PATCH_CODE" == "200" ]] || [[ "$PATCH_CODE" == "204" ]]; then
-          log_info "Email attribute added successfully"
-        else
-          log_info "Could not patch schema (HTTP $PATCH_CODE), may need manual update: ${PATCH_RESPONSE%???}"
-        fi
-      fi
-    else
-      log_info "User schema does not exist, creating user schema '{{ .Values.thunder.bootstrap.userSchema.name }}'..."
-      RESPONSE=$(api_call POST "/user-types" "{
-        \"name\": \"{{ .Values.thunder.bootstrap.userSchema.name }}\",
-        \"ouId\": \"$DEFAULT_OU_ID\",
-        \"allowSelfRegistration\": {{ .Values.thunder.bootstrap.userSchema.allowSelfRegistration }},
-        \"schema\": {
-          \"username\": {
-            \"type\": \"string\",
-            \"displayName\": \"Username\",
-            \"required\": true,
-            \"unique\": true
-          },
-          \"password\": {
-            \"type\": \"string\",
-            \"displayName\": \"Password\",
-            \"required\": true,
-            \"credential\": true
-          },
-          \"given_name\": {
-            \"type\": \"string\",
-            \"displayName\": \"First Name\"
-          },
-          \"family_name\": {
-            \"type\": \"string\",
-            \"displayName\": \"Last Name\"
-          },
-          \"email\": {
-            \"type\": \"string\",
-            \"displayName\": \"Email\"
-          }
-        },
-        \"systemAttributes\": {
-          \"display\": \"username\"
-        }
-      }")
-
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "201" ]] || [[ "$HTTP_CODE" == "200" ]]; then
-        log_info "User schema created successfully"
-      elif [[ "$HTTP_CODE" == "409" ]]; then
-        log_info "User schema already exists, skipping"
-      else
-        log_error "Failed to create user schema (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    fi
-
-    # Create default users
-    {{- if .Values.thunder.bootstrap.defaultUsers }}
-    {{- range .Values.thunder.bootstrap.defaultUsers }}
-    log_info "Checking if user '{{ .username }}' already exists..."
-    RESPONSE=$(api_call GET "/users")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch users (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-
-    if echo "$BODY" | grep -q '"username":"{{ .username }}"'; then
-      log_info "User '{{ .username }}' already exists, skipping creation"
-    else
-      log_info "User does not exist, creating user '{{ .username }}'..."
-      RESPONSE=$(api_call POST "/users" "{
-        \"type\": \"{{ $.Values.thunder.bootstrap.userSchema.name }}\",
-        \"ouId\": \"$DEFAULT_OU_ID\",
-        \"attributes\": {
-          \"username\": \"{{ .username }}\",
-          \"password\": \"{{ .password }}\",
-          \"given_name\": \"{{ .givenName }}\",
-          \"family_name\": \"{{ .familyName }}\"
-        }
-      }")
-
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "201" ]] || [[ "$HTTP_CODE" == "200" ]]; then
-        log_info "User '{{ .username }}' created successfully"
-      elif [[ "$HTTP_CODE" == "409" ]]; then
-        log_info "User '{{ .username }}' already exists, skipping"
-      else
-        log_error "Failed to create user (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    fi
-    {{- end }}
-    {{- end }}
-
-  52-amp-console-branding.sh: |
-    #!/bin/bash
-    set -e
-
-    SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]:-$0}")"
-    source "${SCRIPT_DIR}/common.sh"
-
-    # -----------------------------------------------------------------------
-    # 1. Upsert the Agent Manager Console layout (GET → PUT if exists, POST if not)
-    # -----------------------------------------------------------------------
-    LAYOUT_HANDLE="{{ .Values.thunder.bootstrap.ampConsoleLayout.handle }}"
-    log_info "Checking if layout '$LAYOUT_HANDLE' already exists (by handle)..."
-
-    LAYOUT_PAYLOAD='{{ .Values.thunder.bootstrap.ampConsoleLayout | toJson }}'
-
-    # List all layouts and find by handle
-    RESPONSE=$(api_call GET "/design/layouts")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to check layout existence (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-
-    EXISTING_LAYOUT_ID=$(echo "$BODY" | sed 's/},{/}\n{/g' \
-      | grep "\"handle\":\"$LAYOUT_HANDLE\"" \
-      | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-    if [[ -n "$EXISTING_LAYOUT_ID" ]]; then
-      # Found it — update using the actual ID from the database
-      log_info "Layout exists (id: $EXISTING_LAYOUT_ID), updating..."
-      STATIC_LAYOUT_ID='{{ .Values.thunder.bootstrap.ampConsoleLayout.id }}'
-      LAYOUT_PAYLOAD="${LAYOUT_PAYLOAD//$STATIC_LAYOUT_ID/$EXISTING_LAYOUT_ID}"
-      RESPONSE=$(api_call PUT "/design/layouts/$EXISTING_LAYOUT_ID" "$LAYOUT_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "200" ]] || [[ "$HTTP_CODE" == "201" ]]; then
-        log_info "Layout updated successfully"
-        echo "$EXISTING_LAYOUT_ID" > /tmp/amp-console-layout-id
-      else
-        log_error "Failed to update layout (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    else
-      # Not found — create it
-      log_info "Layout not found, creating..."
-      RESPONSE=$(api_call POST "/design/layouts" "$LAYOUT_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      BODY="${RESPONSE%???}"
-      if [[ "$HTTP_CODE" == "201" ]] || [[ "$HTTP_CODE" == "200" ]]; then
-        NEW_LAYOUT_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-        log_info "Layout created successfully (id: $NEW_LAYOUT_ID)"
-        echo "$NEW_LAYOUT_ID" > /tmp/amp-console-layout-id
-      else
-        log_error "Failed to create layout (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    fi
-
-    # -----------------------------------------------------------------------
-    # 2. Upsert the Agent Manager Console theme (find by handle, then PUT/POST)
-    # -----------------------------------------------------------------------
-    THEME_HANDLE="{{ .Values.thunder.bootstrap.ampConsoleTheme.handle }}"
-    log_info "Checking if theme '$THEME_HANDLE' already exists..."
-
-    RESPONSE=$(api_call GET "/design/themes")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to list themes (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-
-    EXISTING_THEME_ID=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep "\"handle\":\"$THEME_HANDLE\"" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-    THEME_PAYLOAD='{{ .Values.thunder.bootstrap.ampConsoleTheme | toJson }}'
-
-    if [[ -n "$EXISTING_THEME_ID" ]]; then
-      log_info "Theme '$THEME_HANDLE' exists (id: $EXISTING_THEME_ID), updating..."
-      RESPONSE=$(api_call PUT "/design/themes/$EXISTING_THEME_ID" "$THEME_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "200" ]]; then
-        log_info "Theme updated successfully"
-        echo "$EXISTING_THEME_ID" > /tmp/amp-console-theme-id
-      else
-        log_error "Failed to update theme (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    else
-      log_info "Theme '$THEME_HANDLE' not found, creating..."
-      RESPONSE=$(api_call POST "/design/themes" "$THEME_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      BODY="${RESPONSE%???}"
-      if [[ "$HTTP_CODE" == "201" ]] || [[ "$HTTP_CODE" == "200" ]]; then
-        NEW_THEME_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-        log_info "Theme created successfully (id: $NEW_THEME_ID)"
-        echo "$NEW_THEME_ID" > /tmp/amp-console-theme-id
-      else
-        log_error "Failed to create theme (HTTP $HTTP_CODE)"
-        echo "Response: $BODY"
-        exit 1
-      fi
-    fi
-
-  53-amp-console-app.sh: |
-    #!/bin/bash
-    set -e
-
-    SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]:-$0}")"
-    source "${SCRIPT_DIR}/common.sh"
-
-
-    log_info "Checking if application '{{ .Values.thunder.bootstrap.ampConsoleClient.name }}' already exists..."
-
-    # Read theme ID and layout ID written by 52-amp-console-branding.sh
-    CONSOLE_THEME_ID=$(cat /tmp/amp-console-theme-id 2>/dev/null || echo "")
-    CONSOLE_LAYOUT_ID=$(cat /tmp/amp-console-layout-id 2>/dev/null || echo "{{ .Values.thunder.bootstrap.ampConsoleLayout.id }}")
-
-    # Get the default OU ID
-    RESPONSE=$(api_call GET "/organization-units/tree/default")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch default organization unit (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    DEFAULT_OU_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-    if [[ -z "$DEFAULT_OU_ID" ]]; then
-      log_error "Could not extract default organization unit ID from response"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    log_info "Using OU ID: $DEFAULT_OU_ID"
-
-    # Look up the default auth flow ID
-    RESPONSE=$(api_call GET "/flows?flowType=AUTHENTICATION&limit=200")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch authentication flows (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    AUTH_FLOW_ID=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"handle":"default-basic-flow"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-    if [[ -z "$AUTH_FLOW_ID" ]]; then
-      log_error "Could not find default-basic-flow authentication flow"
-      exit 1
-    fi
-    log_info "Using auth flow ID: $AUTH_FLOW_ID"
-
-    # Check existing apps
-    RESPONSE=$(api_call GET "/applications")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch applications (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-
-    APP_PAYLOAD='{
-      "name": "{{ .Values.thunder.bootstrap.ampConsoleClient.name }}",
-      "description": "{{ .Values.thunder.bootstrap.ampConsoleClient.description }}",
-      "logoUrl": "{{ .Values.thunder.bootstrap.ampConsoleClient.logoUrl }}",
-      "ouId": "'${DEFAULT_OU_ID}'",
-      "authFlowId": "'${AUTH_FLOW_ID}'",
-      "themeId": "'${CONSOLE_THEME_ID}'",
-      "layoutId": "'${CONSOLE_LAYOUT_ID}'",
-      "allowedUserTypes": {{ .Values.thunder.bootstrap.ampConsoleClient.allowedUserTypes | toJson }},
-      "inboundAuthConfig": [
-        {
-          "type": "oauth2",
-          "config": {
-            "clientId": "{{ .Values.thunder.bootstrap.ampConsoleClient.clientId }}",
-            "redirectUris": {{ .Values.thunder.bootstrap.ampConsoleClient.redirectUris | toJson }},
-            "grantTypes": {{ .Values.thunder.bootstrap.ampConsoleClient.grantTypes | toJson }},
-            "responseTypes": {{ .Values.thunder.bootstrap.ampConsoleClient.responseTypes | toJson }},
-            "tokenEndpointAuthMethod": "{{ .Values.thunder.bootstrap.ampConsoleClient.tokenEndpointAuthMethod }}",
-            "pkceRequired": {{ .Values.thunder.bootstrap.ampConsoleClient.pkceRequired }},
-            "publicClient": {{ .Values.thunder.bootstrap.ampConsoleClient.publicClient }},
-            "scopes": {{ .Values.thunder.bootstrap.ampScopes | toJson }},
-            "token": {
-              "accessToken": {
-                "validityPeriod": {{ .Values.thunder.bootstrap.ampConsoleClient.accessTokenValidityPeriod }},
-                "userAttributes": {{ .Values.thunder.bootstrap.ampConsoleClient.userAttributes | toJson }}
-              },
-              "idToken": {
-                "validityPeriod": {{ .Values.thunder.bootstrap.ampConsoleClient.idTokenValidityPeriod }},
-                "userAttributes": {{ .Values.thunder.bootstrap.ampConsoleClient.userAttributes | toJson }}
-              }
-            }
-          }
-        }
-      ]
-    }'
-
-    if echo "$BODY" | grep -q '"clientId":"{{ .Values.thunder.bootstrap.ampConsoleClient.clientId }}"'; then
-      app_id=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"clientId":"{{ .Values.thunder.bootstrap.ampConsoleClient.clientId }}"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-      log_info "Application '{{ .Values.thunder.bootstrap.ampConsoleClient.name }}' already exists (id: $app_id), updating..."
-      RESPONSE=$(api_call PUT "/applications/$app_id" "$APP_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "200" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.ampConsoleClient.name }}' updated successfully"
-      else
-        log_error "Failed to update application (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    else
-      log_info "Application '{{ .Values.thunder.bootstrap.ampConsoleClient.name }}' does not exist, creating..."
-      RESPONSE=$(api_call POST "/applications" "$APP_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "201" ]] || [[ "$HTTP_CODE" == "200" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.ampConsoleClient.name }}' created successfully"
-      elif [[ "$HTTP_CODE" == "409" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.ampConsoleClient.name }}' already exists, skipping"
-      else
-        log_error "Failed to create application (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    fi
-
-  54-workload-publisher-app.sh: |
-    #!/bin/bash
-    set -e
-
-    SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]:-$0}")"
-    source "${SCRIPT_DIR}/common.sh"
-
-
-    log_info "Checking if application '{{ .Values.thunder.bootstrap.workloadPublisherClient.name }}' already exists..."
-
-    # Get the default OU ID
-    RESPONSE=$(api_call GET "/organization-units/tree/default")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch default organization unit (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    DEFAULT_OU_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-    if [[ -z "$DEFAULT_OU_ID" ]]; then
-      log_error "Could not extract default organization unit ID from response"
-      echo "Response: $BODY"
-      exit 1
-    fi
-
-    # Check existing apps
-    RESPONSE=$(api_call GET "/applications")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch applications (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-
-    APP_PAYLOAD='{
-      "name": "{{ .Values.thunder.bootstrap.workloadPublisherClient.name }}",
-      "description": "{{ .Values.thunder.bootstrap.workloadPublisherClient.description }}",
-      "ouId": "'${DEFAULT_OU_ID}'",
-      "inboundAuthConfig": [
-        {
-          "type": "oauth2",
-          "config": {
-            "clientId": "{{ .Values.thunder.bootstrap.workloadPublisherClient.clientId }}",
-            "clientSecret": "{{ .Values.thunder.bootstrap.workloadPublisherClient.clientSecret }}",
-            "grantTypes": {{ .Values.thunder.bootstrap.workloadPublisherClient.grantTypes | toJson }},
-            "tokenEndpointAuthMethod": "{{ .Values.thunder.bootstrap.workloadPublisherClient.tokenEndpointAuthMethod }}",
-            "pkceRequired": {{ .Values.thunder.bootstrap.workloadPublisherClient.pkceRequired }},
-            "publicClient": {{ .Values.thunder.bootstrap.workloadPublisherClient.publicClient }},
-            "token": {
-              "accessToken": {
-                "validityPeriod": {{ .Values.thunder.bootstrap.workloadPublisherClient.accessTokenValidityPeriod }}
-              }
-            }
-          }
-        }
-      ]
-    }'
-
-    if echo "$BODY" | grep -q '"clientId":"{{ .Values.thunder.bootstrap.workloadPublisherClient.clientId }}"'; then
-      app_id=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"clientId":"{{ .Values.thunder.bootstrap.workloadPublisherClient.clientId }}"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-      log_info "Application '{{ .Values.thunder.bootstrap.workloadPublisherClient.name }}' already exists (id: $app_id), updating..."
-      RESPONSE=$(api_call PUT "/applications/$app_id" "$APP_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "200" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.workloadPublisherClient.name }}' updated successfully"
-      else
-        log_error "Failed to update application (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    else
-      log_info "Application '{{ .Values.thunder.bootstrap.workloadPublisherClient.name }}' does not exist, creating..."
-      RESPONSE=$(api_call POST "/applications" "$APP_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "201" ]] || [[ "$HTTP_CODE" == "200" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.workloadPublisherClient.name }}' created successfully"
-      elif [[ "$HTTP_CODE" == "409" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.workloadPublisherClient.name }}' already exists, skipping"
-      else
-        log_error "Failed to create application (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    fi
-
-  55-observer-resource-reader-app.sh: |
-    #!/bin/bash
-    set -e
-
-    SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]:-$0}")"
-    source "${SCRIPT_DIR}/common.sh"
-
-
-    log_info "Checking if application '{{ .Values.thunder.bootstrap.observerResourceReaderClient.name }}' already exists..."
-
-    # Get the default OU ID
-    RESPONSE=$(api_call GET "/organization-units/tree/default")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch default organization unit (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    DEFAULT_OU_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-    if [[ -z "$DEFAULT_OU_ID" ]]; then
-      log_error "Could not extract default organization unit ID from response"
-      echo "Response: $BODY"
-      exit 1
-    fi
-
-    # Check existing apps
-    RESPONSE=$(api_call GET "/applications")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch applications (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-
-    APP_PAYLOAD='{
-      "name": "{{ .Values.thunder.bootstrap.observerResourceReaderClient.name }}",
-      "description": "{{ .Values.thunder.bootstrap.observerResourceReaderClient.description }}",
-      "ouId": "'${DEFAULT_OU_ID}'",
-      "inboundAuthConfig": [
-        {
-          "type": "oauth2",
-          "config": {
-            "clientId": "{{ .Values.thunder.bootstrap.observerResourceReaderClient.clientId }}",
-            "clientSecret": "{{ .Values.thunder.bootstrap.observerResourceReaderClient.clientSecret }}",
-            "grantTypes": {{ .Values.thunder.bootstrap.observerResourceReaderClient.grantTypes | toJson }},
-            "tokenEndpointAuthMethod": "{{ .Values.thunder.bootstrap.observerResourceReaderClient.tokenEndpointAuthMethod }}",
-            "pkceRequired": {{ .Values.thunder.bootstrap.observerResourceReaderClient.pkceRequired }},
-            "publicClient": {{ .Values.thunder.bootstrap.observerResourceReaderClient.publicClient }},
-            "token": {
-              "accessToken": {
-                "validityPeriod": {{ .Values.thunder.bootstrap.observerResourceReaderClient.accessTokenValidityPeriod }}
-              }
-            }
-          }
-        }
-      ]
-    }'
-
-    if echo "$BODY" | grep -q '"clientId":"{{ .Values.thunder.bootstrap.observerResourceReaderClient.clientId }}"'; then
-      app_id=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"clientId":"{{ .Values.thunder.bootstrap.observerResourceReaderClient.clientId }}"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-      log_info "Application '{{ .Values.thunder.bootstrap.observerResourceReaderClient.name }}' already exists (id: $app_id), updating..."
-      RESPONSE=$(api_call PUT "/applications/$app_id" "$APP_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "200" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.observerResourceReaderClient.name }}' updated successfully"
-      else
-        log_error "Failed to update application (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    else
-      log_info "Application '{{ .Values.thunder.bootstrap.observerResourceReaderClient.name }}' does not exist, creating..."
-      RESPONSE=$(api_call POST "/applications" "$APP_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "201" ]] || [[ "$HTTP_CODE" == "200" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.observerResourceReaderClient.name }}' created successfully"
-      elif [[ "$HTTP_CODE" == "409" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.observerResourceReaderClient.name }}' already exists, skipping"
-      else
-        log_error "Failed to create application (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    fi
-
-  56-amp-publisher-client.sh: |
-    #!/bin/bash
-    set -e
-
-    SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]:-$0}")"
-    source "${SCRIPT_DIR}/common.sh"
-
-
-    log_info "Checking if application '{{ .Values.thunder.bootstrap.ampPublisherClient.name }}' already exists..."
-
-    # Get the default OU ID
-    RESPONSE=$(api_call GET "/organization-units/tree/default")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch default organization unit (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    DEFAULT_OU_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-    if [[ -z "$DEFAULT_OU_ID" ]]; then
-      log_error "Could not extract default organization unit ID from response"
-      echo "Response: $BODY"
-      exit 1
-    fi
-
-    # Look up the default auth flow ID
-    RESPONSE=$(api_call GET "/flows?flowType=AUTHENTICATION&limit=200")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch authentication flows (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    AUTH_FLOW_ID=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"handle":"default-basic-flow"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-    if [[ -z "$AUTH_FLOW_ID" ]]; then
-      log_error "Could not find default-basic-flow authentication flow"
-      exit 1
-    fi
-    log_info "Using auth flow ID: $AUTH_FLOW_ID"
-
-    # Check existing apps
-    RESPONSE=$(api_call GET "/applications")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch applications (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-
-    APP_PAYLOAD='{
-      "name": "{{ .Values.thunder.bootstrap.ampPublisherClient.name }}",
-      "description": "{{ .Values.thunder.bootstrap.ampPublisherClient.description }}",
-      "ouId": "'${DEFAULT_OU_ID}'",
-      "authFlowId": "'${AUTH_FLOW_ID}'",
-      "inboundAuthConfig": [
-        {
-          "type": "oauth2",
-          "config": {
-            "clientId": "{{ .Values.thunder.bootstrap.ampPublisherClient.clientId }}",
-            "clientSecret": "{{ .Values.thunder.bootstrap.ampPublisherClient.clientSecret }}",
-            "grantTypes": {{ .Values.thunder.bootstrap.ampPublisherClient.grantTypes | toJson }},
-            "tokenEndpointAuthMethod": "{{ .Values.thunder.bootstrap.ampPublisherClient.tokenEndpointAuthMethod }}",
-            "pkceRequired": {{ .Values.thunder.bootstrap.ampPublisherClient.pkceRequired }},
-            "publicClient": {{ .Values.thunder.bootstrap.ampPublisherClient.publicClient }},
-            "scopes": {{ .Values.thunder.bootstrap.ampScopes | toJson }},
-            "token": {
-              "accessToken": {
-                "validityPeriod": {{ .Values.thunder.bootstrap.ampPublisherClient.accessTokenValidityPeriod }}
-              }
-            }
-          }
-        }
-      ]
-    }'
-
-    if echo "$BODY" | grep -q '"clientId":"{{ .Values.thunder.bootstrap.ampPublisherClient.clientId }}"'; then
-      app_id=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"clientId":"{{ .Values.thunder.bootstrap.ampPublisherClient.clientId }}"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-      log_info "Application '{{ .Values.thunder.bootstrap.ampPublisherClient.name }}' already exists (id: $app_id), updating..."
-      RESPONSE=$(api_call PUT "/applications/$app_id" "$APP_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "200" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.ampPublisherClient.name }}' updated successfully"
-      else
-        log_error "Failed to update application (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    else
-      log_info "Application '{{ .Values.thunder.bootstrap.ampPublisherClient.name }}' does not exist, creating..."
-      RESPONSE=$(api_call POST "/applications" "$APP_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "201" ]] || [[ "$HTTP_CODE" == "200" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.ampPublisherClient.name }}' created successfully"
-      elif [[ "$HTTP_CODE" == "409" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.ampPublisherClient.name }}' already exists, skipping"
-      else
-        log_error "Failed to create application (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    fi
-
-  57-amp-system-client.sh: |
-    #!/bin/bash
-    set -e
-
-    SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]:-$0}")"
-    source "${SCRIPT_DIR}/common.sh"
-
-
-    log_info "Checking if application '{{ .Values.thunder.bootstrap.ampSystemClient.name }}' already exists..."
-
-    # Get the default OU ID
-    RESPONSE=$(api_call GET "/organization-units/tree/default")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch default organization unit (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    DEFAULT_OU_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-    if [[ -z "$DEFAULT_OU_ID" ]]; then
-      log_error "Could not extract default organization unit ID from response"
-      echo "Response: $BODY"
-      exit 1
-    fi
-
-    # Look up the default auth flow ID
-    RESPONSE=$(api_call GET "/flows?flowType=AUTHENTICATION&limit=200")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch authentication flows (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    AUTH_FLOW_ID=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"handle":"default-basic-flow"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-    if [[ -z "$AUTH_FLOW_ID" ]]; then
-      log_error "Could not find default-basic-flow authentication flow"
-      exit 1
-    fi
-    log_info "Using auth flow ID: $AUTH_FLOW_ID"
-
-    # Check existing apps
-    RESPONSE=$(api_call GET "/applications")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch applications (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-
-    APP_PAYLOAD='{
-      "name": "{{ .Values.thunder.bootstrap.ampSystemClient.name }}",
-      "description": "{{ .Values.thunder.bootstrap.ampSystemClient.description }}",
-      "ouId": "'${DEFAULT_OU_ID}'",
-      "authFlowId": "'${AUTH_FLOW_ID}'",
-      "inboundAuthConfig": [
-        {
-          "type": "oauth2",
-          "config": {
-            "clientId": "{{ .Values.thunder.bootstrap.ampSystemClient.clientId }}",
-            "clientSecret": "{{ .Values.thunder.bootstrap.ampSystemClient.clientSecret }}",
-            "grantTypes": {{ .Values.thunder.bootstrap.ampSystemClient.grantTypes | toJson }},
-            "tokenEndpointAuthMethod": "{{ .Values.thunder.bootstrap.ampSystemClient.tokenEndpointAuthMethod }}",
-            "pkceRequired": {{ .Values.thunder.bootstrap.ampSystemClient.pkceRequired }},
-            "publicClient": {{ .Values.thunder.bootstrap.ampSystemClient.publicClient }},
-            "scopes": {{ .Values.thunder.bootstrap.ampScopes | toJson }},
-            "token": {
-              "accessToken": {
-                "validityPeriod": {{ .Values.thunder.bootstrap.ampSystemClient.accessTokenValidityPeriod }}
-              }
-            }
-          }
-        }
-      ]
-    }'
-
-    SYSTEM_APP_ID=""
-
-    if echo "$BODY" | grep -q '"clientId":"{{ .Values.thunder.bootstrap.ampSystemClient.clientId }}"'; then
-      SYSTEM_APP_ID=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"clientId":"{{ .Values.thunder.bootstrap.ampSystemClient.clientId }}"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-      log_info "Application '{{ .Values.thunder.bootstrap.ampSystemClient.name }}' already exists (id: $SYSTEM_APP_ID), updating..."
-      RESPONSE=$(api_call PUT "/applications/$SYSTEM_APP_ID" "$APP_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "200" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.ampSystemClient.name }}' updated successfully"
-      else
-        log_error "Failed to update application (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    else
-      log_info "Application '{{ .Values.thunder.bootstrap.ampSystemClient.name }}' does not exist, creating..."
-      RESPONSE=$(api_call POST "/applications" "$APP_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      BODY="${RESPONSE%???}"
-      if [[ "$HTTP_CODE" == "201" ]] || [[ "$HTTP_CODE" == "200" ]]; then
-        SYSTEM_APP_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-        log_info "Application '{{ .Values.thunder.bootstrap.ampSystemClient.name }}' created successfully (id: $SYSTEM_APP_ID)"
-      elif [[ "$HTTP_CODE" == "409" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.ampSystemClient.name }}' already exists, skipping"
-        # Re-fetch to get the ID
-        RESPONSE=$(api_call GET "/applications")
-        BODY="${RESPONSE%???}"
-        SYSTEM_APP_ID=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"clientId":"{{ .Values.thunder.bootstrap.ampSystemClient.clientId }}"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-      else
-        log_error "Failed to create application (HTTP $HTTP_CODE)"
-        echo "Response: $BODY"
-        exit 1
-      fi
-    fi
-
-    if [[ -z "$SYSTEM_APP_ID" ]]; then
-      log_error "Could not determine system app ID"
-      exit 1
-    fi
-
-    # Assign the system app to the Administrator role so it can get system-scoped tokens
-    log_info "Looking up Administrator role..."
-    RESPONSE=$(api_call GET "/roles")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch roles (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-
-    ADMIN_ROLE_ID=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"name":"Administrator"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-    if [[ -z "$ADMIN_ROLE_ID" ]]; then
-      log_error "Could not find Administrator role"
-      exit 1
-    fi
-    log_info "Found Administrator role (id: $ADMIN_ROLE_ID)"
-
-    log_info "Assigning system app to Administrator role..."
-    ASSIGN_PAYLOAD='{"assignments":[{"id":"'${SYSTEM_APP_ID}'","type":"app"}]}'
-    RESPONSE=$(api_call POST "/roles/$ADMIN_ROLE_ID/assignments/add" "$ASSIGN_PAYLOAD")
-    HTTP_CODE="${RESPONSE: -3}"
-    if [[ "$HTTP_CODE" == "200" ]] || [[ "$HTTP_CODE" == "201" ]] || [[ "$HTTP_CODE" == "204" ]]; then
-      log_info "System app assigned to Administrator role successfully"
-    elif [[ "$HTTP_CODE" == "409" ]]; then
-      log_info "System app already assigned to Administrator role"
-    else
-      log_error "Failed to assign system app to Administrator role (HTTP $HTTP_CODE)"
-      echo "Response: ${RESPONSE%???}"
-      exit 1
-    fi
-
-
-  58-amctl-client.sh: |
-    #!/bin/bash
-    set -e
-
-    SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]:-$0}")"
-    source "${SCRIPT_DIR}/common.sh"
-
-
-    log_info "Checking if application '{{ .Values.thunder.bootstrap.amCliClient.name }}' already exists..."
-
-    # Get the default OU ID
-    RESPONSE=$(api_call GET "/organization-units/tree/default")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch default organization unit (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    DEFAULT_OU_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-    if [[ -z "$DEFAULT_OU_ID" ]]; then
-      log_error "Could not extract default organization unit ID from response"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    log_info "Using OU ID: $DEFAULT_OU_ID"
-
-    # Look up the default auth flow ID
-    RESPONSE=$(api_call GET "/flows?flowType=AUTHENTICATION&limit=200")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch authentication flows (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    AUTH_FLOW_ID=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"handle":"default-basic-flow"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-    if [[ -z "$AUTH_FLOW_ID" ]]; then
-      log_error "Could not find default-basic-flow authentication flow"
-      exit 1
-    fi
-    log_info "Using auth flow ID: $AUTH_FLOW_ID"
-
-    # Check existing apps
-    RESPONSE=$(api_call GET "/applications")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch applications (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-
-    APP_PAYLOAD='{
-      "name": "{{ .Values.thunder.bootstrap.amCliClient.name }}",
-      "description": "{{ .Values.thunder.bootstrap.amCliClient.description }}",
-      "ouId": "'${DEFAULT_OU_ID}'",
-      "authFlowId": "'${AUTH_FLOW_ID}'",
-      "allowedUserTypes": {{ .Values.thunder.bootstrap.amCliClient.allowedUserTypes | toJson }},
-      "inboundAuthConfig": [
-        {
-          "type": "oauth2",
-          "config": {
-            "clientId": "{{ .Values.thunder.bootstrap.amCliClient.clientId }}",
-            "redirectUris": {{ .Values.thunder.bootstrap.amCliClient.redirectUris | toJson }},
-            "grantTypes": {{ .Values.thunder.bootstrap.amCliClient.grantTypes | toJson }},
-            "responseTypes": {{ .Values.thunder.bootstrap.amCliClient.responseTypes | toJson }},
-            "tokenEndpointAuthMethod": "{{ .Values.thunder.bootstrap.amCliClient.tokenEndpointAuthMethod }}",
-            "pkceRequired": {{ .Values.thunder.bootstrap.amCliClient.pkceRequired }},
-            "publicClient": {{ .Values.thunder.bootstrap.amCliClient.publicClient }},
-            "scopes": {{ .Values.thunder.bootstrap.ampScopes | toJson }},
-            "token": {
-              "accessToken": {
-                "validityPeriod": {{ .Values.thunder.bootstrap.amCliClient.accessTokenValidityPeriod }},
-                "userAttributes": {{ .Values.thunder.bootstrap.amCliClient.userAttributes | toJson }}
-              },
-              "idToken": {
-                "validityPeriod": {{ .Values.thunder.bootstrap.amCliClient.idTokenValidityPeriod }},
-                "userAttributes": {{ .Values.thunder.bootstrap.amCliClient.userAttributes | toJson }}
-              }
-            }
-          }
-        }
-      ]
-    }'
-
-    if echo "$BODY" | grep -q '"clientId":"{{ .Values.thunder.bootstrap.amCliClient.clientId }}"'; then
-      app_id=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"clientId":"{{ .Values.thunder.bootstrap.amCliClient.clientId }}"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-      log_info "Application '{{ .Values.thunder.bootstrap.amCliClient.name }}' already exists (id: $app_id), updating..."
-      RESPONSE=$(api_call PUT "/applications/$app_id" "$APP_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "200" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.amCliClient.name }}' updated successfully"
-      else
-        log_error "Failed to update application (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    else
-      log_info "Application '{{ .Values.thunder.bootstrap.amCliClient.name }}' does not exist, creating..."
-      RESPONSE=$(api_call POST "/applications" "$APP_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "201" ]] || [[ "$HTTP_CODE" == "200" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.amCliClient.name }}' created successfully"
-      elif [[ "$HTTP_CODE" == "409" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.amCliClient.name }}' already exists, skipping"
-      else
-        log_error "Failed to create application (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    fi
+  50-amp-api-client.yaml: |
+    # ouId (not ouHandle) on every application document in this file: the declarative
+    # importer resolves ouHandle correctly for roles/groups/users, but not for
+    # applications, so an application bootstrapped with ouHandle: default ends up with
+    # no OU at all, and its client_credentials tokens carry no ouId/ouHandle claim —
+    # agent-manager-service's RequireOrgMatch then rejects them as "missing ou identity
+    # in token". "01900000-0000-7000-8000-000000000001" is ThunderID's own built-in
+    # "default" OU, fixed on every install rather than generated per instance, mirroring
+    # what the pre-declarative bootstrap scripts did: resolve "default" once and send
+    # the real id. This on-prem deployment only ever runs a single org/OU ("default",
+    # mapped to OpenChoreo's own default namespace) — multi-org support is a future
+    # concern, not something to solve here.
+    #
+    # ouId alone is NOT enough: Thunder only embeds ouId/ouHandle as token claims when
+    # a client's own token.accessToken.clientConfig.attributes opts in. Every
+    # client_credentials-only application in this file needs this attributes list, or
+    # its tokens keep getting rejected as "missing ou identity in token" even though
+    # ouId above is set correctly.
+    resource_type: application
+    id: amp-api-client
+    type: m2m # client_credentials only, no interactive login
+    name: {{ .Values.thunder.bootstrap.ampApiClient.name | quote }}
+    description: {{ .Values.thunder.bootstrap.ampApiClient.description | quote }}
+    ouId: "01900000-0000-7000-8000-000000000001"
+    inboundAuthConfig:
+      - type: oauth2
+        config:
+          clientId: {{ .Values.thunder.bootstrap.ampApiClient.clientId | quote }}
+          clientSecret: {{ .Values.thunder.bootstrap.ampApiClient.clientSecret | quote }}
+          grantTypes: {{ .Values.thunder.bootstrap.ampApiClient.grantTypes | toJson }}
+          tokenEndpointAuthMethod: {{ .Values.thunder.bootstrap.ampApiClient.tokenEndpointAuthMethod | quote }}
+          pkceRequired: {{ .Values.thunder.bootstrap.ampApiClient.pkceRequired }}
+          publicClient: {{ .Values.thunder.bootstrap.ampApiClient.publicClient }}
+          scopes: {{ .Values.thunder.bootstrap.ampScopes | toJson }}
+          token:
+            accessToken:
+              clientConfig:
+                validityPeriod: {{ .Values.thunder.bootstrap.ampApiClient.accessTokenValidityPeriod }}
+                attributes: ["ouId", "ouHandle"]
+
+  51-amp-console-theme.yaml: |
+    resource_type: theme
+    id: amp-console-theme
+    handle: {{ .Values.thunder.bootstrap.ampConsoleTheme.handle | quote }}
+    displayName: {{ .Values.thunder.bootstrap.ampConsoleTheme.displayName | quote }}
+    theme:
+{{ .Values.thunder.bootstrap.ampConsoleTheme.theme | toYaml | indent 6 }}
+
+  52-amp-console-layout.yaml: |
+    # CreateLayout enforces handle uniqueness with no "already exists under a
+    # different id, reuse it" fallback. Older ThunderID versions silently discarded
+    # a caller-specified layout id, so a cluster upgraded from one of those still has
+    # this layout row under a different id — wipe Thunder's PVC before reinstalling
+    # with this fixed id, or the id mismatch causes a conflict.
+    resource_type: layout
+    id: {{ .Values.thunder.bootstrap.ampConsoleLayout.id | quote }}
+    handle: {{ .Values.thunder.bootstrap.ampConsoleLayout.handle | quote }}
+    displayName: {{ .Values.thunder.bootstrap.ampConsoleLayout.displayName | quote }}
+    layout:
+{{ .Values.thunder.bootstrap.ampConsoleLayout.layout | toYaml | indent 6 }}
+
+  53-amp-console-app.yaml: |
+    resource_type: application
+    id: amp-console-client
+    type: browser # public redirect client (authorization_code + PKCE console login)
+    name: {{ .Values.thunder.bootstrap.ampConsoleClient.name | quote }}
+    description: {{ .Values.thunder.bootstrap.ampConsoleClient.description | quote }}
+    ouId: "01900000-0000-7000-8000-000000000001"
+    logoUrl: {{ .Values.thunder.bootstrap.ampConsoleClient.logoUrl | quote }}
+    authFlowHandle: default-flow
+    themeId: amp-console-theme
+    layoutId: {{ .Values.thunder.bootstrap.ampConsoleLayout.id | quote }}
+    allowedUserTypes: {{ .Values.thunder.bootstrap.ampConsoleClient.allowedUserTypes | toJson }}
+    inboundAuthConfig:
+      - type: oauth2
+        config:
+          clientId: {{ .Values.thunder.bootstrap.ampConsoleClient.clientId | quote }}
+          clientSecret: {{ .Values.thunder.bootstrap.ampConsoleClient.clientSecret | quote }}
+          redirectUris: {{ .Values.thunder.bootstrap.ampConsoleClient.redirectUris | toJson }}
+          grantTypes: {{ .Values.thunder.bootstrap.ampConsoleClient.grantTypes | toJson }}
+          responseTypes: {{ .Values.thunder.bootstrap.ampConsoleClient.responseTypes | toJson }}
+          tokenEndpointAuthMethod: {{ .Values.thunder.bootstrap.ampConsoleClient.tokenEndpointAuthMethod | quote }}
+          pkceRequired: {{ .Values.thunder.bootstrap.ampConsoleClient.pkceRequired }}
+          publicClient: {{ .Values.thunder.bootstrap.ampConsoleClient.publicClient }}
+          scopes: {{ .Values.thunder.bootstrap.ampScopes | toJson }}
+          token:
+            accessToken:
+              userConfig:
+                validityPeriod: {{ .Values.thunder.bootstrap.ampConsoleClient.accessTokenValidityPeriod }}
+                attributes: {{ .Values.thunder.bootstrap.ampConsoleClient.userAttributes | toJson }}
+            idToken:
+              validityPeriod: {{ .Values.thunder.bootstrap.ampConsoleClient.idTokenValidityPeriod }}
+              userAttributes: {{ .Values.thunder.bootstrap.ampConsoleClient.userAttributes | toJson }}
+
+  54-workload-publisher-app.yaml: |
+    resource_type: application
+    id: workload-publisher-client
+    type: m2m # client_credentials only, no interactive login
+    name: {{ .Values.thunder.bootstrap.workloadPublisherClient.name | quote }}
+    description: {{ .Values.thunder.bootstrap.workloadPublisherClient.description | quote }}
+    ouId: "01900000-0000-7000-8000-000000000001"
+    inboundAuthConfig:
+      - type: oauth2
+        config:
+          clientId: {{ .Values.thunder.bootstrap.workloadPublisherClient.clientId | quote }}
+          clientSecret: {{ .Values.thunder.bootstrap.workloadPublisherClient.clientSecret | quote }}
+          grantTypes: {{ .Values.thunder.bootstrap.workloadPublisherClient.grantTypes | toJson }}
+          tokenEndpointAuthMethod: {{ .Values.thunder.bootstrap.workloadPublisherClient.tokenEndpointAuthMethod | quote }}
+          pkceRequired: {{ .Values.thunder.bootstrap.workloadPublisherClient.pkceRequired }}
+          publicClient: {{ .Values.thunder.bootstrap.workloadPublisherClient.publicClient }}
+          scopes: {{ .Values.thunder.bootstrap.ampScopes | toJson }}
+          token:
+            accessToken:
+              clientConfig:
+                validityPeriod: {{ .Values.thunder.bootstrap.workloadPublisherClient.accessTokenValidityPeriod }}
+                attributes: ["ouId", "ouHandle"]
+
+  55-observer-resource-reader-app.yaml: |
+    resource_type: application
+    id: observer-resource-reader-client
+    type: m2m # client_credentials only, no interactive login
+    name: {{ .Values.thunder.bootstrap.observerResourceReaderClient.name | quote }}
+    description: {{ .Values.thunder.bootstrap.observerResourceReaderClient.description | quote }}
+    ouId: "01900000-0000-7000-8000-000000000001"
+    inboundAuthConfig:
+      - type: oauth2
+        config:
+          clientId: {{ .Values.thunder.bootstrap.observerResourceReaderClient.clientId | quote }}
+          clientSecret: {{ .Values.thunder.bootstrap.observerResourceReaderClient.clientSecret | quote }}
+          grantTypes: {{ .Values.thunder.bootstrap.observerResourceReaderClient.grantTypes | toJson }}
+          tokenEndpointAuthMethod: {{ .Values.thunder.bootstrap.observerResourceReaderClient.tokenEndpointAuthMethod | quote }}
+          pkceRequired: {{ .Values.thunder.bootstrap.observerResourceReaderClient.pkceRequired }}
+          publicClient: {{ .Values.thunder.bootstrap.observerResourceReaderClient.publicClient }}
+          scopes: {{ .Values.thunder.bootstrap.ampScopes | toJson }}
+          token:
+            accessToken:
+              clientConfig:
+                validityPeriod: {{ .Values.thunder.bootstrap.observerResourceReaderClient.accessTokenValidityPeriod }}
+                attributes: ["ouId", "ouHandle"]
+
+  56-amp-publisher-client.yaml: |
+    resource_type: application
+    id: amp-publisher-client
+    type: m2m # client_credentials only, no interactive login
+    name: {{ .Values.thunder.bootstrap.ampPublisherClient.name | quote }}
+    description: {{ .Values.thunder.bootstrap.ampPublisherClient.description | quote }}
+    ouId: "01900000-0000-7000-8000-000000000001"
+    inboundAuthConfig:
+      - type: oauth2
+        config:
+          clientId: {{ .Values.thunder.bootstrap.ampPublisherClient.clientId | quote }}
+          clientSecret: {{ .Values.thunder.bootstrap.ampPublisherClient.clientSecret | quote }}
+          grantTypes: {{ .Values.thunder.bootstrap.ampPublisherClient.grantTypes | toJson }}
+          tokenEndpointAuthMethod: {{ .Values.thunder.bootstrap.ampPublisherClient.tokenEndpointAuthMethod | quote }}
+          pkceRequired: {{ .Values.thunder.bootstrap.ampPublisherClient.pkceRequired }}
+          publicClient: {{ .Values.thunder.bootstrap.ampPublisherClient.publicClient }}
+          scopes: {{ .Values.thunder.bootstrap.ampScopes | toJson }}
+          token:
+            accessToken:
+              clientConfig:
+                validityPeriod: {{ .Values.thunder.bootstrap.ampPublisherClient.accessTokenValidityPeriod }}
+                attributes: ["ouId", "ouHandle"]
+
+  57-amp-system-client.yaml: |
+    resource_type: application
+    id: amp-system-client
+    type: m2m # client_credentials only, no interactive login
+    name: {{ .Values.thunder.bootstrap.ampSystemClient.name | quote }}
+    description: {{ .Values.thunder.bootstrap.ampSystemClient.description | quote }}
+    ouId: "01900000-0000-7000-8000-000000000001"
+    inboundAuthConfig:
+      - type: oauth2
+        config:
+          clientId: {{ .Values.thunder.bootstrap.ampSystemClient.clientId | quote }}
+          clientSecret: {{ .Values.thunder.bootstrap.ampSystemClient.clientSecret | quote }}
+          grantTypes: {{ .Values.thunder.bootstrap.ampSystemClient.grantTypes | toJson }}
+          tokenEndpointAuthMethod: {{ .Values.thunder.bootstrap.ampSystemClient.tokenEndpointAuthMethod | quote }}
+          pkceRequired: {{ .Values.thunder.bootstrap.ampSystemClient.pkceRequired }}
+          publicClient: {{ .Values.thunder.bootstrap.ampSystemClient.publicClient }}
+          # "system" (not an amp: scope) grants ThunderID's own admin-API access, gated by
+          # security.HasSystemPermission reading the token's OAuth scope claim directly
+          # (backend/internal/system/security/jwt_authenticator.go + permissions.go) — a
+          # separate mechanism from the amp-resource-server role/permission model used below.
+          scopes: {{ append .Values.thunder.bootstrap.ampScopes "system" | toJson }}
+          token:
+            accessToken:
+              clientConfig:
+                validityPeriod: {{ .Values.thunder.bootstrap.ampSystemClient.accessTokenValidityPeriod }}
+                attributes: ["ouId", "ouHandle"]
+
+  58-amctl-client.yaml: |
+    resource_type: application
+    id: amctl-client
+    type: browser # public redirect client (authorization_code + PKCE, loopback redirect)
+    name: {{ .Values.thunder.bootstrap.amCliClient.name | quote }}
+    description: {{ .Values.thunder.bootstrap.amCliClient.description | quote }}
+    ouId: "01900000-0000-7000-8000-000000000001"
+    authFlowHandle: default-flow
+    allowedUserTypes: {{ .Values.thunder.bootstrap.amCliClient.allowedUserTypes | toJson }}
+    inboundAuthConfig:
+      - type: oauth2
+        config:
+          clientId: {{ .Values.thunder.bootstrap.amCliClient.clientId | quote }}
+          redirectUris: {{ .Values.thunder.bootstrap.amCliClient.redirectUris | toJson }}
+          grantTypes: {{ .Values.thunder.bootstrap.amCliClient.grantTypes | toJson }}
+          responseTypes: {{ .Values.thunder.bootstrap.amCliClient.responseTypes | toJson }}
+          tokenEndpointAuthMethod: {{ .Values.thunder.bootstrap.amCliClient.tokenEndpointAuthMethod | quote }}
+          pkceRequired: {{ .Values.thunder.bootstrap.amCliClient.pkceRequired }}
+          publicClient: {{ .Values.thunder.bootstrap.amCliClient.publicClient }}
+          scopes: {{ .Values.thunder.bootstrap.ampScopes | toJson }}
+          token:
+            accessToken:
+              userConfig:
+                validityPeriod: {{ .Values.thunder.bootstrap.amCliClient.accessTokenValidityPeriod }}
+                attributes: {{ .Values.thunder.bootstrap.amCliClient.userAttributes | toJson }}
+            idToken:
+              validityPeriod: {{ .Values.thunder.bootstrap.amCliClient.idTokenValidityPeriod }}
+              userAttributes: {{ .Values.thunder.bootstrap.amCliClient.userAttributes | toJson }}
 
   {{- /* am-mcp may request every amp scope EXCEPT the observability data-read
-       scopes (thunder.bootstrap.observabilityScopes) — those belong to the
-       observer MCP client (64-am-obs-mcp-client.sh). */}}
+       scopes (thunder.bootstrap.observabilityScopes) — those belong exclusively
+       to the observer MCP client (73-am-obs-mcp-client.yaml below). */}}
   {{- $amMcpScopes := list }}
   {{- range .Values.thunder.bootstrap.ampScopes }}
   {{- if not (has . $.Values.thunder.bootstrap.observabilityScopes) }}
   {{- $amMcpScopes = append $amMcpScopes . }}
   {{- end }}
   {{- end }}
-  59-am-mcp-client.sh: |
-    {{- include "amp-thunder.mcpClientScript" (dict "client" .Values.thunder.bootstrap.amMcpClient "scopes" $amMcpScopes) | nindent 4 }}
+  59-am-mcp-client.yaml: |
+    resource_type: application
+    id: am-mcp-client
+    type: browser # public redirect client (authorization_code + PKCE, loopback redirect)
+    name: {{ .Values.thunder.bootstrap.amMcpClient.name | quote }}
+    description: {{ .Values.thunder.bootstrap.amMcpClient.description | quote }}
+    ouId: "01900000-0000-7000-8000-000000000001"
+    authFlowHandle: default-flow
+    allowedUserTypes: {{ .Values.thunder.bootstrap.amMcpClient.allowedUserTypes | toJson }}
+    inboundAuthConfig:
+      - type: oauth2
+        config:
+          clientId: {{ .Values.thunder.bootstrap.amMcpClient.clientId | quote }}
+          redirectUris: {{ .Values.thunder.bootstrap.amMcpClient.redirectUris | toJson }}
+          grantTypes: {{ .Values.thunder.bootstrap.amMcpClient.grantTypes | toJson }}
+          responseTypes: {{ .Values.thunder.bootstrap.amMcpClient.responseTypes | toJson }}
+          tokenEndpointAuthMethod: {{ .Values.thunder.bootstrap.amMcpClient.tokenEndpointAuthMethod | quote }}
+          pkceRequired: {{ .Values.thunder.bootstrap.amMcpClient.pkceRequired }}
+          publicClient: {{ .Values.thunder.bootstrap.amMcpClient.publicClient }}
+          scopes: {{ $amMcpScopes | toJson }}
+          token:
+            accessToken:
+              userConfig:
+                validityPeriod: {{ .Values.thunder.bootstrap.amMcpClient.accessTokenValidityPeriod }}
+                attributes: {{ .Values.thunder.bootstrap.amMcpClient.userAttributes | toJson }}
+            idToken:
+              validityPeriod: {{ .Values.thunder.bootstrap.amMcpClient.idTokenValidityPeriod }}
+              userAttributes: {{ .Values.thunder.bootstrap.amMcpClient.userAttributes | toJson }}
 
-  60-amp-resource-server.sh: |
-    #!/bin/bash
-    set -e
-
-    SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]:-$0}")"
-    source "${SCRIPT_DIR}/common.sh"
-
-
-    log_info "Registering Agent Manager (amp) as a Thunder resource server..."
-
-    # ---------------------------------------------------------------------------
-    # Helper: create or retrieve a resource server; echoes the server ID
-    # ---------------------------------------------------------------------------
-    create_or_get_rs() {
-      local name="$1" handle="$2" identifier="$3" description="$4" ou_id="$5"
-      local payload="{\"name\":\"${name}\",\"handle\":\"${handle}\",\"identifier\":\"${identifier}\",\"description\":\"${description}\",\"ouId\":\"${ou_id}\"}"
-      local response http_code body id
-
-      response=$(api_call POST "/resource-servers" "$payload")
-      http_code="${response: -3}"
-      body="${response%???}"
-
-      if [[ "$http_code" == "201" ]] || [[ "$http_code" == "200" ]]; then
-        id=$(echo "$body" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-        echo "$id"
-        return 0
-      fi
-
-      if [[ "$http_code" == "409" ]]; then
-        log_warning "Resource server '${identifier}' already exists, retrieving ID..."
-        response=$(api_call GET "/resource-servers")
-        http_code="${response: -3}"
-        body="${response%???}"
-        if [[ "$http_code" != "200" ]]; then
-          log_error "Failed to list resource servers (HTTP $http_code)"
-          exit 1
-        fi
-        id=$(echo "$body" | sed 's/},{/}\n{/g' | grep "\"identifier\":\"${identifier}\"" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-        if [[ -z "$id" ]]; then
-          log_error "Resource server '${identifier}' reported 409 but not found in list"
-          exit 1
-        fi
-        log_success "Found existing resource server '${identifier}' (id: $id)"
-        echo "$id"
-        return 0
-      fi
-
-      log_error "Failed to create resource server '${identifier}' (HTTP $http_code): $body"
-      exit 1
-    }
-
-    # ---------------------------------------------------------------------------
-    # Helper: create or retrieve a resource node; echoes the resource ID
-    # Usage: create_or_get_resource <rs_id> <name> <handle> <description> [parent_id]
-    # Uses ?parentId= query param on 409 to avoid handle collisions across parents
-    # ---------------------------------------------------------------------------
-    create_or_get_resource() {
-      local rs_id="$1" name="$2" handle="$3" description="$4" parent_id="${5:-}"
-      local payload body response http_code id list_url
-
-      if [[ -n "$parent_id" ]]; then
-        payload="{\"name\":\"${name}\",\"handle\":\"${handle}\",\"description\":\"${description}\",\"parent\":\"${parent_id}\"}"
-        list_url="/resource-servers/${rs_id}/resources?parentId=${parent_id}"
-      else
-        payload="{\"name\":\"${name}\",\"handle\":\"${handle}\",\"description\":\"${description}\"}"
-        list_url="/resource-servers/${rs_id}/resources"
-      fi
-
-      response=$(api_call POST "/resource-servers/${rs_id}/resources" "$payload")
-      http_code="${response: -3}"
-      body="${response%???}"
-
-      if [[ "$http_code" == "201" ]] || [[ "$http_code" == "200" ]]; then
-        id=$(echo "$body" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-        echo "$id"
-        return 0
-      fi
-
-      if [[ "$http_code" == "409" ]]; then
-        log_warning "Resource '${handle}' already exists, retrieving ID..."
-        response=$(api_call GET "${list_url}")
-        http_code="${response: -3}"
-        body="${response%???}"
-        if [[ "$http_code" != "200" ]]; then
-          log_error "Failed to list resources (HTTP $http_code)"
-          exit 1
-        fi
-        id=$(echo "$body" | sed 's/},{/}\n{/g' | grep "\"handle\":\"${handle}\"" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-        if [[ -z "$id" ]]; then
-          log_error "Resource '${handle}' reported 409 but not found in list"
-          exit 1
-        fi
-        log_success "Found existing resource '${handle}' (id: $id)"
-        echo "$id"
-        return 0
-      fi
-
-      log_error "Failed to create resource '${handle}' (HTTP $http_code): $body"
-      exit 1
-    }
-
-    # ---------------------------------------------------------------------------
-    # Helper: create an action leaf (idempotent via 409 ignore)
-    # Usage: create_action <rs_id> <res_id> <name> <handle> <description>
-    # ---------------------------------------------------------------------------
-    create_action() {
-      local rs_id="$1" res_id="$2" name="$3" handle="$4" description="$5"
-      local payload="{\"name\":\"${name}\",\"handle\":\"${handle}\",\"description\":\"${description}\"}"
-      local response http_code body
-
-      response=$(api_call POST "/resource-servers/${rs_id}/resources/${res_id}/actions" "$payload")
-      http_code="${response: -3}"
-      body="${response%???}"
-
-      if [[ "$http_code" == "201" ]] || [[ "$http_code" == "200" ]] || [[ "$http_code" == "409" ]]; then
-        return 0
-      fi
-
-      log_error "Failed to create action '${handle}' on resource ${res_id} (HTTP $http_code): $body"
-      exit 1
-    }
-
-    # ---------------------------------------------------------------------------
-    # Helper: register the amp permission tree under a resource server
-    # Usage: register_amp_permissions <rs_id> <mode> [parent_res_id]
-    #   mode: full                    — all resources and actions
-    #         amp-minus-observability — everything except the observability
-    #                                   resource and its actions
-    #         observability-only      — only the observability resource and
-    #                                   its actions
-    # When parent_res_id is given, resources are created as children of it so
-    # the derived permission strings start at that resource's permission (used
-    # by the MCP resource servers, which carry no handle of their own).
-    # ---------------------------------------------------------------------------
-    register_amp_permissions() {
-      local rs_id="$1" mode="$2" parent_id="${3:-}"
-      local r_org r_project r_env r_gw r_dp r_pipe r_git r_llmt r_llm r_mcp \
-            r_scope r_agentid r_proxy r_eval r_agent r_agent_kind r_mon r_obs \
-            r_role r_group r_cat r_repo r_profile
-
-      case "$mode" in
-        full|amp-minus-observability|observability-only) ;;
-        *)
-          log_error "register_amp_permissions: unrecognized mode '${mode}' (expected full, amp-minus-observability, or observability-only)"
-          exit 1
-          ;;
-      esac
-
-      if [[ "$mode" != "observability-only" ]]; then
-        log_info "Creating resources..."
-
-        r_org=$(create_or_get_resource        "$rs_id" "Organization"            "org"                    "Organizational unit management"       "$parent_id")
-        r_project=$(create_or_get_resource    "$rs_id" "Project"                  "project"                "Project management"                   "$parent_id")
-        r_env=$(create_or_get_resource        "$rs_id" "Environment"              "environment"            "Environment management"               "$parent_id")
-        r_gw=$(create_or_get_resource         "$rs_id" "Gateway"                  "gateway"                "Gateway management"                   "$parent_id")
-        r_dp=$(create_or_get_resource         "$rs_id" "Data Plane"               "data-plane"             "Data plane visibility"                "$parent_id")
-        r_pipe=$(create_or_get_resource       "$rs_id" "Deployment Pipeline"      "deployment-pipeline"    "Deployment pipeline visibility"       "$parent_id")
-        r_git=$(create_or_get_resource        "$rs_id" "Git Secret"               "git-secret"             "Git credential management"            "$parent_id")
-        r_llmt=$(create_or_get_resource       "$rs_id" "LLM Provider Template"    "llm-provider-template"  "LLM provider template management"     "$parent_id")
-        r_llm=$(create_or_get_resource        "$rs_id" "LLM Provider"             "llm-provider"           "LLM provider management"              "$parent_id")
-        r_mcp=$(create_or_get_resource        "$rs_id" "MCP Server"               "mcp-server"             "MCP server management"                "$parent_id")
-        r_scope=$(create_or_get_resource      "$rs_id" "Scope"                    "scope"                  "Scope catalog management"             "$parent_id")
-        r_agentid=$(create_or_get_resource    "$rs_id" "Agent Identity"           "agent-identity"         "Agent identity management"            "$parent_id")
-        r_proxy=$(create_or_get_resource      "$rs_id" "LLM Proxy"                "llm-proxy"              "LLM proxy management"                 "$parent_id")
-        r_eval=$(create_or_get_resource       "$rs_id" "Evaluator"                "evaluator"              "Evaluator management"                 "$parent_id")
-        r_agent=$(create_or_get_resource      "$rs_id" "Agent"                    "agent"                  "Agent management"                     "$parent_id")
-        r_agent_kind=$(create_or_get_resource "$rs_id" "Agent Kind"               "agent-kind"             "Agent kind management"                "$parent_id")
-        r_mon=$(create_or_get_resource        "$rs_id" "Monitor"                  "monitor"                "Monitor management"                   "$parent_id")
-        r_role=$(create_or_get_resource       "$rs_id" "Role"                     "role"                   "Role management"                      "$parent_id")
-        r_group=$(create_or_get_resource      "$rs_id" "Group"                    "group"                  "Group management"                     "$parent_id")
-        r_cat=$(create_or_get_resource        "$rs_id" "Catalog"                  "catalog"                "Resource catalog"                     "$parent_id")
-        r_repo=$(create_or_get_resource       "$rs_id" "Repository"               "repository"             "Source repository browsing"           "$parent_id")
-        r_profile=$(create_or_get_resource    "$rs_id" "Profile"                  "profile"                "User profile management"              "$parent_id")
-
-        log_info "Creating actions..."
-
-        # org actions  → amp:org:<action>
-        create_action "$rs_id" "$r_org"          "View"                   "view"                   "View organizational details"
-        create_action "$rs_id" "$r_org"          "Modify Settings"        "modify-settings"        "Modify organizational settings"
-        create_action "$rs_id" "$r_org"          "Invite Member"          "invite-member"          "Invite members to the organization"
-        create_action "$rs_id" "$r_org"          "Remove Member"          "remove-member"          "Remove members from the organization"
-        create_action "$rs_id" "$r_org"          "Assign Role"            "assign-role"            "Assign or revoke roles"
-        create_action "$rs_id" "$r_org"          "Manage IDP"             "manage-idp"             "Configure Identity Provider"
-        create_action "$rs_id" "$r_org"          "Manage Service Account" "manage-service-account" "Manage service accounts"
-
-        # profile actions  → amp:profile:<action>
-        create_action "$rs_id" "$r_profile"      "Read"                     "read"                 "View user profile information"
-        create_action "$rs_id" "$r_profile"      "Update Attributes"        "update-attributes"    "Update user attributes"
-
-        # project actions  → amp:project:<action>
-        create_action "$rs_id" "$r_project"      "Create"                 "create"                 "Create a project"
-        create_action "$rs_id" "$r_project"      "Read"                   "read"                   "View project details"
-        create_action "$rs_id" "$r_project"      "Update"                 "update"                 "Update project settings"
-        create_action "$rs_id" "$r_project"      "Delete"                 "delete"                 "Delete a project"
-
-        # environment actions  → amp:environment:<action>
-        create_action "$rs_id" "$r_env"          "Create"                 "create"                 "Create an environment"
-        create_action "$rs_id" "$r_env"          "Read"                   "read"                   "View environment details"
-        create_action "$rs_id" "$r_env"          "Update"                 "update"                 "Update an environment"
-        create_action "$rs_id" "$r_env"          "Delete"                 "delete"                 "Delete an environment"
-
-        # gateway actions  → amp:gateway:<action>
-        create_action "$rs_id" "$r_gw"           "Create"                 "create"                 "Register a gateway"
-        create_action "$rs_id" "$r_gw"           "Read"                   "read"                   "View gateway details and status"
-        create_action "$rs_id" "$r_gw"           "Update"                 "update"                 "Update gateway configuration"
-        create_action "$rs_id" "$r_gw"           "Delete"                 "delete"                 "Delete a gateway"
-        create_action "$rs_id" "$r_gw"           "Manage Token"           "token-manage"           "Create, list, and delete gateway tokens"
-
-        # data-plane actions  → amp:data-plane:<action>
-        create_action "$rs_id" "$r_dp"           "Read"                   "read"                   "View data planes"
-
-        # deployment-pipeline actions  → amp:deployment-pipeline:<action>
-        create_action "$rs_id" "$r_pipe"         "Create"                 "create"                 "Create a deployment pipeline"
-        create_action "$rs_id" "$r_pipe"         "Read"                   "read"                   "View deployment pipelines"
-        create_action "$rs_id" "$r_pipe"         "Update"                 "update"                 "Update a deployment pipeline"
-        create_action "$rs_id" "$r_pipe"         "Delete"                 "delete"                 "Delete a deployment pipeline"
-
-        # git-secret actions  → amp:git-secret:<action>
-        create_action "$rs_id" "$r_git"          "Create"                 "create"                 "Create a git secret"
-        create_action "$rs_id" "$r_git"          "Read"                   "read"                   "List git secrets"
-        create_action "$rs_id" "$r_git"          "Delete"                 "delete"                 "Delete a git secret"
-
-        # llm-provider-template actions  → amp:llm-provider-template:<action>
-        create_action "$rs_id" "$r_llmt"         "Create"                 "create"                 "Create a provider template"
-        create_action "$rs_id" "$r_llmt"         "Read"                   "read"                   "View provider templates"
-        create_action "$rs_id" "$r_llmt"         "Update"                 "update"                 "Update a provider template"
-        create_action "$rs_id" "$r_llmt"         "Delete"                 "delete"                 "Delete a provider template"
-
-        # llm-provider actions  → amp:llm-provider:<action>
-        create_action "$rs_id" "$r_llm"          "Create"                 "create"                 "Create an LLM provider"
-        create_action "$rs_id" "$r_llm"          "Read"                   "read"                   "View LLM providers and deployments"
-        create_action "$rs_id" "$r_llm"          "Update"                 "update"                 "Update an LLM provider"
-        create_action "$rs_id" "$r_llm"          "Delete"                 "delete"                 "Delete an LLM provider"
-        create_action "$rs_id" "$r_llm"          "Configure Guardrail"    "configure-guardrail"    "Configure guardrails, rate limits, and budgets"
-        create_action "$rs_id" "$r_llm"          "Connect"                "connect"                "Connect an agent to an LLM provider"
-        create_action "$rs_id" "$r_llm"          "Deploy"                 "deploy"                 "Deploy, undeploy, and restore an LLM provider"
-        create_action "$rs_id" "$r_llm"          "Manage API Key"         "api-key-manage"         "Create, update, and delete LLM provider API keys"
-
-        # mcp-server actions  → amp:mcp-server:<action>
-        create_action "$rs_id" "$r_mcp"          "Create"                 "create"                 "Create an MCP server"
-        create_action "$rs_id" "$r_mcp"          "Read"                   "read"                   "View MCP servers"
-        create_action "$rs_id" "$r_mcp"          "Update"                 "update"                 "Update an MCP server"
-        create_action "$rs_id" "$r_mcp"          "Delete"                 "delete"                 "Delete an MCP server"
-        create_action "$rs_id" "$r_mcp"          "Configure Guardrail"    "configure-guardrail"    "Configure guardrails on an MCP server"
-        create_action "$rs_id" "$r_mcp"          "Connect"                "connect"                "Connect an agent to an MCP server"
-        create_action "$rs_id" "$r_mcp"          "Manage API Key"         "api-key-manage"         "Create, update, and delete MCP server API keys"
-
-        # scope actions  → amp:scope:<action>
-        create_action "$rs_id" "$r_scope"        "Create"                 "create"                 "Create a scope"
-        create_action "$rs_id" "$r_scope"        "Read"                   "read"                   "View scopes"
-        create_action "$rs_id" "$r_scope"        "Update"                 "update"                 "Update a scope"
-        create_action "$rs_id" "$r_scope"        "Delete"                 "delete"                 "Delete a scope"
-
-        # agent-identity actions  → amp:agent-identity:<action>
-        create_action "$rs_id" "$r_agentid"      "Create"                 "create"                 "Create an agent identity"
-        create_action "$rs_id" "$r_agentid"      "Read"                   "read"                   "View agent identities"
-        create_action "$rs_id" "$r_agentid"      "Update"                 "update"                 "Update an agent identity"
-        create_action "$rs_id" "$r_agentid"      "Delete"                 "delete"                 "Delete an agent identity"
-
-        # llm-proxy actions  → amp:llm-proxy:<action>
-        create_action "$rs_id" "$r_proxy"        "Create"                 "create"                 "Create an LLM proxy"
-        create_action "$rs_id" "$r_proxy"        "Read"                   "read"                   "View LLM proxies and deployments"
-        create_action "$rs_id" "$r_proxy"        "Update"                 "update"                 "Update an LLM proxy"
-        create_action "$rs_id" "$r_proxy"        "Delete"                 "delete"                 "Delete an LLM proxy"
-        create_action "$rs_id" "$r_proxy"        "Deploy"                 "deploy"                 "Deploy, undeploy, and restore an LLM proxy"
-        create_action "$rs_id" "$r_proxy"        "Manage API Key"         "api-key-manage"         "Create, update, and delete LLM proxy API keys"
-
-        # evaluator actions  → amp:evaluator:<action>
-        create_action "$rs_id" "$r_eval"         "Create"                 "create"                 "Create a custom evaluator"
-        create_action "$rs_id" "$r_eval"         "Read"                   "read"                   "View evaluators"
-        create_action "$rs_id" "$r_eval"         "Update"                 "update"                 "Update a custom evaluator"
-        create_action "$rs_id" "$r_eval"         "Delete"                 "delete"                 "Delete a custom evaluator"
-
-        # agent actions  → amp:agent:<action>
-        create_action "$rs_id" "$r_agent"        "Create"                 "create"                 "Create an agent"
-        create_action "$rs_id" "$r_agent"        "Read"                   "read"                   "View agent details, builds, deployments, and configs"
-        create_action "$rs_id" "$r_agent"        "Update"                 "update"                 "Update agent configuration and resource configs"
-        create_action "$rs_id" "$r_agent"        "Delete"                 "delete"                 "Delete an agent"
-        create_action "$rs_id" "$r_agent"        "Build"                  "build"                  "Trigger an agent build"
-        create_action "$rs_id" "$r_agent"        "Promote"                "promote"                "Promote an agent deployment across environments"
-        create_action "$rs_id" "$r_agent"        "Rollback"               "rollback"               "Rollback an agent deployment"
-        create_action "$rs_id" "$r_agent"        "Suspend"                "suspend"                "Suspend or stop an agent deployment"
-        create_action "$rs_id" "$r_agent"        "Deploy Non-Production"  "deploy-non-production"  "Deploy an agent to a non-production environment"
-        create_action "$rs_id" "$r_agent"        "Deploy Production"      "deploy-production"      "Deploy an agent to a production environment"
-        create_action "$rs_id" "$r_agent"        "Manage Token"           "token-manage"           "Generate agent tokens"
-        create_action "$rs_id" "$r_agent"        "Manage API Key"         "api-key-manage"         "Create, update, and delete agent API keys"
-
-        # agent-kind actions  → amp:agent-kind:<action>
-        create_action "$rs_id" "$r_agent_kind"   "Create"                 "create"                 "Create an agent kind"
-        create_action "$rs_id" "$r_agent_kind"   "Read"                   "read"                   "View agent kinds and versions"
-        create_action "$rs_id" "$r_agent_kind"   "Update"                 "update"                 "Update an agent kind"
-        create_action "$rs_id" "$r_agent_kind"   "Delete"                 "delete"                 "Delete an agent kind"
-
-        # monitor actions  → amp:monitor:<action>
-        create_action "$rs_id" "$r_mon"          "Create"                 "create"                 "Create a monitor"
-        create_action "$rs_id" "$r_mon"          "Read"                   "read"                   "View monitors, runs, and run logs"
-        create_action "$rs_id" "$r_mon"          "Update"                 "update"                 "Update a monitor"
-        create_action "$rs_id" "$r_mon"          "Delete"                 "delete"                 "Delete a monitor"
-        create_action "$rs_id" "$r_mon"          "Execute"                "execute"                "Start, stop, and rerun monitors"
-        create_action "$rs_id" "$r_mon"          "Read Score"             "score-read"             "View scores, breakdowns, and timeseries"
-        create_action "$rs_id" "$r_mon"          "Publish Score"          "score-publish"          "Publish monitor scores (internal/system use)"
-
-        # role actions  → amp:role:<action>
-        create_action "$rs_id" "$r_role"         "Create"                 "create"                 "Create a custom role"
-        create_action "$rs_id" "$r_role"         "Read"                   "read"                   "View roles and their permissions"
-        create_action "$rs_id" "$r_role"         "Update"                 "update"                 "Update a custom role"
-        create_action "$rs_id" "$r_role"         "Delete"                 "delete"                 "Delete a custom role"
-
-        # group actions  → amp:group:<action>
-        create_action "$rs_id" "$r_group"        "Create"                 "create"                 "Create a group"
-        create_action "$rs_id" "$r_group"        "Read"                   "read"                   "View groups and their members"
-        create_action "$rs_id" "$r_group"        "Update"                 "update"                 "Update a group"
-        create_action "$rs_id" "$r_group"        "Delete"                 "delete"                 "Delete a group"
-
-        # catalog actions  → amp:catalog:<action>
-        create_action "$rs_id" "$r_cat"          "Read"                   "read"                   "View the resource catalog"
-
-        # repository actions  → amp:repository:<action>
-        create_action "$rs_id" "$r_repo"         "Read"                   "read"                   "Browse repository branches and commits"
-      fi
-
-      if [[ "$mode" != "amp-minus-observability" ]]; then
-        # observability resource and actions  → amp:observability:<action>
-        r_obs=$(create_or_get_resource "$rs_id" "Observability" "observability" "Observability dashboards and metrics" "$parent_id")
-
-        create_action "$rs_id" "$r_obs"          "Trace Read"             "trace-read"             "Read traces and spans"
-        create_action "$rs_id" "$r_obs"          "Log Read"               "log-read"               "Read runtime logs"
-        create_action "$rs_id" "$r_obs"          "Build Log Read"         "build-log-read"         "Read build logs"
-        create_action "$rs_id" "$r_obs"          "Metric Read"            "metric-read"            "Read runtime and infrastructure metrics"
-      fi
-    }
-
-    # ===========================================================================
-    # 0. Fetch default OU ID (required by Thunder for resource server creation)
-    # ===========================================================================
-    log_info "Fetching default organization unit ID..."
-    RESPONSE=$(api_call GET "/organization-units/tree/default")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch default OU (HTTP $HTTP_CODE): $BODY"
-      exit 1
-    fi
-    DEFAULT_OU_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-    if [[ -z "$DEFAULT_OU_ID" ]]; then
-      log_error "Could not extract default OU ID from response"
-      exit 1
-    fi
-    log_success "Default OU ID: $DEFAULT_OU_ID"
-
-    # ===========================================================================
-    # 1. Create the resource server
-    # ===========================================================================
-    RS_ID=$(create_or_get_rs "Agent Manager API" "amp" "amp" "Agent Manager platform permissions" "$DEFAULT_OU_ID")
-    log_info "Resource server 'amp' ready (id: $RS_ID)"
-
-    # ===========================================================================
-    # 2. Register the amp permission tree
-    # ===========================================================================
-    register_amp_permissions "$RS_ID" full
-
-    log_info "Agent Manager resource server registration complete (all amp permissions registered)."
-
-    # ===========================================================================
-    # 3. MCP resource servers (RFC 8707 resource indicators)
-    # ===========================================================================
-    # MCP clients (Claude Code etc.) send the service's public base URL, with a
-    # trailing slash, as the OAuth `resource` parameter. Thunder rejects the
-    # authorize request with invalid_target unless that value exactly matches a
-    # registered resource-server identifier, so each MCP endpoint's public URL
-    # is registered here as its own resource server.
+  60-amp-resource-server.yaml: |
+    resource_type: resource_server
+    id: amp-resource-server
+    name: Agent Manager API
+    description: Agent Manager platform permissions
+    # MUST be an absolute URI (RFC 8707 §2): Thunder's /oauth2/authorize binds an
+    # authorization request to one resource server up front and persists the resolved
+    # identifier into the authorization code, and the token endpoint then re-validates
+    # that stored value — a bare string like "amp" has no URI scheme to validate, so
+    # every authorization_code exchange fails with invalid_target "Invalid resource
+    # parameter: must be an absolute URI". client_credentials never hits this (it
+    # skips /oauth2/authorize entirely).
     #
-    # Thunder also downscopes the granted scopes to the permissions DEFINED on
-    # the resource server named in `resource` (RFC 6749 §3.3), so a bare
-    # resource server yields tokens with an EMPTY scope list. Each MCP resource
-    # server therefore mirrors the slice of the amp permission tree its client
-    # is allowed (permissionSet in values.yaml). Because Thunder prefixes every
-    # derived permission with the resource server's handle, the MCP resource
-    # servers carry no handle and instead root the tree under a top-level "amp"
-    # resource — yielding scope strings identical to the amp resource server's
-    # (e.g. amp:project:read), which is what agent-manager-service's per-route
-    # authorization checks expect.
-    log_info "Registering MCP resource servers..."
-    {{- range .Values.thunder.bootstrap.mcpResourceServers }}
-    {{- $base := index $.Values.thunder.bootstrap .baseUrlValue }}
-    {{- if $base }}
-    {{- $identifier := printf "%s/" (trimSuffix "/" $base) }}
-    MCP_RS_ID=$(create_or_get_rs "{{ .name }}" "{{ .handle }}" "{{ $identifier }}" "{{ .description }}" "$DEFAULT_OU_ID")
-    log_info "MCP resource server '{{ $identifier }}' ready (id: $MCP_RS_ID)"
+    # A urn: (not http:) URI on purpose: resource-server identifiers must be unique,
+    # and Thunder's own built-in System resource server already claims this
+    # deployment's http origin (70-fix-thunder-system-rs-identifier.yaml below).
+    # A urn is also deployment-independent, so it needs no per-environment host
+    # templating.
+    #
+    # This value IS the token's "aud" claim, so it must stay in sync with every
+    # audience allow-list that accepts platform-Thunder tokens: agent-manager-service's
+    # and agent-manager-observer's KEY_MANAGER_AUDIENCE, and env-Thunder's
+    # trustedIssuer.audience (PLATFORM_THUNDER_TOKEN_AUDIENCE in add-environment-thunder.sh).
+    # It does NOT affect any amp:* scope string — those come from resource handles plus
+    # the delimiter below, never from this identifier.
+    identifier: "urn:wso2:amp"
+    ouHandle: default
+    delimiter: ":"
+    resources:
+      # Top-level parent for every resource below (see parent: amp on each). Makes
+      # ThunderID's computed permission strings "amp:<resource>:<action>" instead of
+      # bare "<resource>:<action>", matching our amp: scope-naming convention — see
+      # backend/internal/oauth/oauth2/resourceindicators/resourceindicators.go's
+      # DownscopeToResourceServer, which filters requested scopes down to only the
+      # permission strings actually computed from this resource server's tree.
+      # Without this, every "amp:*" scope we request gets silently dropped (empty
+      # granted-scope set) once a resource server is resolved for the token.
+      - name: Agent Manager
+        handle: amp
+        description: Top-level namespace for all Agent Manager permissions
+      - name: Organization
+        handle: org
+        parent: amp
+        description: Organizational unit management
+        actions:
+          - { name: View, handle: view, description: "View organizational details" }
+          - { name: Modify Settings, handle: modify-settings, description: "Modify organizational settings" }
+          - { name: Invite Member, handle: invite-member, description: "Invite members to the organization" }
+          - { name: Remove Member, handle: remove-member, description: "Remove members from the organization" }
+          - { name: Assign Role, handle: assign-role, description: "Assign or revoke roles" }
+          - { name: Manage IDP, handle: manage-idp, description: "Configure Identity Provider" }
+          - { name: Manage Service Account, handle: manage-service-account, description: "Manage service accounts" }
+      - name: Profile
+        handle: profile
+        parent: amp
+        description: User profile management
+        actions:
+          - { name: Read, handle: read, description: "View user profile information" }
+          - { name: Update Attributes, handle: update-attributes, description: "Update user attributes" }
+      - name: Project
+        handle: project
+        parent: amp
+        description: Project management
+        actions:
+          - { name: Create, handle: create, description: "Create a project" }
+          - { name: Read, handle: read, description: "View project details" }
+          - { name: Update, handle: update, description: "Update project settings" }
+          - { name: Delete, handle: delete, description: "Delete a project" }
+      - name: Environment
+        handle: environment
+        parent: amp
+        description: Environment management
+        actions:
+          - { name: Create, handle: create, description: "Create an environment" }
+          - { name: Read, handle: read, description: "View environment details" }
+          - { name: Update, handle: update, description: "Update an environment" }
+          - { name: Delete, handle: delete, description: "Delete an environment" }
+      - name: Gateway
+        handle: gateway
+        parent: amp
+        description: Gateway management
+        actions:
+          - { name: Create, handle: create, description: "Register a gateway" }
+          - { name: Read, handle: read, description: "View gateway details and status" }
+          - { name: Update, handle: update, description: "Update gateway configuration" }
+          - { name: Delete, handle: delete, description: "Delete a gateway" }
+          - { name: Manage Token, handle: token-manage, description: "Create, list, and delete gateway tokens" }
+      - name: Data Plane
+        handle: data-plane
+        parent: amp
+        description: Data plane visibility
+        actions:
+          - { name: Read, handle: read, description: "View data planes" }
+      - name: Deployment Pipeline
+        handle: deployment-pipeline
+        parent: amp
+        description: Deployment pipeline visibility
+        actions:
+          - { name: Create, handle: create, description: "Create a deployment pipeline" }
+          - { name: Read, handle: read, description: "View deployment pipelines" }
+          - { name: Update, handle: update, description: "Update a deployment pipeline" }
+          - { name: Delete, handle: delete, description: "Delete a deployment pipeline" }
+      - name: Git Secret
+        handle: git-secret
+        parent: amp
+        description: Git credential management
+        actions:
+          - { name: Create, handle: create, description: "Create a git secret" }
+          - { name: Read, handle: read, description: "List git secrets" }
+          - { name: Delete, handle: delete, description: "Delete a git secret" }
+      - name: LLM Provider Template
+        handle: llm-provider-template
+        parent: amp
+        description: LLM provider template management
+        actions:
+          - { name: Create, handle: create, description: "Create a provider template" }
+          - { name: Read, handle: read, description: "View provider templates" }
+          - { name: Update, handle: update, description: "Update a provider template" }
+          - { name: Delete, handle: delete, description: "Delete a provider template" }
+      - name: LLM Provider
+        handle: llm-provider
+        parent: amp
+        description: LLM provider management
+        actions:
+          - { name: Create, handle: create, description: "Create an LLM provider" }
+          - { name: Read, handle: read, description: "View LLM providers and deployments" }
+          - { name: Update, handle: update, description: "Update an LLM provider" }
+          - { name: Delete, handle: delete, description: "Delete an LLM provider" }
+          - { name: Configure Guardrail, handle: configure-guardrail, description: "Configure guardrails, rate limits, and budgets" }
+          - { name: Connect, handle: connect, description: "Connect an agent to an LLM provider" }
+          - { name: Deploy, handle: deploy, description: "Deploy, undeploy, and restore an LLM provider" }
+          - { name: Manage API Key, handle: api-key-manage, description: "Create, update, and delete LLM provider API keys" }
+      - name: MCP Server
+        handle: mcp-server
+        parent: amp
+        description: MCP server management
+        actions:
+          - { name: Create, handle: create, description: "Create an MCP server" }
+          - { name: Read, handle: read, description: "View MCP servers" }
+          - { name: Update, handle: update, description: "Update an MCP server" }
+          - { name: Delete, handle: delete, description: "Delete an MCP server" }
+          - { name: Configure Guardrail, handle: configure-guardrail, description: "Configure guardrails on an MCP server" }
+          - { name: Connect, handle: connect, description: "Connect an agent to an MCP server" }
+          - { name: Manage API Key, handle: api-key-manage, description: "Create, update, and delete MCP server API keys" }
+      - name: Scope
+        handle: scope
+        parent: amp
+        description: Scope catalog management
+        actions:
+          - { name: Create, handle: create, description: "Create a scope" }
+          - { name: Read, handle: read, description: "View scopes" }
+          - { name: Update, handle: update, description: "Update a scope" }
+          - { name: Delete, handle: delete, description: "Delete a scope" }
+      - name: Agent Identity
+        handle: agent-identity
+        parent: amp
+        description: Agent identity management
+        actions:
+          - { name: Create, handle: create, description: "Create an agent identity" }
+          - { name: Read, handle: read, description: "View agent identities" }
+          - { name: Update, handle: update, description: "Update an agent identity" }
+          - { name: Delete, handle: delete, description: "Delete an agent identity" }
+      - name: LLM Proxy
+        handle: llm-proxy
+        parent: amp
+        description: LLM proxy management
+        actions:
+          - { name: Create, handle: create, description: "Create an LLM proxy" }
+          - { name: Read, handle: read, description: "View LLM proxies and deployments" }
+          - { name: Update, handle: update, description: "Update an LLM proxy" }
+          - { name: Delete, handle: delete, description: "Delete an LLM proxy" }
+          - { name: Deploy, handle: deploy, description: "Deploy, undeploy, and restore an LLM proxy" }
+          - { name: Manage API Key, handle: api-key-manage, description: "Create, update, and delete LLM proxy API keys" }
+      - name: Evaluator
+        handle: evaluator
+        parent: amp
+        description: Evaluator management
+        actions:
+          - { name: Create, handle: create, description: "Create a custom evaluator" }
+          - { name: Read, handle: read, description: "View evaluators" }
+          - { name: Update, handle: update, description: "Update a custom evaluator" }
+          - { name: Delete, handle: delete, description: "Delete a custom evaluator" }
+      - name: Agent
+        handle: agent
+        parent: amp
+        description: Agent management
+        actions:
+          - { name: Create, handle: create, description: "Create an agent" }
+          - { name: Read, handle: read, description: "View agent details, builds, deployments, and configs" }
+          - { name: Update, handle: update, description: "Update agent configuration and resource configs" }
+          - { name: Delete, handle: delete, description: "Delete an agent" }
+          - { name: Build, handle: build, description: "Trigger an agent build" }
+          - { name: Promote, handle: promote, description: "Promote an agent deployment across environments" }
+          - { name: Rollback, handle: rollback, description: "Rollback an agent deployment" }
+          - { name: Suspend, handle: suspend, description: "Suspend or stop an agent deployment" }
+          - { name: Deploy Non-Production, handle: deploy-non-production, description: "Deploy an agent to a non-production environment" }
+          - { name: Deploy Production, handle: deploy-production, description: "Deploy an agent to a production environment" }
+          - { name: Manage Token, handle: token-manage, description: "Generate agent tokens" }
+          - { name: Manage API Key, handle: api-key-manage, description: "Create, update, and delete agent API keys" }
+      - name: Agent Kind
+        handle: agent-kind
+        parent: amp
+        description: Agent kind management
+        actions:
+          - { name: Create, handle: create, description: "Create an agent kind" }
+          - { name: Read, handle: read, description: "View agent kinds and versions" }
+          - { name: Update, handle: update, description: "Update an agent kind" }
+          - { name: Delete, handle: delete, description: "Delete an agent kind" }
+      - name: Monitor
+        handle: monitor
+        parent: amp
+        description: Monitor management
+        actions:
+          - { name: Create, handle: create, description: "Create a monitor" }
+          - { name: Read, handle: read, description: "View monitors, runs, and run logs" }
+          - { name: Update, handle: update, description: "Update a monitor" }
+          - { name: Delete, handle: delete, description: "Delete a monitor" }
+          - { name: Execute, handle: execute, description: "Start, stop, and rerun monitors" }
+          - { name: Read Score, handle: score-read, description: "View scores, breakdowns, and timeseries" }
+          - { name: Publish Score, handle: score-publish, description: "Publish monitor scores (internal/system use)" }
+      - name: Observability
+        handle: observability
+        parent: amp
+        description: Observability data-read scopes, enforced by agent-manager-observer
+        # Renamed from the dashboard/metric-category model (org-dashboard, project-dashboard,
+        # guardrail-metric, infra-metric) to match the data-read model every actual consumer
+        # already expects — agent-manager-observer/rbac/permissions.go, agent-manager-service/
+        # rbac/permissions.go, and values.yaml's ampScopes/observabilityScopes all use these
+        # names; only this resource-server document still had the old ones, so Thunder could
+        # never grant amp:observability:trace-read etc. to anyone, even to a superadmin token
+        # requesting every ampScopes entry.
+        actions:
+          - { name: Trace Read, handle: trace-read, description: "Read agent execution traces" }
+          - { name: Log Read, handle: log-read, description: "Read agent runtime logs" }
+          - { name: Build Log Read, handle: build-log-read, description: "Read agent build logs" }
+          - { name: Metric Read, handle: metric-read, description: "Read agent and system metrics" }
+      - name: Role
+        handle: role
+        parent: amp
+        description: Role management
+        actions:
+          - { name: Create, handle: create, description: "Create a custom role" }
+          - { name: Read, handle: read, description: "View roles and their permissions" }
+          - { name: Update, handle: update, description: "Update a custom role" }
+          - { name: Delete, handle: delete, description: "Delete a custom role" }
+      - name: Group
+        handle: group
+        parent: amp
+        description: Group management
+        actions:
+          - { name: Create, handle: create, description: "Create a group" }
+          - { name: Read, handle: read, description: "View groups and their members" }
+          - { name: Update, handle: update, description: "Update a group" }
+          - { name: Delete, handle: delete, description: "Delete a group" }
+      - name: Catalog
+        handle: catalog
+        parent: amp
+        description: Resource catalog
+        actions:
+          - { name: Read, handle: read, description: "View the resource catalog" }
+      - name: Repository
+        handle: repository
+        parent: amp
+        description: Source repository browsing
+        actions:
+          - { name: Read, handle: read, description: "Browse repository branches and commits" }
 
-    # Remediation: a resource server seeded by an older bootstrap carries a
-    # non-empty handle. The handle is immutable and would prefix every derived
-    # permission (e.g. amp-am:amp:project:read), producing scope strings
-    # agent-manager-service will never accept. The MCP resource servers are
-    # pure mirrors of the amp permission tree with no independent state, so
-    # delete the legacy resource server and recreate it with an empty handle.
-    RESPONSE=$(api_call GET "/resource-servers/${MCP_RS_ID}")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch resource server ${MCP_RS_ID} (HTTP $HTTP_CODE): $BODY"
-      exit 1
-    fi
-    MCP_RS_HANDLE=$(echo "$BODY" | grep -o '"handle":"[^"]*"' | head -1 | cut -d'"' -f4)
-    if [[ -n "$MCP_RS_HANDLE" ]]; then
-      log_warning "Resource server '{{ $identifier }}' has legacy handle '$MCP_RS_HANDLE'; deleting and recreating it with an empty handle..."
-      RESPONSE=$(api_call DELETE "/resource-servers/${MCP_RS_ID}")
-      HTTP_CODE="${RESPONSE: -3}"
-      BODY="${RESPONSE%???}"
-      if [[ "$HTTP_CODE" != "200" ]] && [[ "$HTTP_CODE" != "204" ]]; then
-        log_error "Failed to delete legacy resource server ${MCP_RS_ID} (HTTP $HTTP_CODE): $BODY"
-        exit 1
-      fi
-      MCP_RS_ID=$(create_or_get_rs "{{ .name }}" "{{ .handle }}" "{{ $identifier }}" "{{ .description }}" "$DEFAULT_OU_ID")
-      log_info "MCP resource server '{{ $identifier }}' recreated (id: $MCP_RS_ID)"
-    fi
-    MCP_AMP_ROOT=$(create_or_get_resource "$MCP_RS_ID" "Agent Manager" "amp" "Root of the amp permission tree")
-    register_amp_permissions "$MCP_RS_ID" "{{ .permissionSet }}" "$MCP_AMP_ROOT"
-    log_info "MCP resource server '{{ $identifier }}': '{{ .permissionSet }}' permission set registered."
-    {{- else if not .optional }}
-    {{- fail (printf "thunder.bootstrap.%s must be set (base URL for the %s resource server)" .baseUrlValue .name) }}
+  61-amp-role-admin.yaml: |
+    resource_type: role
+    id: amp-role-admin
+    name: Agent Manager Admin
+    description: Full administrative access to all AMP resources
+    ouHandle: default
+    permissions:
+      - resourceServerId: amp-resource-server
+        permissions:
+          - "amp:org:view"
+          - "amp:org:modify-settings"
+          - "amp:org:invite-member"
+          - "amp:org:remove-member"
+          - "amp:org:assign-role"
+          - "amp:org:manage-idp"
+          - "amp:org:manage-service-account"
+          - "amp:project:create"
+          - "amp:project:read"
+          - "amp:project:update"
+          - "amp:project:delete"
+          - "amp:environment:create"
+          - "amp:environment:read"
+          - "amp:environment:update"
+          - "amp:environment:delete"
+          - "amp:gateway:create"
+          - "amp:gateway:read"
+          - "amp:gateway:update"
+          - "amp:gateway:delete"
+          - "amp:gateway:token-manage"
+          - "amp:data-plane:read"
+          - "amp:deployment-pipeline:create"
+          - "amp:deployment-pipeline:read"
+          - "amp:deployment-pipeline:update"
+          - "amp:deployment-pipeline:delete"
+          - "amp:git-secret:create"
+          - "amp:git-secret:read"
+          - "amp:git-secret:delete"
+          - "amp:llm-provider-template:create"
+          - "amp:llm-provider-template:read"
+          - "amp:llm-provider-template:update"
+          - "amp:llm-provider-template:delete"
+          - "amp:llm-provider:create"
+          - "amp:llm-provider:read"
+          - "amp:llm-provider:update"
+          - "amp:llm-provider:delete"
+          - "amp:llm-provider:configure-guardrail"
+          - "amp:llm-provider:connect"
+          - "amp:llm-provider:deploy"
+          - "amp:llm-provider:api-key-manage"
+          - "amp:mcp-server:create"
+          - "amp:mcp-server:read"
+          - "amp:mcp-server:update"
+          - "amp:mcp-server:delete"
+          - "amp:mcp-server:configure-guardrail"
+          - "amp:mcp-server:connect"
+          - "amp:mcp-server:api-key-manage"
+          - "amp:scope:create"
+          - "amp:scope:read"
+          - "amp:scope:update"
+          - "amp:scope:delete"
+          - "amp:llm-proxy:create"
+          - "amp:llm-proxy:read"
+          - "amp:llm-proxy:update"
+          - "amp:llm-proxy:delete"
+          - "amp:llm-proxy:deploy"
+          - "amp:llm-proxy:api-key-manage"
+          - "amp:evaluator:create"
+          - "amp:evaluator:read"
+          - "amp:evaluator:update"
+          - "amp:evaluator:delete"
+          - "amp:agent:create"
+          - "amp:agent:read"
+          - "amp:agent:update"
+          - "amp:agent:delete"
+          - "amp:agent:build"
+          - "amp:agent:deploy-non-production"
+          - "amp:agent:deploy-production"
+          - "amp:agent:promote"
+          - "amp:agent:rollback"
+          - "amp:agent:suspend"
+          - "amp:agent:token-manage"
+          - "amp:agent:api-key-manage"
+          - "amp:agent-kind:read"
+          - "amp:agent-kind:create"
+          - "amp:agent-kind:update"
+          - "amp:agent-kind:delete"
+          - "amp:monitor:create"
+          - "amp:monitor:read"
+          - "amp:monitor:update"
+          - "amp:monitor:delete"
+          - "amp:monitor:execute"
+          - "amp:monitor:score-read"
+          - "amp:monitor:score-publish"
+          - "amp:observability:trace-read"
+          - "amp:observability:log-read"
+          - "amp:observability:build-log-read"
+          - "amp:observability:metric-read"
+          - "amp:role:create"
+          - "amp:role:read"
+          - "amp:role:update"
+          - "amp:role:delete"
+          - "amp:group:create"
+          - "amp:group:read"
+          - "amp:group:update"
+          - "amp:group:delete"
+          - "amp:agent-identity:read"
+          - "amp:agent-identity:create"
+          - "amp:agent-identity:update"
+          - "amp:agent-identity:delete"
+          - "amp:catalog:read"
+          - "amp:repository:read"
+          - "amp:profile:read"
+          - "amp:profile:update-attributes"
+    assignments:
+      - id: amp-api-client
+        type: app
+      - id: amp-admins
+        type: group
+
+  62-amp-role-developer.yaml: |
+    resource_type: role
+    id: amp-role-developer
+    name: Developer
+    description: "Development access: build, deploy, and observe agents within projects"
+    ouHandle: default
+    permissions:
+      - resourceServerId: amp-resource-server
+        permissions:
+          - "amp:org:view"
+          - "amp:project:create"
+          - "amp:project:read"
+          - "amp:project:update"
+          - "amp:project:delete"
+          - "amp:environment:read"
+          - "amp:data-plane:read"
+          - "amp:deployment-pipeline:read"
+          - "amp:git-secret:create"
+          - "amp:git-secret:read"
+          - "amp:git-secret:delete"
+          - "amp:llm-provider-template:read"
+          - "amp:llm-provider:read"
+          - "amp:llm-provider:configure-guardrail"
+          - "amp:llm-provider:connect"
+          - "amp:mcp-server:read"
+          - "amp:mcp-server:configure-guardrail"
+          - "amp:mcp-server:connect"
+          - "amp:mcp-server:api-key-manage"
+          - "amp:scope:read"
+          - "amp:llm-proxy:create"
+          - "amp:llm-proxy:read"
+          - "amp:llm-proxy:update"
+          - "amp:llm-proxy:delete"
+          - "amp:llm-proxy:deploy"
+          - "amp:llm-proxy:api-key-manage"
+          - "amp:evaluator:read"
+          - "amp:agent-kind:read"
+          - "amp:agent:create"
+          - "amp:agent:read"
+          - "amp:agent:update"
+          - "amp:agent:delete"
+          - "amp:agent:build"
+          - "amp:agent:deploy-non-production"
+          - "amp:agent:token-manage"
+          - "amp:agent:api-key-manage"
+          - "amp:monitor:create"
+          - "amp:monitor:read"
+          - "amp:monitor:update"
+          - "amp:monitor:delete"
+          - "amp:monitor:execute"
+          - "amp:monitor:score-read"
+          - "amp:observability:trace-read"
+          - "amp:observability:log-read"
+          - "amp:observability:build-log-read"
+          - "amp:observability:metric-read"
+          - "amp:catalog:read"
+          - "amp:repository:read"
+          - "amp:profile:read"
+          - "amp:profile:update-attributes"
+
+  63-amp-role-ai-lead.yaml: |
+    resource_type: role
+    id: amp-role-ai-lead
+    name: AI Lead
+    description: "AI lead access: manage LLM providers, MCP servers, and evaluators"
+    ouHandle: default
+    permissions:
+      - resourceServerId: amp-resource-server
+        permissions:
+          - "amp:org:view"
+          - "amp:project:read"
+          - "amp:environment:read"
+          - "amp:data-plane:read"
+          - "amp:deployment-pipeline:read"
+          - "amp:llm-provider-template:create"
+          - "amp:llm-provider-template:read"
+          - "amp:llm-provider-template:update"
+          - "amp:llm-provider-template:delete"
+          - "amp:llm-provider:create"
+          - "amp:llm-provider:read"
+          - "amp:llm-provider:update"
+          - "amp:llm-provider:delete"
+          - "amp:llm-provider:configure-guardrail"
+          - "amp:llm-provider:connect"
+          - "amp:llm-provider:deploy"
+          - "amp:llm-provider:api-key-manage"
+          - "amp:mcp-server:create"
+          - "amp:mcp-server:read"
+          - "amp:mcp-server:update"
+          - "amp:mcp-server:delete"
+          - "amp:mcp-server:configure-guardrail"
+          - "amp:mcp-server:connect"
+          - "amp:mcp-server:api-key-manage"
+          - "amp:scope:create"
+          - "amp:scope:read"
+          - "amp:scope:update"
+          - "amp:scope:delete"
+          - "amp:evaluator:create"
+          - "amp:evaluator:read"
+          - "amp:evaluator:update"
+          - "amp:evaluator:delete"
+          - "amp:agent-kind:read"
+          - "amp:agent:read"
+          - "amp:agent:build"
+          - "amp:agent:deploy-non-production"
+          - "amp:agent:api-key-manage"
+          - "amp:monitor:read"
+          - "amp:monitor:score-read"
+          - "amp:observability:trace-read"
+          - "amp:observability:metric-read"
+          - "amp:catalog:read"
+          - "amp:profile:read"
+          - "amp:profile:update-attributes"
+
+  64-amp-role-platform-engineer.yaml: |
+    resource_type: role
+    id: amp-role-platform-engineer
+    name: Platform Engineer
+    description: "Platform engineering: manage environments, gateways, and agent deployments"
+    ouHandle: default
+    permissions:
+      - resourceServerId: amp-resource-server
+        permissions:
+          - "amp:org:view"
+          - "amp:project:read"
+          - "amp:environment:create"
+          - "amp:environment:read"
+          - "amp:environment:update"
+          - "amp:environment:delete"
+          - "amp:gateway:create"
+          - "amp:gateway:read"
+          - "amp:gateway:update"
+          - "amp:gateway:delete"
+          - "amp:gateway:token-manage"
+          - "amp:data-plane:read"
+          - "amp:deployment-pipeline:create"
+          - "amp:deployment-pipeline:read"
+          - "amp:deployment-pipeline:update"
+          - "amp:deployment-pipeline:delete"
+          - "amp:llm-provider:read"
+          - "amp:llm-provider:configure-guardrail"
+          - "amp:mcp-server:read"
+          - "amp:mcp-server:configure-guardrail"
+          - "amp:scope:read"
+          - "amp:agent-kind:read"
+          - "amp:agent:read"
+          - "amp:agent:build"
+          - "amp:agent:api-key-manage"
+          - "amp:agent:deploy-non-production"
+          - "amp:agent:deploy-production"
+          - "amp:agent:promote"
+          - "amp:agent:rollback"
+          - "amp:agent:suspend"
+          - "amp:monitor:read"
+          - "amp:monitor:score-read"
+          - "amp:observability:log-read"
+          - "amp:observability:build-log-read"
+          - "amp:observability:metric-read"
+          - "amp:catalog:read"
+          - "amp:profile:read"
+          - "amp:profile:update-attributes"
+
+  65-amp-group-admins.yaml: |
+    resource_type: group
+    id: amp-admins
+    name: Agent Manager Admins
+    description: Administrative group with full access to all AMP resources
+    ouHandle: default
+    members:
+      {{- range .Values.thunder.bootstrap.defaultUsers }}
+      {{- if eq .username "admin" }}
+      - id: "01900000-0000-7000-8000-000000000030"
+        type: user
+      {{- else }}
+      - id: amp-user-{{ .username }}
+        type: user
+      {{- end }}
+      {{- end }}
+
+  67-amp-default-users.yaml: |
+    {{- range $i, $u := .Values.thunder.bootstrap.defaultUsers }}
+    {{- if $i }}
+    ---
+    {{- end }}
+    resource_type: user
+    {{- if eq $u.username "admin" }}
+    # Merges into Thunder's own built-in admin account (created by its internal
+    # bootstrap, backend/cmd/server/bootstrap/01-default-resources.yaml, at this exact
+    # fixed id) instead of creating a second, separate user — matching how the previous
+    # bootstrap script looked up and reused this same native account rather than
+    # creating its own. One benefit beyond parity: this account is already a member of
+    # Thunder's built-in "Administrators" group (system permission), so it works for
+    # both the AMP console and ThunderID's own native console without a second AMP-side
+    # role granting that permission. type stays "Person" (Thunder's own native schema
+    # for this account, not our "engineer" schema) since we're updating that existing
+    # entity in place, not creating a new one.
+    #
+    # No credentials block here, deliberately: Thunder's own "01-" bootstrap document
+    # (which runs first in the same import batch, since it sorts before "67-") already
+    # creates this exact user and sets its credential from thunder.setup.admin.password
+    # (explicitly set, matching defaultUsers[0].password below — the subchart does not
+    # default this itself). Setting credentials again here,
+    # on the very same id in the very same batch, fails with USR-1028 "Credential update
+    # not allowed" — Thunder refuses a second credential write against a user that
+    # already has one, even within a single bootstrap run. If you change
+    # defaultUsers[0].password, also update thunder.setup.admin.password to match, since
+    # that is what actually sets this account's real password.
+    id: "01900000-0000-7000-8000-000000000030"
+    type: Person
+    ouHandle: default
+    # email is required by Thunder's own "Person" user-type schema (the only other
+    # required field besides username); this is an update on an existing entity, so
+    # omitting a required attribute fails schema validation the same as it would on
+    # create. Thunder's own "01-" document sets this to admin@example.com by default,
+    # which is kept here since defaultUsers has no configurable email field.
+    attributes:
+      username: {{ $u.username | quote }}
+      email: "admin@example.com"
+      given_name: {{ $u.givenName | quote }}
+      family_name: {{ $u.familyName | quote }}
+    {{- else }}
+    id: amp-user-{{ $u.username }}
+    type: {{ $.Values.thunder.bootstrap.userSchema.name | quote }}
+    ouHandle: default
+    # password must be set in BOTH places, for two independent reasons:
+    #  - attributes: entity.Attributes is what Schema.Validate checks for required+
+    #    credential fields at create time (skipCredentialRequired is false for creates,
+    #    per entity/service.go), so omitting it here fails schema validation as "missing
+    #    required field".
+    #  - credentials: importUser (system/importer/service_adapters.go) only calls
+    #    UpdateUserCredentials — the call that actually hashes and stores a usable
+    #    password — when the separate `credentials` field is non-empty. Attributes alone
+    #    creates the user with NO real credential at all: it looks fine (GetUser/GetUsers
+    #    succeed, the field isn't even echoed back), but every login silently fails and
+    #    the sign-in flow just restarts at the same node with no visible error.
+    attributes:
+      username: {{ $u.username | quote }}
+      password: {{ $u.password | quote }}
+      given_name: {{ $u.givenName | quote }}
+      family_name: {{ $u.familyName | quote }}
+    credentials:
+      password: {{ $u.password | quote }}
     {{- end }}
     {{- end }}
-    log_success "MCP resource servers registered."
 
-  61-amp-default-roles.sh: |
-    #!/bin/bash
-    set -e
-
-    SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]:-$0}")"
-    source "${SCRIPT_DIR}/common.sh"
-
-
-    log_info "Creating AMP default roles with permissions..."
-
-    # ---------------------------------------------------------------------------
-    # Fetch default OU ID
-    # ---------------------------------------------------------------------------
-    RESPONSE=$(api_call GET "/organization-units/tree/default")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch default OU (HTTP $HTTP_CODE)"
-      exit 1
-    fi
-    DEFAULT_OU_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-    if [[ -z "$DEFAULT_OU_ID" ]]; then
-      log_error "Could not extract default OU ID"
-      exit 1
-    fi
-    log_info "Using OU ID: $DEFAULT_OU_ID"
-
-    # ---------------------------------------------------------------------------
-    # Fetch AMP resource server ID
+  68-amp-role-system-client-thunder-admin.yaml: |
+    # Grants agent-manager's system client access to ThunderID's OWN admin API (org-unit
+    # lookups, resource-server provisioning) by assigning it into Thunder's own built-in
+    # "Administrator" role (fixed id, created by Thunder's internal bootstrap,
+    # backend/cmd/server/bootstrap/01-default-resources.yaml) — the same role the merged
+    # admin user (see 67-amp-default-users.yaml) reaches "system" permission through via
+    # the Administrators group. This matches how the previous bootstrap script did the
+    # exact same thing: look up Thunder's own Administrator role by name and assign the
+    # system client into it, rather than creating a separate role of our own.
     #
-    # Role permissions below reference only the 'amp' resource server. That is
-    # sufficient for the MCP resource servers too (60-amp-resource-server.sh):
-    # Thunder grants scopes by matching the role's permission STRINGS against
-    # the requested scopes without filtering by resource server, and the MCP
-    # resource servers register the identical amp:* permission strings.
-    # ---------------------------------------------------------------------------
-    RESPONSE=$(api_call GET "/resource-servers")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch resource servers (HTTP $HTTP_CODE)"
-      exit 1
-    fi
-    AMP_RS_ID=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"identifier":"amp"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-    if [[ -z "$AMP_RS_ID" ]]; then
-      log_error "Could not find AMP resource server — run 60-amp-resource-server.sh first"
-      exit 1
-    fi
-    log_info "AMP resource server ID: $AMP_RS_ID"
+    # Name/description/permissions are re-declared exactly as Thunder's own document sets
+    # them (not our own invented values): the update path here replaces those three fields
+    # wholesale, so restating Thunder's own values keeps this a no-op re-assertion rather
+    # than an accidental rename. The role's declarative-immutability guard does not apply
+    # to this deployment (role store mode is "mutable", the default when
+    # declarativeResources.enabled is unset), and assignments are additive
+    # (roleAssignmentService.AddAssignments), so this only adds amp-system-client
+    # alongside the existing Administrators group assignment — it does not remove it.
+    resource_type: role
+    id: "01900000-0000-7000-8000-000000000050"
+    name: Administrator
+    description: System administrator role with full permissions
+    ouHandle: default
+    permissions:
+      - resourceServerId: "01900000-0000-7000-8000-000000000020"
+        permissions:
+          - system
+    assignments:
+      - id: amp-system-client
+        type: app
 
-    # ---------------------------------------------------------------------------
-    # Helper: create or get role by name; echoes the role ID
-    # ---------------------------------------------------------------------------
-    create_or_get_role() {
-      local name="$1" description="$2"
-      local payload="{\"name\":\"${name}\",\"ouId\":\"${DEFAULT_OU_ID}\",\"description\":\"${description}\"}"
-      local response http_code body id
+  66-amp-user-type-engineer.yaml: |
+    resource_type: user_type
+    id: engineer
+    category: user
+    name: {{ .Values.thunder.bootstrap.userSchema.name | quote }}
+    ouHandle: default
+    allowSelfRegistration: {{ .Values.thunder.bootstrap.userSchema.allowSelfRegistration }}
+    systemAttributes:
+      display: username
+    schema:
+      username:
+        type: string
+        displayName: Username
+        required: true
+        unique: true
+      password:
+        type: string
+        displayName: Password
+        required: true
+        credential: true
+      given_name:
+        type: string
+        displayName: First Name
+      family_name:
+        type: string
+        displayName: Last Name
+      email:
+        type: string
+        displayName: Email
 
-      response=$(api_call POST "/roles" "$payload")
-      http_code="${response: -3}"
-      body="${response%???}"
+  69-amp-default-resource-server-config.yaml: |
+    # Any client_credentials request that includes an explicit OAuth scope now requires a
+    # resolvable resource indicator (backend/internal/oauth/oauth2/resourceindicators),
+    # failing with invalid_target otherwise. Scripts across the platform (e.g.
+    # deployments/scripts/ams-auth.sh's get_ams_token) request explicit scopes without a
+    # "resource" param, so we set amp-resource-server as the server-wide default instead of
+    # patching every caller.
+    resource_type: server_config
+    name: defaultResourceServer
+    value:
+      resourceServerId: amp-resource-server
 
-      if [[ "$http_code" == "201" ]] || [[ "$http_code" == "200" ]]; then
-        id=$(echo "$body" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-        log_success "Created role '${name}' (id: $id)" >&2
-        echo "$id"
-        return 0
-      fi
+  70-fix-thunder-system-rs-identifier.yaml: |
+    # ThunderID's own built-in "System" resource server (created by its OWN default
+    # bootstrap, backend/cmd/server/bootstrap/01-default-resources.yaml) hardcodes
+    # identifier: https://localhost:8090/mcp — NOT templated to the deployment's actual
+    # publicUrl. The native /console app's config.js derives its OWN OAuth
+    # resource_identifier from configuration.server.publicUrl (correctly, e.g.
+    # "http://thunder.amp.localhost:8080/mcp" for us), so the two never match, and every
+    # native-console login redirects back with "invalid_target: The resource parameter
+    # does not match any registered resource server" — the console loads but silently
+    # renders nothing. This document re-declares the SAME
+    # resource server (same id, so it's an update not a duplicate) with the correct
+    # identifier, preserving its full resources/actions tree verbatim so nothing Thunder's
+    # own native Administrator role depends on gets dropped. Runs after Thunder's own
+    # 01-default-resources.yaml (all resource_server docs execute in filename order
+    # within their dependency-order group), so this updates rather than fails to find it.
+    resource_type: resource_server
+    id: "01900000-0000-7000-8000-000000000020"
+    name: System
+    description: System resource server
+    identifier: "{{ .Values.thunder.configuration.server.publicUrl }}/mcp"
+    ouHandle: default
+    resources:
+      - name: System
+        handle: system
+        description: System resource
+      - name: Organization Unit
+        handle: ou
+        description: Organization unit resource
+        parent: system
+        actions:
+          - name: View
+            handle: view
+            description: Read-only access to organization units
+      - name: User
+        handle: user
+        description: User resource
+        parent: system
+        actions:
+          - name: View
+            handle: view
+            description: Read-only access to users
+      - name: Group
+        handle: group
+        description: Group resource
+        parent: system
+        actions:
+          - name: View
+            handle: view
+            description: Read-only access to groups
+      - name: User Type
+        handle: usertype
+        description: User type resource
+        parent: system
+        actions:
+          - name: View
+            handle: view
+            description: Read-only access to user types
 
-      if [[ "$http_code" == "409" ]]; then
-        log_warning "Role '${name}' already exists, retrieving ID..." >&2
-        response=$(api_call GET "/roles")
-        body="${response%???}"
-        id=$(echo "$body" | sed 's/},{/}\n{/g' | grep "\"name\":\"${name}\"" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-        if [[ -z "$id" ]]; then
-          log_error "Role '${name}' reported 409 but not found in list" >&2
-          exit 1
-        fi
-        log_success "Found existing role '${name}' (id: $id)" >&2
-        echo "$id"
-        return 0
-      fi
+  71-amp-cors-config.yaml: |
+    # CORS is configured via a "cors" server_config resource (same read-only/writable
+    # server-config mechanism as defaultResourceServer above); Thunder's static
+    # server config has no CORS section anymore, so this document is the only
+    # thing that sets configuration.cors.allowedOrigins below. Without this
+    # document Thunder returns no Access-Control-Allow-Origin header for any
+    # cross-origin request. The browser then
+    # silently fails the /oauth2/token exchange right after a successful sign-in (Thunder
+    # processes the request fine; the browser just refuses to hand the response to the
+    # calling script), which made the AMP console bounce back into a fresh sign-in loop
+    # instead of completing login.
+    resource_type: server_config
+    name: cors
+    value:
+      allowedOrigins: {{ .Values.thunder.configuration.cors.allowedOrigins | toJson }}
 
-      log_error "Failed to create role '${name}' (HTTP $http_code): $body" >&2
-      exit 1
-    }
+  73-amp-csp-config.yaml: |
+    # Content Security Policy (CSP) server_config resource for ThunderID 1.0.0 GA.
+    # ThunderID 1.0.0 enforces a deny-first CSP policy with img-src 'self' data: by default.
+    # This bootstrap document relaxes img-src and font-src for /gate/ and /console/ paths
+    # to allow external branding assets (e.g. wso2.cachefly.net, gstatic, wikimedia).
+    resource_type: server_config
+    name: csp
+    value:
+      reportOnly: false
+      paths:
+        - location: "/gate/"
+          directives:
+            style-src-elem:
+              - "'self'"
+              - "'unsafe-inline'"
+            style-src-attr:
+              - "'self'"
+              - "'unsafe-inline'"
+            img-src:
+              - "'self'"
+              - "data:"
+              - "https://wso2.cachefly.net"
+              - "https://www.gstatic.com"
+              - "https://upload.wikimedia.org"
+            font-src:
+              - "'self'"
+              - "data:"
+              - "https://fonts.gstatic.com"
+        - location: "/console/"
+          directives:
+            style-src-elem:
+              - "'self'"
+              - "'unsafe-inline'"
+            style-src-attr:
+              - "'self'"
+              - "'unsafe-inline'"
+            img-src:
+              - "'self'"
+              - "data:"
+              - "https://wso2.cachefly.net"
+              - "https://www.gstatic.com"
+              - "https://upload.wikimedia.org"
+            font-src:
+              - "'self'"
+              - "data:"
+              - "https://fonts.gstatic.com"
+            connect-src:
+              - "'self'"
+              - "https://thunderid.dev"
+            worker-src:
+              - "'self'"
+              - "blob:"
 
-    # ---------------------------------------------------------------------------
-    # Helper: assign permissions to a role via PUT /roles/{id}
-    # ---------------------------------------------------------------------------
-    set_role_permissions() {
-      local role_id="$1" role_name="$2" role_desc="$3" permissions_json="$4"
-      local payload="{\"ouId\":\"${DEFAULT_OU_ID}\",\"name\":\"${role_name}\",\"description\":\"${role_desc}\",\"permissions\":[{\"resourceServerId\":\"${AMP_RS_ID}\",\"permissions\":${permissions_json}}]}"
-      local response http_code
+  72-am-observer-client.yaml: |
+    # No "scopes" key on purpose: this client's authority comes from its OpenChoreo
+    # ClusterAuthzRoleBinding (amp-observer-reader-binding), not from AMP scopes.
+    # Scope-less client_credentials tokens fall back to the client ID as audience.
+    resource_type: application
+    id: am-observer-client
+    type: m2m # client_credentials only, no interactive login
+    name: {{ .Values.thunder.bootstrap.amObserverClient.name | quote }}
+    description: {{ .Values.thunder.bootstrap.amObserverClient.description | quote }}
+    ouId: "01900000-0000-7000-8000-000000000001"
+    inboundAuthConfig:
+      - type: oauth2
+        config:
+          clientId: {{ .Values.thunder.bootstrap.amObserverClient.clientId | quote }}
+          clientSecret: {{ .Values.thunder.bootstrap.amObserverClient.clientSecret | quote }}
+          grantTypes: {{ .Values.thunder.bootstrap.amObserverClient.grantTypes | toJson }}
+          tokenEndpointAuthMethod: {{ .Values.thunder.bootstrap.amObserverClient.tokenEndpointAuthMethod | quote }}
+          pkceRequired: {{ .Values.thunder.bootstrap.amObserverClient.pkceRequired }}
+          publicClient: {{ .Values.thunder.bootstrap.amObserverClient.publicClient }}
+          token:
+            accessToken:
+              clientConfig:
+                validityPeriod: {{ .Values.thunder.bootstrap.amObserverClient.accessTokenValidityPeriod }}
+                attributes: ["ouId", "ouHandle"]
 
-      response=$(api_call PUT "/roles/${role_id}" "$payload")
-      http_code="${response: -3}"
-      if [[ "$http_code" == "200" ]] || [[ "$http_code" == "204" ]]; then
-        log_success "Permissions set for role '${role_name}'"
-      else
-        log_error "Failed to set permissions for role '${role_name}' (HTTP $http_code): ${response%???}"
-        exit 1
-      fi
-    }
-
-    # ===========================================================================
-    # Agent Manager Admin — full access to all resources
-    # ===========================================================================
-    ADMIN_ID=$(create_or_get_role "admin" "Full administrative access to all AMP resources")
-    set_role_permissions "$ADMIN_ID" "admin" "Full administrative access to all AMP resources" \
-      '["amp:org:view","amp:org:modify-settings","amp:org:invite-member","amp:org:remove-member","amp:org:assign-role","amp:org:manage-idp","amp:org:manage-service-account","amp:project:create","amp:project:read","amp:project:update","amp:project:delete","amp:environment:create","amp:environment:read","amp:environment:update","amp:environment:delete","amp:gateway:create","amp:gateway:read","amp:gateway:update","amp:gateway:delete","amp:gateway:token-manage","amp:data-plane:read","amp:deployment-pipeline:create","amp:deployment-pipeline:read","amp:deployment-pipeline:update","amp:deployment-pipeline:delete","amp:git-secret:create","amp:git-secret:read","amp:git-secret:delete","amp:llm-provider-template:create","amp:llm-provider-template:read","amp:llm-provider-template:update","amp:llm-provider-template:delete","amp:llm-provider:create","amp:llm-provider:read","amp:llm-provider:update","amp:llm-provider:delete","amp:llm-provider:configure-guardrail","amp:llm-provider:connect","amp:llm-provider:deploy","amp:llm-provider:api-key-manage","amp:mcp-server:create","amp:mcp-server:read","amp:mcp-server:update","amp:mcp-server:delete","amp:mcp-server:configure-guardrail","amp:mcp-server:connect","amp:mcp-server:api-key-manage","amp:scope:create","amp:scope:read","amp:scope:update","amp:scope:delete","amp:llm-proxy:create","amp:llm-proxy:read","amp:llm-proxy:update","amp:llm-proxy:delete","amp:llm-proxy:deploy","amp:llm-proxy:api-key-manage","amp:evaluator:create","amp:evaluator:read","amp:evaluator:update","amp:evaluator:delete","amp:agent:create","amp:agent:read","amp:agent:update","amp:agent:delete","amp:agent:build","amp:agent:deploy-non-production","amp:agent:deploy-production","amp:agent:promote","amp:agent:rollback","amp:agent:suspend","amp:agent:token-manage","amp:agent:api-key-manage","amp:agent-kind:read","amp:agent-kind:create","amp:agent-kind:update","amp:agent-kind:delete","amp:monitor:create","amp:monitor:read","amp:monitor:update","amp:monitor:delete","amp:monitor:execute","amp:monitor:score-read","amp:monitor:score-publish","amp:observability:trace-read","amp:observability:log-read","amp:observability:build-log-read","amp:observability:metric-read","amp:role:create","amp:role:read","amp:role:update","amp:role:delete","amp:group:create","amp:group:read","amp:group:update","amp:group:delete","amp:agent-identity:read","amp:agent-identity:create","amp:agent-identity:update","amp:agent-identity:delete","amp:catalog:read","amp:repository:read","amp:profile:read","amp:profile:update-attributes"]'
-
-    # ===========================================================================
-    # developer — project-scoped development and deployment
-    # ===========================================================================
-    DEV_ID=$(create_or_get_role "developer" "Development access: build, deploy, and observe agents within projects")
-    set_role_permissions "$DEV_ID" "developer" "Development access: build, deploy, and observe agents within projects" \
-      '["amp:org:view","amp:project:create","amp:project:read","amp:project:update","amp:project:delete","amp:environment:read","amp:data-plane:read","amp:deployment-pipeline:read","amp:git-secret:create","amp:git-secret:read","amp:git-secret:delete","amp:llm-provider-template:read","amp:llm-provider:read","amp:llm-provider:configure-guardrail","amp:llm-provider:connect","amp:mcp-server:read","amp:mcp-server:configure-guardrail","amp:mcp-server:connect","amp:mcp-server:api-key-manage","amp:scope:read","amp:llm-proxy:create","amp:llm-proxy:read","amp:llm-proxy:update","amp:llm-proxy:delete","amp:llm-proxy:deploy","amp:llm-proxy:api-key-manage","amp:evaluator:read","amp:agent-kind:read","amp:agent:create","amp:agent:read","amp:agent:update","amp:agent:delete","amp:agent:build","amp:agent:deploy-non-production","amp:agent:token-manage","amp:agent:api-key-manage","amp:monitor:create","amp:monitor:read","amp:monitor:update","amp:monitor:delete","amp:monitor:execute","amp:monitor:score-read","amp:observability:trace-read","amp:observability:log-read","amp:observability:build-log-read","amp:observability:metric-read","amp:catalog:read","amp:repository:read","amp:profile:read","amp:profile:update-attributes"]'
-
-    # ===========================================================================
-    # ai-lead — AI/ML resources and provider management
-    # ===========================================================================
-    AILEAD_ID=$(create_or_get_role "ai-lead" "AI lead access: manage LLM providers, MCP servers, and evaluators")
-    set_role_permissions "$AILEAD_ID" "ai-lead" "AI lead access: manage LLM providers, MCP servers, and evaluators" \
-      '["amp:org:view","amp:project:read","amp:environment:read","amp:data-plane:read","amp:deployment-pipeline:read","amp:llm-provider-template:create","amp:llm-provider-template:read","amp:llm-provider-template:update","amp:llm-provider-template:delete","amp:llm-provider:create","amp:llm-provider:read","amp:llm-provider:update","amp:llm-provider:delete","amp:llm-provider:configure-guardrail","amp:llm-provider:connect","amp:llm-provider:deploy","amp:llm-provider:api-key-manage","amp:mcp-server:create","amp:mcp-server:read","amp:mcp-server:update","amp:mcp-server:delete","amp:mcp-server:configure-guardrail","amp:mcp-server:connect","amp:mcp-server:api-key-manage","amp:scope:create","amp:scope:read","amp:scope:update","amp:scope:delete","amp:evaluator:create","amp:evaluator:read","amp:evaluator:update","amp:evaluator:delete","amp:agent-kind:read","amp:agent:read","amp:agent:build","amp:agent:deploy-non-production","amp:agent:api-key-manage","amp:monitor:read","amp:monitor:score-read","amp:observability:trace-read","amp:observability:metric-read","amp:catalog:read","amp:profile:read","amp:profile:update-attributes"]'
-
-    # ===========================================================================
-    # platform-engineer — infrastructure and deployment pipeline management
-    # ===========================================================================
-    PE_ID=$(create_or_get_role "platform-engineer" "Platform engineering: manage environments, gateways, and agent deployments")
-    set_role_permissions "$PE_ID" "platform-engineer" "Platform engineering: manage environments, gateways, and agent deployments" \
-      '["amp:org:view","amp:project:read","amp:environment:create","amp:environment:read","amp:environment:update","amp:environment:delete","amp:gateway:create","amp:gateway:read","amp:gateway:update","amp:gateway:delete","amp:gateway:token-manage","amp:data-plane:read","amp:deployment-pipeline:create","amp:deployment-pipeline:read","amp:deployment-pipeline:update","amp:deployment-pipeline:delete","amp:llm-provider:read","amp:llm-provider:configure-guardrail","amp:mcp-server:read","amp:mcp-server:configure-guardrail","amp:scope:read","amp:agent-kind:read","amp:agent:read","amp:agent:build","amp:agent:api-key-manage","amp:agent:deploy-non-production","amp:agent:deploy-production","amp:agent:promote","amp:agent:rollback","amp:agent:suspend","amp:monitor:read","amp:monitor:score-read","amp:observability:log-read","amp:observability:build-log-read","amp:observability:metric-read","amp:catalog:read","amp:profile:read","amp:profile:update-attributes"]'
-
-    log_info "Default role provisioning complete (4 roles created/updated)."
-
-    # ===========================================================================
-    # Assign default users to roles
-    # ===========================================================================
-    assign_user_to_role() {
-      local username="$1" role_id="$2" role_name="$3"
-      local response http_code body user_id
-
-      response=$(api_call GET "/users")
-      http_code="${response: -3}"
-      body="${response%???}"
-      if [[ "$http_code" != "200" ]]; then
-        log_error "Failed to fetch users (HTTP $http_code)"
-        exit 1
-      fi
-
-      user_id=$(echo "$body" | sed 's/},{/}\n{/g' | grep "\"username\":\"${username}\"" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-      if [[ -z "$user_id" ]]; then
-        log_warning "User '${username}' not found, skipping role assignment"
-        return 0
-      fi
-
-      local payload="{\"assignments\":[{\"id\":\"${user_id}\",\"type\":\"user\"}]}"
-      response=$(api_call POST "/roles/${role_id}/assignments/add" "$payload")
-      http_code="${response: -3}"
-      if [[ "$http_code" == "200" ]] || [[ "$http_code" == "201" ]] || [[ "$http_code" == "204" ]] || [[ "$http_code" == "409" ]]; then
-        log_success "Assigned user '${username}' to role '${role_name}'"
-      else
-        log_error "Failed to assign user '${username}' to role '${role_name}' (HTTP $http_code): ${response%???}"
-        exit 1
-      fi
-    }
-
-    assign_user_to_role "{{ .Values.thunder.setup.admin.username }}" "$ADMIN_ID" "admin"
-
-    # ===========================================================================
-    # Assign ampApiClient app to Agent Manager Admin role so it gets all scopes in M2M tokens
-    # ===========================================================================
-    log_info "Assigning ampApiClient app to admin role..."
-    response=$(api_call GET "/applications")
-    http_code="${response: -3}"
-    body="${response%???}"
-    if [[ "$http_code" != "200" ]]; then
-      log_error "Failed to fetch applications (HTTP $http_code)"
-      exit 1
-    fi
-
-    AMP_API_CLIENT_ID=$(echo "$body" | sed 's/},{/}\n{/g' | grep '"clientId":"amp-api-client"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-    if [[ -z "$AMP_API_CLIENT_ID" ]]; then
-      log_warning "ampApiClient app not found, skipping role assignment"
-    else
-      payload="{\"assignments\":[{\"id\":\"${AMP_API_CLIENT_ID}\",\"type\":\"app\"}]}"
-      response=$(api_call POST "/roles/${ADMIN_ID}/assignments/add" "$payload")
-      http_code="${response: -3}"
-      if [[ "$http_code" == "200" ]] || [[ "$http_code" == "201" ]] || [[ "$http_code" == "204" ]] || [[ "$http_code" == "409" ]]; then
-        log_success "Assigned ampApiClient to Agent Manager Admin role"
-      else
-        log_error "Failed to assign ampApiClient to Agent Manager Admin role (HTTP $http_code): ${response%???}"
-        exit 1
-      fi
-    fi
-
-    log_info "Default role assignments complete."
-
-  62-amp-default-groups.sh: |
-    #!/bin/bash
-    set -e
-
-    SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]:-$0}")"
-    source "${SCRIPT_DIR}/common.sh"
-
-    log_info "Creating AMP default groups..."
-
-    # ---------------------------------------------------------------------------
-    # Fetch default OU ID
-    # ---------------------------------------------------------------------------
-    RESPONSE=$(api_call GET "/organization-units/tree/default")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch default OU (HTTP $HTTP_CODE)"
-      exit 1
-    fi
-    DEFAULT_OU_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-    if [[ -z "$DEFAULT_OU_ID" ]]; then
-      log_error "Could not extract default OU ID"
-      exit 1
-    fi
-    log_info "Using OU ID: $DEFAULT_OU_ID"
-
-    # ---------------------------------------------------------------------------
-    # Helper: create or get group by name; echoes the group ID
-    # ---------------------------------------------------------------------------
-    create_or_get_group() {
-      local name="$1" description="$2"
-      local payload="{\"name\":\"${name}\",\"ouId\":\"${DEFAULT_OU_ID}\",\"description\":\"${description}\"}"
-      local response http_code body id
-
-      response=$(api_call POST "/groups" "$payload")
-      http_code="${response: -3}"
-      body="${response%???}"
-
-      if [[ "$http_code" == "201" ]] || [[ "$http_code" == "200" ]]; then
-        id=$(echo "$body" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-        log_success "Created group '${name}' (id: $id)" >&2
-        echo "$id"
-        return 0
-      fi
-
-      if [[ "$http_code" == "409" ]]; then
-        log_warning "Group '${name}' already exists, retrieving ID..." >&2
-        response=$(api_call GET "/groups")
-        body="${response%???}"
-        id=$(echo "$body" | sed 's/},{/}\n{/g' | grep "\"name\":\"${name}\"" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-        if [[ -z "$id" ]]; then
-          log_error "Group '${name}' reported 409 but not found in list" >&2
-          exit 1
-        fi
-        log_success "Found existing group '${name}' (id: $id)" >&2
-        echo "$id"
-        return 0
-      fi
-
-      log_error "Failed to create group '${name}' (HTTP $http_code): $body" >&2
-      exit 1
-    }
-
-    # ===========================================================================
-    # Create default groups
-    # ===========================================================================
-    ADMINS_GROUP_ID=$(create_or_get_group "Agent Manager Admins" "Administrative group with full access to all AMP resources")
-
-    # ===========================================================================
-    # Assign Agent Manager Admin role to Agent Manager Admins group
-    # ===========================================================================
-    log_info "Looking up admin role..."
-    RESPONSE=$(api_call GET "/roles")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch roles (HTTP $HTTP_CODE)"
-      exit 1
-    fi
-
-    ADMIN_ROLE_ID=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"name":"admin"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-    if [[ -z "$ADMIN_ROLE_ID" ]]; then
-      log_error "Could not find 'admin' role"
-      exit 1
-    fi
-    log_info "Found 'admin' role (id: $ADMIN_ROLE_ID)"
-
-    log_info "Assigning Agent Manager Admin role to Agent Manager Admins group..."
-    ASSIGN_PAYLOAD='{"assignments":[{"id":"'${ADMINS_GROUP_ID}'","type":"group"}]}'
-    RESPONSE=$(api_call POST "/roles/$ADMIN_ROLE_ID/assignments/add" "$ASSIGN_PAYLOAD")
-    HTTP_CODE="${RESPONSE: -3}"
-    if [[ "$HTTP_CODE" == "200" ]] || [[ "$HTTP_CODE" == "201" ]] || [[ "$HTTP_CODE" == "204" ]] || [[ "$HTTP_CODE" == "409" ]]; then
-      log_success "Assigned Agent Manager Admin role to Agent Manager Admins group"
-    else
-      log_error "Failed to assign Agent Manager Admin role to Agent Manager Admins group (HTTP $HTTP_CODE)"
-      echo "Response: ${RESPONSE%???}"
-      exit 1
-    fi
-
-    # ===========================================================================
-    # Assign admin user to Agent Manager Admins group
-    # ===========================================================================
-    log_info "Looking up admin user..."
-    RESPONSE=$(api_call GET "/users")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch users (HTTP $HTTP_CODE)"
-      exit 1
-    fi
-
-    ADMIN_USER_ID=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"username":"{{ .Values.thunder.setup.admin.username }}"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-    if [[ -z "$ADMIN_USER_ID" ]]; then
-      log_warning "admin user not found, skipping group assignment"
-    else
-      log_info "Found admin user (id: $ADMIN_USER_ID)"
-      log_info "Assigning admin user to Agent Manager Admins group..."
-      ASSIGN_USER_PAYLOAD='{"members":[{"id":"'${ADMIN_USER_ID}'","type":"user"}]}'
-      RESPONSE=$(api_call POST "/groups/$ADMINS_GROUP_ID/members/add" "$ASSIGN_USER_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "200" ]] || [[ "$HTTP_CODE" == "201" ]] || [[ "$HTTP_CODE" == "204" ]] || [[ "$HTTP_CODE" == "409" ]]; then
-        log_success "Assigned admin user to Agent Manager Admins group"
-      else
-        log_error "Failed to assign admin user to Agent Manager Admins group (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    fi
-
-    log_info "Default group provisioning complete (1 group created/updated)."
-  63-am-observer-client.sh: |
-    #!/bin/bash
-    set -e
-
-    SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]:-$0}")"
-    source "${SCRIPT_DIR}/common.sh"
-
-
-    log_info "Checking if application '{{ .Values.thunder.bootstrap.amObserverClient.name }}' already exists..."
-
-    # Get the default OU ID
-    RESPONSE=$(api_call GET "/organization-units/tree/default")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch default organization unit (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    DEFAULT_OU_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-    if [[ -z "$DEFAULT_OU_ID" ]]; then
-      log_error "Could not extract default organization unit ID from response"
-      echo "Response: $BODY"
-      exit 1
-    fi
-    log_info "Using OU ID: $DEFAULT_OU_ID"
-
-    # Check existing apps
-    RESPONSE=$(api_call GET "/applications")
-    HTTP_CODE="${RESPONSE: -3}"
-    BODY="${RESPONSE%???}"
-    if [[ "$HTTP_CODE" != "200" ]]; then
-      log_error "Failed to fetch applications (HTTP $HTTP_CODE)"
-      echo "Response: $BODY"
-      exit 1
-    fi
-
-    # No "scopes" key on purpose: this client's authority comes from its
-    # OpenChoreo ClusterAuthzRoleBinding (amp-observer-reader-binding), not
-    # from AMP scopes. Scope-less client_credentials tokens fall back to the
-    # client ID as audience.
-    APP_PAYLOAD='{
-      "name": "{{ .Values.thunder.bootstrap.amObserverClient.name }}",
-      "description": "{{ .Values.thunder.bootstrap.amObserverClient.description }}",
-      "ouId": "'${DEFAULT_OU_ID}'",
-      "inboundAuthConfig": [
-        {
-          "type": "oauth2",
-          "config": {
-            "clientId": "{{ .Values.thunder.bootstrap.amObserverClient.clientId }}",
-            "clientSecret": "{{ .Values.thunder.bootstrap.amObserverClient.clientSecret }}",
-            "grantTypes": {{ .Values.thunder.bootstrap.amObserverClient.grantTypes | toJson }},
-            "tokenEndpointAuthMethod": "{{ .Values.thunder.bootstrap.amObserverClient.tokenEndpointAuthMethod }}",
-            "pkceRequired": {{ .Values.thunder.bootstrap.amObserverClient.pkceRequired }},
-            "publicClient": {{ .Values.thunder.bootstrap.amObserverClient.publicClient }},
-            "token": {
-              "accessToken": {
-                "validityPeriod": {{ .Values.thunder.bootstrap.amObserverClient.accessTokenValidityPeriod }}
-              }
-            }
-          }
-        }
-      ]
-    }'
-
-    if echo "$BODY" | grep -q '"clientId":"{{ .Values.thunder.bootstrap.amObserverClient.clientId }}"'; then
-      app_id=$(echo "$BODY" | sed 's/},{/}\n{/g' | grep '"clientId":"{{ .Values.thunder.bootstrap.amObserverClient.clientId }}"' | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-      log_info "Application '{{ .Values.thunder.bootstrap.amObserverClient.name }}' already exists (id: $app_id), updating..."
-      RESPONSE=$(api_call PUT "/applications/$app_id" "$APP_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "200" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.amObserverClient.name }}' updated successfully"
-      else
-        log_error "Failed to update application (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    else
-      log_info "Application '{{ .Values.thunder.bootstrap.amObserverClient.name }}' does not exist, creating..."
-      RESPONSE=$(api_call POST "/applications" "$APP_PAYLOAD")
-      HTTP_CODE="${RESPONSE: -3}"
-      if [[ "$HTTP_CODE" == "201" ]] || [[ "$HTTP_CODE" == "200" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.amObserverClient.name }}' created successfully"
-      elif [[ "$HTTP_CODE" == "409" ]]; then
-        log_info "Application '{{ .Values.thunder.bootstrap.amObserverClient.name }}' already exists, skipping"
-      else
-        log_error "Failed to create application (HTTP $HTTP_CODE)"
-        echo "Response: ${RESPONSE%???}"
-        exit 1
-      fi
-    fi
   {{- /* am-obs-mcp gets its OIDC scopes (amObsMcpClient.scopes) plus the four
        observability data-read scopes, single-sourced from
        thunder.bootstrap.observabilityScopes. */}}
-  64-am-obs-mcp-client.sh: |
-    {{- include "amp-thunder.mcpClientScript" (dict "client" .Values.thunder.bootstrap.amObsMcpClient "scopes" (concat .Values.thunder.bootstrap.amObsMcpClient.scopes .Values.thunder.bootstrap.observabilityScopes)) | nindent 4 }}
+  73-am-obs-mcp-client.yaml: |
+    resource_type: application
+    id: am-obs-mcp-client
+    type: browser # public redirect client (authorization_code + PKCE, loopback redirect)
+    name: {{ .Values.thunder.bootstrap.amObsMcpClient.name | quote }}
+    description: {{ .Values.thunder.bootstrap.amObsMcpClient.description | quote }}
+    ouId: "01900000-0000-7000-8000-000000000001"
+    authFlowHandle: default-flow
+    allowedUserTypes: {{ .Values.thunder.bootstrap.amObsMcpClient.allowedUserTypes | toJson }}
+    inboundAuthConfig:
+      - type: oauth2
+        config:
+          clientId: {{ .Values.thunder.bootstrap.amObsMcpClient.clientId | quote }}
+          redirectUris: {{ .Values.thunder.bootstrap.amObsMcpClient.redirectUris | toJson }}
+          grantTypes: {{ .Values.thunder.bootstrap.amObsMcpClient.grantTypes | toJson }}
+          responseTypes: {{ .Values.thunder.bootstrap.amObsMcpClient.responseTypes | toJson }}
+          tokenEndpointAuthMethod: {{ .Values.thunder.bootstrap.amObsMcpClient.tokenEndpointAuthMethod | quote }}
+          pkceRequired: {{ .Values.thunder.bootstrap.amObsMcpClient.pkceRequired }}
+          publicClient: {{ .Values.thunder.bootstrap.amObsMcpClient.publicClient }}
+          scopes: {{ concat .Values.thunder.bootstrap.amObsMcpClient.scopes .Values.thunder.bootstrap.observabilityScopes | toJson }}
+          token:
+            accessToken:
+              userConfig:
+                validityPeriod: {{ .Values.thunder.bootstrap.amObsMcpClient.accessTokenValidityPeriod }}
+                attributes: {{ .Values.thunder.bootstrap.amObsMcpClient.userAttributes | toJson }}
+            idToken:
+              validityPeriod: {{ .Values.thunder.bootstrap.amObsMcpClient.idTokenValidityPeriod }}
+              userAttributes: {{ .Values.thunder.bootstrap.amObsMcpClient.userAttributes | toJson }}

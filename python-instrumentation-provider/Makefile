@@ -4,7 +4,7 @@
 PYTHON_VERSION ?= 3.11
 # Default must be a version with a committed lock (see locks/); the image installs
 # locks/traceloop-$(TRACELOOP_VERSION)-python$(PYTHON_VERSION).txt.
-TRACELOOP_VERSION ?= 0.61.0
+TRACELOOP_VERSION ?= 0.62.3
 TAG ?= dev-python$(PYTHON_VERSION)
 APP_NAME = ghcr.io/wso2/amp-python-instrumentation-provider
 DOCKER_IMAGE = $(APP_NAME):$(TAG)

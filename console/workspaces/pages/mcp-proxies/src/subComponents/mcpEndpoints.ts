@@ -50,52 +50,15 @@ export const DEFAULT_ENDPOINT_SECURITY = {
   },
 };
 
-export type AuthenticationType = "apiKey" | "identity" | "";
-
-const AUTHENTICATION_TYPE_LABELS: Record<AuthenticationType, string> = {
-  "": "None",
-  apiKey: "API Key",
-  identity: "OAuth",
-};
-
-// Display label for an AuthenticationType, shared by the Security tab's method
-// selector and the Overview tab's Auth Type summary so both stay in sync.
-export function getAuthenticationTypeLabel(type: AuthenticationType): string {
-  return AUTHENTICATION_TYPE_LABELS[type];
-}
-
-export function isAPIKeySecurityEnabled(
-  config: MCPEndpointConfig | undefined,
-): boolean {
-  const apiKeyConfig = config?.security?.apiKey;
-  return (
-    config?.security?.enabled !== false &&
-    !!apiKeyConfig &&
-    apiKeyConfig.enabled !== false
-  );
-}
-
-// Used by resolveAuthenticationType below to derive the Security tab's
-// active auth method from the endpoint's security config.
-function isIdentitySecurityEnabled(
-  config: MCPEndpointConfig | undefined,
-): boolean {
-  return (
-    config?.security?.enabled !== false &&
-    config?.security?.identity?.enabled === true
-  );
-}
-
-// Derives which authentication method is active from the endpoint's security
-// config, the same way both the Security tab (method selector) and the
-// Overview tab (Auth Type summary) need to.
-export function resolveAuthenticationType(
-  config: MCPEndpointConfig | undefined,
-): AuthenticationType {
-  if (isAPIKeySecurityEnabled(config)) return "apiKey";
-  if (isIdentitySecurityEnabled(config)) return "identity";
-  return "";
-}
+// The auth-type rule lives in shared-component so the agent creation and
+// configuration pages derive their runtime variables from the same definition
+// this page renders. Re-exported here for existing importers.
+export {
+  getAuthenticationTypeLabel,
+  isAPIKeySecurityEnabled,
+  resolveAuthenticationType,
+  type AuthenticationType,
+} from "@agent-management-platform/shared-component";
 
 // Backend identifier of a capability entry, matching the resolution used by the
 // Rewrite / Manage Tools tabs (resources key on uri, tools/prompts on name).
@@ -207,6 +170,8 @@ export function endpointToDraft(endpoint: MCPProxyEndpoint): EndpointDraft {
     url: endpoint.upstream?.main?.url ?? "",
     authHeader: endpoint.upstream?.main?.auth?.header ?? "",
     authValue: "",
+    resilienceTimeout: endpoint.resilience?.timeout ?? "",
+    resilienceIdleTimeout: endpoint.resilience?.idleTimeout ?? "",
     environments: (endpoint.environments ?? []).map(
       (env) => env.environmentUuid,
     ),
@@ -408,10 +373,26 @@ export function draftToEndpoint(
     id = deriveEndpointHandle(draft, index, usedHandles);
   }
 
+  const trimmedResilienceTimeout = draft.resilienceTimeout.trim();
+  const trimmedResilienceIdleTimeout = draft.resilienceIdleTimeout.trim();
+
   return {
     id,
     name: name || undefined,
-    upstream: { ...existing?.upstream, main: { url: draft.url, auth } },
+    upstream: {
+      ...existing?.upstream,
+      main: {
+        url: draft.url,
+        auth,
+      },
+    },
+    resilience:
+      trimmedResilienceTimeout || trimmedResilienceIdleTimeout
+        ? {
+            timeout: trimmedResilienceTimeout || undefined,
+            idleTimeout: trimmedResilienceIdleTimeout || undefined,
+          }
+        : undefined,
     capabilities,
     policies: prunePoliciesForCapabilities(existing?.policies, capabilities),
     security: existing?.security ?? DEFAULT_ENDPOINT_SECURITY,

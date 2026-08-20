@@ -17,7 +17,10 @@
  */
 
 import React from "react";
-import { useListLLMProviderConsumers } from "@agent-management-platform/api-client";
+import {
+  useListLLMProviderConsumers,
+  useOrgAgentDisplayNames,
+} from "@agent-management-platform/api-client";
 import {
   absoluteRouteMap,
   type LLMProviderConsumerItem,
@@ -67,6 +70,14 @@ export const LLMProviderConsumersTab: React.FC<
     orgName,
     providerId,
   });
+  const { resolveAgentName, resolveProjectName } = useOrgAgentDisplayNames({ orgName });
+
+  // Monitors aren't agents and will never resolve to anything here, so they
+  // naturally fall back to their raw consumerName/projectName.
+  const displayNameFor = (consumer: LLMProviderConsumerItem) =>
+    resolveAgentName(consumer.projectName, consumer.consumerName);
+  const projectDisplayNameFor = (consumer: LLMProviderConsumerItem) =>
+    resolveProjectName(consumer.projectName, consumer.consumerName);
 
   if (isLoading) {
     return (
@@ -125,7 +136,7 @@ export const LLMProviderConsumersTab: React.FC<
               >
                 <ListingTable.Cell>
                   <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                    {consumer.consumerName}
+                    {displayNameFor(consumer)}
                   </Typography>
                 </ListingTable.Cell>
                 <ListingTable.Cell>
@@ -147,7 +158,7 @@ export const LLMProviderConsumersTab: React.FC<
                 </ListingTable.Cell>
                 <ListingTable.Cell>
                   <Typography variant="body2" color="text.secondary">
-                    {consumer.projectName}
+                    {projectDisplayNameFor(consumer)}
                   </Typography>
                 </ListingTable.Cell>
                 <ListingTable.Cell align="right" padding="none" sx={{ pr: 1.5 }}>
@@ -158,7 +169,7 @@ export const LLMProviderConsumersTab: React.FC<
                       size="small"
                       endIcon={<ArrowRight size={14} />}
                       onClick={() => navigate(href)}
-                      aria-label={`Go to ${consumer.consumerType} ${consumer.consumerName}`}
+                      aria-label={`Go to ${consumer.consumerType} ${displayNameFor(consumer)}`}
                       sx={{ minWidth: 120 }}
                     >
                       {`Go to ${consumer.consumerType}`}

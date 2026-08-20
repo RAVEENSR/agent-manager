@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
@@ -85,7 +86,21 @@ func (s *LLMProviderAPIKeyService) CreateAPIKey(
 	if provider == nil {
 		return nil, utils.ErrLLMProviderNotFound
 	}
-	return s.broadcaster.broadcastCreate(ctx, orgID, providerID, providerID, req)
+
+	attempt, err := beginAPIKeyAudit(ctx, audit.ActionAPIKeyCreate, apiKeyAuditTarget{
+		OUID:      orgID,
+		OwnerType: audit.APIKeyOwnerLLMProvider,
+		OwnerID:   providerID,
+		OwnerName: llmProviderName(provider),
+		KeyName:   keyNameOf(req),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := s.broadcaster.broadcastCreate(ctx, orgID, providerID, providerID, req)
+	attempt.Complete(ctx, err)
+	return resp, err
 }
 
 // RevokeAPIKey broadcasts an API key revocation event to all gateways for this organization.
@@ -100,7 +115,21 @@ func (s *LLMProviderAPIKeyService) RevokeAPIKey(
 	if provider == nil {
 		return utils.ErrLLMProviderNotFound
 	}
-	return s.broadcaster.broadcastRevoke(ctx, orgID, providerID, providerID, keyName)
+
+	attempt, err := beginAPIKeyAudit(ctx, audit.ActionAPIKeyRevoke, apiKeyAuditTarget{
+		OUID:      orgID,
+		OwnerType: audit.APIKeyOwnerLLMProvider,
+		OwnerID:   providerID,
+		OwnerName: llmProviderName(provider),
+		KeyName:   keyName,
+	})
+	if err != nil {
+		return err
+	}
+
+	err = s.broadcaster.broadcastRevoke(ctx, orgID, providerID, providerID, keyName)
+	attempt.Complete(ctx, err)
+	return err
 }
 
 // RevokeAllUserManagedKeys revokes every user-managed API key for an LLM provider and
@@ -116,7 +145,24 @@ func (s *LLMProviderAPIKeyService) RevokeAllUserManagedKeys(
 	if provider == nil {
 		return utils.ErrLLMProviderNotFound
 	}
-	return s.broadcaster.broadcastRevokeUserManaged(ctx, orgID, providerID, providerID)
+
+	// A bulk revocation, triggered when API-key security is turned off. Recorded
+	// as one event naming the provider rather than one per key: the operation
+	// the operator performed was "disable key security on this provider".
+	attempt, err := beginAPIKeyAudit(ctx, audit.ActionAPIKeyRevoke, apiKeyAuditTarget{
+		OUID:      orgID,
+		OwnerType: audit.APIKeyOwnerLLMProvider,
+		OwnerID:   providerID,
+		OwnerName: llmProviderName(provider),
+		KeyName:   "*",
+	})
+	if err != nil {
+		return err
+	}
+
+	err = s.broadcaster.broadcastRevokeUserManaged(ctx, orgID, providerID, providerID)
+	attempt.Complete(ctx, err)
+	return err
 }
 
 // RotateAPIKey generates a new API key value and broadcasts the update to all gateways.
@@ -133,5 +179,30 @@ func (s *LLMProviderAPIKeyService) RotateAPIKey(
 	if provider == nil {
 		return nil, utils.ErrLLMProviderNotFound
 	}
-	return s.broadcaster.broadcastRotate(ctx, orgID, providerID, providerID, keyName, req)
+
+	attempt, err := beginAPIKeyAudit(ctx, audit.ActionAPIKeyRotate, apiKeyAuditTarget{
+		OUID:      orgID,
+		OwnerType: audit.APIKeyOwnerLLMProvider,
+		OwnerID:   providerID,
+		OwnerName: llmProviderName(provider),
+		KeyName:   keyName,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := s.broadcaster.broadcastRotate(ctx, orgID, providerID, providerID, keyName, req)
+	attempt.Complete(ctx, err)
+	return resp, err
+}
+
+// llmProviderName returns the provider's display name for an audit record.
+// The Artifact relation carries the name and is preloaded by the repository,
+// but it is nil-guarded here so a missing join degrades the record rather than
+// panicking on the credential path.
+func llmProviderName(provider *models.LLMProvider) string {
+	if provider == nil || provider.Artifact == nil {
+		return ""
+	}
+	return provider.Artifact.Name
 }

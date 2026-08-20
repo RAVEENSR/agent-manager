@@ -179,7 +179,7 @@ func (c *llmProxyDeploymentController) UndeployLLMProxyDeployment(w http.Respons
 	log.Info("UndeployLLMProxyDeployment: calling service layer", "ouID", ouID, "proxyID", proxyID,
 		"deploymentID", deploymentID, "gatewayID", gatewayID)
 
-	_, err := c.deploymentService.UndeployLLMProxyDeployment(proxyID, deploymentID, gatewayID, ouID)
+	_, err := c.deploymentService.UndeployLLMProxyDeployment(r.Context(), proxyID, deploymentID, gatewayID, ouID)
 	if err != nil {
 		switch {
 		case errors.Is(err, utils.ErrLLMProxyNotFound):

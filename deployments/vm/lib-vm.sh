@@ -37,6 +37,19 @@ vm_host() {
 # these functions have just moved. So both this function and
 # observability_helm_args below restate the derived values explicitly. Commas
 # stay escaped or helm's --set splits the value into a list.
+#
+# "urn:wso2:amp" is the amp resource server's identifier — see
+# 60-amp-resource-server.yaml in the Thunder extension chart. If a future
+# AMP_VERSION changes that identifier again, this value needs to move with it,
+# same as the hostnames above.
+#
+# thunder.baseURL must be the public Thunder URL (same as keyManager.issuer),
+# not the in-cluster service address, because it also derives the RFC 8707
+# resource identifier admin API tokens are scoped to. thunder.resolveToHost
+# points the actual connection at the in-cluster service instead, since the
+# public hostname doesn't resolve from inside the cluster. Leaving either
+# unset reproduces AUTH-4030/invalid_target failures on every admin identity
+# call (users/roles/groups).
 # shellcheck disable=SC2154  # AMP_HOST_* come from the caller's scope by design.
 amp_helm_args() {
   local k
@@ -45,9 +58,17 @@ amp_helm_args() {
       "--set" "${k}.config.serverPublicURL=https://${AMP_HOST_API}" \
       "--set" "${k}.config.oauthAuthorizationServers=https://${AMP_HOST_THUNDER}" \
       "--set" "${k}.config.keyManager.issuer=https://${AMP_HOST_THUNDER}" \
-      "--set" "${k}.config.keyManager.audience=amp\,amp-console-client\,amp-api-client\,amp-publisher-*\,amctl\,am-mcp\,https://${AMP_HOST_API}/" \
+      "--set" "${k}.config.keyManager.audience=urn:wso2:amp\,amp-console-client\,amp-api-client\,amp-publisher-*\,amctl\,am-mcp\,https://${AMP_HOST_API}/" \
+      "--set" "${k}.config.thunder.baseURL=https://${AMP_HOST_THUNDER}" \
+      "--set" "${k}.config.thunder.resolveToHost=amp-thunder-extension-service.amp-thunder.svc.cluster.local:8090" \
       "--set" "${k}.config.tlsEnabled=true" \
-      "--set" "${k}.config.thunderHostBaseDomain=${AMP_HOST_THUNDER#thunder.}"
+      "--set" "${k}.config.thunderHostBaseDomain=${AMP_HOST_THUNDER#thunder.}" \
+      "--set" "${k}.config.agentsBaseDomain=${AMP_AGENTS_BASE}" \
+      "--set" "${k}.config.agentsHttpPort=443" \
+      "--set" "${k}.config.agentsHttpsPort=443" \
+      "--set" "${k}.config.gatewayBaseDomain=${AMP_HOST_GATEWAY}" \
+      "--set" "${k}.config.gatewayVhostScheme=https" \
+      "--set" "${k}.config.gatewayVhostPort=443"
   done
 
   printf '%s\n' \
@@ -56,7 +77,9 @@ amp_helm_args() {
     "--set" "console.config.auth.signOutRedirectURL=https://${AMP_HOST_CONSOLE}/login" \
     "--set" "console.config.apiBaseUrl=https://${AMP_HOST_API}" \
     "--set" "agentManagerService.config.amObserverPublicURL=https://${AMP_HOST_OBSERVER}" \
-    "--set" "console.config.instrumentationUrl=https://${AMP_HOST_GATEWAY}/otel"
+    "--set" "console.config.instrumentationUrl=https://${AMP_HOST_GATEWAY}/otel" \
+    "--set" "console.config.thunderHostBaseDomain=${AMP_HOST_THUNDER#thunder.}" \
+    "--set" "console.config.tlsEnabled=true"
 
   # Console and API are ClusterIP behind the OC control-plane kgateway; their
   # HTTPRoutes must match the public hosts Caddy forwards (Host is preserved).
@@ -77,12 +100,13 @@ amp_helm_args() {
 # build_amp_helm_args <ip> <external_gateways:true|false> — sslip.io-from-IP wrapper.
 build_amp_helm_args() {
   local ip="$1" external_gateways="${2:-true}"
-  local AMP_HOST_API AMP_HOST_THUNDER AMP_HOST_CONSOLE AMP_HOST_OBSERVER AMP_HOST_GATEWAY AMP_HOST_CP
+  local AMP_HOST_API AMP_HOST_THUNDER AMP_HOST_CONSOLE AMP_HOST_OBSERVER AMP_HOST_GATEWAY AMP_HOST_CP AMP_AGENTS_BASE
   AMP_HOST_API="$(vm_host api "$ip")"
   AMP_HOST_THUNDER="$(vm_host thunder "$ip")"
   AMP_HOST_CONSOLE="$(vm_host console "$ip")"
   AMP_HOST_OBSERVER="$(vm_host observer "$ip")"
   AMP_HOST_GATEWAY="$(vm_host gateway "$ip")"
+  AMP_AGENTS_BASE="agents.${ip}.sslip.io"
   AMP_HOST_CP=""; [[ "$external_gateways" == "true" ]] && AMP_HOST_CP="$(vm_host cp "$ip")"
   amp_helm_args
 }
@@ -136,8 +160,9 @@ build_gateway_helm_args() {
 # AMP_HOST_OBSERVER.
 #
 # authorizationServers/audience are restated for the version-skew reason noted
-# above amp_helm_args. The last audience entry is the observer MCP token's `aud`
-# (publicUrl plus a trailing slash); the first three cover console/amctl tokens.
+# above amp_helm_args (including the "urn:wso2:amp" identifier value). The last
+# audience entry is the observer MCP token's `aud` (publicUrl plus a trailing
+# slash); the first three cover console/amctl tokens.
 # shellcheck disable=SC2154  # AMP_HOST_* come from the caller's scope by design.
 observability_helm_args() {
   printf '%s\n' \
@@ -145,7 +170,7 @@ observability_helm_args() {
     "--set" "amObserver.ocIngress.hostname=${AMP_HOST_OBSERVER}" \
     "--set" "amObserver.publicUrl=https://${AMP_HOST_OBSERVER}" \
     "--set" "amObserver.oauth.authorizationServers=https://${AMP_HOST_THUNDER}" \
-    "--set" "amObserver.auth.audience=amp\,amp-api-client\,am-obs-mcp\,https://${AMP_HOST_OBSERVER}/"
+    "--set" "amObserver.auth.audience=urn:wso2:amp\,amp-api-client\,am-obs-mcp\,https://${AMP_HOST_OBSERVER}/"
 }
 
 # build_observability_helm_args <ip> — sslip.io-from-IP wrapper.
@@ -399,7 +424,7 @@ render_dataplane_external_ingress() {
 # listener differs.
 # shellcheck disable=SC2154  # AMP_HOST_*/AMP_AGENTS_BASE come from the caller's scope.
 caddyfile() {
-  local tls_mode="$1" email="$2" cert_file="$3" key_file="$4" listen_port="${5:-80}" trusted_proxies="${6:-0.0.0.0/0}"
+  local tls_mode="$1" email="$2" cert_file="$3" key_file="$4" listen_port="${5:-80}" trusted_proxies="${6:-0.0.0.0/0}" ask_secret="${7:-}"
   local console_origin="https://${AMP_HOST_CONSOLE}"
 
   # Per-mode building blocks computed once.
@@ -412,7 +437,7 @@ caddyfile() {
       agent_tls=$'\ttls {\n\t\ton_demand\n\t\tissuer acme {\n\t\t\tdisable_http_challenge\n\t\t}\n\t}\n'
       [[ -n "$email" ]] && gopts+=$'\temail '"$email"$'\n'
       gopts+=$'\tauto_https disable_redirects\n'
-      gopts+=$'\ton_demand_tls {\n\t\task http://127.0.0.1:9753\n\t}\n'
+      gopts+=$'\ton_demand_tls {\n\t\task http://127.0.0.1:9753/internal/thunder-ask\n\t}\n'
       ;;
     byoc)
       # Serve the operator-supplied cert/key on every site (incl. the agent wildcard,
@@ -448,15 +473,21 @@ caddyfile() {
   _site "$AMP_HOST_THUNDER"  8080   # Thunder OAuth (OC kgateway, host-routed)
 
   # Env-Thunder instances: one per org/environment, created dynamically after
-  # initial install (not just at install time) — <org>-<env>.$AMP_HOST_THUNDER,
-  # wildcard-matched and proxied to the SAME kgateway listener as platform Thunder
-  # above (port 8080; kgateway itself discriminates by Host header via each
-  # env-Thunder's own HTTPRoute — see add-environment-thunder.sh's apply_httproute).
-  # A real wildcard cert can't be issued via TLS-ALPN-01, so — like the agents site
-  # below — this needs on-demand TLS (one concrete cert per hostname, issued the
-  # first time it's actually requested).
+  # initial install (not just at install time) — <handle>.<base-domain> (no fixed
+  # "thunder." segment — see thunder-naming.sh's thunder_host), wildcard-matched
+  # and proxied to the SAME kgateway listener as platform Thunder above (port
+  # 8080; kgateway itself discriminates by Host header via each env-Thunder's own
+  # HTTPRoute — see add-environment-thunder.sh's apply_httproute). This wildcard
+  # is broader than just env-Thunder hosts, but Caddy always matches the most
+  # specific site first, so the exact _site blocks above (console/api/thunder/
+  # observer/gateway/cp) still win for their own hostnames; only a handle that
+  # doesn't match any of those falls through to here — which
+  # reservedThunderHandles (environment_service.go) prevents a handle from ever
+  # equalling one of those reserved site names in the first place. A real wildcard cert can't be issued via
+  # TLS-ALPN-01, so — like the agents site below — this needs on-demand TLS (one
+  # concrete cert per hostname, issued the first time it's actually requested).
   printf '%s*.%s%s {\n%s\treverse_proxy 127.0.0.1:8080\n}\n\n' \
-    "$([[ "$scheme" == http ]] && printf 'http://')" "$AMP_HOST_THUNDER" "$addr_suffix" "$agent_tls"
+    "$([[ "$scheme" == http ]] && printf 'http://')" "${AMP_HOST_THUNDER#thunder.}" "$addr_suffix" "$agent_tls"
 
   # Observer is ClusterIP behind the OC observability-plane kgateway
   # (11080), host-routed the same way (observability_helm_args sets the route
@@ -471,6 +502,11 @@ caddyfile() {
   # ClusterIP, not through this host.)
   _site "$AMP_HOST_GATEWAY"  19080  # api-platform gateway via kgateway (LLM proxy)
 
+  # Per-environment gateways (<env>-<org>.$AMP_HOST_GATEWAY, added post-install) share
+  # the listener above; on-demand TLS since TLS-ALPN-01 cannot issue a wildcard cert.
+  printf '%s*.%s%s {\n%s\treverse_proxy 127.0.0.1:19080\n}\n\n' \
+    "$([[ "$scheme" == http ]] && printf 'http://')" "$AMP_HOST_GATEWAY" "$addr_suffix" "$agent_tls"
+
   if [[ -n "$AMP_HOST_CP" ]]; then
     # Gateway control plane rides the OC control-plane kgateway (host-routed;
     # the kgateway re-encrypts to the TLS backend via BackendTLSPolicy).
@@ -478,10 +514,43 @@ caddyfile() {
     _site "$AMP_HOST_CP" 8080
   fi
 
-  # On-demand TLS ask endpoint exists only in letsencrypt mode (always-allow; Caddy
-  # only triggers on-demand for SNI matching a wildcard site — both the *.agents
-  # wildcard below and the *.$AMP_HOST_THUNDER env-Thunder wildcard above).
-  [[ "$tls_mode" == letsencrypt ]] && printf 'http://127.0.0.1:9753 {\n\trespond 200\n}\n\n'
+  # On-demand TLS ask endpoint exists only in letsencrypt mode. Caddy triggers
+  # on-demand for SNI matching any wildcard site — the *.agents and per-env
+  # gateway wildcards below, AND the env-Thunder base-domain wildcard above —
+  # so this one shared endpoint has to answer for all three tiers.
+  #
+  # The gateway/agents wildcards are matched and allowed HERE, in Caddy, before
+  # ever calling out to AMS: AMP_HOST_GATEWAY ("gateway.<thunder base>") is
+  # itself a subdomain of the env-Thunder base domain, so a naive "does this
+  # request's domain end in the base domain" check on the AMS side would treat
+  # every per-env gateway host as an env-Thunder handle lookup too (and 403 it,
+  # since "myenv-myorg.gateway" isn't a bare single-label handle) — matching
+  # them here keeps their cert issuance independent of AMS/kgateway being up,
+  # exactly like before this endpoint existed, and keeps the only genuinely
+  # ambiguous case (a bare label directly under the base domain) as the one
+  # that actually needs AMS's registered-handle check.
+  #
+  # Everything else falls through to AMS's own /internal/thunder-ask
+  # (agent-manager-service/api/thunder_ask_routes.go) via the SAME kgateway
+  # listener every other site already uses, with the Host header rewritten to
+  # AMP_HOST_API so kgateway's Host-based routing lands on AMS rather than
+  # whatever Caddy's on-demand-tls client itself sent (no new container/process
+  # — this is just another Caddy site, like every _site above).
+  if [[ "$tls_mode" == letsencrypt ]]; then
+    # ask_secret, when non-empty, is amp-api's own auto-generated
+    # thunder-ask-secret (agent-manager-service/config: THUNDER_ASK_SECRET) —
+    # install-vm.sh reads it back out of the already-deployed amp Secret after
+    # the "amp" Helm release exists (start_caddy runs after run_install's base
+    # installer, so it's always there by this point) and passes it in here.
+    # Empty when unset/unreadable (e.g. an existingSecret override with no
+    # matching key) — the ask call still works either way, it just draws from
+    # AMS's shared public rate-limit budget instead of its own, same as before
+    # this header existed.
+    local ask_secret_header=""
+    [[ -n "$ask_secret" ]] && ask_secret_header=$'\t\theader_up X-Thunder-Ask-Secret '"${ask_secret}"$'\n'
+    printf 'http://127.0.0.1:9753 {\n\t@gateway_or_agents expression `{query.domain}.endsWith(".%s") || {query.domain}.endsWith(".%s")`\n\trespond @gateway_or_agents 200\n\treverse_proxy 127.0.0.1:8080 {\n\t\theader_up Host %s\n%s\t}\n}\n\n' \
+      "$AMP_HOST_GATEWAY" "$AMP_AGENTS_BASE" "$AMP_HOST_API" "$ask_secret_header"
+  fi
 
   # Deployed-agent endpoints: <org>-<project>.<AGENTS_BASE> (one host per org/project,
   # dynamic), proxied to the data-plane gateway + CORS (the gateway adds none);
@@ -499,7 +568,7 @@ caddyfile() {
 # byte-for-byte. Prints a complete Caddyfile to stdout: 443-only, every site forces
 # the TLS-ALPN-01 challenge so issuance never needs inbound port 80.
 render_caddyfile() {
-  local ip="$1" email="$2" external_gateways="${3:-true}"
+  local ip="$1" email="$2" external_gateways="${3:-true}" ask_secret="${4:-}"
   local AMP_HOST_CONSOLE AMP_HOST_API AMP_HOST_THUNDER AMP_HOST_OBSERVER AMP_HOST_GATEWAY AMP_HOST_CP AMP_AGENTS_BASE
   AMP_HOST_CONSOLE="$(vm_host console "$ip")"
   AMP_HOST_API="$(vm_host api "$ip")"
@@ -508,5 +577,5 @@ render_caddyfile() {
   AMP_HOST_GATEWAY="$(vm_host gateway "$ip")"
   AMP_HOST_CP=""; [[ "$external_gateways" == "true" ]] && AMP_HOST_CP="$(vm_host cp "$ip")"
   AMP_AGENTS_BASE="agents.${ip}.sslip.io"
-  caddyfile letsencrypt "$email" "" "" ""
+  caddyfile letsencrypt "$email" "" "" "" "" "$ask_secret"
 }

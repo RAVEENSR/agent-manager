@@ -179,6 +179,11 @@ export type PolicySelectorDrawerProps = {
   catalogData?: GuardrailsCatalogResponse;
   isLoadingCatalog?: boolean;
   catalogError?: unknown;
+  /**
+   * Scopes the default catalog fetch to this LLM provider's deployed
+   * gateways. Ignored when catalogData is supplied.
+   */
+  providerId?: string;
   filterPolicies?: (policies: GuardrailDefinition[]) => GuardrailDefinition[];
   getPolicyDefinitionVersion?: (policy: GuardrailDefinition) => string;
   /** Policy names that are already added - disable in list (e.g. create flow) */
@@ -210,6 +215,7 @@ export function PolicySelectorDrawer({
   catalogData,
   isLoadingCatalog: controlledIsLoadingCatalog,
   catalogError: controlledCatalogError,
+  providerId,
   filterPolicies,
   getPolicyDefinitionVersion,
   disabledPolicyNames = [],
@@ -240,6 +246,7 @@ export function PolicySelectorDrawer({
       controlledIsLoadingCatalog === undefined &&
       controlledCatalogError === undefined &&
       !filterPolicies,
+    providerId,
   );
 
   const [selectedPolicy, setSelectedPolicy] =

@@ -348,8 +348,8 @@ func TestExportTraces_UsesBulkAttributes(t *testing.T) {
 			SpanCount:  2,
 		}},
 		spans: []observer.SpanInfo{
-			{SpanID: "root", SpanName: "invoke_agent", Kind: "SERVER", Status: "ok", StartTime: now.Add(-time.Minute), EndTime: now, Attributes: rootAttrs},
-			{SpanID: "child", SpanName: "llm", ParentSpanID: "root", Kind: "INTERNAL", Status: "ok", StartTime: now.Add(-30 * time.Second), EndTime: now},
+			{SpanID: "root", SpanName: "invoke_agent", Kind: "SERVER", Status: &observer.SpanStatus{Code: "ok"}, StartTime: now.Add(-time.Minute), EndTime: now, Attributes: rootAttrs},
+			{SpanID: "child", SpanName: "llm", ParentSpanID: "root", Kind: "INTERNAL", Status: &observer.SpanStatus{Code: "ok"}, StartTime: now.Add(-30 * time.Second), EndTime: now},
 		},
 	}
 	c := NewTracingController(fake)

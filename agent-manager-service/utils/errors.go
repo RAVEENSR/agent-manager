@@ -77,12 +77,15 @@ var (
 	ErrBuildNotFound               = errors.New("build not found")
 	ErrEnvironmentNotFound         = errors.New("environment not found")
 	ErrAgentIdentityNotProvisioned = errors.New("agent identity not yet provisioned for this environment")
-	ErrOrganizationAlreadyExists   = errors.New("organization already exists")
-	ErrProjectAlreadyExists        = errors.New("project already exists")
-	ErrDeploymentPipelineNotFound  = errors.New("deployment pipeline not found")
-	ErrDeploymentPipelineInUse     = errors.New("deployment pipeline is referenced by one or more projects")
-	ErrDeploymentInProgress        = errors.New("a deployment is already in progress")
-	ErrProjectHasAssociatedAgents  = errors.New("project has associated agents")
+	// ErrAgentIdentityRetryNotAllowed is returned when a retry is requested for
+	// a binding whose current status is not failed. Maps to 409.
+	ErrAgentIdentityRetryNotAllowed = errors.New("agent identity binding is not in a failed state and cannot be retried")
+	ErrOrganizationAlreadyExists    = errors.New("organization already exists")
+	ErrProjectAlreadyExists         = errors.New("project already exists")
+	ErrDeploymentPipelineNotFound   = errors.New("deployment pipeline not found")
+	ErrDeploymentPipelineInUse      = errors.New("deployment pipeline is referenced by one or more projects")
+	ErrDeploymentInProgress         = errors.New("a deployment is already in progress")
+	ErrProjectHasAssociatedAgents   = errors.New("project has associated agents")
 	// ErrComponentNotReconcilable reports that OpenChoreo cannot reconcile the agent's Component,
 	// so a deploy or promote would be silently discarded: the writes land on the Component and
 	// Workload, but no new ComponentRelease is cut, so the pods restart on the previous snapshot
@@ -124,6 +127,23 @@ var (
 	ErrEnvironmentAlreadyExists = errors.New("environment already exists")
 	ErrEnvironmentHasGateways   = errors.New("environment has associated gateways")
 	ErrEnvironmentInUse         = errors.New("environment is referenced by one or more deployment pipelines")
+	// ErrThunderHandleTaken is returned when a user-supplied env-Thunder URL handle
+	// is already registered to a different (org, env) pair. Maps to 409.
+	ErrThunderHandleTaken = errors.New("thunder url handle is already in use")
+	// ErrInvalidThunderHandle is returned when a user-supplied env-Thunder URL
+	// handle fails format validation. Maps to 400.
+	ErrInvalidThunderHandle = errors.New("invalid thunder url handle")
+	// ErrThunderHandleNotFound is returned when no env-Thunder URL handle has been
+	// registered for an environment. Maps to 404.
+	ErrThunderHandleNotFound = errors.New("thunder url handle not found")
+	// ErrEnvThunderURLAlreadyClaimed is returned by EnvThunderURLRepository.Insert
+	// when a DIFFERENT concurrent request already claimed the SAME (ouID, envName)
+	// first — i.e. the (ou_id, env_name) unique constraint was violated, not the
+	// thunder_handle one. Internal-only signal between the repository and
+	// EnvironmentService.SetThunderURL: the service reacts by reading back the
+	// row that won and adopting/rejecting it, exactly as it would for an
+	// already-existing row seen up front — this never reaches a controller.
+	ErrEnvThunderURLAlreadyClaimed = errors.New("env-thunder url already claimed by a concurrent request")
 
 	// ErrGatewayIngressCapExceeded is returned when assigning an ingress-capable gateway to
 	// an environment that already has one. Maps to 409.

@@ -24,6 +24,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/config"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/jwtassertion"
 	"github.com/wso2/agent-manager/agent-manager-service/rbac"
@@ -107,7 +108,7 @@ func TestAddToolPanicsWithoutPermissions(t *testing.T) {
 		Name:        "no_perm_tool",
 		Description: "a tool registered without permissions",
 		InputSchema: createSchema(map[string]any{}, nil),
-	}, func(context.Context, *gomcp.CallToolRequest, struct{}) (*gomcp.CallToolResult, any, error) {
+	}, audit.ActionAgentRead, func(context.Context, *gomcp.CallToolRequest, struct{}) (*gomcp.CallToolResult, any, error) {
 		return &gomcp.CallToolResult{}, nil, nil
 	})
 }
@@ -119,7 +120,7 @@ func TestAddToolRecordsPermissions(t *testing.T) {
 		Name:        "two_perm_tool",
 		Description: "a tool with two permissions",
 		InputSchema: createSchema(map[string]any{}, nil),
-	}, func(context.Context, *gomcp.CallToolRequest, struct{}) (*gomcp.CallToolResult, any, error) {
+	}, audit.ActionAgentCreate, func(context.Context, *gomcp.CallToolRequest, struct{}) (*gomcp.CallToolResult, any, error) {
 		return &gomcp.CallToolResult{}, nil, nil
 	}, rbac.AgentCreate, rbac.AgentTokenManage)
 
@@ -127,6 +128,36 @@ func TestAddToolRecordsPermissions(t *testing.T) {
 	if len(got) != 2 || got[0] != rbac.AgentCreate || got[1] != rbac.AgentTokenManage {
 		t.Fatalf("registry permissions = %v, want [AgentCreate AgentTokenManage]", got)
 	}
+	if reg.actions["two_perm_tool"] != audit.ActionAgentCreate {
+		t.Fatalf("registry action = %q, want %q", reg.actions["two_perm_tool"], audit.ActionAgentCreate)
+	}
+}
+
+// TestAddToolPanicsWithoutAuditAction pins the second half of the registration
+// guarantee: a tool that cannot be attributed in the trail must fail at startup,
+// exactly as one registered without permissions does.
+func TestAddToolPanicsWithoutAuditAction(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic when registering a tool without an audit action")
+		}
+		msg, ok := r.(string)
+		if !ok || !strings.Contains(msg, "no_action_tool") {
+			t.Fatalf("panic message %v does not name the tool", r)
+		}
+		if !strings.Contains(msg, "audit action") {
+			t.Fatalf("panic message %q does not explain what is missing", msg)
+		}
+	}()
+	server := gomcp.NewServer(&gomcp.Implementation{Name: "t", Version: "0"}, nil)
+	addTool(newToolRegistry(), server, &gomcp.Tool{
+		Name:        "no_action_tool",
+		Description: "a tool registered without an audit action",
+		InputSchema: createSchema(map[string]any{}, nil),
+	}, "", func(context.Context, *gomcp.CallToolRequest, struct{}) (*gomcp.CallToolResult, any, error) {
+		return &gomcp.CallToolResult{}, nil, nil
+	}, rbac.AgentCreate)
 }
 
 func TestAuthzMiddlewareDeniesUnregisteredTool(t *testing.T) {

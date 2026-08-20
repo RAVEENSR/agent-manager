@@ -389,12 +389,18 @@ func (c *llmController) ListAvailableLLMPolicies(w http.ResponseWriter, r *http.
 	ctx := r.Context()
 	log := logger.GetLogger(ctx)
 	ouID := middleware.OUIDFromRequest(r)
+	providerID := r.URL.Query().Get("providerId")
 
-	log.Info("ListAvailableLLMPolicies: starting", "ouID", ouID)
+	log.Info("ListAvailableLLMPolicies: starting", "ouID", ouID, "providerID", providerID)
 
-	resp, err := c.providerService.ListAvailableLLMPolicies(ctx, ouID)
+	resp, err := c.providerService.ListAvailableLLMPolicies(ctx, ouID, providerID)
 	if err != nil {
-		log.Error("ListAvailableLLMPolicies: failed", "ouID", ouID, "error", err)
+		if errors.Is(err, utils.ErrLLMProviderNotFound) {
+			log.Warn("ListAvailableLLMPolicies: provider not found", "ouID", ouID, "providerID", providerID)
+			utils.WriteErrorResponse(w, http.StatusNotFound, "LLM provider not found")
+			return
+		}
+		log.Error("ListAvailableLLMPolicies: failed", "ouID", ouID, "providerID", providerID, "error", err)
 		utils.WriteErrorResponse(w, http.StatusInternalServerError, "Failed to list available LLM policies")
 		return
 	}
@@ -563,8 +569,17 @@ func (c *llmController) UpdateLLMProvider(w http.ResponseWriter, r *http.Request
 	providerReq.Policies = req.Policies
 	providerReq.RateLimiting = req.RateLimiting
 	providerReq.Security = req.Security
+	// Resilience is not part of CreateLLMProviderRequest's field set on the request struct
+	// itself (it's applied to the model after conversion) so an omitted value in the update
+	// request preserves the existing setting rather than wiping it.
+	if req.Resilience != nil {
+		providerReq.Resilience = req.Resilience
+	}
 
 	provider := utils.ConvertSpecToModelLLMProvider(providerReq, ouID)
+	if req.Resilience == nil {
+		provider.Configuration.Resilience = existing.Configuration.Resilience
+	}
 
 	// Preserve upstream directly from the stored model to avoid the spec converter
 	// masking credentials with "***REDACTED***" (H-3). If the request supplies a new

@@ -23,6 +23,6 @@ import (
 )
 
 func registerRepositoryRoutes(rr *middleware.RouteRegistrar, ctrl controllers.RepositoryController) {
-	rr.HandleFuncWithValidationAndAuthz("POST /repositories/branches", rbac.RepositoryRead, ctrl.ListBranches)
-	rr.HandleFuncWithValidationAndAuthz("POST /repositories/commits", rbac.RepositoryRead, ctrl.ListCommits)
+	rr.HandleFuncWithValidationAndAuthz("POST /orgs/{orgName}/repositories/branches", rbac.RepositoryRead, ctrl.ListBranches)
+	rr.HandleFuncWithValidationAndAuthz("POST /orgs/{orgName}/repositories/commits", rbac.RepositoryRead, ctrl.ListCommits)
 }

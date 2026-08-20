@@ -21,6 +21,7 @@ import type {
   CreateLLMAPIKeyRequest,
   CreateLLMAPIKeyResponse,
   LLMPolicy,
+  Resilience,
   RotateLLMAPIKeyRequest,
   RotateLLMAPIKeyResponse,
 } from "./llm-providers";
@@ -36,6 +37,11 @@ export interface EnvironmentVariableConfig {
 
 export interface EnvProviderConfiguration {
   policies?: LLMPolicy[];
+  /**
+   * Overrides the proxy's request/idle timeout for this environment. When
+   * omitted, the gateway's own default timeout applies.
+   */
+  resilience?: Resilience;
 }
 
 export interface EnvModelConfigRequest {
@@ -80,6 +86,12 @@ export interface ProviderConfig {
   url?: string;
   authInfo?: AuthInfo;
   policies?: LLMPolicy[];
+  /**
+   * Guardrails configured on the org-level LLM provider itself; applied in
+   * addition to `policies`.
+   */
+  providerPolicies?: LLMPolicy[];
+  resilience?: Resilience;
   status?: string;
 }
 

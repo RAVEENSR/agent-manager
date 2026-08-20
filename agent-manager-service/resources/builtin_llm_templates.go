@@ -102,7 +102,13 @@ var BuiltInLLMProviderTemplates = []*models.LLMProviderTemplate{
 		IsSystem: true,
 		OUID:     "",
 		Metadata: &models.LLMProviderTemplateMetadata{
-			EndpointURL:    "https://bedrock-runtime.us-east-1.amazonaws.com",
+			EndpointURL: "https://bedrock-runtime.us-east-1.amazonaws.com",
+			// "bearer" is not a gateway upstream auth type; api-key sets the header verbatim.
+			Auth: &models.LLMProviderTemplateAuth{
+				Type:        "api-key",
+				Header:      "Authorization",
+				ValuePrefix: "Bearer ",
+			},
 			LogoURL:        "https://raw.githubusercontent.com/nomadxd/openapi-connectors/main/openapi/aws.bedrock/icon.png",
 			OpenapiSpecURL: "https://raw.githubusercontent.com/nomadxd/openapi-connectors/main/openapi/aws.bedrock/openapi.yaml",
 		},

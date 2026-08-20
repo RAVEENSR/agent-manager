@@ -23,7 +23,6 @@ import {
     CollapsibleSection,
     DeploymentStatus,
     getAgentDeploymentPath,
-    IsolationTierChip,
     OverviewSectionCard,
 } from "@agent-management-platform/shared-component";
 import { type Configurations } from "@agent-management-platform/types";
@@ -38,7 +37,6 @@ interface EnvCapabilitiesSectionProps {
     envId: string;
     configurations?: Configurations;
     external?: boolean;
-    isolationTier?: string;
     deploymentStatus?: DeploymentStatus;
 }
 
@@ -106,7 +104,7 @@ const StatusPill: React.FC<StatusPillProps> = ({ label, value, tooltip }) => (
  * aren't deployed through this platform, so there's nothing to fetch).
  */
 export const EnvCapabilitiesSection: React.FC<EnvCapabilitiesSectionProps> = ({
-    orgId, projectId, agentId, envId, configurations, external, isolationTier, deploymentStatus,
+    orgId, projectId, agentId, envId, configurations, external, deploymentStatus,
 }) => {
     const [consumerConfigOpen, setConsumerConfigOpen] = useState(false);
 
@@ -207,7 +205,6 @@ export const EnvCapabilitiesSection: React.FC<EnvCapabilitiesSectionProps> = ({
                                         value={corsLabel}
                                         tooltip={corsTooltip}
                                     />
-                                    <IsolationTierChip tier={isolationTier} />
                                 </Box>
                             </>
                         )}

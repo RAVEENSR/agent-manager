@@ -36,8 +36,6 @@ type ListCommitsRequest struct {
 	Until *time.Time `json:"until,omitempty"`
 	// Secret reference name for private repository Git credentials
 	SecretRef *string `json:"secretRef,omitempty"`
-	// Organization name for resolving the secret reference
-	OrgName *string `json:"orgName,omitempty"`
 	// Optional project name used to resolve a deployment-specific repository binding
 	ProjectName *string `json:"projectName,omitempty"`
 	// Optional component name used to resolve a deployment-specific repository binding
@@ -303,38 +301,6 @@ func (o *ListCommitsRequest) SetSecretRef(v string) {
 	o.SecretRef = &v
 }
 
-// GetOrgName returns the OrgName field value if set, zero value otherwise.
-func (o *ListCommitsRequest) GetOrgName() string {
-	if o == nil || IsNil(o.OrgName) {
-		var ret string
-		return ret
-	}
-	return *o.OrgName
-}
-
-// GetOrgNameOk returns a tuple with the OrgName field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *ListCommitsRequest) GetOrgNameOk() (*string, bool) {
-	if o == nil || IsNil(o.OrgName) {
-		return nil, false
-	}
-	return o.OrgName, true
-}
-
-// HasOrgName returns a boolean if a field has been set.
-func (o *ListCommitsRequest) HasOrgName() bool {
-	if o != nil && !IsNil(o.OrgName) {
-		return true
-	}
-
-	return false
-}
-
-// SetOrgName gets a reference to the given string and assigns it to the OrgName field.
-func (o *ListCommitsRequest) SetOrgName(v string) {
-	o.OrgName = &v
-}
-
 // GetProjectName returns the ProjectName field value if set, zero value otherwise.
 func (o *ListCommitsRequest) GetProjectName() string {
 	if o == nil || IsNil(o.ProjectName) {
@@ -428,9 +394,6 @@ func (o ListCommitsRequest) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.SecretRef) {
 		toSerialize["secretRef"] = o.SecretRef
-	}
-	if !IsNil(o.OrgName) {
-		toSerialize["orgName"] = o.OrgName
 	}
 	if !IsNil(o.ProjectName) {
 		toSerialize["projectName"] = o.ProjectName

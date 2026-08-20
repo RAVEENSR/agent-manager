@@ -30,6 +30,7 @@ import {
   getDeploymentPipeline,
   listDeploymentPipelines,
   listDataPlanes,
+  checkThunderUrlAvailability,
   updateDeploymentState,
   promoteAgent,
   createDeploymentPipeline,
@@ -86,6 +87,9 @@ import type {
   CreateEnvironmentRequest,
   CreateEnvironmentPathParams,
   DeleteEnvironmentPathParams,
+  CheckThunderUrlAvailabilityPathParams,
+  CheckThunderUrlAvailabilityQuery,
+  ThunderUrlAvailabilityResponse,
 } from '@agent-management-platform/types';
 import { POLL_INTERVAL } from '../utils';
 import { useApiMutation, useApiQuery } from './react-query-notifications';
@@ -242,6 +246,25 @@ export function useListDataPlanes(
     queryKey: ['data-planes', params.orgName],
     queryFn: () => listDataPlanes(params, getToken),
     enabled: options?.enabled ?? !!params.orgName,
+  });
+}
+
+// Advisory-only pre-flight check for the Create Environment drawer's Thunder
+// URL handle field — silences the generic error snackbar since this fires on
+// every keystroke and a transient failure shouldn't interrupt typing; the
+// real enforcement is the 409 add-environment-thunder.sh's PUT gets back.
+export function useCheckThunderUrlAvailability(
+  params: CheckThunderUrlAvailabilityPathParams,
+  query: CheckThunderUrlAvailabilityQuery,
+  options?: { enabled?: boolean },
+) {
+  const { getToken } = useAuthHooks();
+  return useApiQuery<ThunderUrlAvailabilityResponse>({
+    queryKey: ['thunder-url-availability', params.orgName, query.handle],
+    queryFn: () => checkThunderUrlAvailability(params, query, getToken),
+    enabled: (options?.enabled ?? true) && !!query.handle,
+    retry: false,
+    silent: true,
   });
 }
 

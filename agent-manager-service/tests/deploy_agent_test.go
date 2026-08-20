@@ -101,7 +101,11 @@ func TestDeployAgent(t *testing.T) {
 		require.Equal(t, deployTestProjName, deployCall.ProjectName)
 		require.Equal(t, deployTestAgentName, deployCall.ComponentName)
 		require.Equal(t, "registry.example.com/myapp:v1.0.0", deployCall.Req.ImageID)
-		require.Empty(t, deployCall.Req.Env) // No env vars provided
+		// Deploy carries the image only — env vars go to the environment's
+		// ReleaseBinding overrides, which get none when the request supplies none.
+		overrideCalls := openChoreoClient.ReplaceReleaseBindingWorkloadOverridesCalls()
+		require.Len(t, overrideCalls, 1)
+		require.Empty(t, overrideCalls[0].EnvOverrides) // No env vars provided
 	})
 
 	t.Run("Deploying agent with imageId and environment variables should return 202", func(t *testing.T) {
@@ -171,14 +175,18 @@ func TestDeployAgent(t *testing.T) {
 		require.Equal(t, deployTestAgentName, deployCall.ComponentName)
 		require.Equal(t, "registry.example.com/myapp:v1.2.0", deployCall.Req.ImageID)
 
-		// Validate environment variables
-		require.Len(t, deployCall.Req.Env, 3)
-		require.Equal(t, "DATABASE_URL", deployCall.Req.Env[0].Key)
-		require.Equal(t, "postgresql://localhost:5432/mydb", deployCall.Req.Env[0].Value)
-		require.Equal(t, "API_KEY", deployCall.Req.Env[1].Key)
-		require.Equal(t, "secret-api-key", deployCall.Req.Env[1].Value)
-		require.Equal(t, "LOG_LEVEL", deployCall.Req.Env[2].Key)
-		require.Equal(t, "INFO", deployCall.Req.Env[2].Value)
+		// Validate environment variables — scoped to the deployed environment's
+		// ReleaseBinding overrides rather than the component-wide Workload.
+		overrideCalls := openChoreoClient.ReplaceReleaseBindingWorkloadOverridesCalls()
+		require.Len(t, overrideCalls, 1)
+		envOverrides := overrideCalls[0].EnvOverrides
+		require.Len(t, envOverrides, 3)
+		require.Equal(t, "DATABASE_URL", envOverrides[0].Key)
+		require.Equal(t, "postgresql://localhost:5432/mydb", envOverrides[0].Value)
+		require.Equal(t, "API_KEY", envOverrides[1].Key)
+		require.Equal(t, "secret-api-key", envOverrides[1].Value)
+		require.Equal(t, "LOG_LEVEL", envOverrides[2].Key)
+		require.Equal(t, "INFO", envOverrides[2].Value)
 	})
 
 	validationTests := []struct {

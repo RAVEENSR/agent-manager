@@ -4,6 +4,7 @@
 package repomocks
 
 import (
+	"context"
 	"sync"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
@@ -38,6 +39,9 @@ import (
 //			},
 //			GetByIDAndProjectFunc: func(proxyID string, ouID string, projectUUID string) (*models.LLMProxy, error) {
 //				panic("mock out the GetByIDAndProject method")
+//			},
+//			GetByIDCtxFunc: func(ctx context.Context, proxyID string, ouID string) (*models.LLMProxy, error) {
+//				panic("mock out the GetByIDCtx method")
 //			},
 //			ListFunc: func(ouID string, limit int, offset int) ([]*models.LLMProxy, error) {
 //				panic("mock out the List method")
@@ -81,6 +85,9 @@ type LLMProxyRepositoryMock struct {
 
 	// GetByIDAndProjectFunc mocks the GetByIDAndProject method.
 	GetByIDAndProjectFunc func(proxyID string, ouID string, projectUUID string) (*models.LLMProxy, error)
+
+	// GetByIDCtxFunc mocks the GetByIDCtx method.
+	GetByIDCtxFunc func(ctx context.Context, proxyID string, ouID string) (*models.LLMProxy, error)
 
 	// ListFunc mocks the List method.
 	ListFunc func(ouID string, limit int, offset int) ([]*models.LLMProxy, error)
@@ -158,6 +165,15 @@ type LLMProxyRepositoryMock struct {
 			// ProjectUUID is the projectUUID argument value.
 			ProjectUUID string
 		}
+		// GetByIDCtx holds details about calls to the GetByIDCtx method.
+		GetByIDCtx []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// ProxyID is the proxyID argument value.
+			ProxyID string
+			// OuID is the ouID argument value.
+			OuID string
+		}
 		// List holds details about calls to the List method.
 		List []struct {
 			// OuID is the ouID argument value.
@@ -207,6 +223,7 @@ type LLMProxyRepositoryMock struct {
 	lockExists            sync.RWMutex
 	lockGetByID           sync.RWMutex
 	lockGetByIDAndProject sync.RWMutex
+	lockGetByIDCtx        sync.RWMutex
 	lockList              sync.RWMutex
 	lockListByProject     sync.RWMutex
 	lockListByProvider    sync.RWMutex
@@ -510,6 +527,46 @@ func (mock *LLMProxyRepositoryMock) GetByIDAndProjectCalls() []struct {
 	mock.lockGetByIDAndProject.RLock()
 	calls = mock.calls.GetByIDAndProject
 	mock.lockGetByIDAndProject.RUnlock()
+	return calls
+}
+
+// GetByIDCtx calls GetByIDCtxFunc.
+func (mock *LLMProxyRepositoryMock) GetByIDCtx(ctx context.Context, proxyID string, ouID string) (*models.LLMProxy, error) {
+	if mock.GetByIDCtxFunc == nil {
+		panic("LLMProxyRepositoryMock.GetByIDCtxFunc: method is nil but LLMProxyRepository.GetByIDCtx was just called")
+	}
+	callInfo := struct {
+		Ctx     context.Context
+		ProxyID string
+		OuID    string
+	}{
+		Ctx:     ctx,
+		ProxyID: proxyID,
+		OuID:    ouID,
+	}
+	mock.lockGetByIDCtx.Lock()
+	mock.calls.GetByIDCtx = append(mock.calls.GetByIDCtx, callInfo)
+	mock.lockGetByIDCtx.Unlock()
+	return mock.GetByIDCtxFunc(ctx, proxyID, ouID)
+}
+
+// GetByIDCtxCalls gets all the calls that were made to GetByIDCtx.
+// Check the length with:
+//
+//	len(mockedLLMProxyRepository.GetByIDCtxCalls())
+func (mock *LLMProxyRepositoryMock) GetByIDCtxCalls() []struct {
+	Ctx     context.Context
+	ProxyID string
+	OuID    string
+} {
+	var calls []struct {
+		Ctx     context.Context
+		ProxyID string
+		OuID    string
+	}
+	mock.lockGetByIDCtx.RLock()
+	calls = mock.calls.GetByIDCtx
+	mock.lockGetByIDCtx.RUnlock()
 	return calls
 }
 

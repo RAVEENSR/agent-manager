@@ -28,14 +28,14 @@ func TestLoad_BaselineOnly(t *testing.T) {
 	if c.Default() != "0.3.0" {
 		t.Errorf("Default = %q, want 0.3.0", c.Default())
 	}
-	// The bundled baseline currently ships two versions. All() ordering is
+	// The bundled baseline currently ships three versions. All() ordering is
 	// unspecified (it comes from a map), so assert membership by version key
 	// rather than by slice position.
 	all := c.All()
-	if len(all) != 2 {
-		t.Fatalf("len(All) = %d, want 2", len(all))
+	if len(all) != 3 {
+		t.Fatalf("len(All) = %d, want 3", len(all))
 	}
-	for _, want := range []string{"0.3.0", "0.4.0"} {
+	for _, want := range []string{"0.3.0", "0.4.0", "0.4.1"} {
 		got, ok := c.Get(want)
 		if !ok {
 			t.Errorf("Get(%s) missing from bundled baseline", want)
@@ -100,8 +100,8 @@ func TestLoad_ExtensionFileAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(c.All()) != 2 {
-		t.Errorf("len(All) = %d, want 2 (baseline only)", len(c.All()))
+	if len(c.All()) != 3 {
+		t.Errorf("len(All) = %d, want 3 (baseline only)", len(c.All()))
 	}
 }
 

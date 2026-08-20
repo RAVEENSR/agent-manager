@@ -95,6 +95,50 @@ func TestGenerateMCPProxyDeploymentYAML_Basic(t *testing.T) {
 	}
 }
 
+// TestGenerateMCPProxyDeploymentYAML_WithResilience verifies that the
+// resilience block passes through directly to the deployment spec, mirroring
+// the LLM provider behavior.
+func TestGenerateMCPProxyDeploymentYAML_WithResilience(t *testing.T) {
+	service := &MCPProxyService{}
+	timeout := "15s"
+	idleTimeout := "20s"
+
+	proxy := &models.MCPProxy{
+		Handle: "test-mcp-proxy",
+		Configuration: models.MCPProxyConfig{
+			Name:    "Test MCP Proxy",
+			Version: "1.0.0",
+			Upstream: models.UpstreamConfig{
+				Main: &models.UpstreamEndpoint{URL: "https://mcp.example.com"},
+			},
+			Resilience: &models.Resilience{
+				Timeout:     &timeout,
+				IdleTimeout: &idleTimeout,
+			},
+		},
+	}
+
+	yamlStr, err := service.generateMCPProxyDeploymentYAML(proxy, "x", nil)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	var deployment MCPProxyDeploymentYAML
+	if err := yaml.Unmarshal([]byte(yamlStr), &deployment); err != nil {
+		t.Fatalf("failed to unmarshal YAML: %v", err)
+	}
+
+	if deployment.Spec.Resilience == nil {
+		t.Fatalf("expected resilience to be set")
+	}
+	if deployment.Spec.Resilience.Timeout == nil || *deployment.Spec.Resilience.Timeout != "15s" {
+		t.Errorf("expected resilience.timeout 15s, got: %+v", deployment.Spec.Resilience.Timeout)
+	}
+	if deployment.Spec.Resilience.IdleTimeout == nil || *deployment.Spec.Resilience.IdleTimeout != "20s" {
+		t.Errorf("expected resilience.idleTimeout 20s, got: %+v", deployment.Spec.Resilience.IdleTimeout)
+	}
+}
+
 // TestGenerateMCPProxyDeploymentYAML_WithContextAndVhost verifies an explicit
 // context, vhost and spec version flow through to the spec.
 func TestGenerateMCPProxyDeploymentYAML_WithContextAndVhost(t *testing.T) {
@@ -450,8 +494,8 @@ func TestGenerateMCPProxyDeploymentYAML_MissingUpstreamURL(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected an error for missing upstream URL, got nil")
 			}
-			if !strings.Contains(err.Error(), "upstream URL is required") {
-				t.Errorf("expected 'upstream URL is required', got %q", err.Error())
+			if !strings.Contains(err.Error(), "upstream URL or ref is required") {
+				t.Errorf("expected 'upstream URL or ref is required', got %q", err.Error())
 			}
 		})
 	}

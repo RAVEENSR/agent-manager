@@ -3,6 +3,17 @@
 observer:
   openSearchSecretName: opensearch-admin-credentials
   secretName: observer-secret
+  # OpenChoreo 1.2.0+ requires a real (non-.invalid) control plane API URL.
+  # Used for AUTHZ_SERVICE_URL and UID_RESOLVER_OPENCHOREO_API_URL; resolves
+  # via coredns-custom (*.openchoreo.localhost -> host.k3d.internal) to the
+  # openchoreo-api HTTPRoute.
+  controlPlaneApiUrl: "http://api.openchoreo.localhost:8080"
+  # OpenChoreo 1.2.0+ validates OBSERVER_BASE_URL is not a placeholder domain.
+  extraEnvs:
+    - name: OBSERVER_BASE_URL
+      value: "http://observer.openchoreo.localhost:11080"
+    - name: AUTHZ_TIMEOUT
+      value: "30s"
   http:
     hostnames:
       - observer.openchoreo.localhost

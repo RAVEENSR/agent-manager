@@ -171,6 +171,13 @@ func (c *agentKindController) AddVersion(w http.ResponseWriter, r *http.Request)
 		utils.WriteErrorResponse(w, http.StatusBadRequest, "version, buildName, sourceAgentName, and sourceProjectName are required")
 		return
 	}
+	// The tag is stamped onto every agent created from this version as a label,
+	// so reject an unusable one here rather than at agent-creation time.
+	if err := utils.ValidateLabelValue(payload.GetVersion(), "version"); err != nil {
+		log.Debug("AddVersion: invalid version tag", "error", err)
+		utils.WriteValidationErrorResponse(w, err)
+		return
+	}
 
 	result, err := c.kindService.AddVersion(ctx, ouID, kindName, &payload)
 	if err != nil {

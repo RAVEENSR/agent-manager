@@ -21,6 +21,7 @@ import (
 	"errors"
 	"log/slog"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
 	"github.com/wso2/agent-manager/agent-manager-service/spec"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
@@ -70,9 +71,28 @@ func (s *GitSecretService) Create(ctx context.Context, ouID string, req *spec.Cr
 		Token:      req.Credentials.Password,
 	}
 
+	// The credential lands in an external secret store, so the change and its
+	// audit record cannot commit together. Record the intent first and refuse
+	// the operation if that fails: a credential written with no trace of who
+	// wrote it is worse than a failed request. Only the name, type and username
+	// are recorded — the password never leaves this function.
+	attempt, err := audit.Begin(
+		ctx, audit.ActionGitSecretCreate,
+		audit.Org(ouID),
+		audit.ResourceNamed(audit.ResourceGitSecret, req.Name, req.Name),
+		audit.Detail("secretType", string(secretType)),
+		audit.Detail("username", req.Credentials.Username),
+	)
+	if err != nil {
+		slog.Error("GitSecretService.Create: refusing, audit record could not be written",
+			"ouID", ouID, "name", req.Name, "error", err)
+		return nil, err
+	}
+
 	// Create git secret via OpenChoreo
 	result, err := s.ocClient.CreateGitSecret(ctx, ouID, ocReq)
 	if err != nil {
+		attempt.Complete(ctx, err)
 		if errors.Is(err, utils.ErrConflict) {
 			slog.Warn("GitSecretService.Create: git secret already exists", "ouID", ouID, "name", req.Name)
 			return nil, utils.ErrGitSecretAlreadyExists
@@ -80,6 +100,7 @@ func (s *GitSecretService) Create(ctx context.Context, ouID string, req *spec.Cr
 		slog.Error("GitSecretService.Create: failed to create git secret", "ouID", ouID, "name", req.Name, "error", err)
 		return nil, err
 	}
+	attempt.Complete(ctx, nil)
 
 	slog.Info("GitSecretService.Create: git secret created successfully", "ouID", ouID, "name", result.Name)
 
@@ -130,14 +151,27 @@ func (s *GitSecretService) Delete(ctx context.Context, ouID, secretName string) 
 		return utils.ErrInvalidInput
 	}
 
+	attempt, err := audit.Begin(
+		ctx, audit.ActionGitSecretDelete,
+		audit.Org(ouID),
+		audit.ResourceNamed(audit.ResourceGitSecret, secretName, secretName),
+	)
+	if err != nil {
+		slog.Error("GitSecretService.Delete: refusing, audit record could not be written",
+			"ouID", ouID, "secretName", secretName, "error", err)
+		return err
+	}
+
 	// Delete git secret via OpenChoreo
 	if err := s.ocClient.DeleteGitSecret(ctx, ouID, secretName); err != nil {
+		attempt.Complete(ctx, err)
 		if errors.Is(err, utils.ErrNotFound) {
 			return utils.ErrGitSecretNotFound
 		}
 		slog.Error("GitSecretService.Delete: failed to delete git secret", "ouID", ouID, "secretName", secretName, "error", err)
 		return err
 	}
+	attempt.Complete(ctx, nil)
 
 	slog.Info("GitSecretService.Delete: completed", "ouID", ouID, "secretName", secretName)
 	return nil

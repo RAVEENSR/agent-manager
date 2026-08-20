@@ -17,11 +17,16 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
+	"github.com/wso2/agent-manager/agent-manager-service/middleware/jwtassertion"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/logger"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/services"
@@ -78,10 +83,30 @@ func (c *monitorScoresPublisherController) PublishScores(w http.ResponseWriter, 
 		return
 	}
 
-	// Publish scores via service
-	if err := c.scoresService.PublishScores(monitorID, runID, &req); err != nil {
-		log.Error("Failed to publish scores", "monitorId", monitorID, "runId", runID, "error", err)
-		utils.WriteErrorResponse(w, http.StatusInternalServerError, "Failed to publish scores")
+	// This route carries no rbac.Permission, so this record is the sole account of
+	// who wrote scores for a run. The actor is a machine client, not a user.
+	publishErr := c.scoresService.PublishScores(monitorID, runID, publisherOUID(r.Context()), &req)
+	audit.Record(
+		r.Context(), audit.ActionMonitorScorePublish,
+		audit.ResourceNamed("monitor-run", runID.String(), runID.String()),
+		audit.SurfaceOpt(audit.SurfacePublisher),
+		audit.Actor(audit.ActorService, publisherAudience(r.Context()), ""),
+		audit.AuthMethod("publisher-client"),
+		audit.Detail("monitorId", monitorID.String()),
+		audit.Detail("runId", runID.String()),
+		audit.Detail("scoreCount", len(req.IndividualScores)+len(req.AggregatedScores)),
+		audit.Result(publishErr),
+	)
+	if publishErr != nil {
+		log.Error("Failed to publish scores", "monitorId", monitorID, "runId", runID, "error", publishErr)
+		switch {
+		case errors.Is(publishErr, utils.ErrForbidden):
+			utils.WriteErrorResponse(w, http.StatusForbidden, "insufficient permissions")
+		case errors.Is(publishErr, utils.ErrNotFound):
+			utils.WriteErrorResponse(w, http.StatusNotFound, "Monitor run not found")
+		default:
+			utils.WriteErrorResponse(w, http.StatusInternalServerError, "Failed to publish scores")
+		}
 		return
 	}
 
@@ -90,4 +115,32 @@ func (c *monitorScoresPublisherController) PublishScores(w http.ResponseWriter, 
 	if _, err := w.Write([]byte(`{"message":"scores published successfully"}`)); err != nil {
 		log.Error("Failed to write response", "error", err)
 	}
+}
+
+// publisherOUID returns the token's organization; empty is rejected downstream.
+func publisherOUID(ctx context.Context) string {
+	claims := jwtassertion.GetTokenClaims(ctx)
+	if claims == nil {
+		return ""
+	}
+	return claims.OuId
+}
+
+// publisherAudience returns the publisher client identity behind a score
+// publish. The route is authorized by matching an "amp-publisher-*" audience
+// rather than a subject, so the audience is the only actor identity available.
+func publisherAudience(ctx context.Context) string {
+	claims := jwtassertion.GetTokenClaims(ctx)
+	if claims == nil {
+		return ""
+	}
+	for _, aud := range claims.Audience {
+		if strings.HasPrefix(aud, "amp-publisher-") {
+			return aud
+		}
+	}
+	if claims.Sub != "" {
+		return claims.Sub
+	}
+	return ""
 }

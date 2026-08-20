@@ -20,12 +20,50 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/config"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/jwtassertion"
 	"github.com/wso2/agent-manager/agent-manager-service/rbac"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
+
+// recordAuthzDeny records a refused authorization decision.
+//
+// Denied privilege escalation is the first thing a security reviewer looks for,
+// and until now every deny site here wrote a 403 and nothing else — two of them
+// without even a log line. The event carries the specific missing scope rather
+// than the caller's whole scope string, which can run to kilobytes.
+//
+// It suppresses the coverage tier's envelope event so a single refusal produces
+// one record rather than two.
+func recordAuthzDeny(r *http.Request, reason string, opts ...audit.Option) {
+	ctx := r.Context()
+
+	all := make([]audit.Option, 0, len(opts)+3)
+	all = append(
+		all,
+		audit.OutcomeOpt(audit.OutcomeDeny),
+		audit.Status(http.StatusForbidden),
+		audit.Detail("reason", reason),
+	)
+	all = append(all, opts...)
+
+	audit.Record(ctx, audit.ActionAuthzDeny, all...)
+	audit.Skip(ctx)
+}
+
+// grantedScopeCount reports how many scopes the caller presented. The count is
+// recorded instead of the scopes themselves: it distinguishes "token with no
+// scopes at all" from "token missing this one scope" without copying a
+// potentially huge claim into every record.
+func grantedScopeCount(claims *jwtassertion.TokenClaims) int {
+	if claims == nil {
+		return 0
+	}
+	return len(strings.Fields(claims.Scope))
+}
 
 // ResolverError is returned by a PermissionResolver to signal an expected failure
 // with a specific HTTP status code and message. Use NewResolverInputError for bad
@@ -80,11 +118,13 @@ func resolveOrgFromToken() func(http.HandlerFunc) http.HandlerFunc {
 			claims := jwtassertion.GetTokenClaims(r.Context())
 			if claims == nil {
 				slog.Warn("RequireOrgMatch rejected", "reason", "missing token claims", "path", r.URL.Path)
+				recordAuthzDeny(r, "missing-token-claims")
 				utils.WriteErrorResponse(w, http.StatusForbidden, "missing token claims")
 				return
 			}
 			if claims.OuId == "" || claims.OuHandle == "" {
 				slog.Warn("RequireOrgMatch rejected", "reason", "missing ou identity in token", "sub", claims.Sub, "path", r.URL.Path)
+				recordAuthzDeny(r, "missing-ou-identity")
 				utils.WriteErrorResponse(w, http.StatusForbidden, "missing ou identity in token")
 				return
 			}
@@ -119,16 +159,38 @@ func requirePermission(perm rbac.Permission, allowRootOU bool) func(http.Handler
 	return func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			if !config.GetConfig().RBACEnabled {
+				// The check is skipped entirely. The event the coverage tier
+				// writes for this request carries rbacEnforced=false alongside
+				// the permission that would have applied, so the record shows
+				// on its face that nothing was enforced.
 				next(w, r)
 				return
 			}
 			if allowRootOU {
 				if claims := jwtassertion.GetTokenClaims(r.Context()); claims != nil && claims.OuHandle == config.GetConfig().RootOUHandle {
+					// A root-OU token is admitted regardless of its scopes. That
+					// bypass is a first-class audited fact, not an implementation
+					// detail — it is the one path where a caller reaches a
+					// protected route without holding its permission.
+					//
+					// Recorded without suppressing the envelope: this event says
+					// how the caller got in, the envelope says what they then did.
+					audit.RecordAncillary(
+						r.Context(), audit.ActionAuthzRootOUBypass,
+						audit.RequiredPermissions(perm),
+						audit.Detail("rootOUBypass", true),
+					)
 					next(w, r)
 					return
 				}
 			}
 			if !jwtassertion.HasAllScopes(r.Context(), []string{perm.Scope()}) {
+				recordAuthzDeny(
+					r, "missing-scope",
+					audit.RequiredPermissions(perm),
+					audit.Detail("missingScope", perm.Scope()),
+					audit.Detail("grantedScopes", grantedScopeCount(jwtassertion.GetTokenClaims(r.Context()))),
+				)
 				utils.WriteErrorResponse(w, http.StatusForbidden, "insufficient permissions")
 				return
 			}
@@ -154,6 +216,13 @@ func RequireAnyPermission(perms ...rbac.Permission) func(http.HandlerFunc) http.
 					return
 				}
 			}
+			// The caller held none of the acceptable permissions, so record all
+			// of them rather than singling one out as "the" missing scope.
+			recordAuthzDeny(
+				r, "missing-any-scope",
+				audit.RequiredPermissions(perms...),
+				audit.Detail("grantedScopes", grantedScopeCount(jwtassertion.GetTokenClaims(r.Context()))),
+			)
 			utils.WriteErrorResponse(w, http.StatusForbidden, "insufficient permissions")
 		}
 	}
@@ -179,6 +248,9 @@ func RequireDynamicPermission(resolver PermissionResolver) func(http.HandlerFunc
 			if err != nil {
 				var re *ResolverError
 				if errors.As(err, &re) {
+					if re.StatusCode == http.StatusForbidden {
+						recordAuthzDeny(r, "resolver-denied")
+					}
 					utils.WriteErrorResponse(w, re.StatusCode, re.Message)
 				} else {
 					utils.WriteErrorResponse(w, http.StatusInternalServerError, "internal error resolving permission")
@@ -186,6 +258,16 @@ func RequireDynamicPermission(resolver PermissionResolver) func(http.HandlerFunc
 				return
 			}
 			if !jwtassertion.HasAllScopes(r.Context(), []string{perm.Scope()}) {
+				// The route declares no permission at registration time, so this
+				// is the only place the required scope becomes known — without
+				// recording it here the event would say nothing about what was
+				// demanded.
+				recordAuthzDeny(
+					r, "missing-scope",
+					audit.RequiredPermissions(perm),
+					audit.Detail("missingScope", perm.Scope()),
+					audit.Detail("grantedScopes", grantedScopeCount(jwtassertion.GetTokenClaims(r.Context()))),
+				)
 				utils.WriteErrorResponse(w, http.StatusForbidden, "insufficient permissions")
 				return
 			}

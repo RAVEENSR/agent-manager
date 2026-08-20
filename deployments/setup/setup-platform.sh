@@ -14,8 +14,13 @@ echo "=== Setting up Agent Manager Core Platform ==="
 
 # Check prerequisites
 if ! docker info &> /dev/null; then
-    echo "❌ Docker is not running. Please start Colima first:"
-    echo "   ./setup-colima.sh"
+    if [ "$(uname -s)" = "Linux" ]; then
+        echo "❌ Docker is not running. Start the daemon first:"
+        echo "   sudo systemctl start docker"
+    else
+        echo "❌ Docker is not running. Please start Colima first:"
+        echo "   ./setup-colima.sh"
+    fi
     exit 1
 fi
 
@@ -30,6 +35,11 @@ if ! docker buildx version &> /dev/null; then
     echo "   Please install Docker Buildx plugin."
     exit 1
 fi
+
+# Checked up front rather than at first use: the migration step below shells out
+# to `go run`, and it only runs after images are built and Postgres is up — so a
+# missing toolchain would otherwise surface many minutes into the setup.
+check_command go
 
 if ! command -v node &> /dev/null; then
     echo "❌ Node.js is not installed."
@@ -76,6 +86,15 @@ echo "2️⃣  Start platform services"
 # Export console host path so docker-compose can align WORKDIR with the host,
 # preventing Rush temp-file / node_modules path mismatches.
 export CONSOLE_HOST_PATH="$(cd "$SCRIPT_DIR/../../console" && pwd)"
+
+# The console service mounts named volumes at these two paths inside the
+# bind-mounted console directory. Any that do not exist yet, Docker creates as
+# the container's user — root — and on Linux that ownership lands on the host
+# verbatim, so the later host-side `rush install` gets EACCES. (macOS remaps
+# bind-mount ownership to the invoking user, which is why it only bites here.)
+# Creating them first leaves them owned by this user; Docker never re-chowns an
+# existing mountpoint.
+mkdir -p "$CONSOLE_HOST_PATH/node_modules" "$CONSOLE_HOST_PATH/common/temp"
 
 # Must migrate before agent-manager-service starts: it crashes on a fresh volume
 # (missing tables), and Air never auto-restarts a crash — only rebuilds on file changes.

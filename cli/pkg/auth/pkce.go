@@ -21,7 +21,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
-	"html"
 	"net"
 	"net/http"
 	"time"
@@ -35,14 +34,6 @@ const (
 	callbackPath        = "/callback"
 	defaultCallbackPort = 10325
 )
-
-const successHTML = `<!DOCTYPE html>
-<html><head><title>Login Successful</title></head>
-<body><h1>Login successful</h1><p>You may close this tab.</p></body></html>`
-
-const errorHTML = `<!DOCTYPE html>
-<html><head><title>Login Failed</title></head>
-<body><h1>Login failed</h1><p>%s</p></body></html>`
 
 type callbackResult struct {
 	code string
@@ -93,28 +84,28 @@ func authCodePKCE(ctx context.Context, cfg *oauth2.Config, io *iostreams.IOStrea
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc(callbackPath, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if got := r.FormValue("state"); got != state {
 			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprintf(w, errorHTML, "State mismatch — possible CSRF attack.")
+			fmt.Fprint(w, loginErrorPage("State mismatch — possible CSRF attack."))
 			send(callbackResult{err: fmt.Errorf("state mismatch")})
 			return
 		}
 		if errCode := r.FormValue("error"); errCode != "" {
-			desc := html.EscapeString(r.FormValue("error_description"))
+			desc := r.FormValue("error_description")
 			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprintf(w, errorHTML, desc)
+			fmt.Fprint(w, loginErrorPage(desc))
 			send(callbackResult{err: fmt.Errorf("authorization error: %s: %s", errCode, desc)})
 			return
 		}
 		code := r.FormValue("code")
 		if code == "" {
 			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprintf(w, errorHTML, "No authorization code received.")
+			fmt.Fprint(w, loginErrorPage("No authorization code received."))
 			send(callbackResult{err: fmt.Errorf("no authorization code in callback")})
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, successHTML)
+		fmt.Fprint(w, loginSuccessPage())
 		send(callbackResult{code: code})
 	})
 

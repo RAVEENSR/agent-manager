@@ -37,6 +37,7 @@ type LLMProviderResponse struct {
 	// Template identifier
 	Template      string            `json:"template"`
 	Upstream      UpstreamConfig    `json:"upstream"`
+	Resilience    *Resilience       `json:"resilience,omitempty"`
 	AccessControl *LLMAccessControl `json:"accessControl,omitempty"`
 	// List of policies applied to this provider
 	Policies []LLMPolicy `json:"policies,omitempty"`
@@ -312,6 +313,38 @@ func (o *LLMProviderResponse) GetUpstreamOk() (*UpstreamConfig, bool) {
 // SetUpstream sets field value
 func (o *LLMProviderResponse) SetUpstream(v UpstreamConfig) {
 	o.Upstream = v
+}
+
+// GetResilience returns the Resilience field value if set, zero value otherwise.
+func (o *LLMProviderResponse) GetResilience() Resilience {
+	if o == nil || IsNil(o.Resilience) {
+		var ret Resilience
+		return ret
+	}
+	return *o.Resilience
+}
+
+// GetResilienceOk returns a tuple with the Resilience field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *LLMProviderResponse) GetResilienceOk() (*Resilience, bool) {
+	if o == nil || IsNil(o.Resilience) {
+		return nil, false
+	}
+	return o.Resilience, true
+}
+
+// HasResilience returns a boolean if a field has been set.
+func (o *LLMProviderResponse) HasResilience() bool {
+	if o != nil && !IsNil(o.Resilience) {
+		return true
+	}
+
+	return false
+}
+
+// SetResilience gets a reference to the given Resilience and assigns it to the Resilience field.
+func (o *LLMProviderResponse) SetResilience(v Resilience) {
+	o.Resilience = &v
 }
 
 // GetAccessControl returns the AccessControl field value if set, zero value otherwise.
@@ -681,6 +714,9 @@ func (o LLMProviderResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize["context"] = o.Context
 	toSerialize["template"] = o.Template
 	toSerialize["upstream"] = o.Upstream
+	if !IsNil(o.Resilience) {
+		toSerialize["resilience"] = o.Resilience
+	}
 	if !IsNil(o.AccessControl) {
 		toSerialize["accessControl"] = o.AccessControl
 	}

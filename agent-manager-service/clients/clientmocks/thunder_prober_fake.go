@@ -14,7 +14,7 @@ import (
 //
 //		// make and configure a mocked thundersvc.Prober
 //		mockedProber := &ThunderProberMock{
-//			ProbeFunc: func(ctx context.Context, org string, env string) bool {
+//			ProbeFunc: func(ctx context.Context, org string, env string, handle string) bool {
 //				panic("mock out the Probe method")
 //			},
 //		}
@@ -25,7 +25,7 @@ import (
 //	}
 type ThunderProberMock struct {
 	// ProbeFunc mocks the Probe method.
-	ProbeFunc func(ctx context.Context, org string, env string) bool
+	ProbeFunc func(ctx context.Context, org string, env string, handle string) bool
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -37,29 +37,33 @@ type ThunderProberMock struct {
 			Org string
 			// Env is the env argument value.
 			Env string
+			// Handle is the handle argument value.
+			Handle string
 		}
 	}
 	lockProbe sync.RWMutex
 }
 
 // Probe calls ProbeFunc.
-func (mock *ThunderProberMock) Probe(ctx context.Context, org string, env string) bool {
+func (mock *ThunderProberMock) Probe(ctx context.Context, org string, env string, handle string) bool {
 	if mock.ProbeFunc == nil {
 		panic("ThunderProberMock.ProbeFunc: method is nil but Prober.Probe was just called")
 	}
 	callInfo := struct {
-		Ctx context.Context
-		Org string
-		Env string
+		Ctx    context.Context
+		Org    string
+		Env    string
+		Handle string
 	}{
-		Ctx: ctx,
-		Org: org,
-		Env: env,
+		Ctx:    ctx,
+		Org:    org,
+		Env:    env,
+		Handle: handle,
 	}
 	mock.lockProbe.Lock()
 	mock.calls.Probe = append(mock.calls.Probe, callInfo)
 	mock.lockProbe.Unlock()
-	return mock.ProbeFunc(ctx, org, env)
+	return mock.ProbeFunc(ctx, org, env, handle)
 }
 
 // ProbeCalls gets all the calls that were made to Probe.
@@ -67,14 +71,16 @@ func (mock *ThunderProberMock) Probe(ctx context.Context, org string, env string
 //
 //	len(mockedProber.ProbeCalls())
 func (mock *ThunderProberMock) ProbeCalls() []struct {
-	Ctx context.Context
-	Org string
-	Env string
+	Ctx    context.Context
+	Org    string
+	Env    string
+	Handle string
 } {
 	var calls []struct {
-		Ctx context.Context
-		Org string
-		Env string
+		Ctx    context.Context
+		Org    string
+		Env    string
+		Handle string
 	}
 	mock.lockProbe.RLock()
 	calls = mock.calls.Probe

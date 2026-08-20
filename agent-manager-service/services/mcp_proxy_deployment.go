@@ -77,13 +77,15 @@ type MCPProxyDeploymentSpec struct {
 	Context     string             `yaml:"context" json:"context"`
 	Vhost       *string            `yaml:"vhost" json:"vhost"`
 	Upstream    MCPProxyUpstream   `yaml:"upstream" json:"upstream"`
+	Resilience  *models.Resilience `yaml:"resilience,omitempty" json:"resilience,omitempty"`
 	SpecVersion string             `yaml:"specVersion" json:"specVersion"`
 	Policies    []models.MCPPolicy `yaml:"policies,omitempty" json:"policies,omitempty"`
 }
 
 // MCPProxyUpstream represents the flat upstream shape expected by the gateway.
 type MCPProxyUpstream struct {
-	URL string `yaml:"url" json:"url"`
+	URL string `yaml:"url,omitempty" json:"url,omitempty"`
+	Ref string `yaml:"ref,omitempty" json:"ref,omitempty"`
 }
 
 // deployMCPProxyToGateway deploys a single MCP artifact to one gateway. It is used by
@@ -422,10 +424,11 @@ func (s *MCPProxyService) buildMCPProxyDeploymentYAML(proxy *models.MCPProxy, pr
 	var upstreamAuth *models.UpstreamAuth
 	if proxy.Configuration.Upstream.Main != nil {
 		upstream.URL = strings.TrimSpace(proxy.Configuration.Upstream.Main.URL)
+		upstream.Ref = strings.TrimSpace(proxy.Configuration.Upstream.Main.Ref)
 		upstreamAuth = proxy.Configuration.Upstream.Main.Auth
 	}
-	if strings.TrimSpace(upstream.URL) == "" {
-		return nil, fmt.Errorf("upstream URL is required")
+	if upstream.URL == "" && upstream.Ref == "" {
+		return nil, fmt.Errorf("upstream URL or ref is required")
 	}
 	policies, err := appendMCPAPIKeyAuthPolicy(proxy.Configuration.Policies, proxy.Configuration.Security)
 	if err != nil {
@@ -462,6 +465,7 @@ func (s *MCPProxyService) buildMCPProxyDeploymentYAML(proxy *models.MCPProxy, pr
 			Context:     contextValue,
 			Vhost:       proxy.Configuration.Vhost,
 			Upstream:    upstream,
+			Resilience:  proxy.Configuration.Resilience,
 			SpecVersion: specVersion,
 			Policies:    policies,
 		},

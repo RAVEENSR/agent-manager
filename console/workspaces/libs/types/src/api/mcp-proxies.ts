@@ -17,6 +17,7 @@
 
 import type { ListQuery, OrgPathParams } from "./common";
 import type {
+  Resilience,
   SecurityConfig,
   UpstreamAuth,
   UpstreamConfig,
@@ -55,6 +56,7 @@ export interface MCPPolicyAvailabilityResponse {
  */
 export interface MCPEndpointConfig {
   upstream?: UpstreamConfig;
+  resilience?: Resilience;
   policies?: MCPProxyPolicy[];
   capabilities?: MCPProxyCapabilities;
   security?: SecurityConfig;

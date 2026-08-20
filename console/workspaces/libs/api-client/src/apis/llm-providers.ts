@@ -209,14 +209,21 @@ export async function listLLMProviders(
 
 export async function listAvailableLLMPolicies(
   params: ListAvailableLLMPoliciesPathParams,
+  query?: { providerId?: string },
   getToken?: () => Promise<string>,
 ): Promise<LLMPolicyAvailabilityResponse> {
   const org = encodeRequired(params.orgName, "orgName");
   const token = getToken ? await getToken() : undefined;
 
+  const searchParams: Record<string, string> = {};
+  if (query?.providerId) {
+    searchParams.providerId = query.providerId;
+  }
+
   // httpGET already throws on a non-OK response, so no !res.ok branch is needed.
   const res = await httpGET(`${SERVICE_BASE}/orgs/${org}/llm-providers/policies`, {
     token,
+    searchParams: Object.keys(searchParams).length ? searchParams : undefined,
   });
   return res.json();
 }

@@ -286,7 +286,7 @@ func (p *LLMProxyProvisioner) ProvisionProxy(ctx context.Context, params Provisi
 		rb.ProxySecretLoc = &proxySecretLoc
 	}
 
-	proxyURL := buildProxyURL(params.Gateway, proxy.Configuration.Context, true)
+	proxyURL := buildProxyURL(params.Gateway, proxy.Configuration.Context)
 
 	p.logger.Info(
 		"Provisioned LLM proxy",
@@ -325,7 +325,7 @@ func (p *LLMProxyProvisioner) RollbackProxy(ctx context.Context, state ProxyRoll
 		}
 	}
 	if state.ProxyHandle != "" && state.DeploymentID != uuid.Nil {
-		if _, err := p.llmProxyDeploymentService.UndeployLLMProxyDeployment(state.ProxyHandle, state.DeploymentID.String(), state.GatewayUUID.String(), ouID); err != nil {
+		if _, err := p.llmProxyDeploymentService.UndeployLLMProxyDeployment(ctx, state.ProxyHandle, state.DeploymentID.String(), state.GatewayUUID.String(), ouID); err != nil {
 			p.logger.Error("Failed to undeploy proxy during rollback",
 				"proxyHandle", state.ProxyHandle, "deploymentID", state.DeploymentID, "error", err)
 		}
@@ -390,7 +390,7 @@ func (p *LLMProxyProvisioner) CleanupProxy(ctx context.Context, proxy *models.LL
 	} else {
 		for _, dep := range deployments {
 			if _, err := p.llmProxyDeploymentService.UndeployLLMProxyDeployment(
-				proxyHandle, dep.DeploymentID.String(), dep.GatewayUUID.String(), ouID,
+				ctx, proxyHandle, dep.DeploymentID.String(), dep.GatewayUUID.String(), ouID,
 			); err != nil {
 				p.logger.Error("Failed to undeploy proxy during cleanup",
 					"proxyHandle", proxyHandle, "deploymentID", dep.DeploymentID, "error", err)

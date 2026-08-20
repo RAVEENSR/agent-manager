@@ -25,9 +25,12 @@ import {
 } from "@agent-management-platform/views";
 import {
   CodeBlock,
+  AGENTID_ENV_VAR_ROWS,
   copyToClipboard,
+  EnvironmentVariablesReference,
   getErrorMessage,
   monospaceInputSx,
+  resolveAuthenticationType,
   useAgentIdentityCredentials,
   usePipelineEnvironmentsState,
   useThunderInstanceForEnv,
@@ -85,10 +88,6 @@ import {
   useParams,
 } from "react-router-dom";
 import { EnvironmentVariablesGuideDrawer } from "./Configure/subComponents/EnvironmentVariablesGuideDrawer";
-import {
-  EnvironmentVariablesReference,
-  type EnvVarReferenceRow,
-} from "./Configure/subComponents/EnvironmentVariablesReference";
 import { MCPServerDisplay } from "./Configure/subComponents/MCPServerDisplay";
 import { MCPProxyAPIKeysSection } from "./Configure/subComponents/MCPProxyAPIKeysSection";
 import { CONFIGURE_TAB_PARAM } from "./configureTabs";
@@ -102,29 +101,9 @@ type AuthInfoEntry = {
 
 // Fixed, never-renameable AMP_AGENTID_* names (client.EnvVarAgentID* in
 // constants.go) — kept as their own reference instead of folding into
-// envVarReferenceRows.
-export const AGENTID_ENV_VAR_ROWS: EnvVarReferenceRow[] = [
-  {
-    key: "clientId",
-    name: "AMP_AGENTID_CLIENT_ID",
-    description: "This agent's OAuth2 client ID for this environment",
-  },
-  {
-    key: "clientSecret",
-    name: "AMP_AGENTID_CLIENT_SECRET",
-    description: "This agent's OAuth2 client secret for this environment",
-  },
-  {
-    key: "tokenEndpoint",
-    name: "AMP_AGENTID_TOKEN_ENDPOINT",
-    description: "Token endpoint to call with a client_credentials grant",
-  },
-  {
-    key: "scopes",
-    name: "AMP_AGENTID_SCOPES",
-    description: "Space-separated scopes to request for this tool's actions",
-  },
-];
+// envVarReferenceRows. Now defined in shared-component so the agent-creation flow
+// shows the same variables; re-exported here for existing importers.
+export { AGENTID_ENV_VAR_ROWS };
 
 // Mirrors how buildMCPPythonSnippet resolves the (possibly renamed) URL var,
 // so both guides stay consistent if that name changes.
@@ -475,7 +454,18 @@ export const ViewMCPServerComponent = () => {
     selectedEnvUuid,
   );
   const apiKeyHeaderName = getMCPAPIKeyHeaderName(sourceProxyEndpoint?.security);
-  const usesIdentitySecurity = sourceProxyEndpoint?.security?.identity?.enabled === true;
+  // Same rule the MCP Servers Security tab renders and the creation flow derives
+  // its variables from, so all three surfaces agree on API key vs OAuth vs None.
+  const authenticationType = resolveAuthenticationType(sourceProxyEndpoint);
+  const usesIdentitySecurity = authenticationType === "identity";
+  const usesAPIKeySecurity = authenticationType === "apiKey";
+  // A failed or in-flight proxy fetch leaves sourceProxyEndpoint undefined,
+  // which resolveAuthenticationType reads as "None" — indistinguishable from a
+  // genuinely unsecured endpoint. Treating that as real would hide whichever
+  // fields/rows the endpoint's actual security needs and show misleading
+  // copy, the same #1597 failure mode with the polarity reversed. Callers must
+  // gate on this rather than trusting authenticationType directly while true.
+  const isMCPSecurityUnresolved = isLoadingProxyDetails || isProxyDetailsError;
 
   // Scopes are a proxy-level catalog (action -> tools it authorizes), not
   // per-endpoint, so this fetch doesn't depend on the selected environment.
@@ -530,14 +520,16 @@ export const ViewMCPServerComponent = () => {
     [config],
   );
 
-  // A config may still carry an apikey row from before the proxy's security
-  // was switched to OAuth; hide it rather than show a stale, irrelevant field.
+  // A config may still carry an apikey row from before the proxy's security was
+  // switched away from API key; hide it rather than show a stale, irrelevant
+  // field. Only an API-key endpoint has one — OAuth mints credentials
+  // server-side and an unsecured endpoint needs none (issue #1597).
   const visibleEnvVarRows = useMemo(
     () =>
-      usesIdentitySecurity
-        ? envVarRows.filter((envVar) => !isAPIKeyEnvVarKey(envVar.key))
-        : envVarRows,
-    [envVarRows, usesIdentitySecurity],
+      usesAPIKeySecurity
+        ? envVarRows
+        : envVarRows.filter((envVar) => !isAPIKeyEnvVarKey(envVar.key)),
+    [envVarRows, usesAPIKeySecurity],
   );
 
   useEffect(() => {
@@ -561,7 +553,8 @@ export const ViewMCPServerComponent = () => {
       !projectId ||
       !agentId ||
       !decodedConfigId ||
-      hasEmptyEnvVarName
+      hasEmptyEnvVarName ||
+      isMCPSecurityUnresolved
     ) {
       return;
     }
@@ -673,7 +666,20 @@ export const ViewMCPServerComponent = () => {
           onClose={() => setPanelOpen(false)}
         />
         <DrawerContent>
-          {usesIdentitySecurity ? (
+          {isMCPSecurityUnresolved ? (
+            isLoadingProxyDetails ? (
+              <Skeleton variant="rounded" height={160} />
+            ) : (
+              <Alert severity="error" icon={<AlertTriangle size={18} />}>
+                <Typography variant="body2">
+                  Couldn&apos;t load this MCP server&apos;s security settings, so
+                  the connection details shown here may not match how this tool
+                  is actually secured. Reload the page or try again once the
+                  server is reachable.
+                </Typography>
+              </Alert>
+            )
+          ) : usesIdentitySecurity ? (
             <Stack spacing={3}>
               <Alert severity="info">
                 <Typography variant="body2">
@@ -746,7 +752,7 @@ export const ViewMCPServerComponent = () => {
                 </Form.Section>
               )}
             </Stack>
-          ) : (() => {
+          ) : usesAPIKeySecurity ? (() => {
             const authEntry =
               authInfoByEnv?.[selectedEnvName] ?? providerConfig.authInfo;
             const headerName = apiKeyHeaderName || authEntry?.name || "api-key";
@@ -823,7 +829,40 @@ export const ViewMCPServerComponent = () => {
                 </Form.Section>
               </Stack>
             );
-          })()}
+          })() : (
+            // Unsecured endpoint: no header, no key, and no "the key was only
+            // shown at creation" copy — that phrasing implies a credential that
+            // was never minted, since this server takes none (issue #1597).
+            <Stack spacing={3}>
+              <Alert severity="info">
+                <Typography variant="body2">
+                  This tool has no security configured. Call the endpoint
+                  directly — no header or API key is required.
+                </Typography>
+              </Alert>
+              <Form.Section>
+                <Form.Subheader>Connection</Form.Subheader>
+                {Boolean(providerConfig.url) && (
+                  <TextInput
+                    label="Endpoint URL"
+                    value={providerConfig.url ?? ""}
+                    copyable
+                    copyTooltipText="Copy Endpoint URL"
+                    slotProps={{ input: { readOnly: true } }}
+                    size="small"
+                  />
+                )}
+              </Form.Section>
+              <Form.Section>
+                <Form.Subheader>Example cURL</Form.Subheader>
+                <CodeBlock
+                  code={`curl -N ${providerConfig.url || "<endpoint-url>"}`}
+                  language="bash"
+                  fieldId="mcp-curl"
+                />
+              </Form.Section>
+            </Stack>
+          )}
         </DrawerContent>
       </DrawerWrapper>
     ) : (
@@ -837,7 +876,7 @@ export const ViewMCPServerComponent = () => {
         onSave={handleSave}
         isDirty={isDirty}
         isSaving={updateConfig.isPending}
-        hasInvalidNames={hasEmptyEnvVarName}
+        hasInvalidNames={hasEmptyEnvVarName || isMCPSecurityUnresolved}
         error={updateConfig.isError ? updateConfig.error : undefined}
         description={
           "These variable names are injected into the agent at runtime with environment-specific values. Rename them here if your code already uses different names, then save."
@@ -851,7 +890,20 @@ export const ViewMCPServerComponent = () => {
         }
       >
         <Divider sx={{ my: 2 }} />
-        {usesIdentitySecurity ? (
+        {isMCPSecurityUnresolved ? (
+          isLoadingProxyDetails ? (
+            <Skeleton variant="rounded" height={160} />
+          ) : (
+            <Alert severity="error" icon={<AlertTriangle size={18} />}>
+              <Typography variant="body2">
+                Couldn&apos;t load this MCP server&apos;s security settings, so
+                the fields and integration guide shown here may not match how
+                this tool is actually secured. Reload the page or try again
+                once the server is reachable before saving.
+              </Typography>
+            </Alert>
+          )
+        ) : usesIdentitySecurity ? (
           <Stack spacing={3}>
             <Alert severity="info">
               <Typography variant="body2">
@@ -886,8 +938,9 @@ export const ViewMCPServerComponent = () => {
           <Form.Section>
             <Form.Subheader>Integration Guide</Form.Subheader>
             <Typography variant="body2" color="text.secondary">
-              Copy this pattern into your agent code to load MCP tools
-              through the injected proxy URL and API key.
+              {usesAPIKeySecurity
+                ? "Copy this pattern into your agent code to load MCP tools through the injected proxy URL and API key."
+                : "Copy this pattern into your agent code to load MCP tools through the injected proxy URL. This server requires no API key."}
             </Typography>
             <CodeBlock
               language="python"
@@ -1050,7 +1103,7 @@ export const ViewMCPServerComponent = () => {
           )}
         </Form.Section>
 
-        {isExternal && providerConfig && !usesIdentitySecurity && (
+        {isExternal && providerConfig && usesAPIKeySecurity && (
           <MCPProxyAPIKeysSection
             orgName={orgId}
             projName={projectId}
@@ -1114,9 +1167,33 @@ function isAPIKeyEnvVarKey(key: string): boolean {
 function buildMCPPythonSnippet(rows: { key: string; name: string }[]): string {
   const urlEnvVar =
     rows.find((row) => /url/i.test(row.key))?.name ?? "MCP_SERVER_URL";
-  const apiKeyEnvVar =
-    rows.find((row) => /api[-_]?key/i.test(row.key))?.name ??
-    "MCP_SERVER_API_KEY";
+  // The caller already filters the apikey row out of `rows` for anything but an
+  // API-key-secured endpoint (visibleEnvVarRows, issue #1597), so its absence
+  // here is the real signal — not something to paper over with a hardcoded
+  // fallback name. An unsecured endpoint has no key to read at all.
+  const apiKeyEnvVar = rows.find((row) => /api[-_]?key/i.test(row.key))?.name;
+
+  if (!apiKeyEnvVar) {
+    return [
+      "import os",
+      "from typing import Any",
+      "from langchain_mcp_adapters.client import MultiServerMCPClient",
+      "",
+      `raw_urls = os.environ.get("${urlEnvVar}", "")`,
+      'mcp_server_urls = [url.strip() for url in raw_urls.split(",") if url.strip()]',
+      "",
+      "server_configs: dict[str, dict[str, Any]] = {",
+      '    f"mcp_server_{i}": {',
+      '        "url": url,',
+      '        "transport": "streamable_http",',
+      "    }",
+      "    for i, url in enumerate(mcp_server_urls)",
+      "} if mcp_server_urls else {}",
+      "",
+      "mcp_client = MultiServerMCPClient(server_configs)",
+      "tools = await mcp_client.get_tools()",
+    ].join("\n");
+  }
 
   return [
     "import os",

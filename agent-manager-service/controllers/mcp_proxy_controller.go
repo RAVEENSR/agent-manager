@@ -19,6 +19,7 @@ package controllers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -83,7 +84,13 @@ func (c *mcpProxyController) CreateMCPProxy(w http.ResponseWriter, r *http.Reque
 			utils.WriteErrorResponseWithReason(w, http.StatusBadRequest, "Bad request", err.Error(), utils.ErrCodeBadRequest)
 		case errors.Is(err, utils.ErrMCPProxyExists):
 			log.Error("CreateMCPProxy: MCP proxy already exists", "ouID", ouID, "id", req.ID)
-			utils.WriteErrorResponse(w, http.StatusConflict, "MCP proxy already exists")
+			utils.WriteErrorResponse(w, http.StatusConflict, fmt.Sprintf("MCP proxy %q already exists", req.ID))
+		case errors.Is(err, utils.ErrArtifactExists):
+			log.Error("CreateMCPProxy: handle already in use by another artifact", "ouID", ouID, "id", req.ID)
+			utils.WriteErrorResponse(w, http.StatusConflict, fmt.Sprintf("Handle %q is already in use", req.ID))
+		case errors.Is(err, utils.ErrMCPEnvAlreadyBound):
+			log.Error("CreateMCPProxy: environment already bound to another endpoint", "ouID", ouID, "id", req.ID)
+			utils.WriteErrorResponse(w, http.StatusConflict, err.Error())
 		default:
 			log.Error("CreateMCPProxy: failed", "ouID", ouID, "error", err)
 			utils.WriteErrorResponse(w, http.StatusInternalServerError, "Failed to create MCP proxy")
@@ -196,6 +203,12 @@ func (c *mcpProxyController) UpdateMCPProxy(w http.ResponseWriter, r *http.Reque
 		case errors.Is(err, utils.ErrInvalidInput), errors.Is(err, utils.ErrInvalidURL):
 			log.Error("UpdateMCPProxy: invalid request", "ouID", ouID, "proxyID", proxyID, "error", err)
 			utils.WriteErrorResponseWithReason(w, http.StatusBadRequest, "Bad request", err.Error(), utils.ErrCodeBadRequest)
+		case errors.Is(err, utils.ErrArtifactExists):
+			log.Error("UpdateMCPProxy: handle already in use by another artifact", "ouID", ouID, "proxyID", proxyID)
+			utils.WriteErrorResponse(w, http.StatusConflict, err.Error())
+		case errors.Is(err, utils.ErrMCPEnvAlreadyBound):
+			log.Error("UpdateMCPProxy: environment already bound to another endpoint", "ouID", ouID, "proxyID", proxyID)
+			utils.WriteErrorResponse(w, http.StatusConflict, err.Error())
 		default:
 			log.Error("UpdateMCPProxy: failed", "ouID", ouID, "proxyID", proxyID, "error", err)
 			utils.WriteErrorResponse(w, http.StatusInternalServerError, "Failed to update MCP proxy")

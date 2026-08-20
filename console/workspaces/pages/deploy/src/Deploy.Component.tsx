@@ -69,7 +69,7 @@ export const DeployComponent = () => {
 
   return (
     <PageLayout title="Deploy" disableIcon>
-      <Stack direction="row" pb={4} width="100%" overflow="auto">
+      <Stack direction="row" pb={4} width="100%" minHeight="calc(100vh - 300px)" overflow="auto">
         <BuildCard initialEnvironment={pipelineEnvironments[0]} />
         {pipelineEnvironments.map((env) => (
           <Fragment key={env.name}>

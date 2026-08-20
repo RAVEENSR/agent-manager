@@ -18,7 +18,10 @@
 
 import type { Environment } from "@agent-management-platform/types";
 import { Box, Tooltip, Typography } from "@wso2/oxygen-ui";
-import { DeploymentStatus } from "@agent-management-platform/shared-component";
+import {
+  DeploymentStatus,
+  IsolationTierBadge,
+} from "@agent-management-platform/shared-component";
 
 interface EnvironmentSingleHeaderProps {
   environment: Environment;
@@ -41,11 +44,11 @@ const STATUS_LABEL: Record<DeploymentStatus, string> = {
 
 /**
  * EnvironmentCard's `tabsHeader` slot for the single-environment case — a tab
- * strip has nothing to switch between with only one environment, but the env
- * name and its deployment state are still worth surfacing in the same spot,
- * styled like EnvironmentTabsBar's tab label (dot + name). The dot carries the
- * deployment state on hover rather than a separate chip, keeping the header
- * as compact as a tab label.
+ * strip has nothing to switch between with only one environment, but the env's
+ * sandbox level, name, and deployment state are still worth surfacing in the
+ * same spot, styled like EnvironmentTabsBar's tab label (badge + name + dot).
+ * The dot carries the deployment state on hover rather than a separate chip,
+ * keeping the header as compact as a tab label.
  */
 export function EnvironmentSingleHeader({
   environment,
@@ -53,7 +56,9 @@ export function EnvironmentSingleHeader({
   dotColor,
 }: EnvironmentSingleHeaderProps) {
   return (
-    <Box display="flex" alignItems="center" gap={0.75}>
+    <Box display="flex" alignItems="center" gap={0.75} mb={1}>
+      <IsolationTierBadge tier={environment.isolationTier} size={14} />
+      <Typography variant="h6">{environment.displayName ?? environment.name}</Typography>
       <Tooltip title={status ? STATUS_LABEL[status] : ""}>
         <Box
           sx={{
@@ -65,7 +70,6 @@ export function EnvironmentSingleHeader({
           }}
         />
       </Tooltip>
-      <Typography variant="h6">{environment.displayName ?? environment.name}</Typography>
     </Box>
   );
 }

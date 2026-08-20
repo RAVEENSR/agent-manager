@@ -54,12 +54,13 @@ import {
   Info,
   Link,
   Plus,
+  RefreshCw,
   Search,
   Trash2,
   Zap,
 } from "@wso2/oxygen-ui-icons-react";
 import { formatDistanceToNow } from "date-fns";
-import { useParams, useNavigate, generatePath } from "react-router-dom";
+import { useParams, generatePath } from "react-router-dom";
 import {
   useListCatalogLLMProviders,
   useListEnvironments,
@@ -540,8 +541,6 @@ export const LLMProviderSection: React.FC<LLMProviderSectionProps> = ({
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const navigate = useNavigate();
-
   const { data: environments = [], isLoading: envsLoading } =
     useListEnvironments({ orgName: orgId });
   const targetEnvironments = useMemo(
@@ -553,10 +552,31 @@ export const LLMProviderSection: React.FC<LLMProviderSectionProps> = ({
   const drawerEnvironmentId = drawerEnvName
     ? environments.find((e) => e.name === drawerEnvName)?.id
     : undefined;
-  const { data: catalogData, isLoading: catalogLoading } = useListCatalogLLMProviders(
+  const {
+    data: catalogData,
+    isLoading: catalogLoading,
+    refetch: refetchCatalog,
+  } = useListCatalogLLMProviders(
     { orgName: orgId },
     { limit: 50, environmentId: drawerEnvironmentId },
   );
+
+  // The "Add LLM Provider" action opens in a new tab (see below) so the
+  // Create Agent form's state is never unmounted. Refetch the catalog when
+  // the user tabs back so a freshly created provider shows up without them
+  // having to manually refresh.
+  React.useEffect(() => {
+    if (!providerDrawerOpen) return;
+    const onFocus = () => {
+      if (document.visibilityState === "visible") refetchCatalog();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [providerDrawerOpen, refetchCatalog]);
   const { data: templatesData, isLoading: templatesLoading } =
     useListLLMProviderTemplates({ orgName: orgId });
 
@@ -758,14 +778,25 @@ export const LLMProviderSection: React.FC<LLMProviderSectionProps> = ({
                 ? "Select a provider for this LLM configuration."
                 : "Change the provider for this LLM configuration."}
             </Typography>
-            <SearchBar
-              placeholder="Search providers"
-              size="small"
-              fullWidth
-              value={providerSearchQuery}
-              onChange={handleSearchChange}
-              sx={{ mb: 1 }}
-            />
+            <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
+              <SearchBar
+                placeholder="Search providers"
+                size="small"
+                fullWidth
+                value={providerSearchQuery}
+                onChange={handleSearchChange}
+              />
+              <Tooltip title="Refresh provider list" placement="top" arrow>
+                <IconButton
+                  size="small"
+                  aria-label="Refresh provider list"
+                  onClick={() => refetchCatalog()}
+                  disabled={catalogLoading}
+                >
+                  <RefreshCw size={16} />
+                </IconButton>
+              </Tooltip>
+            </Stack>
             <Stack spacing={1} sx={{ flex: 1, overflowY: "auto" }}>
               {drawerLoading ? (
                 <Box sx={{ display: "flex", justifyContent: "center", py: 4 }}>
@@ -797,15 +828,14 @@ export const LLMProviderSection: React.FC<LLMProviderSectionProps> = ({
                             variant="contained"
                             size="small"
                             startIcon={<Link size={16} />}
-                            onClick={() =>
-                              navigate(
-                                generatePath(
-                                  absoluteRouteMap.children.org.children.
-                                    llmProviders.children.add.path,
-                                  { orgId },
-                                ),
-                              )
-                            }
+                            component="a"
+                            href={generatePath(
+                              absoluteRouteMap.children.org.children.
+                                llmProviders.children.add.path,
+                              { orgId },
+                            )}
+                            target="_blank"
+                            rel="noopener noreferrer"
                           >
                             Add LLM Service Provider
                           </Button>

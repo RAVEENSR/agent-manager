@@ -29,19 +29,30 @@ import { useAuthHooks } from "@agent-management-platform/auth";
 import { useApiQuery } from "./react-query-notifications";
 
 export function useListBranches(
+  orgName: string,
   body: ListBranchesRequest,
   query?: ListBranchesQuery,
   enabled: boolean = true,
 ) {
   const { getToken } = useAuthHooks();
   return useApiQuery<ListBranchesResponse>({
-    queryKey: ["branches", body.owner, body.repository, body.orgName, body.secretRef, query],
-    queryFn: () => listBranches(body, query, getToken),
-    enabled: enabled && !!body.owner && !!body.repository,
+    queryKey: [
+      "branches",
+      {
+        orgName,
+        owner: body.owner,
+        repository: body.repository,
+        secretRef: body.secretRef,
+      },
+      query,
+    ],
+    queryFn: () => listBranches(orgName, body, query, getToken),
+    enabled: enabled && !!orgName && !!body.owner && !!body.repository,
   });
 }
 
 export function useListCommits(
+  orgName: string,
   body: ListCommitsRequest,
   query?: ListCommitsQuery,
   enabled: boolean = true,
@@ -50,16 +61,18 @@ export function useListCommits(
   return useApiQuery<ListCommitsResponse>({
     queryKey: [
       "commits",
-      body.owner,
-      body.repo,
-      body.branch,
-      body.orgName,
-      body.secretRef,
-      body.projectName,
-      body.componentName,
+      {
+        orgName,
+        owner: body.owner,
+        repo: body.repo,
+        branch: body.branch,
+        secretRef: body.secretRef,
+        projectName: body.projectName,
+        componentName: body.componentName,
+      },
       query,
     ],
-    queryFn: () => listCommits(body, query, getToken),
-    enabled: enabled && !!body.owner && !!body.repo,
+    queryFn: () => listCommits(orgName, body, query, getToken),
+    enabled: enabled && !!orgName && !!body.owner && !!body.repo,
   });
 }

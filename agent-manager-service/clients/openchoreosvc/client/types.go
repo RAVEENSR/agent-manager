@@ -123,7 +123,11 @@ type InputInterfaceConfig struct {
 	Type       string
 	Port       int32
 	SchemaPath string
-	BasePath   string
+	// SchemaContent holds the resolved OpenAPI spec content, when available up front
+	// (e.g. copied from a source agent when instantiating from an Agent Kind, which
+	// has no git checkout/build step to resolve SchemaPath into content itself).
+	SchemaContent string
+	BasePath      string
 }
 
 // UpdateComponentRequest contains data for updating a component (patch operation)
@@ -189,6 +193,9 @@ type AutoScalingConfig struct {
 type ComponentParameters struct {
 	Exposed   bool            `json:"exposed"`
 	Resources *ResourceConfig `json:"resources,omitempty"`
+	// RoutePath is a bare path segment with no leading slash: the chart template
+	// supplies the "/" when it renders the HTTPRoute path from this parameter.
+	RoutePath string `json:"routePath,omitempty"`
 }
 
 // EnvOverrideParameters represents environment-specific overrides (must match agent-api.yaml envOverrides schema)

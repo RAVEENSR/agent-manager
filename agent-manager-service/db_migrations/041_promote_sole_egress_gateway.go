@@ -40,6 +40,7 @@ import (
 // gateway keeps carrying its existing LLM/MCP traffic. Environments that already hold an
 // 'ingress' or 'both' gateway are untouched, leaving the regular+ai pair and split
 // topology alone.
+
 var migration041 = migration{
 	ID: 41,
 	Migrate: func(db *gorm.DB) error {

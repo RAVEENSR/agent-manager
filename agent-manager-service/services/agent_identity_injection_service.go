@@ -454,9 +454,8 @@ func (s *agentIdentityInjectionService) deleteSecretReference(ctx context.Contex
 }
 
 // buildEnvVars assembles the four identity env vars for one binding. The
-// token endpoint uses the cluster-internal env-Thunder URL — pods run inside
-// the cluster, matching the convention that internal agents reach platform
-// services via in-cluster addresses (see buildProxyURL).
+// token endpoint uses the cluster-internal env-Thunder URL: env-Thunder is not
+// published on the gateway vhost, so pods reach it by in-cluster address.
 //
 // The URL is built from ThunderOrgNamespace(), NOT binding.OUID: env-Thunder
 // is addressed by the org's namespace/handle (e.g. "default"), and binding.OUID

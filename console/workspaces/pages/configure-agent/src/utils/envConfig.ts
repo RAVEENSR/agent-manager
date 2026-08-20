@@ -15,9 +15,15 @@
  * under the License.
  */
 
-export const ENV_VAR_KEYS = ["url", "apikey"] as const;
+import type { EnvVarKey } from "@agent-management-platform/shared-component";
 
-export type EnvVarKey = (typeof ENV_VAR_KEYS)[number];
+// The key list itself now lives in shared-component alongside resolveMCPEnvVarSpec,
+// which decides which of these keys a given endpoint's security actually needs.
+// Re-exported here so the LLM-provider and MCP pages keep their existing imports.
+export {
+  ENV_VAR_KEYS,
+  type EnvVarKey,
+} from "@agent-management-platform/shared-component";
 
 export function generateEnvVarNames(prefix: string): Record<EnvVarKey, string> {
   let sanitized = prefix.replace(/[^A-Za-z0-9_]/g, "_").toUpperCase();

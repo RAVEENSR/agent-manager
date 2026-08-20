@@ -82,18 +82,20 @@ export function getIsolationTierMeta(tier?: string): IsolationTierMeta {
 interface IsolationTierBadgeProps {
   tier?: string;
   size?: number;
+  /** Overrides the tier's default icon color, e.g. to match a selected tab's text. */
+  color?: string;
 }
 
 /**
  * Bare shield icon with a "Sandbox Level N" tooltip.
  * Used next to environment names where a chip would be too heavy.
  */
-export function IsolationTierBadge({ tier, size = 18 }: IsolationTierBadgeProps) {
+export function IsolationTierBadge({ tier, size = 18, color }: IsolationTierBadgeProps) {
   const meta = getIsolationTierMeta(tier);
   const IconComponent = meta.icon;
   return (
     <Tooltip title={meta.fullLabel}>
-      <Box display="inline-flex" alignItems="center" sx={{ color: meta.iconColor }}>
+      <Box display="inline-flex" alignItems="center" sx={{ color: color ?? meta.iconColor }}>
         <IconComponent size={size} />
       </Box>
     </Tooltip>

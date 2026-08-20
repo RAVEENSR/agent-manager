@@ -73,18 +73,26 @@ type (
 	// ErrThunderNotProvisioned for a missing row.
 	ReadSystemClientFunc func(ctx context.Context, ouID, envName string) (clientID, clientSecret string, err error)
 
+	// ReadThunderHandleFunc reads an env-Thunder's registered URL handle (see
+	// EnvThunderURL) from AMS's own Postgres, keyed by (ouID, envName). A
+	// missing row means this environment was never provisioned — it returns
+	// ("", nil), never a value computed from (ouID, envName).
+	ReadThunderHandleFunc func(ctx context.Context, ouID, envName string) (handle string, err error)
+
 	// resolveBaseURLFunc picks a reachable base URL for an env-Thunder instance —
 	// injectable so tests don't depend on real network probing.
-	resolveBaseURLFunc func(ctx context.Context, org, env string) (baseURL, resolveToHost string, ok bool)
+	resolveBaseURLFunc func(ctx context.Context, org, env, handle string) (baseURL, resolveToHost string, ok bool)
 )
 
 // envThunderResolver reads the system-client credential via the injected
-// ReadSystemClientFunc (AMS's Postgres, not a key vault — cloud vaults are reveal-once).
+// ReadSystemClientFunc (AMS's Postgres, not a key vault — cloud vaults are reveal-once),
+// and the env's URL handle (if any) via the injected ReadThunderHandleFunc.
 type envThunderResolver struct {
-	readSystemClient ReadSystemClientFunc
-	resolveBaseURL   resolveBaseURLFunc
-	ttl              time.Duration
-	now              func() time.Time
+	readSystemClient  ReadSystemClientFunc
+	readThunderHandle ReadThunderHandleFunc
+	resolveBaseURL    resolveBaseURLFunc
+	ttl               time.Duration
+	now               func() time.Time
 
 	mu    sync.RWMutex
 	cache map[string]cachedThunderClient // keyed by "org/env"
@@ -97,20 +105,22 @@ type cachedThunderClient struct {
 }
 
 // NewEnvThunderResolver creates an EnvThunderResolver backed by the given
-// system-client reader (which decrypts the credential from AMS's Postgres).
-func NewEnvThunderResolver(readSystemClient ReadSystemClientFunc) EnvThunderResolver {
-	return newEnvThunderResolverWithReader(readSystemClient, ResolveThunderBaseURL)
+// system-client reader (which decrypts the credential from AMS's Postgres) and
+// URL-handle reader (which looks up a user-chosen handle, if any, from the same DB).
+func NewEnvThunderResolver(readSystemClient ReadSystemClientFunc, readThunderHandle ReadThunderHandleFunc) EnvThunderResolver {
+	return newEnvThunderResolverWithReader(readSystemClient, readThunderHandle, ResolveThunderBaseURL)
 }
 
-// newEnvThunderResolverWithReader builds a resolver from an injected reader and
+// newEnvThunderResolverWithReader builds a resolver from injected readers and a
 // base-URL resolver — real implementations in production, fakes in tests.
-func newEnvThunderResolverWithReader(readSystemClient ReadSystemClientFunc, resolveBaseURL resolveBaseURLFunc) *envThunderResolver {
+func newEnvThunderResolverWithReader(readSystemClient ReadSystemClientFunc, readThunderHandle ReadThunderHandleFunc, resolveBaseURL resolveBaseURLFunc) *envThunderResolver {
 	return &envThunderResolver{
-		readSystemClient: readSystemClient,
-		resolveBaseURL:   resolveBaseURL,
-		ttl:              envThunderClientCacheTTL,
-		now:              time.Now,
-		cache:            make(map[string]cachedThunderClient),
+		readSystemClient:  readSystemClient,
+		readThunderHandle: readThunderHandle,
+		resolveBaseURL:    resolveBaseURL,
+		ttl:               envThunderClientCacheTTL,
+		now:               time.Now,
+		cache:             make(map[string]cachedThunderClient),
 	}
 }
 
@@ -156,11 +166,28 @@ func (r *envThunderResolver) Resolve(ctx context.Context, ouID, orgNamespace, en
 			return nil, ErrThunderNotProvisioned
 		}
 
-		baseURL, resolveToHost, ok := r.resolveBaseURL(ctx, orgNamespace, envName)
+		// Every environment gets a handle at provisioning time (see SetThunderURL) —
+		// there is no fallback to a pattern computed from org/env. A missing handle
+		// (read error OR genuinely no row) means this env-Thunder was never
+		// provisioned through add-environment-thunder.sh, exactly like a missing
+		// system-client secret above — so it gets the same ErrThunderNotProvisioned,
+		// not a degraded/guessed address.
+		handle, err := r.readThunderHandle(ctx, ouID, envName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read env-thunder url handle for %s/%s: %w", ouID, envName, err)
+		}
+		if handle == "" {
+			return nil, ErrThunderNotProvisioned
+		}
+
+		baseURL, resolveToHost, ok := r.resolveBaseURL(ctx, orgNamespace, envName, handle)
 		if !ok {
 			return nil, fmt.Errorf("%w: %s/%s", ErrThunderUnreachable, orgNamespace, envName)
 		}
-		client := newThunderClientWithDialOverride(baseURL, clientID, clientSecret, resolveToHost)
+		// The System RS identifier is "<issuer>/mcp", derived from the env-Thunder issuer
+		// URL — not the (possibly cluster-internal) dialable base URL selected above.
+		systemResource := SystemResourceIdentifier(ThunderIssuerURL(handle))
+		client := NewThunderClientWithDialOverride(baseURL, clientID, clientSecret, resolveToHost, systemResource)
 
 		r.mu.Lock()
 		r.cache[cacheKey] = cachedThunderClient{client: client, cachedAt: r.now()}

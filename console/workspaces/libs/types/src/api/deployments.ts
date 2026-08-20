@@ -99,6 +99,9 @@ export interface PromotionTargetEnvironment {
 
 export interface DeploymentDetailsResponse {
   imageId: string;
+  /** Agent Kind version running in this environment, resolved from the deployed
+   *  image. Absent for source-built agents and unmatched images. */
+  kindVersion?: string;
   status: string;
   lastDeployed: string; // ISO date-time
   endpoints: DeploymentEndpoint[];
@@ -203,6 +206,7 @@ export type ListEnvironmentsPathParams = { orgName: string | undefined };
 export type ListDataPlanesPathParams = { orgName: string | undefined };
 export type ListDeploymentPipelinesPathParams = { orgName: string | undefined };
 export type GetDeploymentPipelinePathParams = OrgProjPathParams;
+export type CheckThunderUrlAvailabilityPathParams = { orgName: string | undefined };
 
 // Query helpers
 export interface EnvironmentQuery {
@@ -210,6 +214,18 @@ export interface EnvironmentQuery {
 }
 
 export type ListDeploymentPipelinesQuery = ListQuery;
+
+export interface CheckThunderUrlAvailabilityQuery {
+  handle: string;
+}
+
+// Advisory-only pre-flight check for the Create Environment drawer's Thunder
+// URL handle field — see agent-manager-service's checkThunderUrlAvailability.
+// The real enforcement remains the 409 a caller-supplied handle gets back from
+// add-environment-thunder.sh's PUT thunder-url call.
+export interface ThunderUrlAvailabilityResponse {
+  available: boolean;
+}
 
 // Deployment State Types
 export type DeploymentState = 'Active' | 'Undeploy';

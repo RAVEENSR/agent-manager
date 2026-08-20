@@ -78,24 +78,23 @@ func newRepoService(creds GitCredentialsService) RepositoryService {
 	return NewRepositoryService(creds, discardLogger())
 }
 
-// branchReq builds a ListBranchesRequest carrying a secretRef + ouID, which is
-// what triggers the credential-resolution branch.
-func branchReq(secretRef, ouID string) spec.ListBranchesRequest {
+// branchReq builds a ListBranchesRequest carrying a secretRef, which together
+// with a non-empty org triggers the credential-resolution branch. The org now
+// comes from the caller's token, so it is passed to the service separately.
+func branchReq(secretRef string) spec.ListBranchesRequest {
 	return spec.ListBranchesRequest{
 		Owner:      "acme",
 		Repository: "widgets",
 		SecretRef:  strPtr(secretRef),
-		OrgName:    strPtr(ouID),
 	}
 }
 
 // commitReq mirrors branchReq for ListCommits.
-func commitReq(secretRef, ouID string) spec.ListCommitsRequest {
+func commitReq(secretRef string) spec.ListCommitsRequest {
 	return spec.ListCommitsRequest{
 		Owner:     "acme",
 		Repo:      "widgets",
 		SecretRef: strPtr(secretRef),
-		OrgName:   strPtr(ouID),
 	}
 }
 
@@ -143,7 +142,7 @@ func TestRepositoryService_ListBranches(t *testing.T) {
 		}
 		svc := newRepoService(creds)
 
-		_, err := svc.ListBranches(context.Background(), branchReq("git-secret", "acme"), gitprovider.ProviderGitHub, 10, 0)
+		_, err := svc.ListBranches(context.Background(), branchReq("git-secret"), "acme", gitprovider.ProviderGitHub, 10, 0)
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, boom)
@@ -160,10 +159,21 @@ func TestRepositoryService_ListBranches(t *testing.T) {
 		}
 		svc := newRepoService(creds)
 
-		_, err := svc.ListBranches(context.Background(), branchReq("git-secret", "acme"), gitprovider.ProviderGitHub, 10, 0)
+		_, err := svc.ListBranches(context.Background(), branchReq("git-secret"), "acme", gitprovider.ProviderGitHub, 10, 0)
 
 		assert.ErrorIs(t, err, utils.ErrGitSecretInvalidType)
 		assert.NotErrorIs(t, err, gitprovider.ErrNotFound)
+	})
+
+	t.Run("secretRef without an org identity is rejected, not silently downgraded", func(t *testing.T) {
+		// Stub func left nil: a missing org must fail before any credential fetch,
+		// rather than falling back to the platform's default (public-repo) config.
+		svc := newRepoService(&gitCredsStub{})
+
+		_, err := svc.ListBranches(context.Background(), branchReq("git-secret"), "", gitprovider.ProviderGitHub, 10, 0)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "organization identity is required")
 	})
 
 	t.Run("unsupported provider type fails locally without network", func(t *testing.T) {
@@ -173,7 +183,7 @@ func TestRepositoryService_ListBranches(t *testing.T) {
 		svc := newRepoService(&gitCredsStub{})
 
 		req := spec.ListBranchesRequest{Owner: "acme", Repository: "widgets"}
-		_, err := svc.ListBranches(context.Background(), req, gitprovider.ProviderType("bitbucket"), 10, 0)
+		_, err := svc.ListBranches(context.Background(), req, "acme", gitprovider.ProviderType("bitbucket"), 10, 0)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unsupported git provider")
@@ -220,7 +230,7 @@ func TestRepositoryService_ListCommits(t *testing.T) {
 			ComponentName: strPtr("private-agent"),
 		}
 
-		response, err := svc.ListCommits(context.Background(), req, gitprovider.ProviderGitHub, 10, 10)
+		response, err := svc.ListCommits(context.Background(), req, "acme", gitprovider.ProviderGitHub, 10, 10)
 
 		require.NoError(t, err)
 		require.Len(t, response.Commits, 1)
@@ -245,7 +255,7 @@ func TestRepositoryService_ListCommits(t *testing.T) {
 			ComponentName: strPtr("public-agent"),
 		}
 
-		_, err := svc.ListCommits(context.Background(), req, gitprovider.ProviderType("gitlab"), 10, 0)
+		_, err := svc.ListCommits(context.Background(), req, "acme", gitprovider.ProviderType("gitlab"), 10, 0)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unsupported git provider")
@@ -267,7 +277,7 @@ func TestRepositoryService_ListCommits(t *testing.T) {
 			ComponentName: strPtr("private-agent"),
 		}
 
-		_, err := svc.ListCommits(context.Background(), req, gitprovider.ProviderGitHub, 10, 0)
+		_, err := svc.ListCommits(context.Background(), req, "acme", gitprovider.ProviderGitHub, 10, 0)
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, boom)
@@ -283,7 +293,7 @@ func TestRepositoryService_ListCommits(t *testing.T) {
 		}
 		svc := newRepoService(creds)
 
-		_, err := svc.ListCommits(context.Background(), commitReq("git-secret", "acme"), gitprovider.ProviderGitHub, 10, 0)
+		_, err := svc.ListCommits(context.Background(), commitReq("git-secret"), "acme", gitprovider.ProviderGitHub, 10, 0)
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, boom)
@@ -299,17 +309,26 @@ func TestRepositoryService_ListCommits(t *testing.T) {
 		}
 		svc := newRepoService(creds)
 
-		_, err := svc.ListCommits(context.Background(), commitReq("git-secret", "acme"), gitprovider.ProviderGitHub, 10, 0)
+		_, err := svc.ListCommits(context.Background(), commitReq("git-secret"), "acme", gitprovider.ProviderGitHub, 10, 0)
 
 		assert.ErrorIs(t, err, utils.ErrGitSecretInvalidType)
 		assert.NotErrorIs(t, err, gitprovider.ErrNotFound)
+	})
+
+	t.Run("secretRef without an org identity is rejected, not silently downgraded", func(t *testing.T) {
+		svc := newRepoService(&gitCredsStub{})
+
+		_, err := svc.ListCommits(context.Background(), commitReq("git-secret"), "", gitprovider.ProviderGitHub, 10, 0)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "organization identity is required")
 	})
 
 	t.Run("unsupported provider type fails locally without network", func(t *testing.T) {
 		svc := newRepoService(&gitCredsStub{})
 
 		req := spec.ListCommitsRequest{Owner: "acme", Repo: "widgets"}
-		_, err := svc.ListCommits(context.Background(), req, gitprovider.ProviderType("gitlab"), 10, 0)
+		_, err := svc.ListCommits(context.Background(), req, "acme", gitprovider.ProviderType("gitlab"), 10, 0)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unsupported git provider")

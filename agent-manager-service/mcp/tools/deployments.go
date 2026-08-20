@@ -23,6 +23,7 @@ import (
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/rbac"
 	"github.com/wso2/agent-manager/agent-manager-service/spec"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
@@ -82,7 +83,7 @@ func (t *Toolsets) registerDeploymentTools(server *gomcp.Server, reg *toolRegist
 			"project_name": stringProperty("Required. Project name where the agent exists."),
 			"agent_name":   stringProperty("Required. Name of the agent to check deployments for."),
 		}, []string{"project_name", "agent_name"}),
-	}, listDeployments(t.DeploymentToolset), rbac.AgentRead)
+	}, audit.ActionAgentRead, listDeployments(t.DeploymentToolset), rbac.AgentRead)
 
 	addTool(reg, server, &gomcp.Tool{
 		Name: "deploy_agent",
@@ -101,7 +102,7 @@ func (t *Toolsets) registerDeploymentTools(server *gomcp.Server, reg *toolRegist
 				"secret_ref":   stringProperty("Optional. Reference to existing secret."),
 			}, []string{"key"})),
 		}, []string{"project_name", "agent_name", "image_id"}),
-	}, deployAgent(t.DeploymentToolset), rbac.AgentDeployNonProduction)
+	}, audit.ActionAgentDeploy, deployAgent(t.DeploymentToolset), rbac.AgentDeployNonProduction)
 
 	addTool(reg, server, &gomcp.Tool{
 		Name: "update_deployment_state",
@@ -113,7 +114,7 @@ func (t *Toolsets) registerDeploymentTools(server *gomcp.Server, reg *toolRegist
 			"environment":  stringProperty("Required. Environment name. Use list_environments to discover valid names."),
 			"state":        enumProperty("Required. Desired deployment action for the selected environment.", []string{"redeploy", "undeploy"}),
 		}, []string{"project_name", "agent_name", "environment", "state"}),
-	}, updateDeploymentState(t.DeploymentToolset), rbac.AgentSuspend)
+	}, audit.ActionAgentChangeDeploymentState, updateDeploymentState(t.DeploymentToolset), rbac.AgentSuspend)
 }
 
 func listDeployments(handler DeploymentToolsetHandler) func(context.Context, *gomcp.CallToolRequest, listDeploymentsInput) (*gomcp.CallToolResult, any, error) {

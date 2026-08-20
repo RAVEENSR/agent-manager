@@ -8,6 +8,10 @@ on:
       - 'documentation/**'
       - '.github/workflows/docs-pr-checks.yml'
 
+# Both jobs only check out the repository and run npm; nothing needs write access.
+permissions:
+  contents: read
+
 jobs:
   audit:
     name: Security Audit
@@ -28,7 +32,7 @@ jobs:
 
       - name: Security Audit
         working-directory: ./documentation
-        run: npm audit --audit-level=high --omit=dev
+        run: npm run audit
 
   build:
     name: Build Documentation Site

@@ -60,7 +60,21 @@ done
 
 start_caddy() {
   mkdir -p /opt/amp
-  render_caddyfile "$VM_IP" "$ACME_EMAIL" "$EXTERNAL_GATEWAYS" >/opt/amp/Caddyfile
+
+  # amp-api auto-generates thunder-ask-secret (see the wso2-agent-manager
+  # chart's secret.yaml) once the "amp" release exists — which it always does
+  # by this point, since start_caddy only runs after run_install's base
+  # installer returns. Read it back so Caddy can present it on its own
+  # on-demand-TLS ask calls (see caddyfile()'s ask_secret param), isolating
+  # that traffic's rate-limit budget from the public internet's, which also
+  # reaches /internal/thunder-ask through the api host's own catch-all route.
+  # Left empty (never fatal) if the secret or key is missing — e.g. an
+  # operator-supplied existingSecret override with no such key — the ask call
+  # still works, it just falls back to sharing the public budget.
+  local thunder_ask_secret=""
+  thunder_ask_secret="$(kubectl get secret amp-api -n wso2-amp -o jsonpath='{.data.thunder-ask-secret}' 2>/dev/null | base64 -d 2>/dev/null)" || thunder_ask_secret=""
+
+  render_caddyfile "$VM_IP" "$ACME_EMAIL" "$EXTERNAL_GATEWAYS" "$thunder_ask_secret" >/opt/amp/Caddyfile
   log "Wrote /opt/amp/Caddyfile"
 
   docker rm -f amp-caddy >/dev/null 2>&1 || true
@@ -114,8 +128,9 @@ run_install() {
   # agent-manager-service's identical THUNDER_HOST_BASE_DOMAIN/TLS_ENABLED config
   # (must match on both sides or the reported and actually-deployed URLs diverge).
   # vm_host("thunder", ip) is "thunder.amp.<ip>.sslip.io"; stripping the "thunder."
-  # prefix gives env-Thunder's base domain, so "<org>-<env>.thunder.<base>" is a
-  # subdomain of it — exactly what the Caddy wildcard site added for it matches.
+  # prefix gives env-Thunder's base domain, so "<handle>.<base>" sits directly
+  # under it (no fixed "thunder." segment) — exactly what the Caddy wildcard
+  # site added for it matches.
   local thunder_host_full; thunder_host_full="$(vm_host thunder "$VM_IP")"
   export THUNDER_HOST_BASE_DOMAIN="${thunder_host_full#thunder.}"
   export TLS_ENABLED=true

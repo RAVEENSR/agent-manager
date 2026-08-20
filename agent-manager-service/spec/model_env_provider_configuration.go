@@ -19,7 +19,8 @@ var _ MappedNullable = &EnvProviderConfiguration{}
 
 // EnvProviderConfiguration struct for EnvProviderConfiguration
 type EnvProviderConfiguration struct {
-	Policies []LLMPolicy `json:"policies,omitempty"`
+	Policies   []LLMPolicy `json:"policies,omitempty"`
+	Resilience *Resilience `json:"resilience,omitempty"`
 }
 
 // NewEnvProviderConfiguration instantiates a new EnvProviderConfiguration object
@@ -71,6 +72,38 @@ func (o *EnvProviderConfiguration) SetPolicies(v []LLMPolicy) {
 	o.Policies = v
 }
 
+// GetResilience returns the Resilience field value if set, zero value otherwise.
+func (o *EnvProviderConfiguration) GetResilience() Resilience {
+	if o == nil || IsNil(o.Resilience) {
+		var ret Resilience
+		return ret
+	}
+	return *o.Resilience
+}
+
+// GetResilienceOk returns a tuple with the Resilience field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *EnvProviderConfiguration) GetResilienceOk() (*Resilience, bool) {
+	if o == nil || IsNil(o.Resilience) {
+		return nil, false
+	}
+	return o.Resilience, true
+}
+
+// HasResilience returns a boolean if a field has been set.
+func (o *EnvProviderConfiguration) HasResilience() bool {
+	if o != nil && !IsNil(o.Resilience) {
+		return true
+	}
+
+	return false
+}
+
+// SetResilience gets a reference to the given Resilience and assigns it to the Resilience field.
+func (o *EnvProviderConfiguration) SetResilience(v Resilience) {
+	o.Resilience = &v
+}
+
 func (o EnvProviderConfiguration) MarshalJSON() ([]byte, error) {
 	toSerialize, err := o.ToMap()
 	if err != nil {
@@ -83,6 +116,9 @@ func (o EnvProviderConfiguration) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	if !IsNil(o.Policies) {
 		toSerialize["policies"] = o.Policies
+	}
+	if !IsNil(o.Resilience) {
+		toSerialize["resilience"] = o.Resilience
 	}
 	return toSerialize, nil
 }

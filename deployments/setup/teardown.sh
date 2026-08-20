@@ -41,9 +41,13 @@ fi
 # ============================================================================
 # Step 3: Delete Colima dev profile
 # ============================================================================
+# Linux never created a Colima VM (see setup-colima.sh), and any profile found
+# here belongs to the user's other work — leave it alone.
 echo ""
 echo "3️⃣  Delete Colima dev profile"
-if command -v colima &> /dev/null; then
+if [ "$(uname -s)" = "Linux" ]; then
+    echo "⏭️  Linux uses the native Docker daemon, no Colima profile to delete"
+elif command -v colima &> /dev/null; then
     if colima list 2>/dev/null | grep -q "dev"; then
         echo "🛑 Deleting Colima dev profile..."
         colima stop dev 2>/dev/null || true
@@ -57,7 +61,9 @@ else
 fi
 
 echo ""
-echo "ℹ️  Note: Colima default profile may still be running."
-echo "   To completely remove Colima: colima delete"
-echo ""
+if [ "$(uname -s)" != "Linux" ]; then
+    echo "ℹ️  Note: Colima default profile may still be running."
+    echo "   To completely remove Colima: colima delete"
+    echo ""
+fi
 echo "✅ Teardown complete!"

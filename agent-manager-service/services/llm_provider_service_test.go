@@ -40,7 +40,7 @@ import (
 func TestLLMProviderService_ListAvailableLLMPolicies_NilGatewayRepoReturnsEmpty(t *testing.T) {
 	svc := &LLMProviderService{}
 
-	resp, err := svc.ListAvailableLLMPolicies(context.Background(), "org-uuid")
+	resp, err := svc.ListAvailableLLMPolicies(context.Background(), "org-uuid", "")
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)
@@ -67,7 +67,7 @@ func TestLLMProviderService_ListAvailableLLMPolicies_SurfacesFullDefinitions(t *
 	}
 	svc := &LLMProviderService{gatewayRepo: repo}
 
-	resp, err := svc.ListAvailableLLMPolicies(context.Background(), "org-uuid")
+	resp, err := svc.ListAvailableLLMPolicies(context.Background(), "org-uuid", "")
 
 	require.NoError(t, err)
 	require.Equal(t, int32(1), resp.Count)
@@ -98,11 +98,57 @@ func TestLLMProviderService_ListAvailableLLMPolicies_IntersectsAcrossActiveGatew
 	}
 	svc := &LLMProviderService{gatewayRepo: repo}
 
-	resp, err := svc.ListAvailableLLMPolicies(context.Background(), "org-uuid")
+	resp, err := svc.ListAvailableLLMPolicies(context.Background(), "org-uuid", "")
 
 	require.NoError(t, err)
 	require.Len(t, resp.List, 1)
 	assert.Equal(t, "shared-guardrail", resp.List[0].Name)
+}
+
+func TestLLMProviderService_ListAvailableLLMPolicies_ScopesToProviderDeployment(t *testing.T) {
+	providerUUID := uuid.New()
+	provider := &models.LLMProvider{UUID: providerUUID}
+
+	providerRepo := &repomocks.LLMProviderRepositoryMock{
+		GetByUUIDFunc: func(_ string, _ string) (*models.LLMProvider, error) {
+			return provider, nil
+		},
+	}
+	deploymentRepo := &repomocks.DeploymentRepositoryMock{
+		GetDeployedGatewaysByProviderFunc: func(artifactUUID uuid.UUID, orgUUID string) ([]string, error) {
+			assert.Equal(t, providerUUID, artifactUUID)
+			return []string{"gw-1"}, nil
+		},
+	}
+	gatewayRepo := &repomocks.GatewayRepositoryMock{
+		GetByUUIDFunc: func(_ string) (*models.Gateway, error) {
+			gw := gatewayWithLLMPolicyManifest(
+				map[string]interface{}{"name": "deployed-policy", "version": "v1"},
+			)
+			gw.OUID = "org-uuid"
+			return gw, nil
+		},
+	}
+	svc := &LLMProviderService{providerRepo: providerRepo, gatewayRepo: gatewayRepo, deploymentRepo: deploymentRepo}
+
+	resp, err := svc.ListAvailableLLMPolicies(context.Background(), "org-uuid", providerUUID.String())
+
+	require.NoError(t, err)
+	require.Len(t, resp.List, 1)
+	assert.Equal(t, "deployed-policy", resp.List[0].Name)
+}
+
+func TestLLMProviderService_ListAvailableLLMPolicies_UnknownProviderReturnsNotFound(t *testing.T) {
+	providerRepo := &repomocks.LLMProviderRepositoryMock{
+		GetByUUIDFunc: func(_ string, _ string) (*models.LLMProvider, error) {
+			return nil, gorm.ErrRecordNotFound
+		},
+	}
+	svc := &LLMProviderService{providerRepo: providerRepo}
+
+	_, err := svc.ListAvailableLLMPolicies(context.Background(), "org-uuid", uuid.New().String())
+
+	assert.ErrorIs(t, err, utils.ErrLLMProviderNotFound)
 }
 
 // -----------------------------------------------------------------------------

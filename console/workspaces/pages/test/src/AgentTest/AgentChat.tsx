@@ -33,7 +33,8 @@ import {
 } from "@agent-management-platform/api-client";
 import { useParams } from "react-router-dom";
 import { ChatMessage } from "./subComponents/ChatMessage";
-import { FadeIn } from "@agent-management-platform/views";
+import { FadeIn, useSnackBar } from "@agent-management-platform/views";
+import { readSSEStream, parseStreamChunk } from "./utils/sse";
 
 interface ChatMessage {
   id: string;
@@ -47,7 +48,23 @@ interface ChatMessage {
 // so a single delayed retry with the same key rides out that window.
 const TEST_KEY_PROPAGATION_RETRY_DELAY_MS = 2000;
 
+const FORMAT_MISMATCH_SNACKBAR_DURATION_MS = 15000;
+
+const FORMAT_MISMATCH_SNACKBAR_TEXT: Record<"streaming" | "http", string> = {
+  streaming:
+    "Streamed response didn't match the expected format",
+  http: "Response didn't match the expected format ",
+};
+
+
+const FORMAT_HINT_DETAIL: Record<"streaming" | "http", string> = {
+  streaming:
+    "Expected an SSE data:{node: string, content: [{type: string, text?: string}]}",
+  http: "Expected JSON body: {response: string}",
+};
+
 export function AgentChat() {
+  const { pushSnackBar } = useSnackBar();
   const [endpoint, setEndpoint] = useState("");
   const [message, setMessage] = useState("");
   const defaultBody = useMemo(() => {
@@ -65,6 +82,8 @@ export function AgentChat() {
     null,
   );
   const [isRefreshingKey, setIsRefreshingKey] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { agentId, orgId, projectId, envId } = useParams();
   const { data: endpoints, isLoading: isEndpointsLoading } =
@@ -119,6 +138,74 @@ export function AgentChat() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  const handleStreamingResponse = async (body: ReadableStream<Uint8Array>) => {
+    const assistantMessageId = (Date.now() + 1).toString();
+    let started = false;
+
+    try {
+      for await (const raw of readSSEStream(body)) {
+        const chunk = parseStreamChunk(raw);
+        if (!chunk || chunk.node !== "answer") continue;
+
+        const text = chunk.content
+          .filter((part) => part.type === "text" && typeof part.text === "string")
+          .map((part) => part.text as string)
+          .join("");
+        if (!text) continue;
+
+        if (!started) {
+          started = true;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: assistantMessageId,
+              role: "assistant",
+              content: text,
+              timestamp: new Date(),
+            },
+          ]);
+        } else {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMessageId ? { ...m, content: m.content + text } : m,
+            ),
+          );
+        }
+      }
+
+      // Surface a hint instead of leaving the reply blank.
+      if (!started) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: assistantMessageId,
+            role: "assistant",
+            content: `${FORMAT_HINT_DETAIL.streaming}`,
+            timestamp: new Date(),
+          },
+        ]);
+        pushSnackBar({
+          message: FORMAT_MISMATCH_SNACKBAR_TEXT.streaming,
+          type: "info",
+          duration: FORMAT_MISMATCH_SNACKBAR_DURATION_MS,
+        });
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return;
+      }
+      const errorMsg =
+        err instanceof Error
+          ? err.message
+          : "An error occurred while streaming the response";
+      setError(errorMsg);
+    }
+  };
+
+  const handleStopStreaming = () => {
+    abortControllerRef.current?.abort();
+  };
+
   const handleSendMessage = async () => {
     if (!message.trim() || isLoading || oauthOnly) return;
     if (securityEnabled && !testKey?.apiKey) {
@@ -138,6 +225,10 @@ export function AgentChat() {
     setError(null);
     setKeyAlert(null);
     setIsLoading(true);
+    setIsStreaming(false);
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
 
     try {
       const requestBody = {
@@ -157,6 +248,7 @@ export function AgentChat() {
           headers,
           body: JSON.stringify(requestBody),
           referrerPolicy: "",
+          signal: abortController.signal,
         });
       };
       // The gateway strips CORS headers from auth-rejected responses, so a
@@ -207,8 +299,15 @@ export function AgentChat() {
         return;
       }
 
-      let responseData: any;
       const contentType = apiResponse.headers.get("content-type");
+
+      if (apiResponse.ok && contentType?.includes("text/event-stream") && apiResponse.body) {
+        setIsStreaming(true);
+        await handleStreamingResponse(apiResponse.body);
+        return;
+      }
+
+      let responseData: any;
       if (contentType && contentType.includes("application/json")) {
         responseData = await apiResponse.json();
       } else {
@@ -232,10 +331,10 @@ export function AgentChat() {
         };
         setMessages((prev) => [...prev, errorMessageObj]);
       } else {
-        const responseText =
-          typeof responseData?.response === "string"
-            ? (responseData.response as string)
-            : JSON.stringify(responseData?.result, null, 4);
+        const hasExpectedShape = typeof responseData?.response === "string";
+        const responseText = hasExpectedShape
+          ? (responseData.response as string)
+          : `${JSON.stringify(responseData, null, 4)}\n\n${FORMAT_HINT_DETAIL.http}`;
 
         const assistantMessage: ChatMessage = {
           id: (Date.now() + 1).toString(),
@@ -244,6 +343,13 @@ export function AgentChat() {
           timestamp: new Date(),
         };
         setMessages((prev) => [...prev, assistantMessage]);
+        if (!hasExpectedShape) {
+          pushSnackBar({
+            message: FORMAT_MISMATCH_SNACKBAR_TEXT.http,
+            type: "info",
+            duration: FORMAT_MISMATCH_SNACKBAR_DURATION_MS,
+          });
+        }
       }
     } catch (err) {
       const errorMsg =
@@ -261,6 +367,7 @@ export function AgentChat() {
       setMessages((prev) => [...prev, errorMessageObj]);
     } finally {
       setIsLoading(false);
+      setIsStreaming(false);
     }
   };
 
@@ -487,21 +594,27 @@ export function AgentChat() {
             size="small"
             disabled={inputDisabled}
           />
-          <Button
-            variant="contained"
-            color="primary"
-            onClick={handleSendMessage}
-            disabled={sendDisabled}
-            startIcon={
-              isLoading || isEndpointsLoading ? (
-                <CircularProgress size={16} />
-              ) : (
-                <Send size={16} />
-              )
-            }
-          >
-            {isLoading || isEndpointsLoading ? "Sending" : "Send"}
-          </Button>
+          {isStreaming ? (
+            <Button variant="outlined" color="primary" onClick={handleStopStreaming}>
+              Stop
+            </Button>
+          ) : (
+            <Button
+              variant="contained"
+              color="primary"
+              onClick={handleSendMessage}
+              disabled={sendDisabled}
+              startIcon={
+                isLoading || isEndpointsLoading ? (
+                  <CircularProgress size={16} />
+                ) : (
+                  <Send size={16} />
+                )
+              }
+            >
+              {isLoading || isEndpointsLoading ? "Sending" : "Send"}
+            </Button>
+          )}
         </Box>
       </Box>
     </FadeIn>

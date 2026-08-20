@@ -28,7 +28,7 @@ set -euo pipefail
 #     release so an added env runs the same chart. Injected by the console.
 # Optional:
 #   - CHART_VERSION: gateway-extension chart version (e.g. 0.15.0). Injected by the console.
-#   - THUNDER_CHART_VERSION: ThunderID chart version for the per-env instance (default: 0.45.0).
+#   - THUNDER_CHART_VERSION: ThunderID chart version for the per-env instance (default: 1.0.0).
 #   - GATEWAY_CHART: path to a local chart directory or tarball (e.g. ./deployments/helm-charts/wso2-amp-api-platform-gateway-extension).
 #     When set, CHART_VERSION is ignored and the local chart is used directly.
 #   - IS_PRODUCTION (default: false)
@@ -36,11 +36,25 @@ set -euo pipefail
 #     release for the egress role and lowers the ENV_NAME ceiling by 7 characters.
 #   - ORG_NAME (default: default), DATAPLANE_REF (default: default)
 #   - AGENT_MANAGER_URL (default: http://api.amp.localhost:8080)
-#   - ENV_INGRESS_HOST (default: am-gateway.localhost): agent-facing gateway host.
+#   - ENV_INGRESS_HOST (default: the install's AGENTS_BASE_DOMAIN, else
+#     am-gateway.localhost): agent-facing gateway host.
 #   - ENV_INGRESS_HTTPS_HOST (default: unset): on TLS deployments, advertises an
 #     https listener variant. Set ENV_INGRESS_HTTPS_HOST=$ENV_INGRESS_HOST for
 #     the TLS toggle alone; without it the deployed-agent invoke URL is empty.
-#   - ENV_INGRESS_HTTPS_PORT (default: 443): port for the https listener variant.
+#   - ENV_INGRESS_PORT (default: the install's AGENTS_HTTP_PORT, else 19080) and
+#     ENV_INGRESS_HTTPS_PORT (default: the install's AGENTS_HTTPS_PORT, else 443):
+#     the port each listener variant serves. They differ on a plane gateway that
+#     serves http on 80 and https on 443; neither is inferred from the other.
+#   - GATEWAY_BASE_DOMAIN (default: the install's GATEWAY_BASE_DOMAIN, else
+#     gateway.localhost): base domain for this environment's api-platform gateway.
+#   - GATEWAY_VHOST_SCHEME (default: the install's GATEWAY_VHOST_SCHEME, else http)
+#     and GATEWAY_VHOST_PORT (default: the install's, else 19080): the scheme and
+#     port the gateway vhost is published on. A VM install fronts the runtime with
+#     TLS on :443; a local k3d install serves plain http on the node port.
+#   - GATEWAY_VHOST (default: composed from the three above): full override of the
+#     published gateway URL, for a topology none of the recorded values describe.
+#   - AMS_CONFIGMAP_NAME / AMS_CONFIGMAP_NAMESPACE (default: amp-api / wso2-amp):
+#     where the recorded values above are read from on a non-default release.
 #   - IDP_SKIP_TLS_VERIFY (default: true): skipTlsVerify for the seeded env-Thunder identity provider.
 
 # --- Required inputs ---
@@ -154,8 +168,8 @@ else
     echo "📌 Using pinned chart version: ${CHART_VERSION}"
 fi
 
-# Port the gateway runtime is exposed on (matches values.yaml gateway.vhost default).
-GATEWAY_VHOST_PORT="${GATEWAY_VHOST_PORT:-19080}"
+# GATEWAY_VHOST_PORT is resolved further down, together with the other values the
+# install records on the AMS ConfigMap — defaulting it here would pre-empt that lookup.
 
 # Base URL the gateway uses to reach Agent Manager. Both /api/v1 and the
 # unauthenticated /auth/external/jwks.json endpoint are served from this host:port
@@ -194,8 +208,42 @@ else
   unset _naming_lib_url _naming_lib_tmp
 fi
 
+# Load the shared AMS auth helpers (get_ams_token/get_thunder_url_handle) — see
+# deployments/scripts/ams-auth.sh. Same prefer-local-sibling, fallback-to-curl-fetch
+# pattern as the thunder-naming.sh load above. get_thunder_url_handle is the single
+# implementation every script uses to learn an ALREADY-provisioned env-Thunder's
+# registered handle — see Step 2b below.
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "$(dirname "${BASH_SOURCE[0]}")/ams-auth.sh" ]; then
+  # shellcheck source=ams-auth.sh
+  source "$(dirname "${BASH_SOURCE[0]}")/ams-auth.sh"
+else
+  _ams_auth_lib_url="${AMS_AUTH_LIB_URL:-${SCRIPT_BASE_URL}/ams-auth.sh}"
+  _ams_auth_lib_tmp="$(mktemp)"
+  if ! curl -fsSL "${_ams_auth_lib_url}" -o "${_ams_auth_lib_tmp}"; then
+    echo "❌ Failed to fetch AMS auth helpers from ${_ams_auth_lib_url}" >&2
+    rm -f "${_ams_auth_lib_tmp}"
+    exit 1
+  fi
+  # shellcheck source=/dev/null
+  source "${_ams_auth_lib_tmp}"
+  rm -f "${_ams_auth_lib_tmp}"
+  unset _ams_auth_lib_url _ams_auth_lib_tmp
+fi
+
 echo "=== Adding Environment: ${DISPLAY_NAME} (${ENV_NAME}) ==="
 echo ""
+
+# Checked before any work: an unreachable cluster otherwise surfaces much later as an
+# opaque helm/kubectl error, and `command -v kubectl` passes with no kubeconfig at all.
+if ! kubectl version > /dev/null 2>&1; then
+    echo "❌ kubectl cannot reach the cluster."
+    echo "   Check: kubectl config current-context"
+    echo "   A single-VM install configures the cluster for root only, so either:"
+    echo "     - re-run this command with sudo (place it before 'bash'), or"
+    echo "     - give your user a context:"
+    echo "         sudo k3d kubeconfig merge amp-local --kubeconfig-merge-default --kubeconfig-switch-context"
+    exit 1
+fi
 
 # --- Step 0: Verify Agent Manager is reachable ---
 echo "⏳ Checking Agent Manager is healthy..."
@@ -204,6 +252,7 @@ ELAPSED=0
 until curl -sf "${AGENT_MANAGER_URL}/healthz" > /dev/null 2>&1; do
     if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
         echo "❌ Agent Manager not reachable at ${AGENT_MANAGER_URL}/healthz after ${MAX_WAIT}s"
+        echo "   Set AGENT_MANAGER_URL to the URL you use to reach the console's API."
         exit 1
     fi
     sleep 3
@@ -219,19 +268,111 @@ DISPLAY_NAME_JSON=$(printf '%s' "${DISPLAY_NAME}" | sed -e 's/\\/\\\\/g' -e 's/"
 echo ""
 echo "🌍 Creating environment '${ENV_NAME}'..."
 
+AMS_CONFIGMAP_NAME="${AMS_CONFIGMAP_NAME:-amp-api}"
+AMS_CONFIGMAP_NAMESPACE="${AMS_CONFIGMAP_NAMESPACE:-wso2-amp}"
+
+# Value the install recorded for itself. An absent ConfigMap (legacy or local
+# install) yields empty so callers fall back; an unreachable or forbidden cluster must
+# not silently do the same, or the fallback picks localhost hosts that resolve nowhere
+# and the failure only surfaces as a TLS error at invoke time.
+#
+# stdout and stderr are captured separately: folding them together would splice any
+# kubectl warning into the value on the success path, silently yielding a hostname or
+# port built from a diagnostic string.
+AMS_CONFIG_VALUE=""
+ams_config_value() {
+    local out err rc
+    AMS_CONFIG_VALUE=""
+    err="$(mktemp)"
+    out="$(kubectl get configmap "${AMS_CONFIGMAP_NAME}" -n "${AMS_CONFIGMAP_NAMESPACE}" \
+        -o "jsonpath={.data.$1}" 2>"${err}")" && rc=0 || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        AMS_CONFIG_VALUE="$out"
+    elif ! grep -q 'NotFound' "${err}"; then
+        echo "❌ Could not read ${AMS_CONFIGMAP_NAMESPACE}/${AMS_CONFIGMAP_NAME}: $(cat "${err}")" >&2
+        echo "   Fix cluster access, or set ENV_INGRESS_HOST and GATEWAY_VHOST explicitly." >&2
+        rm -f "${err}"
+        exit 1
+    fi
+    rm -f "${err}"
+}
+
+# --- Agent-facing ingress (the Environment CR's external listeners) ---
+if [ -z "${ENV_INGRESS_HOST:-}" ]; then
+    ams_config_value AGENTS_BASE_DOMAIN
+    ENV_INGRESS_HOST="${AMS_CONFIG_VALUE}"
+fi
 ENV_INGRESS_HOST="${ENV_INGRESS_HOST:-am-gateway.localhost}"
 ENV_INGRESS_HTTPS_HOST="${ENV_INGRESS_HTTPS_HOST:-}"
+# Each listener variant carries the port ITS listener serves, and the two are not
+# always the same: a Caddy-fronted VM terminates both on 443, while a plane gateway
+# commonly serves http on 80 and https on 443. Guessing one from the other publishes
+# "http://<host>:443" — an http scheme on the TLS port, which a browser blocks as
+# mixed content from the https console. So take both from the install.
+if [ -z "${ENV_INGRESS_PORT:-}" ]; then
+    ams_config_value AGENTS_HTTP_PORT
+    ENV_INGRESS_PORT="${AMS_CONFIG_VALUE}"
+fi
+ENV_INGRESS_PORT="${ENV_INGRESS_PORT:-19080}"
+if [ -z "${ENV_INGRESS_HTTPS_PORT:-}" ]; then
+    ams_config_value AGENTS_HTTPS_PORT
+    ENV_INGRESS_HTTPS_PORT="${AMS_CONFIG_VALUE}"
+fi
 ENV_INGRESS_HTTPS_PORT="${ENV_INGRESS_HTTPS_PORT:-443}"
+
+# --- Published gateway vhost (scheme + host + port) ---
+# The vhost is the public URL the controller mints into LLM-proxy and OTel endpoints,
+# and the console appends "/otel" to it verbatim. Getting the hostname right is not
+# enough: on a VM the runtime is reached over TLS on :443 through the front proxy, and
+# the node port (19080) is bound to loopback only, so the localhost-era "http://<host>:19080"
+# still resolves to nothing callable. Take scheme and port from the install too.
+if [ -z "${GATEWAY_BASE_DOMAIN:-}" ]; then
+    ams_config_value GATEWAY_BASE_DOMAIN
+    GATEWAY_BASE_DOMAIN="${AMS_CONFIG_VALUE}"
+fi
+GATEWAY_BASE_DOMAIN="${GATEWAY_BASE_DOMAIN:-gateway.localhost}"
+if [ -z "${GATEWAY_VHOST_SCHEME:-}" ]; then
+    ams_config_value GATEWAY_VHOST_SCHEME
+    GATEWAY_VHOST_SCHEME="${AMS_CONFIG_VALUE}"
+fi
+GATEWAY_VHOST_SCHEME="${GATEWAY_VHOST_SCHEME:-http}"
+if [ -z "${GATEWAY_VHOST_PORT:-}" ]; then
+    ams_config_value GATEWAY_VHOST_PORT
+    GATEWAY_VHOST_PORT="${AMS_CONFIG_VALUE}"
+fi
+GATEWAY_VHOST_PORT="${GATEWAY_VHOST_PORT:-19080}"
+
+# Omit the port when it is the scheme's default. The installer writes the default
+# environment's vhost without one ("https://gateway.<base>"), and the two must agree:
+# they are compared as strings wherever a caller matches an endpoint back to a gateway.
+gateway_vhost_url() {   # <scheme> <host> <port>
+    if { [ "$1" = "https" ] && [ "$3" = "443" ]; } || { [ "$1" = "http" ] && [ "$3" = "80" ]; }; then
+        printf '%s://%s' "$1" "$2"
+    else
+        printf '%s://%s:%s' "$1" "$2" "$3"
+    fi
+}
+
+# Without an https variant the console reports an empty invoke URL on TLS deployments.
+# A recorded (non-localhost) agents base means the install fronts agents publicly, so
+# advertise the TLS variant alongside the plain one.
+if [ -z "${ENV_INGRESS_HTTPS_HOST}" ] && [ "${ENV_INGRESS_HOST}" != "am-gateway.localhost" ]; then
+    ENV_INGRESS_HTTPS_HOST="${ENV_INGRESS_HOST}"
+fi
 
 # Build the external listener set. Always advertise http; add an https variant when
 # ENV_INGRESS_HTTPS_HOST is set (TLS deployments). The console reads the https
 # endpoint variant when tlsEnabled=true, and an Environment's external gateway
 # wholly replaces the dataplane's, so an http-only override on a TLS platform leaves
 # the deployed-agent invoke URL empty (try-out then 405s against the console host).
-EXTERNAL_LISTENERS="\"http\": {\"host\": \"${ENV_INGRESS_HOST}\", \"port\": ${GATEWAY_VHOST_PORT}}"
+EXTERNAL_LISTENERS="\"http\": {\"host\": \"${ENV_INGRESS_HOST}\", \"port\": ${ENV_INGRESS_PORT}}"
 if [ -n "${ENV_INGRESS_HTTPS_HOST}" ]; then
     EXTERNAL_LISTENERS="${EXTERNAL_LISTENERS}, \"https\": {\"host\": \"${ENV_INGRESS_HTTPS_HOST}\", \"port\": ${ENV_INGRESS_HTTPS_PORT}}"
 fi
+
+# Caddy's *.<base> site issues the cert for the resulting hostname on VM installs.
+GATEWAY_HOSTNAME="${ENV_NAME}-${ORG_NAME}.${GATEWAY_BASE_DOMAIN}"
+GATEWAY_VHOST="${GATEWAY_VHOST:-$(gateway_vhost_url "${GATEWAY_VHOST_SCHEME}" "${GATEWAY_HOSTNAME}" "${GATEWAY_VHOST_PORT}")}"
 
 # Optional pod runtime isolation tier for this environment. "gvisor" makes agents run
 # under the runsc RuntimeClass (requires a gVisor node — see `make setup-gvisor`); "kata"
@@ -326,10 +467,31 @@ if [ "${PROVISION_THUNDER:-true}" = "true" ]; then
       # fetches thunder-naming.sh from the same git ref as this one — see thunder-naming.sh.
       # AMP_API_URL/AGENT_MANAGER_TOKEN forward this call's already-verified AMS
       # reachability + bearer token to the chained script's store_via_ams.
+      # THUNDER_HANDLE, when set, forwards the user-chosen unguessable URL handle
+      # (see thunder-naming.sh's thunder_host) to register_thunder_url. Empty is
+      # fine too — add-environment-thunder.sh always registers a handle now, generating
+      # one itself when THUNDER_HANDLE is unset (see register_thunder_url). Step 2b
+      # below learns whichever handle actually got stored, since this process has no
+      # other way to find out.
+      # THUNDER_HOST_BASE_DOMAIN/TLS_ENABLED/PLATFORM_THUNDER_* must ALSO be forwarded
+      # on any non-local-dev deployment (see add-environment-thunder.sh's own doc
+      # comment) — a VM install sets all five together, deployment-wide, when it
+      # provisions the default environment (deployments/vm/lib-vm.sh), but this
+      # add-environment.sh call is a SEPARATE process from that one, so without
+      # forwarding them explicitly here every environment created afterward would
+      # silently fall back to add-environment-thunder.sh's own local-dev defaults
+      # (amp.localhost, TLS disabled) regardless of what this deployment actually
+      # uses. Empty is fine when unset — same fallback either way, just explicit.
       if ENV_NAME="${ENV_NAME}" DISPLAY_NAME="${DISPLAY_NAME}" ORG_NAME="${ORG_NAME}" \
           DATAPLANE_REF="${DATAPLANE_REF}" THUNDER_CHART="${THUNDER_CHART:-}" \
+          THUNDER_HANDLE="${THUNDER_HANDLE:-}" \
           CHART_VERSION="${THUNDER_CHART_VERSION:-}" SCRIPT_BASE_URL="${SCRIPT_BASE_URL}" \
           AMP_API_URL="${AGENT_MANAGER_API_URL}" AGENT_MANAGER_TOKEN="${AGENT_MANAGER_TOKEN}" \
+          THUNDER_HOST_BASE_DOMAIN="${THUNDER_HOST_BASE_DOMAIN:-}" \
+          TLS_ENABLED="${TLS_ENABLED:-}" \
+          PLATFORM_THUNDER_ISSUER="${PLATFORM_THUNDER_ISSUER:-}" \
+          PLATFORM_THUNDER_JWKS_URL="${PLATFORM_THUNDER_JWKS_URL:-}" \
+          PLATFORM_THUNDER_TOKEN_AUDIENCE="${PLATFORM_THUNDER_TOKEN_AUDIENCE:-}" \
           bash "$script_tmp"; then
         echo "✅ Thunder ID instance provisioned"
         THUNDER_PROVISIONED=true
@@ -359,6 +521,27 @@ else
     echo "    ThunderKeyManager (shared platform Thunder) instead of a per-env address."
 fi
 
+# --- Step 2b: Learn this environment's registered Thunder URL handle ---
+# add-environment-thunder.sh (above) registers a handle with agent-manager-service
+# BEFORE installing Thunder — either THUNDER_HANDLE as forwarded, or (when unset) a
+# 10-character one agent-manager-service generated on its own. Either way, THIS
+# script (a separate process) has no way to know which one actually got stored, and
+# there's no pattern to compute from org/env instead — so it must ask
+# agent-manager-service directly via GET before wiring the gateway's ThunderKeyManager
+# in Step 3, or an auto-generated handle would leave the gateway trusting an issuer no
+# real token ever presents.
+THUNDER_URL_HANDLE=""
+if [ "$THUNDER_PROVISIONED" = "true" ]; then
+    if ! THUNDER_URL_HANDLE="$(AGENT_MANAGER_TOKEN="${AGENT_MANAGER_TOKEN}" AMP_API_URL="${AGENT_MANAGER_API_URL}" \
+        get_thunder_url_handle "${ORG_NAME}" "${ENV_NAME}")"; then
+        echo "⚠️  Could not learn the registered Thunder URL handle."
+        echo "    The env-Thunder instance is running, but the gateway cannot be wired to it"
+        echo "    without its handle — falling back to the shared platform Thunder instead."
+        echo "    Re-run this script (idempotent) once agent-manager-service is reachable to fix wiring."
+        THUNDER_PROVISIONED=false
+    fi
+fi
+
 # --- Step 3: Helm install the gateway ---
 echo ""
 echo "🌐 Installing API Platform Gateway for '${ENV_NAME}'..."
@@ -370,10 +553,16 @@ echo "🌐 Installing API Platform Gateway for '${ENV_NAME}'..."
 kubectl create namespace "${GATEWAY_NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f - > /dev/null
 kubectl label namespace "${GATEWAY_NAMESPACE}" "amp.wso2.com/api-platform-gateway=true" --overwrite > /dev/null
 
-# gateway-controller 1.2.0-beta requires an AES-256 at-rest encryption key,
-# mounted from a Secret in the SAME namespace as the gateway release 
+# gateway-controller (1.2.0-beta+) requires an AES-256 at-rest encryption key,
+# mounted from a Secret in the SAME namespace as the gateway release
 GATEWAY_ENCRYPTION_SECRET_NAME="${GATEWAY_ENCRYPTION_SECRET_NAME:-gateway-encryption-keys}"
 GATEWAY_ENCRYPTION_SECRET_KEY="${GATEWAY_ENCRYPTION_SECRET_KEY:-default-aesgcm256-v1.bin}"
+
+if ! kubectl auth can-i get secrets -n "${GATEWAY_NAMESPACE}" &>/dev/null; then
+    echo "❌ Missing 'get' permission on secrets in '${GATEWAY_NAMESPACE}' — required to detect an existing gateway encryption key secret. Grant get (in addition to create) on secrets in this namespace to the identity running this script." >&2
+    exit 1
+fi
+
 key_tmp="$(mktemp)"
 # Remove the plaintext key on every exit path — openssl/kubectl failure (set -e)
 # or an interrupt — not only via the normal cleanup below.
@@ -385,7 +574,7 @@ rm -f "${key_tmp}" # normal cleanup: don't leave the plaintext key on disk
 trap - EXIT INT TERM
 if [ "${enc_create_rc}" -eq 0 ]; then
     echo "✅ Gateway encryption key secret created in '${GATEWAY_NAMESPACE}'"
-elif printf '%s\n' "${enc_create_out}" | grep -q "AlreadyExists"; then
+elif kubectl get secret "${GATEWAY_ENCRYPTION_SECRET_NAME}" -n "${GATEWAY_NAMESPACE}" &>/dev/null; then
     echo "⏭️  Gateway encryption key secret '${GATEWAY_ENCRYPTION_SECRET_NAME}' already exists in '${GATEWAY_NAMESPACE}', leaving it untouched."
 else
     echo "❌ Failed to create gateway encryption key secret '${GATEWAY_ENCRYPTION_SECRET_NAME}' in '${GATEWAY_NAMESPACE}': ${enc_create_out}" >&2
@@ -429,8 +618,15 @@ if [ "$THUNDER_PROVISIONED" = "true" ]; then
     #   issuer        = Thunder's publicUrl / jwt.issuer (what it stamps into the JWT iss claim)
     #   internal_jwks = Thunder's K8s service DNS — avoids routing through the ingress
     #                   Service name follows the chart template: {{ .Release.Name }}-service
+    # THUNDER_URL_HANDLE (learned via GET in Step 2b above, since this script can't
+    # otherwise know whether add-environment-thunder.sh used THUNDER_HANDLE as given
+    # or generated its own) drives the issuer — the ACTUAL issuer the deployed
+    # Thunder stamps into every JWT is handle-based, with no pattern computable
+    # from org/env instead. Getting this wrong would make the gateway trust an
+    # issuer no real token ever presents, rejecting every agent request. Release
+    # name is unaffected — it never honored the handle.
     THUNDER_RELEASE="$(thunder_release_name "${ORG_NAME}" "${ENV_NAME}")"
-    THUNDER_ISSUER="$(thunder_issuer "${ORG_NAME}" "${ENV_NAME}")"
+    THUNDER_ISSUER="$(thunder_issuer "${THUNDER_URL_HANDLE}")"
     THUNDER_INTERNAL_JWKS="http://${THUNDER_RELEASE}-service.${THUNDER_RELEASE}.svc.cluster.local:8090/oauth2/jwks"
     HELM_ARGS+=(
         --set "apiGateway.config.policyConfigurations.jwtauth_v1.keymanagers[1].name=ThunderKeyManager"
@@ -469,7 +665,8 @@ helm upgrade --install "${RELEASE_NAME}" "${CHART_REF}" \
     --set apiGateway.namespace="${GATEWAY_NAMESPACE}" \
     --set gateway.type="${INGRESS_TYPE}" \
     --set gateway.displayName="${DISPLAY_NAME} API Platform Gateway" \
-    --set gateway.vhost="http://${ENV_NAME}-${ORG_NAME}.gateway.localhost:${GATEWAY_VHOST_PORT}" \
+    --set gateway.hostname="${GATEWAY_HOSTNAME}" \
+    --set gateway.vhost="${GATEWAY_VHOST}" \
     "${HELM_ARGS[@]}"
 
 if [ "$GATEWAY_TOPOLOGY" = "split" ]; then
@@ -479,7 +676,8 @@ if [ "$GATEWAY_TOPOLOGY" = "split" ]; then
     EGRESS_NAMESPACE="${GATEWAY_NAMESPACE}-egress"
     EGRESS_RELEASE_NAME=$(echo "api-platform-${ORG_NAME}-${ENV_NAME}-egress" | head -c 53 | sed 's/-*$//')
     EGRESS_GATEWAY_NAME="api-platform-${ORG_NAME}-${ENV_NAME}-egress"
-    EGRESS_HOSTNAME="${ENV_NAME}-${ORG_NAME}-egress.gateway.localhost"
+    EGRESS_HOSTNAME="${ENV_NAME}-${ORG_NAME}-egress.${GATEWAY_BASE_DOMAIN}"
+    EGRESS_VHOST="$(gateway_vhost_url "${GATEWAY_VHOST_SCHEME}" "${EGRESS_HOSTNAME}" "${GATEWAY_VHOST_PORT}")"
 
     # Both namespaces must carry this label. The sandbox NetworkPolicy at
     # wso2-amp-platform-resources-extension/templates/component-types/agent-api.yaml:206-213
@@ -508,7 +706,7 @@ if [ "$GATEWAY_TOPOLOGY" = "split" ]; then
         --set gateway.name="${EGRESS_GATEWAY_NAME}" \
         --set gateway.displayName="${DISPLAY_NAME} API Platform Gateway (Egress)" \
         --set gateway.hostname="${EGRESS_HOSTNAME}" \
-        --set gateway.vhost="http://${EGRESS_HOSTNAME}:${GATEWAY_VHOST_PORT}" \
+        --set gateway.vhost="${EGRESS_VHOST}" \
         "${HELM_ARGS[@]}"
 fi
 
@@ -536,5 +734,6 @@ echo "=== Environment '${ENV_NAME}' setup complete ==="
 echo ""
 echo "  Environment:     ${ENV_NAME}"
 echo "  Display Name:    ${DISPLAY_NAME}"
-echo "  Gateway Runtime: ${ENV_NAME}-${ORG_NAME}.gateway.${ENV_INGRESS_HOST}:${GATEWAY_VHOST_PORT}"
+echo "  Gateway Vhost:   ${GATEWAY_VHOST}"
+echo "  Agent Endpoints: ${ENV_NAME}-${ORG_NAME}.${ENV_INGRESS_HTTPS_HOST:-${ENV_INGRESS_HOST}}"
 echo ""

@@ -84,6 +84,9 @@ import (
 //			EnsureClusterRoleBindingFunc: func(ctx context.Context, clientID string, roleName string) error {
 //				panic("mock out the EnsureClusterRoleBinding method")
 //			},
+//			EnsureProjectReleaseBindingFunc: func(ctx context.Context, ouID string, projectName string, environmentName string) error {
+//				panic("mock out the EnsureProjectReleaseBinding method")
+//			},
 //			EnsureReleaseBindingRuntimeClassFunc: func(ctx context.Context, ouID string, componentName string, environment string, desiredRuntimeClass string) error {
 //				panic("mock out the EnsureReleaseBindingRuntimeClass method")
 //			},
@@ -318,6 +321,9 @@ type OpenChoreoClientMock struct {
 
 	// EnsureClusterRoleBindingFunc mocks the EnsureClusterRoleBinding method.
 	EnsureClusterRoleBindingFunc func(ctx context.Context, clientID string, roleName string) error
+
+	// EnsureProjectReleaseBindingFunc mocks the EnsureProjectReleaseBinding method.
+	EnsureProjectReleaseBindingFunc func(ctx context.Context, ouID string, projectName string, environmentName string) error
 
 	// EnsureReleaseBindingRuntimeClassFunc mocks the EnsureReleaseBindingRuntimeClass method.
 	EnsureReleaseBindingRuntimeClassFunc func(ctx context.Context, ouID string, componentName string, environment string, desiredRuntimeClass string) error
@@ -710,6 +716,17 @@ type OpenChoreoClientMock struct {
 			ClientID string
 			// RoleName is the roleName argument value.
 			RoleName string
+		}
+		// EnsureProjectReleaseBinding holds details about calls to the EnsureProjectReleaseBinding method.
+		EnsureProjectReleaseBinding []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// OuID is the ouID argument value.
+			OuID string
+			// ProjectName is the projectName argument value.
+			ProjectName string
+			// EnvironmentName is the environmentName argument value.
+			EnvironmentName string
 		}
 		// EnsureReleaseBindingRuntimeClass holds details about calls to the EnsureReleaseBindingRuntimeClass method.
 		EnsureReleaseBindingRuntimeClass []struct {
@@ -1350,6 +1367,7 @@ type OpenChoreoClientMock struct {
 	lockDeploy                                 sync.RWMutex
 	lockDetachTrait                            sync.RWMutex
 	lockEnsureClusterRoleBinding               sync.RWMutex
+	lockEnsureProjectReleaseBinding            sync.RWMutex
 	lockEnsureReleaseBindingRuntimeClass       sync.RWMutex
 	lockExpireWorkflowRun                      sync.RWMutex
 	lockGetBuild                               sync.RWMutex
@@ -2343,6 +2361,50 @@ func (mock *OpenChoreoClientMock) EnsureClusterRoleBindingCalls() []struct {
 	mock.lockEnsureClusterRoleBinding.RLock()
 	calls = mock.calls.EnsureClusterRoleBinding
 	mock.lockEnsureClusterRoleBinding.RUnlock()
+	return calls
+}
+
+// EnsureProjectReleaseBinding calls EnsureProjectReleaseBindingFunc.
+func (mock *OpenChoreoClientMock) EnsureProjectReleaseBinding(ctx context.Context, ouID string, projectName string, environmentName string) error {
+	if mock.EnsureProjectReleaseBindingFunc == nil {
+		panic("OpenChoreoClientMock.EnsureProjectReleaseBindingFunc: method is nil but OpenChoreoClient.EnsureProjectReleaseBinding was just called")
+	}
+	callInfo := struct {
+		Ctx             context.Context
+		OuID            string
+		ProjectName     string
+		EnvironmentName string
+	}{
+		Ctx:             ctx,
+		OuID:            ouID,
+		ProjectName:     projectName,
+		EnvironmentName: environmentName,
+	}
+	mock.lockEnsureProjectReleaseBinding.Lock()
+	mock.calls.EnsureProjectReleaseBinding = append(mock.calls.EnsureProjectReleaseBinding, callInfo)
+	mock.lockEnsureProjectReleaseBinding.Unlock()
+	return mock.EnsureProjectReleaseBindingFunc(ctx, ouID, projectName, environmentName)
+}
+
+// EnsureProjectReleaseBindingCalls gets all the calls that were made to EnsureProjectReleaseBinding.
+// Check the length with:
+//
+//	len(mockedOpenChoreoClient.EnsureProjectReleaseBindingCalls())
+func (mock *OpenChoreoClientMock) EnsureProjectReleaseBindingCalls() []struct {
+	Ctx             context.Context
+	OuID            string
+	ProjectName     string
+	EnvironmentName string
+} {
+	var calls []struct {
+		Ctx             context.Context
+		OuID            string
+		ProjectName     string
+		EnvironmentName string
+	}
+	mock.lockEnsureProjectReleaseBinding.RLock()
+	calls = mock.calls.EnsureProjectReleaseBinding
+	mock.lockEnsureProjectReleaseBinding.RUnlock()
 	return calls
 }
 

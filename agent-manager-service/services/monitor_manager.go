@@ -27,6 +27,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/observersvc"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/secretmanagersvc"
@@ -337,6 +338,15 @@ func (s *monitorManagerService) CreateMonitor(ctx context.Context, ouID string, 
 		}
 	}
 
+	audit.Record(
+		ctx, audit.ActionMonitorCreate,
+		audit.Org(ouID),
+		audit.ResourceNamed("monitor", monitor.ID.String(), req.Name),
+		audit.Project(req.ProjectName),
+		audit.Detail("monitorName", req.Name),
+		audit.Detail("agentName", req.AgentName),
+		audit.Detail("monitorType", string(monitor.Type)),
+	)
 	s.logger.Info("Monitor created successfully", "name", req.Name, "id", monitor.ID)
 
 	resp := monitor.ToResponse(models.MonitorStatusActive, latestRun)
@@ -702,6 +712,15 @@ func (s *monitorManagerService) UpdateMonitor(ctx context.Context, ouID, project
 
 	s.logger.Info("Monitor updated successfully", "name", monitorName)
 
+	audit.Record(
+		ctx, audit.ActionMonitorUpdate,
+		audit.Org(ouID),
+		audit.ResourceNamed("monitor", monitor.ID.String(), monitorName),
+		audit.Project(projectName),
+		audit.Detail("monitorName", monitorName),
+		audit.Detail("agentName", agentName),
+	)
+
 	resp := monitor.ToResponse(status, latestRun)
 
 	// Enrich with LLM provider info
@@ -770,6 +789,14 @@ func (s *monitorManagerService) DeleteMonitor(ctx context.Context, ouID, project
 		}
 	}
 
+	audit.Record(
+		ctx, audit.ActionMonitorDelete,
+		audit.Org(ouID),
+		audit.ResourceNamed("monitor", monitor.ID.String(), monitorName),
+		audit.Project(projectName),
+		audit.Detail("monitorName", monitorName),
+		audit.Detail("agentName", agentName),
+	)
 	s.logger.Info("Monitor deleted successfully", "name", monitorName)
 	return nil
 }
@@ -837,6 +864,14 @@ func (s *monitorManagerService) StopMonitor(ctx context.Context, ouID, projectNa
 	latestRun := s.getLatestRun(monitor.ID)
 	status := s.getMonitorStatus(monitor.ID, monitor.Type, monitor.NextRunTime)
 
+	audit.Record(
+		ctx, audit.ActionMonitorStop,
+		audit.Org(ouID),
+		audit.ResourceNamed("monitor", monitor.ID.String(), monitorName),
+		audit.Project(projectName),
+		audit.Detail("monitorName", monitorName),
+		audit.Detail("agentName", agentName),
+	)
 	s.logger.Info("Monitor stopped successfully", "name", monitorName, "status", status)
 	resp := monitor.ToResponse(status, latestRun)
 	llmProvider, err := s.buildMonitorLLMProviderInfo(ctx, monitor.ID, ouID)
@@ -885,6 +920,14 @@ func (s *monitorManagerService) StartMonitor(ctx context.Context, ouID, projectN
 	latestRun := s.getLatestRun(monitor.ID)
 	status := s.getMonitorStatus(monitor.ID, monitor.Type, monitor.NextRunTime)
 
+	audit.Record(
+		ctx, audit.ActionMonitorStart,
+		audit.Org(ouID),
+		audit.ResourceNamed("monitor", monitor.ID.String(), monitorName),
+		audit.Project(projectName),
+		audit.Detail("monitorName", monitorName),
+		audit.Detail("agentName", agentName),
+	)
 	s.logger.Info("Monitor started successfully", "name", monitorName, "status", status, "nextRunTime", now)
 	resp := monitor.ToResponse(status, latestRun)
 	llmProvider, err := s.buildMonitorLLMProviderInfo(ctx, monitor.ID, ouID)
@@ -1010,6 +1053,15 @@ func (s *monitorManagerService) RerunMonitor(ctx context.Context, ouID, projectN
 		return nil, err
 	}
 
+	audit.Record(
+		ctx, audit.ActionMonitorRerun,
+		audit.Org(ouID),
+		audit.ResourceNamed("monitor", monitor.ID.String(), monitorName),
+		audit.Project(projectName),
+		audit.Detail("monitorName", monitorName),
+		audit.Detail("agentName", agentName),
+		audit.Detail("runId", result.Run.ID.String()),
+	)
 	s.logger.Info("Monitor rerun created", "runID", result.Run.ID, "workflowRunName", result.Name)
 
 	resp := result.Run.ToResponse()

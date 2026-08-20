@@ -36,6 +36,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
 	"github.com/wso2/agent-manager/agent-manager-service/config"
 	"github.com/wso2/agent-manager/agent-manager-service/spec"
@@ -354,6 +355,25 @@ func (s *agentTokenManagerService) GenerateToken(ctx context.Context, req Genera
 		"expiresAt", expiresAt,
 		"keyID", keyPair.KeyID,
 	)
+
+	// Recorded before the token is handed back. Minting is local and stateless,
+	// so a token that is never returned was never usable — refusing here leaves
+	// no credential in circulation, which makes this genuinely fail-closed
+	// rather than merely best-effort. The signed token is never passed to the
+	// recorder; the jti identifies it.
+	if err := audit.RecordSync(
+		ctx, audit.ActionAgentTokenMint,
+		audit.Org(req.OrgId),
+		audit.ResourceNamed(audit.ResourceAgent, component.UUID, req.AgentName),
+		audit.Project(req.ProjectName),
+		audit.Environment(environmentName),
+		audit.Detail("agentName", req.AgentName),
+		audit.Detail("expiresIn", int64(expiryDuration.Seconds())),
+	); err != nil {
+		s.logger.Error("Refusing to issue agent token: audit record could not be written",
+			"agentName", req.AgentName, "error", err)
+		return nil, err
+	}
 
 	return &spec.TokenResponse{
 		Token:     signedToken,

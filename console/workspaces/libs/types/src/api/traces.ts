@@ -65,6 +65,7 @@ export type Trace = TraceOverview;
 export interface SpanStatus {
   error: boolean;
   errorType?: string;
+  message?: string;
 }
 
 export interface LLMTokenUsage {
@@ -150,6 +151,7 @@ export interface Span {
   durationInNanos: number;
   kind?: string;
   status?: string;
+  statusMessage?: string;
   attributes?: Record<string, unknown>;
   resource?: Record<string, unknown>;
   ampAttributes?: AmpAttributes;
@@ -164,6 +166,8 @@ export interface TraceSpanSummary {
   startTime: string;
   endTime: string;
   durationNs: number;
+  error?: boolean;
+  statusMessage?: string;
 }
 
 export interface TraceSpanSummaryListResponse {

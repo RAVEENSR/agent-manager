@@ -34,7 +34,7 @@ import {
   TraceSpanSummary,
 } from "@agent-management-platform/types";
 import { Workflow } from "@wso2/oxygen-ui-icons-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { SpanDetailsPanel } from "./SpanDetailsPanel";
 import { SpanDetailsPanelSkeleton } from "./spanDetails/SpanDetailsPanelSkeleton";
 
@@ -54,6 +54,15 @@ function TraceDetailsSkeleton() {
  *  spanKind (name-based detection) is mapped into ampAttributes.kind so the
  *  SpanIcon renders an icon before full span details are fetched. */
 function traceSpanSummaryToSpan(s: TraceSpanSummary): Span {
+  const ampAttributes =
+    s.spanKind || s.error
+      ? {
+          kind: s.spanKind ?? "",
+          ...(s.error
+            ? { status: { error: true, message: s.statusMessage } }
+            : {}),
+        }
+      : undefined;
   return {
     spanId: s.spanId,
     parentSpanId: s.parentSpanId?.trim() || undefined,
@@ -61,7 +70,7 @@ function traceSpanSummaryToSpan(s: TraceSpanSummary): Span {
     startTime: s.startTime,
     endTime: s.endTime,
     durationInNanos: s.durationNs,
-    ampAttributes: s.spanKind ? { kind: s.spanKind } : undefined,
+    ampAttributes,
   };
 }
 
@@ -105,6 +114,11 @@ export function TraceDetails({
 
   const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null);
 
+  const handleOpenAttributesClick = useCallback(
+    (span: Span) => setSelectedSpanId(span.spanId),
+    [],
+  );
+
   const spanKey = useMemo(
     () => traceDetails?.spans?.map((s) => s.spanId).join(',') ?? '',
     [traceDetails?.spans],
@@ -139,16 +153,32 @@ export function TraceDetails({
   const panelSpan =
     spanDetail && spanDetail.spanId === selectedSpanId ? spanDetail : null;
 
+  // Span details arrive one selection at a time, but the summaries the tree falls
+  // back to carry no token usage. Without this the token chip of an already-loaded
+  // span disappears as soon as another span is selected.
+  const [loadedSpans, setLoadedSpans] = useState<Record<string, Span>>({});
+
+  useEffect(() => setLoadedSpans({}), [traceId]);
+
+  useEffect(() => {
+    if (!panelSpan) return;
+    setLoadedSpans((prev) =>
+      prev[panelSpan.spanId] === panelSpan
+        ? prev
+        : { ...prev, [panelSpan.spanId]: panelSpan },
+    );
+  }, [panelSpan]);
+
   const spansForExplorer = useMemo(() => {
     if (!traceDetails?.spans?.length) return [];
     return traceDetails.spans.map((s) => {
-      const base = panelSpan?.spanId === s.spanId ? panelSpan : traceSpanSummaryToSpan(s);
+      const base = loadedSpans[s.spanId] ?? traceSpanSummaryToSpan(s);
       // Pin the tree icon to the summary's name-based kind so it never flips on selection.
       return s.spanKind
         ? { ...base, ampAttributes: { ...base.ampAttributes, kind: s.spanKind } }
         : base;
     });
-  }, [traceDetails?.spans, panelSpan]);
+  }, [traceDetails?.spans, loadedSpans]);
 
   const displaySelectedSpan = useMemo(() => {
     if (!selectedSpanId) return null;
@@ -221,7 +251,7 @@ export function TraceDetails({
         <Box sx={{ width: "45%" }} pr={1} overflow="auto">
           {traceId && (
             <TraceExplorer
-              onOpenAttributesClick={(span) => setSelectedSpanId(span.spanId)}
+              onOpenAttributesClick={handleOpenAttributesClick}
               selectedSpan={displaySelectedSpan}
               spans={spansForExplorer}
             />

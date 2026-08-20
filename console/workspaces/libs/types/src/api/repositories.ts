@@ -20,8 +20,6 @@
 export interface ListBranchesRequest {
   owner: string;
   repository: string;
-  // Organization name (required for private repositories)
-  orgName?: string;
   // Git secret reference name for private repository authentication
   secretRef?: string;
 }
@@ -34,8 +32,6 @@ export interface ListCommitsRequest {
   author?: string;
   since?: string;
   until?: string;
-  // Organization name (required for private repositories)
-  orgName?: string;
   // Git secret reference name for private repository authentication
   secretRef?: string;
   // Optional component identity for deployment-specific repository bindings

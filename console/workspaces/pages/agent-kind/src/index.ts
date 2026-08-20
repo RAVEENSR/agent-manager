@@ -1,5 +1,5 @@
 import type { PageMetadata } from "@agent-management-platform/types";
-import { Package as PackageIcon } from "@wso2/oxygen-ui-icons-react";
+import { Layers as KindIcon } from "@wso2/oxygen-ui-icons-react";
 import { PublishedList } from "./Publish.List";
 import { PublishComponent } from "./Publish.Component";
 import { CatalogOrganization } from "./Catalog.Organization";
@@ -8,7 +8,7 @@ import { CatalogKindDetails } from "./Catalog.KindDetails";
 export const metaData: PageMetadata = {
   title: "Agent Kind",
   description: "Agent Kind pages",
-  icon: PackageIcon,
+  icon: KindIcon,
   path: "/agent-kind",
   component: PublishComponent,
   levels: {

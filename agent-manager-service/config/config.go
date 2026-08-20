@@ -61,13 +61,22 @@ type Config struct {
 	ServerPublicURL          string
 
 	// ThunderHostBaseDomain is the domain suffix env-Thunder's developer-facing
-	// hostnames are built from: "<org>-<env>.thunder.<ThunderHostBaseDomain>".
+	// hostnames are built from: "<handle>.<ThunderHostBaseDomain>".
 	// Default "amp.localhost" matches local dev (k3d + the *.amp.localhost wildcard
 	// cert). VM/production deployments set this to their own base domain (e.g. a
 	// sslip.io address) — see deployments/vm/lib-vm.sh, which sets the identical
 	// value when provisioning env-Thunder so the Go-reported URLs and the actually
 	// deployed Thunder instance's own self-configured issuer never diverge.
 	ThunderHostBaseDomain string
+
+	// ThunderAskSecret, when set, is the shared secret Caddy's on-demand-TLS ask
+	// call presents (header X-Thunder-Ask-Secret) to /internal/thunder-ask so
+	// that call can be told apart from the public internet, which reaches the
+	// same path through the api host's own catch-all route — see
+	// api/thunder_ask_routes.go. Empty by default: a deployment that hasn't set
+	// this (e.g. one upgrading without regenerating its Caddyfile) keeps today's
+	// single shared rate limit rather than breaking.
+	ThunderAskSecret string
 
 	// OAuthAuthorizationServers is the list of OAuth 2.0 authorization server URLs
 	// advertised in the RFC 9728 protected resource metadata document. Each entry
@@ -127,6 +136,59 @@ type Config struct {
 
 	// PerAgentResourceLimits defines the operator-configured maximum values for agent resource configs
 	PerAgentResourceLimits ResourceLimitsConfig
+
+	// Audit configures the audit trail.
+	Audit AuditConfig
+
+	// GatewayManifestCache configures where the gateway-reported policy manifest
+	// cache lives. The default in-memory backend is process-local and therefore
+	// inconsistent across replicas — set Backend to "redis" in HA deployments.
+	GatewayManifestCache GatewayManifestCacheConfig
+}
+
+// GatewayManifestCacheConfig selects and configures the backend for the
+// gateway-manifest cache (see services.GatewayManifestCacheBackend).
+type GatewayManifestCacheConfig struct {
+	// Backend is "memory" (default, single-replica only) or "redis" (required for
+	// HA — a per-replica in-memory cache would leave replicas disagreeing on which
+	// policies gateways report, since each only sees the manifest pushes routed to it).
+	Backend string
+	Redis   GatewayManifestCacheRedisConfig
+}
+
+// GatewayManifestCacheRedisConfig configures the Redis backend. Only read/validated
+// when GatewayManifestCacheConfig.Backend == "redis".
+type GatewayManifestCacheRedisConfig struct {
+	Host       string
+	Port       int
+	Password   string `json:"-"`
+	DB         int
+	TLSEnabled bool
+}
+
+// AuditConfig controls the audit trail.
+//
+// Records are written to stdout as structured JSON and collected by the
+// platform's log pipeline. Retention and immutability are therefore properties
+// of that pipeline, not of this service — see docs/audit-logging.md, which
+// documents the retention the deployment must provide.
+type AuditConfig struct {
+	// Enabled turns audit recording on. Disabling it leaves the platform with
+	// no record of who changed what, so it should only be off for local
+	// development.
+	Enabled bool
+
+	// BufferSize bounds queued events. When the buffer is full, events are
+	// dropped and counted rather than blocking the request that produced them:
+	// a slow sink must not become an outage.
+	BufferSize int
+
+	// BatchSize is the maximum number of events written to the sink at once.
+	BatchSize int
+
+	// FlushIntervalMs bounds how long an event waits before being written, so a
+	// quiet service still emits promptly.
+	FlushIntervalMs int
 }
 
 type TLSConfig struct {
@@ -330,12 +392,24 @@ type InternalServerConfig struct {
 
 // ThunderConfig holds Thunder admin API configuration for provisioning OAuth apps
 type ThunderConfig struct {
-	// BaseURL is the Thunder API base URL (if empty, provisioner uses static defaults)
+	// BaseURL is the Thunder API base URL (if empty, provisioner uses static defaults).
+	// Must be Thunder's public/issuer URL: it also derives the System resource server
+	// identifier (RFC 8707) admin API tokens are scoped to — see
+	// thundersvc.systemResourceIdentifier. It does NOT need to be directly dialable
+	// from this process; see ResolveToHost below.
 	BaseURL string
 	// ClientID is the OAuth2 client ID of the system app (with Administrator role)
 	ClientID string
 	// ClientSecret is the OAuth2 client secret of the system app
 	ClientSecret string `json:"-"`
+	// ResolveToHost, if set, is the host:port this process actually dials for every
+	// Thunder request, while requests still carry BaseURL's host as the HTTP Host
+	// header and BaseURL still derives the System resource server identifier. Set
+	// this when BaseURL isn't directly dialable from here — e.g. agent-manager-service
+	// running in-cluster while Thunder's public URL only resolves via the host
+	// machine's own DNS/hosts setup (typically the in-cluster Thunder service's own
+	// cluster-DNS address). Leave empty when BaseURL is already directly dialable.
+	ResolveToHost string
 }
 
 // WebSocketConfig holds WebSocket-specific configuration

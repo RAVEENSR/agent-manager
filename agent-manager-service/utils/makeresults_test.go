@@ -50,3 +50,58 @@ func TestConvertToConfigurations_UnpinnedIsOmitted(t *testing.T) {
 		t.Errorf("InstrumentationVersion should be unset when the agent has no pin")
 	}
 }
+
+// The kind name and version travel together: a response carrying one but not the
+// other leaves every consumer unable to say which published version an agent runs.
+func TestConvertToAgentResponse_SurfacesKindVersion(t *testing.T) {
+	kindAgent := func(kindName, kindVersion string) *models.AgentResponse {
+		return &models.AgentResponse{
+			Name:         "kind-agent",
+			Provisioning: models.Provisioning{Type: string(InternalAgent)},
+			KindName:     kindName,
+			KindVersion:  kindVersion,
+		}
+	}
+
+	got := ConvertToAgentResponse(kindAgent("bal-task-assistant", "1.0.1"))
+	if got.KindName == nil || *got.KindName != "bal-task-assistant" {
+		t.Errorf("KindName = %v, want bal-task-assistant", got.KindName)
+	}
+	if got.KindVersion == nil || *got.KindVersion != "1.0.1" {
+		t.Errorf("KindVersion = %v, want 1.0.1", got.KindVersion)
+	}
+
+	// Agents created before the version was recorded must omit the field rather
+	// than report an empty version.
+	got = ConvertToAgentResponse(kindAgent("bal-task-assistant", ""))
+	if got.KindVersion != nil {
+		t.Errorf("KindVersion = %v, want nil for an agent with no recorded version", *got.KindVersion)
+	}
+}
+
+// The deployed kind version is what the environment actually runs; dropping it in
+// the mapper would leave the console re-deriving it from image IDs.
+func TestConvertToDeploymentDetailsResponse_SurfacesKindVersion(t *testing.T) {
+	got := ConvertToDeploymentDetailsResponse([]*models.DeploymentResponse{
+		{Environment: "default", ImageId: "img:v1", KindVersion: "1.2.0"},
+		{Environment: "prod", ImageId: "img:v0"},
+	})
+
+	deployed, ok := got["default"]
+	if !ok {
+		t.Fatal("expected a response for the default environment")
+	}
+	if deployed.KindVersion == nil || *deployed.KindVersion != "1.2.0" {
+		t.Errorf("KindVersion = %v, want 1.2.0", deployed.KindVersion)
+	}
+
+	// An image matching no published version must omit the field rather than
+	// report an empty version.
+	unresolved, ok := got["prod"]
+	if !ok {
+		t.Fatal("expected a response for the prod environment")
+	}
+	if unresolved.KindVersion != nil {
+		t.Errorf("KindVersion = %v, want nil when the image matches no version", *unresolved.KindVersion)
+	}
+}

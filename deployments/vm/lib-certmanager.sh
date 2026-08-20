@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
-# lib-certmanager.sh — render the cert-manager resources that replace the old lego +
-# Caddy TLS path for the advanced (DNS-01) VM install. Sourcing only defines functions
-# (no side effects); the render_* functions write YAML to stdout, so the caller pipes
-# them to `kubectl apply`. cert-manager (installed as a cluster prerequisite) then does
-# the ACME DNS-01 challenge, issues a wildcard cert into a Secret, and auto-renews it —
-# kgateway terminates TLS on :443 with that Secret. No lego container, no systemd timer.
+# lib-certmanager.sh — render the TLS + gateway resources for the advanced VM install,
+# which replaced the old lego + Caddy path. Sourcing only defines functions (no side
+# effects); the render_* functions write YAML to stdout, so the caller pipes them to
+# `kubectl apply`. No lego container, no systemd timer.
+#
+# Both TLS modes converge on one seam: a kubernetes.io/tls Secret in GATEWAY_NS that
+# the consolidated :443 Gateway references by name, with kgateway terminating TLS.
+#   dns01 — cert-manager (a cluster prerequisite) does the ACME DNS-01 challenge,
+#           issues a wildcard cert into that Secret, and auto-renews it.
+#   byoc  — render_byoc_tls_secret writes the operator's cert/key into that Secret
+#           directly; no cert-manager objects are created and nothing auto-renews.
+# Everything downstream of the Secret (Gateway, front-proxy routes, ReferenceGrants) is
+# identical in both modes.
 #
 # The caller defines log()/die(); fallbacks are provided so this file is usable standalone.
 command -v log >/dev/null 2>&1 || log() { printf '\033[0;34m[certmgr]\033[0m %s\n' "$*"; }
@@ -50,7 +57,7 @@ validate_dns01_config() {
 }
 
 # cert_dns_names — print the SAN hostnames (one per line) the wildcard cert must cover:
-# every fixed service host + the deployed-agent wildcard + the env-Thunder wildcard. Reads
+# every fixed service host + the three dynamic-tier wildcards. Reads
 # AMP_HOST_*/AMP_AGENTS_BASE from the caller's scope (matches the lib-vm.sh cores). CP is
 # omitted when AMP_HOST_CP is empty (external gateways off).
 # shellcheck disable=SC2154,SC2153  # AMP_HOST_*/AMP_AGENTS_BASE come from the caller's scope by design.
@@ -58,10 +65,14 @@ cert_dns_names() {
   printf '%s\n' "$AMP_HOST_CONSOLE" "$AMP_HOST_API" "$AMP_HOST_THUNDER" \
     "$AMP_HOST_OBSERVER" "$AMP_HOST_GATEWAY"
   [[ -n "${AMP_HOST_CP:-}" ]] && printf '%s\n' "$AMP_HOST_CP"
-  # Dynamic tiers (created after install): deployed agents <org>-<project>.<AGENTS_BASE>
-  # and env-Thunder <org>-<env>.<THUNDER_HOST>. A wildcard covers each without re-issuing.
+  # and the per-environment api-platform gateways <env>-<org>.<GATEWAY_HOST> that
+  # add-environment.sh installs. A wildcard covers each without re-issuing.
+  # Every env-Thunder handle sits directly under the base domain (no "thunder."
+  # segment — see thunder-naming.sh's thunder_host), covered by the base-domain
+  # wildcard below.
   printf '*.%s\n' "$AMP_AGENTS_BASE"
-  printf '*.%s\n' "$AMP_HOST_THUNDER"
+  printf '*.%s\n' "${AMP_HOST_THUNDER#thunder.}"
+  printf '*.%s\n' "$AMP_HOST_GATEWAY"
 }
 
 # _dns01_solver_block — print the cert-manager `dns01:` solver body for DNS_PROVIDER,
@@ -195,6 +206,78 @@ EOF
     name: ${issuer}
     kind: ClusterIssuer
     group: cert-manager.io
+EOF
+}
+
+# render_byoc_tls_secret <secret_name> <cert_file> <key_file> — print the
+# kubernetes.io/tls Secret holding an operator-supplied certificate chain and private
+# key, in GATEWAY_NS so the consolidated :443 Gateway's certificateRefs resolves
+# same-namespace. This is the byoc counterpart to render_wildcard_certificate: it
+# produces the very same Secret the DNS-01 path has cert-manager issue, so nothing
+# downstream (Gateway, routes, grants) can tell the two modes apart.
+#
+# Uses `data:` with base64 rather than `stringData:` with a block scalar: PEM is
+# multi-line and any indentation slip silently corrupts the key. `openssl base64 -A`
+# (not `base64 -w0`, which is GNU-only) keeps this portable across macOS and Linux.
+render_byoc_tls_secret() {
+  local name="$1" cert="$2" key="$3" crt_b64 key_b64
+  # Encode before the heredoc, not inside it. Command substitution in a heredoc swallows
+  # the exit status, so a file that moved or lost its permissions after the pre-flight
+  # would expand to an empty value here and still return 0 — the caller would then see
+  # only kubectl's decoding complaint, which never names the file at fault.
+  crt_b64="$(openssl base64 -A -in "$cert")" && [[ -n "$crt_b64" ]] \
+    || die "render_byoc_tls_secret: could not read/encode the certificate: ${cert}"
+  key_b64="$(openssl base64 -A -in "$key")" && [[ -n "$key_b64" ]] \
+    || die "render_byoc_tls_secret: could not read/encode the private key: ${key}"
+  cat <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${name}
+  namespace: ${GATEWAY_NS}
+type: kubernetes.io/tls
+data:
+  tls.crt: ${crt_b64}
+  tls.key: ${key_b64}
+EOF
+}
+
+# render_platform_ca_configmap <ca_file> — print the ConfigMap holding the operator's
+# CA certificate, so components created AFTER the install can find it.
+#
+# Environments are added long after install-advanced.sh exits, and each one provisions
+# its own env-Thunder that must validate platform Thunder's HTTPS JWKS URL. On a byoc
+# install that URL is served with the operator's certificate, so the in-cluster
+# self-signed root add-environment-thunder.sh otherwise falls back to is the wrong CA —
+# it mounts a bundle that cannot verify the chain, exits 0, and the failure only shows
+# up later as a broken login into that environment. Persisting the CA here is what makes
+# `TLS_CA_FILE` apply to every future environment rather than only the default one.
+#
+# A CA certificate is public by definition (it is sent in the TLS handshake), so a
+# ConfigMap is the right kind — no Secret needed.
+#
+# YAML infers a block scalar's indentation from its first non-empty line, so the sed
+# below strips any leading whitespace before applying exactly four spaces. Otherwise a CA
+# file opening with an indented line — the human-readable preamble `openssl x509 -text`
+# emits, for instance — would set a deeper inferred indent, and every subsequent line
+# would either gain leading spaces inside the value or end the block early. The ConfigMap
+# still applies either way; the damage only appears later as a trust failure.
+#
+# An explicit indentation indicator (`|4`) looks like the tidier fix but is not: the
+# indicator counts from the parent node's indentation, not from column zero, so here it
+# would demand six spaces and fail to parse at all.
+render_platform_ca_configmap() {
+  local ca="$1"
+  [[ -s "$ca" ]] || die "render_platform_ca_configmap: CA file is missing or empty: ${ca}"
+  cat <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: amp-platform-ca
+  namespace: ${GATEWAY_NS}
+data:
+  ca.crt: |
+$(sed -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//' -e 's/^/    /' "$ca")
 EOF
 }
 

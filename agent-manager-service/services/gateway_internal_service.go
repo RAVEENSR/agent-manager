@@ -19,11 +19,13 @@ package services
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
@@ -180,6 +182,9 @@ func (s *GatewayInternalAPIService) GetActiveLLMProviderDeploymentByGateway(ctx 
 func (s *GatewayInternalAPIService) GetActiveLLMProxyDeploymentByGateway(ctx context.Context, proxyID, ouID, gatewayID string) (map[string]string, error) {
 	proxy, err := s.proxyRepo.GetByID(proxyID, ouID)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, utils.ErrLLMProxyNotFound
+		}
 		return nil, fmt.Errorf("failed to get LLM proxy: %w", err)
 	}
 	if proxy == nil {

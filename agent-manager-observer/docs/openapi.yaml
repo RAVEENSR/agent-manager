@@ -575,6 +575,13 @@ components:
           type: string
         status:
           type: string
+          description: OTel status code of the span ("ok", "error", or "unset")
+        statusMessage:
+          type: string
+          description: >
+            Developer-facing status message from the span's OTel status
+            (OpenChoreo 1.2.0+). Typically set only when the span errored.
+          nullable: true
         attributes:
           type: object
           additionalProperties: true
@@ -753,6 +760,16 @@ components:
         durationNs:
           type: integer
           format: int64
+        error:
+          type: boolean
+          description: >
+            True when the span's OTel status code is "error". Sourced from the
+            span-list response (no per-span detail fetch), so the trace tree can
+            flag failed spans up front.
+        statusMessage:
+          type: string
+          description: Developer-facing status message from the span's OTel status (typically set on error).
+          nullable: true
 
     SpanSummaryListResponse:
       type: object
@@ -776,6 +793,12 @@ components:
         errorType:
           type: string
           description: Error type from error.type attribute (only present when error is true)
+          nullable: true
+        message:
+          type: string
+          description: >
+            Developer-facing status message from the span's OTel status
+            (OpenChoreo 1.2.0+). Typically set only when the span errored.
           nullable: true
 
     AmpAttributes:

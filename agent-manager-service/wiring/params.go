@@ -24,6 +24,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	observersvc "github.com/wso2/agent-manager/agent-manager-service/clients/observersvc"
 	occlient "github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/secretmanagersvc"
@@ -43,6 +44,7 @@ type AppParams struct {
 	AuthMiddleware jwtassertion.Middleware
 	Logger         *slog.Logger
 	OrgResolver    middleware.OrgResolver
+	AuditRecorder  audit.Recorder
 
 	// Controllers
 	AgentController                  controllers.AgentController

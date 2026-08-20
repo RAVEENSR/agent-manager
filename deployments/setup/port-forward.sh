@@ -54,7 +54,25 @@ fi
 # Unset = kubectl default (127.0.0.1). CI sets 0.0.0.0 so the agent-manager
 # container (docker-compose) can reach them via the host/bridge gateway —
 # a 127.0.0.1-only forward is unreachable from inside the container on Linux.
+#
+# So on Linux, default to loopback *plus* the Docker bridge gateway: containers
+# reach the host through the address their `host-gateway` alias resolves to, and
+# binding it makes the forwards reachable from docker-compose without publishing
+# anything to the LAN, while loopback keeps http://localhost:<port> working for
+# the developer. macOS needs none of this — Docker Desktop already routes
+# host.docker.internal traffic to the host's loopback.
 PF_ADDRESS="${PORT_FORWARD_ADDRESS:-}"
+if [ -z "$PF_ADDRESS" ] && [ "$(uname -s)" = "Linux" ]; then
+    bridge_gateway=$(docker network inspect bridge \
+        --format '{{ (index .IPAM.Config 0).Gateway }}' 2>/dev/null)
+    if [ -n "$bridge_gateway" ]; then
+        PF_ADDRESS="127.0.0.1,$bridge_gateway"
+    else
+        echo "⚠️  Could not determine the Docker bridge gateway address."
+        echo "   Forwards will bind to localhost only, so containers cannot reach them."
+        echo "   Set PORT_FORWARD_ADDRESS explicitly to override."
+    fi
+fi
 
 start_forward() {
     local desc="$1"; shift

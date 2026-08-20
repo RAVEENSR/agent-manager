@@ -198,6 +198,14 @@ export function EditMCPProxyDrawer({
             <Form.Section>
               <Form.Header>MCP Server Details</Form.Header>
               <Form.Stack spacing={2}>
+                <FormControl fullWidth>
+                  <FormLabel>Handle</FormLabel>
+                  <TextField fullWidth size="small" value={proxy.id} disabled />
+                  <Typography variant="caption" color="text.secondary">
+                    Unique, immutable identifier for the MCP Server.
+                    Cannot be changed after the server is registered.
+                  </Typography>
+                </FormControl>
                 <FormControl fullWidth error={Boolean(errors.name)}>
                   <FormLabel required>Name</FormLabel>
                   <TextField

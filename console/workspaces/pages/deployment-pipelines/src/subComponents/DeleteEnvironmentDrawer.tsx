@@ -32,7 +32,10 @@ import {
   DrawerWrapper,
 } from "@agent-management-platform/views";
 import { useAuthHooks } from "@agent-management-platform/auth";
-import { getRawScriptUrl } from "@agent-management-platform/shared-component";
+import {
+  getAgentManagerUrl,
+  getRawScriptUrl,
+} from "@agent-management-platform/shared-component";
 import type { Environment } from "@agent-management-platform/types";
 
 const TOKEN_MASK = "•••••••••••••••";
@@ -54,6 +57,7 @@ function buildScript(name: string, token: string): string {
     `curl -fsSL ${getRawScriptUrl("remove-environment.sh")} \\`,
     `  | ENV_NAME=${name || "<env-name>"} \\`,
     `    AGENT_MANAGER_TOKEN=${token} \\`,
+    `    AGENT_MANAGER_URL=${getAgentManagerUrl()} \\`,
     `    THUNDER_SCRIPT_URL=${getRawScriptUrl("remove-environment-thunder.sh")} \\`,
     "    bash",
   ];

@@ -481,6 +481,10 @@ func (f *fakeProvisioningService) RegenerateSecret(context.Context, string, stri
 	return "", "", "", nil
 }
 
+func (f *fakeProvisioningService) RetryProvisioning(context.Context, string, string, string, string) (models.AgentIdentityEnvironmentView, error) {
+	return models.AgentIdentityEnvironmentView{}, nil
+}
+
 func (f *fakeProvisioningService) RevokeSecret(context.Context, string, string, string, string) (string, error) {
 	return "", nil
 }

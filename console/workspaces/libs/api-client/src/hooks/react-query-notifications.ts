@@ -103,24 +103,29 @@ function getActionSuccessMessage(action: MutationActionConfig): string {
 /**
  * Extracts a human-readable, server-provided message from a thrown error so it
  * can be surfaced to the user (e.g. a CONFLICT explaining why a delete failed).
- * Handles both proper Errors (thrown by the http write helpers, whose `message`
- * is the backend `message` field) and raw JSON error bodies (`{ code, message }`).
+ * The http write helpers (`httpPOST`/`httpPUT`/`httpDELETE`) throw a real `Error`
+ * whose `message` is the backend's `message` field and whose `.body` is the full
+ * parsed error JSON (`{ code, message, reason, additionalData }`) — so `reason`,
+ * when the backend sends one, sits under `.body.reason`, not on the error itself.
  * Returns undefined for synthetic transport messages so the caller can fall back
  * to a friendly generic message instead of leaking "HTTP error! status: 500".
  */
-function extractServerErrorMessage(error: unknown): string | undefined {
+export function extractServerErrorMessage(error: unknown): string | undefined {
   if (!error || typeof error !== "object") {
     return undefined;
   }
+  const body = (error as { body?: { message?: unknown; reason?: unknown } }).body;
   const candidates: unknown[] = [
     (error as { message?: unknown }).message,
-    (error as { body?: { message?: unknown } }).body?.message,
+    body?.message,
   ];
   for (const candidate of candidates) {
     if (typeof candidate === "string") {
       const trimmed = candidate.trim();
       if (trimmed && !/^HTTP error! status:/i.test(trimmed)) {
-        return trimmed;
+        return typeof body?.reason === "string" && body.reason.trim()
+          ? `${trimmed}: ${body.reason.trim()}`
+          : trimmed;
       }
     }
   }

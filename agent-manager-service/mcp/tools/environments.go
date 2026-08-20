@@ -23,6 +23,7 @@ import (
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/rbac"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
@@ -52,7 +53,7 @@ func (t *Toolsets) registerEnvironmentTools(server *gomcp.Server, reg *toolRegis
 			"limit":  intProperty(fmt.Sprintf("Optional. Max environments to return (default %d, min %d, max %d).", utils.DefaultLimit, utils.MinLimit, utils.MaxLimit)),
 			"offset": intProperty(fmt.Sprintf("Optional. Pagination offset (default %d, min %d).", utils.DefaultOffset, utils.MinOffset)),
 		}, nil),
-	}, listEnvironments(t.EnvironmentToolset), rbac.EnvironmentRead)
+	}, audit.ActionEnvironmentRead, listEnvironments(t.EnvironmentToolset), rbac.EnvironmentRead)
 }
 
 func listEnvironments(handler EnvironmentToolsetHandler) func(context.Context, *gomcp.CallToolRequest, listEnvironmentsInput) (*gomcp.CallToolResult, any, error) {

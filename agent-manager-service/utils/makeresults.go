@@ -66,6 +66,19 @@ func ConvertToAgentListResponse(components []*models.AgentResponse) []spec.Agent
 	return responses
 }
 
+func ConvertToAgentSummaryListResponse(summaries []*models.AgentSummary) []spec.AgentSummary {
+	responses := make([]spec.AgentSummary, len(summaries))
+	for i, summary := range summaries {
+		responses[i] = spec.AgentSummary{
+			Name:               summary.Name,
+			DisplayName:        summary.DisplayName,
+			ProjectName:        summary.ProjectName,
+			ProjectDisplayName: summary.ProjectDisplayName,
+		}
+	}
+	return responses
+}
+
 func ConvertToAgentResponse(component *models.AgentResponse) spec.AgentResponse {
 	if component == nil {
 		return spec.AgentResponse{}
@@ -113,6 +126,14 @@ func convertToInternalAgentResponse(component *models.AgentResponse) spec.AgentR
 				return nil
 			}
 			return &component.KindName
+		}(),
+		// Absent for source-built agents, and for kind-sourced agents created
+		// before the version was recorded on the component.
+		KindVersion: func() *string {
+			if component.KindVersion == "" {
+				return nil
+			}
+			return &component.KindVersion
 		}(),
 		CreatedBy: convertToCreatedBy(component.CreatedBy),
 	}
@@ -385,12 +406,18 @@ func ConvertToDeploymentDetailsResponse(deploymentDetails []*models.DeploymentRe
 			envDisplayName = &deployment.EnvironmentDisplayName
 		}
 
+		var kindVersion *string
+		if deployment.KindVersion != "" {
+			kindVersion = &deployment.KindVersion
+		}
+
 		deploymentResponse := spec.DeploymentDetailsResponse{
 			ImageId:                deployment.ImageId,
 			Status:                 deployment.Status,
 			LastDeployed:           deployment.LastDeployedAt,
 			Endpoints:              endpoints,
 			EnvironmentDisplayName: envDisplayName,
+			KindVersion:            kindVersion,
 		}
 
 		// Add to result map with environment name as key

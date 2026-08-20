@@ -252,6 +252,7 @@ func ConvertModelToSpecLLMProviderResponse(model *models.LLMProvider) spec.LLMPr
 		Context:     ptrToString(model.Configuration.Context),
 		Template:    model.TemplateHandle,
 		Upstream:    upstream,
+		Resilience:  ConvertModelToSpecResilience(model.Configuration.Resilience),
 		Openapi:     stringToPtr(model.OpenAPISpec),
 		Status:      model.Status,
 	}
@@ -295,13 +296,14 @@ func ConvertSpecToModelLLMProviderConfigFromRequest(req *spec.CreateLLMProviderR
 	upstream := ConvertSpecToModelUpstreamConfig(req.Upstream)
 
 	modelConfig := models.LLMProviderConfig{
-		Name:     req.Name,
-		Handle:   req.Id,
-		Version:  req.Version,
-		Context:  &req.Context,
-		VHost:    nil,
-		Template: req.Template,
-		Upstream: &upstream,
+		Name:       req.Name,
+		Handle:     req.Id,
+		Version:    req.Version,
+		Context:    &req.Context,
+		VHost:      nil,
+		Template:   req.Template,
+		Upstream:   &upstream,
+		Resilience: ConvertSpecToModelResilience(req.Resilience),
 	}
 
 	if req.AccessControl != nil {
@@ -371,11 +373,12 @@ func ConvertModelToSpecLLMProxyResponse(model *models.LLMProxy) spec.LLMProxyRes
 // ConvertSpecToModelLLMProxyConfig converts spec proxy config to model proxy config
 func ConvertSpecToModelLLMProxyConfig(config spec.LLMProxyConfig) models.LLMProxyConfig {
 	modelConfig := models.LLMProxyConfig{
-		Name:     ptrToString(config.Name),
-		Version:  ptrToString(config.Version),
-		Context:  config.Context,
-		Vhost:    config.Vhost,
-		Provider: ptrToString(config.Provider),
+		Name:       ptrToString(config.Name),
+		Version:    ptrToString(config.Version),
+		Context:    config.Context,
+		Vhost:      config.Vhost,
+		Provider:   ptrToString(config.Provider),
+		Resilience: ConvertSpecToModelResilience(config.Resilience),
 	}
 
 	// Note: UpstreamAuth is not part of the OpenAPI spec and is handled separately
@@ -398,11 +401,12 @@ func ConvertSpecToModelLLMProxyConfig(config spec.LLMProxyConfig) models.LLMProx
 // ConvertModelToSpecLLMProxyConfig converts model proxy config to spec proxy config
 func ConvertModelToSpecLLMProxyConfig(config models.LLMProxyConfig) spec.LLMProxyConfig {
 	specConfig := spec.LLMProxyConfig{
-		Name:     stringToPtr(config.Name),
-		Version:  stringToPtr(config.Version),
-		Context:  config.Context,
-		Vhost:    config.Vhost,
-		Provider: stringToPtr(config.Provider),
+		Name:       stringToPtr(config.Name),
+		Version:    stringToPtr(config.Version),
+		Context:    config.Context,
+		Vhost:      config.Vhost,
+		Provider:   stringToPtr(config.Provider),
+		Resilience: ConvertModelToSpecResilience(config.Resilience),
 	}
 
 	// Note: UpstreamAuth is intentionally not included in the spec response for security.
@@ -464,6 +468,28 @@ func ConvertModelToSpecLLMModelProvider(model models.LLMModelProvider) spec.LLMM
 	}
 
 	return provider
+}
+
+// ConvertSpecToModelResilience converts spec Resilience to model Resilience.
+func ConvertSpecToModelResilience(r *spec.Resilience) *models.Resilience {
+	if r == nil {
+		return nil
+	}
+	return &models.Resilience{
+		Timeout:     r.Timeout,
+		IdleTimeout: r.IdleTimeout,
+	}
+}
+
+// ConvertModelToSpecResilience converts model Resilience to spec Resilience.
+func ConvertModelToSpecResilience(r *models.Resilience) *spec.Resilience {
+	if r == nil {
+		return nil
+	}
+	return &spec.Resilience{
+		Timeout:     r.Timeout,
+		IdleTimeout: r.IdleTimeout,
+	}
 }
 
 // ConvertSpecToModelUpstreamConfig converts spec to model UpstreamConfig

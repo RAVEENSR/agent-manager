@@ -30,7 +30,7 @@ import {
   ChevronDown,
   Search,
 } from "@wso2/oxygen-ui-icons-react";
-import { useState, useRef } from "react";
+import { useState, useRef, useMemo, useEffect } from "react";
 
 interface AttributesSectionProps {
   attributes?: Record<string, unknown>;
@@ -153,6 +153,11 @@ export function AttributesSection({ attributes }: AttributesSectionProps) {
   const editorRef = useRef<EditorInstance | null>(null);
   const matchesRef = useRef<Array<{ range: MatchRange }>>([]);
 
+  const attributesText = useMemo(
+    () => (attributes ? safeStringifyAttributes(attributes) : ""),
+    [attributes],
+  );
+
   const handleEditorWillMount = (monaco: Monaco) => {
     defineCustomThemes(monaco);
   };
@@ -160,6 +165,24 @@ export function AttributesSection({ attributes }: AttributesSectionProps) {
   const handleEditorMount = (editor: EditorInstance) => {
     editorRef.current = editor;
   };
+
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Reset search state whenever the viewed span's attributes change so a
+  // query (or its stale matches/pending debounce) from the previous span
+  // doesn't carry over.
+  useEffect(() => {
+    setSearchText("");
+    matchesRef.current = [];
+    setTotalMatches(0);
+    setCurrentMatchIndex(0);
+    return () => {
+      if (searchDebounceRef.current) {
+        clearTimeout(searchDebounceRef.current);
+        searchDebounceRef.current = null;
+      }
+    };
+  }, [attributes]);
 
   const navigateToMatch = (index: number) => {
     if (!editorRef.current || matchesRef.current.length === 0) return;
@@ -220,16 +243,31 @@ export function AttributesSection({ attributes }: AttributesSectionProps) {
 
   const handleSearchChange = (value: string) => {
     setSearchText(value);
-    performSearch(value);
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+    }
+    searchDebounceRef.current = setTimeout(() => performSearch(value), 200);
+  };
+
+  // If a search is still debounced, run it now instead of navigating against
+  // stale (or empty) matches from before the latest keystroke.
+  const flushPendingSearch = () => {
+    if (!searchDebounceRef.current) return false;
+    clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = null;
+    performSearch(searchText);
+    return true;
   };
 
   const handleNext = () => {
+    if (flushPendingSearch()) return;
     if (matchesRef.current.length === 0) return;
     const nextIndex = currentMatchIndex % matchesRef.current.length;
     navigateToMatch(nextIndex);
   };
 
   const handlePrevious = () => {
+    if (flushPendingSearch()) return;
     if (matchesRef.current.length === 0) return;
     const prevIndex =
       currentMatchIndex <= 1
@@ -312,7 +350,7 @@ export function AttributesSection({ attributes }: AttributesSectionProps) {
         theme={
           colorSchemeMode === "dark" ? CUSTOM_DARK_THEME : CUSTOM_LIGHT_THEME
         }
-        value={safeStringifyAttributes(attributes)}
+        value={attributesText}
         language="json"
         beforeMount={handleEditorWillMount}
         onMount={handleEditorMount}

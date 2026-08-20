@@ -45,7 +45,7 @@ const (
 )
 
 // validAuthTypes are the upstream auth schemes accepted by the service.
-var validAuthTypes = []string{"api-key", "basic", "bearer", "none"}
+var validAuthTypes = []string{"api-key", "none"}
 
 type CreateOptions struct {
 	IO           *iostreams.IOStreams

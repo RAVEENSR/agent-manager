@@ -50,7 +50,7 @@ assert_cm() {
   fi
 }
 
-CLIENTS="amp,amp-console-client,amp-api-client,amp-publisher-*,amctl,am-mcp"
+CLIENTS="urn:wso2:amp,amp-console-client,amp-api-client,amp-publisher-*,amctl,am-mcp"
 
 # Defaults must stay byte-identical to the pre-derivation literals, so existing
 # installs and quick-start (which passes no overrides) are unaffected.

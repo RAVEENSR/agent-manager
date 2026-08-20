@@ -21,8 +21,6 @@ var _ MappedNullable = &CreateRoleRequest{}
 type CreateRoleRequest struct {
 	// Role name
 	Name string `json:"name"`
-	// Organization unit ID
-	OuId *string `json:"ouId,omitempty"`
 	// Role description
 	Description *string `json:"description,omitempty"`
 }
@@ -69,38 +67,6 @@ func (o *CreateRoleRequest) SetName(v string) {
 	o.Name = v
 }
 
-// GetOuId returns the OuId field value if set, zero value otherwise.
-func (o *CreateRoleRequest) GetOuId() string {
-	if o == nil || IsNil(o.OuId) {
-		var ret string
-		return ret
-	}
-	return *o.OuId
-}
-
-// GetOuIdOk returns a tuple with the OuId field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *CreateRoleRequest) GetOuIdOk() (*string, bool) {
-	if o == nil || IsNil(o.OuId) {
-		return nil, false
-	}
-	return o.OuId, true
-}
-
-// HasOuId returns a boolean if a field has been set.
-func (o *CreateRoleRequest) HasOuId() bool {
-	if o != nil && !IsNil(o.OuId) {
-		return true
-	}
-
-	return false
-}
-
-// SetOuId gets a reference to the given string and assigns it to the OuId field.
-func (o *CreateRoleRequest) SetOuId(v string) {
-	o.OuId = &v
-}
-
 // GetDescription returns the Description field value if set, zero value otherwise.
 func (o *CreateRoleRequest) GetDescription() string {
 	if o == nil || IsNil(o.Description) {
@@ -144,9 +110,6 @@ func (o CreateRoleRequest) MarshalJSON() ([]byte, error) {
 func (o CreateRoleRequest) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["name"] = o.Name
-	if !IsNil(o.OuId) {
-		toSerialize["ouId"] = o.OuId
-	}
 	if !IsNil(o.Description) {
 		toSerialize["description"] = o.Description
 	}

@@ -368,13 +368,13 @@ func (e CreateEnvironmentRequestIsolationTier) Valid() bool {
 
 // Defines values for CreateGitSecretRequestType.
 const (
-	CreateGitSecretRequestTypeBasic CreateGitSecretRequestType = "basic"
+	Basic CreateGitSecretRequestType = "basic"
 )
 
 // Valid indicates whether the value is a known member of the CreateGitSecretRequestType enum.
 func (e CreateGitSecretRequestType) Valid() bool {
 	switch e {
-	case CreateGitSecretRequestTypeBasic:
+	case Basic:
 		return true
 	default:
 		return false
@@ -1025,22 +1025,16 @@ func (e UpdateDeploymentStateResponseState) Valid() bool {
 
 // Defines values for UpstreamAuthType.
 const (
-	UpstreamAuthTypeApiKey UpstreamAuthType = "api-key"
-	UpstreamAuthTypeBasic  UpstreamAuthType = "basic"
-	UpstreamAuthTypeBearer UpstreamAuthType = "bearer"
-	UpstreamAuthTypeNone   UpstreamAuthType = "none"
+	ApiKey UpstreamAuthType = "api-key"
+	None   UpstreamAuthType = "none"
 )
 
 // Valid indicates whether the value is a known member of the UpstreamAuthType enum.
 func (e UpstreamAuthType) Valid() bool {
 	switch e {
-	case UpstreamAuthTypeApiKey:
+	case ApiKey:
 		return true
-	case UpstreamAuthTypeBasic:
-		return true
-	case UpstreamAuthTypeBearer:
-		return true
-	case UpstreamAuthTypeNone:
+	case None:
 		return true
 	default:
 		return false
@@ -1226,7 +1220,7 @@ type AddAgentKindVersionRequest struct {
 	// SourceProjectName Project the source agent belongs to
 	SourceProjectName string `json:"sourceProjectName"`
 
-	// Version Version tag for this release
+	// Version Version tag for this release. Stored as a Kubernetes label on every agent created from this version, so it must be at most 63 characters of letters, digits, '.', '_' or '-', starting and ending with a letter or digit.
 	Version string `json:"version"`
 }
 
@@ -1609,6 +1603,9 @@ type AgentResponse struct {
 	// KindName Name of the Agent Kind this agent was instantiated from (absent for source-built agents)
 	KindName *string `json:"kindName,omitempty"`
 
+	// KindVersion Version tag of the Agent Kind this agent was instantiated from (absent for source-built agents, and for kind-sourced agents created before the version was recorded)
+	KindVersion *string `json:"kindVersion,omitempty"`
+
 	// Labels User-defined key/value labels. Keys are 1-63 characters of [a-zA-Z0-9._-] starting and ending alphanumeric (not enforceable here as an OpenAPI 3.0 property-name pattern — validated server-side); values follow the same rules but may be empty. At most 10 labels per resource.
 	Labels       *Labels      `json:"labels,omitempty"`
 	Name         string       `json:"name"`
@@ -1632,6 +1629,19 @@ type AgentRevokeSecretResponse struct {
 	// The workload may keep referencing the revoked credential until this is confirmed
 	// or the workload is redeployed.
 	WorkloadRefreshWarning *string `json:"workloadRefreshWarning,omitempty"`
+}
+
+// AgentSummary defines model for AgentSummary.
+type AgentSummary struct {
+	DisplayName        string `json:"displayName"`
+	Name               string `json:"name"`
+	ProjectDisplayName string `json:"projectDisplayName"`
+	ProjectName        string `json:"projectName"`
+}
+
+// AgentSummaryListResponse defines model for AgentSummaryListResponse.
+type AgentSummaryListResponse struct {
+	Agents []AgentSummary `json:"agents"`
 }
 
 // AgentThunderStatus Provisioning status of one AgentID binding. Goes from `pending` to
@@ -2303,9 +2313,6 @@ type CreateGroupRequest struct {
 
 	// Name Group name
 	Name string `json:"name"`
-
-	// OuId Organization unit ID
-	OuId *string `json:"ouId,omitempty"`
 }
 
 // CreateLLMAPIKeyRequest defines model for CreateLLMAPIKeyRequest.
@@ -2367,6 +2374,9 @@ type CreateLLMProviderRequest struct {
 	// Policies List of policies applied to this provider
 	Policies     *[]LLMPolicy           `json:"policies,omitempty"`
 	RateLimiting *LLMRateLimitingConfig `json:"rateLimiting,omitempty"`
+
+	// Resilience Route-level request/idle timeouts applied at the API level (no per-operation override for LLM providers, LLM proxies, or MCP proxies).
+	Resilience *Resilience `json:"resilience,omitempty"`
 
 	// Security Security configuration. Exactly one variant is active: apiKey or identity (both omitted / enabled=false means no security).
 	Security *SecurityConfig `json:"security,omitempty"`
@@ -2477,18 +2487,12 @@ type CreateRoleRequest struct {
 
 	// Name Role name
 	Name string `json:"name"`
-
-	// OuId Organization unit ID
-	OuId *string `json:"ouId,omitempty"`
 }
 
 // CreateUserRequest defines model for CreateUserRequest.
 type CreateUserRequest struct {
 	// Attributes User attributes map (include password when creating credentials)
 	Attributes map[string]string `json:"attributes"`
-
-	// OuId Organization unit ID (optional; resolved from org context when omitted)
-	OuId *string `json:"ouId,omitempty"`
 
 	// Type User type
 	Type string `json:"type"`
@@ -2548,6 +2552,9 @@ type DeploymentDetailsResponse struct {
 
 	// ImageId Container image ID
 	ImageId string `json:"imageId"`
+
+	// KindVersion Agent Kind version this deployment runs, resolved from the deployed image. Per-environment, so it reflects what is actually deployed rather than the version the agent was created from. Absent for source-built agents and when the image matches no published version.
+	KindVersion *string `json:"kindVersion,omitempty"`
 
 	// LastDeployed Timestamp of last deployment
 	LastDeployed *time.Time `json:"lastDeployed,omitempty"`
@@ -2713,6 +2720,9 @@ type EnvProviderConfigMappings struct {
 // EnvProviderConfiguration defines model for EnvProviderConfiguration.
 type EnvProviderConfiguration struct {
 	Policies *[]LLMPolicy `json:"policies,omitempty"`
+
+	// Resilience Route-level request/idle timeouts applied at the API level (no per-operation override for LLM providers, LLM proxies, or MCP proxies).
+	Resilience *Resilience `json:"resilience,omitempty"`
 }
 
 // Environment defines model for Environment.
@@ -3553,6 +3563,9 @@ type LLMProviderResponse struct {
 	Policies     *[]LLMPolicy           `json:"policies,omitempty"`
 	RateLimiting *LLMRateLimitingConfig `json:"rateLimiting,omitempty"`
 
+	// Resilience Route-level request/idle timeouts applied at the API level (no per-operation override for LLM providers, LLM proxies, or MCP proxies).
+	Resilience *Resilience `json:"resilience,omitempty"`
+
 	// Security Security configuration. Exactly one variant is active: apiKey or identity (both omitted / enabled=false means no security).
 	Security *SecurityConfig `json:"security,omitempty"`
 
@@ -3659,6 +3672,9 @@ type LLMProxyConfig struct {
 	// Provider Provider reference
 	Provider *string `json:"provider,omitempty"`
 
+	// Resilience Route-level request/idle timeouts applied at the API level (no per-operation override for LLM providers, LLM proxies, or MCP proxies).
+	Resilience *Resilience `json:"resilience,omitempty"`
+
 	// Security Security configuration. Exactly one variant is active: apiKey or identity (both omitted / enabled=false means no security).
 	Security *SecurityConfig `json:"security,omitempty"`
 
@@ -3736,9 +3752,6 @@ type ListBranchesRequest struct {
 	// IncludeDefault Whether to include default branch information in the response
 	IncludeDefault *bool `json:"includeDefault,omitempty"`
 
-	// OrgName Organization name for resolving the secret reference
-	OrgName *string `json:"orgName,omitempty"`
-
 	// Owner Repository owner (organization or user)
 	Owner string `json:"owner"`
 
@@ -3774,9 +3787,6 @@ type ListCommitsRequest struct {
 
 	// ComponentName Optional component name used to resolve a deployment-specific repository binding
 	ComponentName *string `json:"componentName,omitempty"`
-
-	// OrgName Organization name for resolving the secret reference
-	OrgName *string `json:"orgName,omitempty"`
 
 	// Owner Repository owner (organization or user)
 	Owner string `json:"owner"`
@@ -3913,6 +3923,9 @@ type MCPProxyEndpoint struct {
 	// Name Human-readable endpoint name
 	Name     *string      `json:"name,omitempty"`
 	Policies *[]MCPPolicy `json:"policies,omitempty"`
+
+	// Resilience Route-level request/idle timeouts applied at the API level (no per-operation override for LLM providers, LLM proxies, or MCP proxies).
+	Resilience *Resilience `json:"resilience,omitempty"`
 
 	// Security Security configuration. Exactly one variant is active: apiKey or identity (both omitted / enabled=false means no security).
 	Security *SecurityConfig `json:"security,omitempty"`
@@ -4478,6 +4491,12 @@ type ProviderConfig struct {
 	// ProviderName Name of the llm provider
 	ProviderName string `json:"providerName"`
 
+	// ProviderPolicies Guardrails configured on the org-level LLM provider this config is based on; applied in addition to the config's own policies
+	ProviderPolicies *[]LLMPolicy `json:"providerPolicies,omitempty"`
+
+	// ProviderUuid UUID of the org-level LLM provider this config is based on
+	ProviderUuid *openapi_types.UUID `json:"providerUuid,omitempty"`
+
 	// ProxyId ID/handle of the MCP proxy
 	ProxyId *string `json:"proxyId,omitempty"`
 
@@ -4486,6 +4505,9 @@ type ProviderConfig struct {
 
 	// ProxyUuid UUID of the proxy created
 	ProxyUuid openapi_types.UUID `json:"proxyUuid"`
+
+	// Resilience Route-level request/idle timeouts applied at the API level (no per-operation override for LLM providers, LLM proxies, or MCP proxies).
+	Resilience *Resilience `json:"resilience,omitempty"`
 
 	// Status Status of the proxy
 	Status *string `json:"status,omitempty"`
@@ -4538,7 +4560,7 @@ type PublishAgentKindRequest struct {
 	// Metadata Optional interface metadata (e.g. OpenAPI spec)
 	Metadata *map[string]interface{} `json:"metadata,omitempty"`
 
-	// Version Version tag for this release
+	// Version Version tag for this release. Stored as a Kubernetes label on every agent created from this version, so it must be at most 63 characters of letters, digits, '.', '_' or '-', starting and ending with a letter or digit.
 	Version string `json:"version"`
 }
 
@@ -4635,6 +4657,15 @@ type RequestRateLimit struct {
 	// Enabled Whether request rate limiting is enabled
 	Enabled bool                 `json:"enabled"`
 	Reset   RateLimitResetWindow `json:"reset"`
+}
+
+// Resilience Route-level request/idle timeouts applied at the API level (no per-operation override for LLM providers, LLM proxies, or MCP proxies).
+type Resilience struct {
+	// IdleTimeout Per-route stream idle timeout. "0s" disables it; omit to use the gateway's default.
+	IdleTimeout *string `json:"idleTimeout,omitempty"`
+
+	// Timeout Max duration for the whole request→upstream-response. "0s" disables it; omit to use the gateway's default.
+	Timeout *string `json:"timeout,omitempty"`
 }
 
 // ResourceConfig defines model for ResourceConfig.
@@ -4846,6 +4877,34 @@ type ThunderSystemClientRequest struct {
 
 	// ClientSecret OAuth2 client secret (stored encrypted at rest).
 	ClientSecret string `json:"clientSecret"`
+}
+
+// ThunderUrlAvailabilityResponse Whether a candidate env-Thunder URL handle passes format validation
+// and is not already registered to any environment. Advisory only — see
+// checkThunderUrlAvailability.
+type ThunderUrlAvailabilityResponse struct {
+	// Available True if the handle is well-formed and not currently taken.
+	Available bool `json:"available"`
+}
+
+// ThunderUrlRequest An unguessable handle to register for an environment's env-Thunder
+// URL, replacing the predictable "<org>-<env>" pattern. Optional — omit
+// it (or send an empty string) to have the server generate one.
+type ThunderUrlRequest struct {
+	// Handle DNS-label-safe handle (lowercase alphanumeric with hyphens, no
+	// leading/trailing hyphen) that replaces "<org>-<env>" in
+	// "<handle>.<baseDomain>". Must be globally unique across
+	// all orgs/environments, and at least 10 characters (matching what
+	// the server itself generates — anything shorter is trivially
+	// guessable). Omit to auto-generate a 10-character handle.
+	Handle *string `json:"handle,omitempty"`
+}
+
+// ThunderUrlResponse The env-Thunder URL handle registered for an environment — either the
+// caller-supplied value or the value the server generated when the
+// caller left it blank.
+type ThunderUrlResponse struct {
+	Handle string `json:"handle"`
 }
 
 // TimeRange defines model for TimeRange.
@@ -5217,6 +5276,9 @@ type UpdateLLMProviderRequest struct {
 	Policies     *[]LLMPolicy           `json:"policies,omitempty"`
 	RateLimiting *LLMRateLimitingConfig `json:"rateLimiting,omitempty"`
 
+	// Resilience Route-level request/idle timeouts applied at the API level (no per-operation override for LLM providers, LLM proxies, or MCP proxies).
+	Resilience *Resilience `json:"resilience,omitempty"`
+
 	// Security Security configuration. Exactly one variant is active: apiKey or identity (both omitted / enabled=false means no security).
 	Security *SecurityConfig `json:"security,omitempty"`
 
@@ -5567,6 +5629,12 @@ type ListLLMProvidersParams struct {
 	Offset *int32 `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
+// ListAvailableLLMPoliciesParams defines parameters for ListAvailableLLMPolicies.
+type ListAvailableLLMPoliciesParams struct {
+	// ProviderId When set, scope the result to the gateways this LLM provider is deployed to, instead of every active gateway in the organization.
+	ProviderId *openapi_types.UUID `form:"providerId,omitempty" json:"providerId,omitempty"`
+}
+
 // GetLLMProviderDeploymentsParams defines parameters for GetLLMProviderDeployments.
 type GetLLMProviderDeploymentsParams struct {
 	// GatewayId Filter by gateway ID
@@ -5839,6 +5907,12 @@ type ListRepositoryCommitsParams struct {
 	Offset *int `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
+// CheckThunderUrlAvailabilityParams defines parameters for CheckThunderUrlAvailability.
+type CheckThunderUrlAvailabilityParams struct {
+	// Handle The candidate env-Thunder URL handle to check.
+	Handle string `form:"handle" json:"handle"`
+}
+
 // CreateOrganizationJSONRequestBody defines body for CreateOrganization for application/json ContentType.
 type CreateOrganizationJSONRequestBody = CreateOrganizationRequest
 
@@ -5862,6 +5936,9 @@ type UpdateEnvironmentJSONRequestBody = UpdateEnvironmentRequest
 
 // SetEnvironmentThunderSystemClientJSONRequestBody defines body for SetEnvironmentThunderSystemClient for application/json ContentType.
 type SetEnvironmentThunderSystemClientJSONRequestBody = ThunderSystemClientRequest
+
+// SetEnvironmentThunderUrlJSONRequestBody defines body for SetEnvironmentThunderUrl for application/json ContentType.
+type SetEnvironmentThunderUrlJSONRequestBody = ThunderUrlRequest
 
 // CreateAgentIdentityGroupJSONRequestBody defines body for CreateAgentIdentityGroup for application/json ContentType.
 type CreateAgentIdentityGroupJSONRequestBody = AgentIdentityGroupRequest
@@ -6004,6 +6081,9 @@ type RotateAgentAPIKeyJSONRequestBody = RotateLLMAPIKeyRequest
 // RegenerateAgentIdentitySecretJSONRequestBody defines body for RegenerateAgentIdentitySecret for application/json ContentType.
 type RegenerateAgentIdentitySecretJSONRequestBody = AgentIdentityActionRequest
 
+// RetryAgentIdentityProvisioningJSONRequestBody defines body for RetryAgentIdentityProvisioning for application/json ContentType.
+type RetryAgentIdentityProvisioningJSONRequestBody = AgentIdentityActionRequest
+
 // CreateAgentMCPConfigJSONRequestBody defines body for CreateAgentMCPConfig for application/json ContentType.
 type CreateAgentMCPConfigJSONRequestBody = CreateAgentModelConfigRequest
 
@@ -6061,14 +6141,14 @@ type CreateLLMProxyAPIKeyJSONRequestBody = CreateLLMAPIKeyRequest
 // RotateLLMProxyAPIKeyJSONRequestBody defines body for RotateLLMProxyAPIKey for application/json ContentType.
 type RotateLLMProxyAPIKeyJSONRequestBody = RotateLLMAPIKeyRequest
 
-// GetNameByDisplayNameJSONRequestBody defines body for GetNameByDisplayName for application/json ContentType.
-type GetNameByDisplayNameJSONRequestBody = ResourceNameRequest
-
 // ListRepositoryBranchesJSONRequestBody defines body for ListRepositoryBranches for application/json ContentType.
 type ListRepositoryBranchesJSONRequestBody = ListBranchesRequest
 
 // ListRepositoryCommitsJSONRequestBody defines body for ListRepositoryCommits for application/json ContentType.
 type ListRepositoryCommitsJSONRequestBody = ListCommitsRequest
+
+// GetNameByDisplayNameJSONRequestBody defines body for GetNameByDisplayName for application/json ContentType.
+type GetNameByDisplayNameJSONRequestBody = ResourceNameRequest
 
 // AsBuildpackBuild returns the union data inside the Build as a BuildpackBuild
 func (t Build) AsBuildpackBuild() (BuildpackBuild, error) {

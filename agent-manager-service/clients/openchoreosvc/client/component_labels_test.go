@@ -18,6 +18,7 @@
 package client
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -134,7 +135,7 @@ func TestBuildInternalAgentFromKindComponentRequestBody_UserLabels(t *testing.T)
 	assert.Equal(t, "ml", labels["team"])
 	assert.Equal(t, "kind-1", labels[string(LabelKeyAgentKindName)])
 	// System keys plus the one user key, no collision.
-	assert.Len(t, labels, 6)
+	assert.Len(t, labels, 7)
 }
 
 func TestBuildExternalAgentComponentRequestBody_UserLabels(t *testing.T) {
@@ -200,4 +201,130 @@ func TestConvertComponentFromTyped_Labels(t *testing.T) {
 	agent, err := convertComponentFromTyped(comp)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"env": "prod", "team": "ml"}, agent.Labels)
+}
+
+func TestBuildInternalAgentFromKindComponentRequestBody_RoutePath(t *testing.T) {
+	req := CreateComponentRequest{
+		Name:        "agent-1",
+		DisplayName: "Agent 1",
+		AgentType:   AgentTypeConfig{Type: "agent-api", SubType: "chat-api"},
+		AgentKind:   &AgentKindRef{Name: "kind-1", Version: "v1"},
+		Build:       &BuildConfig{Type: "buildpack", Buildpack: &BuildpackConfig{Language: "python"}},
+	}
+	body, err := buildInternalAgentFromKindComponentRequestBody("ns", "proj", req)
+	require.NoError(t, err)
+	require.NotNil(t, body.Spec)
+	require.NotNil(t, body.Spec.Parameters)
+	// The chart prefixes the slash, so the parameter carries a bare segment.
+	assert.Equal(t, "agent-1", (*body.Spec.Parameters)["routePath"])
+}
+
+func TestBuildInternalAgentFromSourceComponentRequestBody_RoutePath(t *testing.T) {
+	req := CreateComponentRequest{
+		Name:             "agent-1",
+		DisplayName:      "Agent 1",
+		ProvisioningType: "internal",
+		AgentType:        AgentTypeConfig{Type: "agent-api", SubType: "chat-api"},
+		Build:            &BuildConfig{Type: "buildpack", Buildpack: &BuildpackConfig{Language: "python", LanguageVersion: "3.11"}},
+		InputInterface:   &InputInterfaceConfig{BasePath: "/"},
+	}
+	body, err := buildInternalAgentFromSourceComponentRequestBody("ns", "proj", req)
+	require.NoError(t, err)
+	require.NotNil(t, body.Spec)
+	require.NotNil(t, body.Spec.Parameters)
+	assert.Equal(t, "agent-1", (*body.Spec.Parameters)["routePath"])
+}
+
+func TestBuildExternalAgentComponentRequestBody_NoRoutePath(t *testing.T) {
+	// External agents render no HTTPRoute at all (external-agent-api.yaml), so a
+	// routePath would be a parameter nothing reads.
+	req := CreateComponentRequest{
+		Name:             "agent-1",
+		DisplayName:      "Agent 1",
+		ProvisioningType: "external",
+		AgentType:        AgentTypeConfig{Type: "external-agent-api", SubType: "custom-api"},
+	}
+	body, err := buildExternalAgentComponentRequestBody("ns", "proj", req)
+	require.NoError(t, err)
+	require.NotNil(t, body.Spec)
+	assert.Nil(t, body.Spec.Parameters)
+}
+
+func TestBuildInternalAgentFromKindComponentRequestBody_KindVersion(t *testing.T) {
+	req := CreateComponentRequest{
+		Name:        "agent-1",
+		DisplayName: "Agent 1",
+		AgentType:   AgentTypeConfig{Type: "agent-api", SubType: "chat-api"},
+		AgentKind:   &AgentKindRef{Name: "kind-1", Version: "v1.2.0"},
+		Build:       &BuildConfig{Type: "buildpack", Buildpack: &BuildpackConfig{Language: "python"}},
+	}
+	body, err := buildInternalAgentFromKindComponentRequestBody("ns", "proj", req)
+	require.NoError(t, err)
+	require.NotNil(t, body.Metadata.Labels)
+	labels := *body.Metadata.Labels
+	assert.Equal(t, "kind-1", labels[string(LabelKeyAgentKindName)])
+	assert.Equal(t, "v1.2.0", labels[string(LabelKeyAgentKindVersion)])
+}
+
+// A version tag that can't be a label value must fail loudly. Creating the agent
+// without the version label would leave an incomplete provenance record that
+// nothing downstream could distinguish from a pre-label agent.
+func TestBuildInternalAgentFromKindComponentRequestBody_RejectsUnlabelableVersion(t *testing.T) {
+	for _, version := range []string{"1.0 (beta)", "v1.0.0+build.1", "-v1", strings.Repeat("v", 64)} {
+		t.Run(version, func(t *testing.T) {
+			req := CreateComponentRequest{
+				Name:        "agent-1",
+				DisplayName: "Agent 1",
+				AgentType:   AgentTypeConfig{Type: "agent-api", SubType: "chat-api"},
+				AgentKind:   &AgentKindRef{Name: "kind-1", Version: version},
+				Build:       &BuildConfig{Type: "buildpack", Buildpack: &BuildpackConfig{Language: "python"}},
+			}
+			_, err := buildInternalAgentFromKindComponentRequestBody("ns", "proj", req)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), version)
+		})
+	}
+}
+
+func TestConvertComponentFromTyped_KindVersion(t *testing.T) {
+	newComp := func(labels map[string]string) *gen.Component {
+		return &gen.Component{
+			Metadata: gen.ObjectMeta{
+				Name:   "agent-1",
+				Labels: &labels,
+			},
+			Spec: &gen.ComponentSpec{
+				ComponentType: struct {
+					Kind *gen.ComponentSpecComponentTypeKind `json:"kind,omitempty"`
+					Name string                              `json:"name"`
+				}{Name: "internal-agent/agent-api"},
+				Owner: struct {
+					ProjectName string `json:"projectName"`
+				}{ProjectName: "proj"},
+			},
+		}
+	}
+
+	t.Run("reads name and version from labels", func(t *testing.T) {
+		agent, err := convertComponentFromTyped(newComp(map[string]string{
+			string(LabelKeyProvisioningType): "internal",
+			string(LabelKeyBuildSource):      BuildSourceKind,
+			string(LabelKeyAgentKindName):    "kind-1",
+			string(LabelKeyAgentKindVersion): "v1.2.0",
+		}))
+		require.NoError(t, err)
+		assert.Equal(t, "kind-1", agent.KindName)
+		assert.Equal(t, "v1.2.0", agent.KindVersion)
+	})
+
+	t.Run("agent created before the version label still resolves its kind", func(t *testing.T) {
+		agent, err := convertComponentFromTyped(newComp(map[string]string{
+			string(LabelKeyProvisioningType): "internal",
+			string(LabelKeyBuildSource):      BuildSourceKind,
+			string(LabelKeyAgentKindName):    "kind-1",
+		}))
+		require.NoError(t, err)
+		assert.Equal(t, "kind-1", agent.KindName)
+		assert.Empty(t, agent.KindVersion)
+	})
 }

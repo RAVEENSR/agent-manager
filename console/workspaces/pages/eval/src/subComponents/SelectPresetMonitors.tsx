@@ -24,6 +24,7 @@ import {
   CardContent,
   CardHeader,
   Chip,
+  CircularProgress,
   Divider,
   Form,
   ListingTable,
@@ -37,19 +38,21 @@ import { getErrorMessage } from "@agent-management-platform/shared-component";
 import {
   Check,
   CircleIcon,
+  Edit,
   Plus,
   Search as SearchIcon,
   Settings,
 } from "@wso2/oxygen-ui-icons-react";
 import { absoluteRouteMap, type EvaluatorResponse, type MonitorEvaluator, type MonitorLLMProviderRef } from "@agent-management-platform/types";
 import {
+  useGetEvaluator,
   useListCatalogLLMProviders,
   useListEvaluators,
   useListLLMProviders,
   useListLLMProviderTemplates,
 } from "@agent-management-platform/api-client";
 import { generatePath, useParams } from "react-router-dom";
-import { useMemo, useState, useCallback, useEffect } from "react";
+import { useMemo, useRef, useState, useCallback, useEffect } from "react";
 import debounce from "lodash/debounce";
 import EvaluatorDetailsDrawer from "./EvaluatorDetailsDrawer";
 import { MonitorLLMProviderDrawer } from "./MonitorLLMProviderDrawer";
@@ -129,6 +132,24 @@ export function SelectPresetMonitors({
 
   const totalItems = data?.total ?? allEvaluators.length;
   const hasMore = allEvaluators.length < totalItems;
+
+  // Auto-load the next page as the sentinel below the grid scrolls into
+  // view, instead of requiring a manual "Load more" click.
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const sentinel = loadMoreSentinelRef.current;
+    if (!sentinel || !hasMore) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !isLoading) {
+          setOffset((o) => o + PAGE_SIZE);
+        }
+      },
+      { threshold: 0.1 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, isLoading]);
 
   const selectedProviderName = llmProvider?.providerName;
 
@@ -261,14 +282,6 @@ export function SelectPresetMonitors({
     [debouncedSetSearch],
   );
 
-  const selectedChipEvaluators = useMemo(() => {
-    const byId = new Map<string, MonitorEvaluator>();
-    selectedEvaluators.forEach((item) => {
-      byId.set(getEvaluatorIdentifier(item), item);
-    });
-    return Array.from(byId.values());
-  }, [selectedEvaluators]);
-
   const handleOpenDrawer = useCallback(
     (evaluator: EvaluatorResponse) => {
       if (evaluator.type === "llm_judge" && !selectedProviderName) {
@@ -284,6 +297,53 @@ export function SelectPresetMonitors({
   const handleCloseDrawer = useCallback(() => {
     setDrawerEvaluator(null);
   }, []);
+
+  // The selected-chip list (below) shows every selected evaluator regardless
+  // of pagination, so an "Edit" click there may target one whose full
+  // EvaluatorResponse (configSchema, type, etc.) was never fetched into
+  // allEvaluators. Fall back to fetching it on demand rather than opening
+  // the drawer with only the MonitorEvaluator's identifier/displayName/config.
+  const [pendingChipEditId, setPendingChipEditId] = useState<string | null>(
+    null,
+  );
+  const { data: fetchedChipEvaluator } = useGetEvaluator({
+    orgName: orgId,
+    evaluatorId: pendingChipEditId ?? undefined,
+  });
+
+  useEffect(() => {
+    if (
+      pendingChipEditId &&
+      fetchedChipEvaluator &&
+      getEvaluatorIdentifier(fetchedChipEvaluator) === pendingChipEditId
+    ) {
+      handleOpenDrawer(fetchedChipEvaluator);
+      setPendingChipEditId(null);
+    }
+  }, [pendingChipEditId, fetchedChipEvaluator, handleOpenDrawer]);
+
+  const handleEditChip = useCallback(
+    (chipEvaluator: MonitorEvaluator) => {
+      const identifier = getEvaluatorIdentifier(chipEvaluator);
+      const loaded = allEvaluators.find(
+        (e) => getEvaluatorIdentifier(e) === identifier,
+      );
+      if (loaded) {
+        handleOpenDrawer(loaded);
+        return;
+      }
+      setPendingChipEditId(identifier);
+    },
+    [allEvaluators, handleOpenDrawer],
+  );
+
+  const selectedChipEvaluators = useMemo(() => {
+    const byId = new Map<string, MonitorEvaluator>();
+    selectedEvaluators.forEach((item) => {
+      byId.set(getEvaluatorIdentifier(item), item);
+    });
+    return Array.from(byId.values());
+  }, [selectedEvaluators]);
 
   const drawerIdentifier = drawerEvaluator
     ? getEvaluatorIdentifier(drawerEvaluator)
@@ -470,25 +530,36 @@ export function SelectPresetMonitors({
         </Form.Header>
         {selectedChipEvaluators.length > 0 && (
           <Form.Section>
+            <Form.Header>
+              Selected Evaluators ({selectedChipEvaluators.length})
+            </Form.Header>
             <Stack direction="row" spacing={2} flexWrap="wrap" alignItems="center">
-              {selectedChipEvaluators.map((evaluator) => {
+              {selectedChipEvaluators.map((evaluator: MonitorEvaluator) => {
                 const identifier = getEvaluatorIdentifier(evaluator);
                 return (
                   <Box py={0.25} key={identifier}>
                     <Chip
-                      label={evaluator.displayName}
+                      label={
+                        <Stack direction="row" alignItems="center" gap={0.5}>
+                          <Typography variant="body2" component="span">
+                            {evaluator.displayName}
+                          </Typography>
+                          <Edit size={14} />
+                        </Stack>
+                      }
+                      onClick={() => handleEditChip(evaluator)}
                       onDelete={() => {
                         const isJudge =
                           evaluatorTypeMap.get(identifier) === "llm_judge" ||
                           llmJudgeIds.has(identifier);
                         if (isJudge) {
                           const selectedJudgeCount = selectedEvaluatorNames.filter(
-                            (id) =>
+                            (id: string) =>
                               evaluatorTypeMap.get(id) === "llm_judge" ||
                               llmJudgeIds.has(id),
                           ).length;
                           const isLastLLMJudge = selectedJudgeCount === 1;
-                          setLlmJudgeIds((prev) => {
+                          setLlmJudgeIds((prev: Set<string>) => {
                             const next = new Set(Array.from(prev));
                             next.delete(identifier);
                             return next;
@@ -547,8 +618,8 @@ export function SelectPresetMonitors({
             gap: 2,
           }}
         >
-          {/* Create custom evaluator card — always first */}
-          {!isLoading && orgId && createEvaluatorHref && (
+          {/* Create custom evaluator card — always first, hidden while searching */}
+          {!isLoading && orgId && createEvaluatorHref && !search.trim() && (
             <Form.CardButton
               sx={{
                 width: "100%",
@@ -758,15 +829,13 @@ export function SelectPresetMonitors({
         )}
 
         {hasMore && (
-          <Box display="flex" justifyContent="center" py={2}>
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={() => setOffset((o) => o + PAGE_SIZE)}
-              disabled={isLoading}
-            >
-              {isLoading ? "Loading..." : "Load more"}
-            </Button>
+          <Box
+            ref={loadMoreSentinelRef}
+            display="flex"
+            justifyContent="center"
+            py={2}
+          >
+            {isLoading && <CircularProgress size={20} />}
           </Box>
         )}
 

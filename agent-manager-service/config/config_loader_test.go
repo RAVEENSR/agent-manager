@@ -379,6 +379,74 @@ func TestValidateSecretManagerConfig(t *testing.T) {
 	}
 }
 
+func TestValidateGatewayManifestCacheConfig(t *testing.T) {
+	tests := []struct {
+		name        string
+		backend     string
+		redisHost   string
+		wantErrors  int
+		errContains string
+	}{
+		{
+			name:       "default memory backend accepted",
+			backend:    "memory",
+			wantErrors: 0,
+		},
+		{
+			name:       "redis backend with host accepted",
+			backend:    "redis",
+			redisHost:  "redis.internal",
+			wantErrors: 0,
+		},
+		{
+			name:        "redis backend without host rejected",
+			backend:     "redis",
+			redisHost:   "",
+			wantErrors:  1,
+			errContains: "GATEWAY_MANIFEST_CACHE_REDIS_HOST is required",
+		},
+		{
+			name:        "unknown backend rejected",
+			backend:     "memcached",
+			wantErrors:  1,
+			errContains: "GATEWAY_MANIFEST_CACHE_BACKEND",
+		},
+		{
+			name:        "empty backend rejected",
+			backend:     "",
+			wantErrors:  1,
+			errContains: "GATEWAY_MANIFEST_CACHE_BACKEND",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{GatewayManifestCache: GatewayManifestCacheConfig{
+				Backend: tc.backend,
+				Redis:   GatewayManifestCacheRedisConfig{Host: tc.redisHost},
+			}}
+			r := &configReader{}
+			validateGatewayManifestCacheConfig(cfg, r)
+
+			if len(r.errors) != tc.wantErrors {
+				t.Fatalf("expected %d errors, got %d: %v", tc.wantErrors, len(r.errors), r.errors)
+			}
+			if tc.errContains != "" {
+				found := false
+				for _, e := range r.errors {
+					if strings.Contains(e.Error(), tc.errContains) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected an error containing %q, got %v", tc.errContains, r.errors)
+				}
+			}
+		})
+	}
+}
+
 func TestLoadEnvs_ObserverConfig(t *testing.T) {
 	requiredEnv := map[string]string{
 		"OPEN_CHOREO_BASE_URL": "http://localhost/api/v1",
@@ -437,4 +505,61 @@ func TestLoadEnvs_ObserverConfig(t *testing.T) {
 			t.Errorf("Observer.URL = %q, want %q", got, "http://observer.internal:9099")
 		}
 	})
+}
+
+func TestValidateAuditConfig(t *testing.T) {
+	valid := AuditConfig{Enabled: true, BufferSize: 4096, BatchSize: 200, FlushIntervalMs: 1000}
+
+	tests := []struct {
+		name        string
+		mutate      func(*AuditConfig)
+		wantErrors  int
+		errContains string
+	}{
+		{
+			name:       "defaults are valid",
+			mutate:     func(*AuditConfig) {},
+			wantErrors: 0,
+		},
+		{
+			name:        "zero buffer size is rejected rather than defaulted",
+			mutate:      func(c *AuditConfig) { c.BufferSize = 0 },
+			wantErrors:  1,
+			errContains: "AUDIT_BUFFER_SIZE",
+		},
+		{
+			name:        "negative flush interval is rejected",
+			mutate:      func(c *AuditConfig) { c.FlushIntervalMs = -1 },
+			wantErrors:  1,
+			errContains: "AUDIT_FLUSH_INTERVAL_MS",
+		},
+		{
+			// A batch that cannot fill would make every flush wait for the
+			// timer, silently disabling the batching the values describe.
+			name:        "batch larger than the buffer is rejected",
+			mutate:      func(c *AuditConfig) { c.BatchSize = 8192 },
+			wantErrors:  1,
+			errContains: "must not exceed",
+		},
+		{
+			name:       "each malformed value is reported separately",
+			mutate:     func(c *AuditConfig) { c.BufferSize = 0; c.BatchSize = 0; c.FlushIntervalMs = 0 },
+			wantErrors: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := valid
+			tt.mutate(&cfg)
+
+			errs := validateAuditConfig(cfg)
+			if len(errs) != tt.wantErrors {
+				t.Fatalf("got %d errors %v, want %d", len(errs), errs, tt.wantErrors)
+			}
+			if tt.errContains != "" && !strings.Contains(errs[0].Error(), tt.errContains) {
+				t.Errorf("error %q does not mention %q", errs[0], tt.errContains)
+			}
+		})
+	}
 }

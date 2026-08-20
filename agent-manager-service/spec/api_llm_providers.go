@@ -474,6 +474,13 @@ type ApiListAvailableLLMPoliciesRequest struct {
 	ctx        context.Context
 	ApiService *LLMProvidersAPIService
 	orgName    string
+	providerId *string
+}
+
+// When set, scope the result to the gateways this LLM provider is deployed to, instead of every active gateway in the organization.
+func (r ApiListAvailableLLMPoliciesRequest) ProviderId(providerId string) ApiListAvailableLLMPoliciesRequest {
+	r.providerId = &providerId
+	return r
 }
 
 func (r ApiListAvailableLLMPoliciesRequest) Execute() (*LLMPolicyAvailabilityResponse, *http.Response, error) {
@@ -483,7 +490,7 @@ func (r ApiListAvailableLLMPoliciesRequest) Execute() (*LLMPolicyAvailabilityRes
 /*
 ListAvailableLLMPolicies List available LLM guardrail policies
 
-Returns full guardrail policy definitions (including parameter schemas) reported by active gateways in the organization.
+Returns full guardrail policy definitions (including parameter schemas) reported by active gateways in the organization. When providerId is given, the result is scoped to the gateways that provider is currently deployed to; otherwise it covers every active gateway in the organization.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name/handle
@@ -520,6 +527,9 @@ func (a *LLMProvidersAPIService) ListAvailableLLMPoliciesExecute(r ApiListAvaila
 	localVarQueryParams := url.Values{}
 	localVarFormParams := url.Values{}
 
+	if r.providerId != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "providerId", r.providerId, "")
+	}
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}
 
@@ -560,6 +570,17 @@ func (a *LLMProvidersAPIService) ListAvailableLLMPoliciesExecute(r ApiListAvaila
 			error: localVarHTTPResponse.Status,
 		}
 		if localVarHTTPResponse.StatusCode == 401 {
+			var v ErrorResponse
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+			newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 404 {
 			var v ErrorResponse
 			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
 			if err != nil {

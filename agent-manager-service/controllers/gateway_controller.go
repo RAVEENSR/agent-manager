@@ -27,6 +27,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	occlient "github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/logger"
@@ -205,6 +206,15 @@ func (c *gatewayController) RegisterGateway(w http.ResponseWriter, r *http.Reque
 		properties,
 		req.EnvironmentIds,
 	)
+	audit.Record(
+		ctx, audit.ActionGatewayCreate,
+		audit.Org(ouID),
+		audit.ResourceNamed(audit.ResourceGateway, gatewayResponseID(gateway), req.Name),
+		audit.Detail("gatewayName", req.Name),
+		audit.Detail("gatewayType", functionalityType),
+		audit.Detail("vhost", req.Vhost),
+		audit.Result(err),
+	)
 	if err != nil {
 		log.Error("RegisterGateway: failed to create gateway", "error", err)
 		handleGatewayErrors(w, err, "Failed to register gateway")
@@ -344,6 +354,12 @@ func (c *gatewayController) UpdateGateway(w http.ResponseWriter, r *http.Request
 	var properties *map[string]interface{}
 	var description *string // Description not in spec
 	gateway, err := c.gatewayService.UpdateGateway(gatewayID, ouID, description, req.DisplayName, req.IsCritical, properties, req.RuntimeUrl)
+	audit.Record(
+		ctx, audit.ActionGatewayUpdate,
+		audit.Org(ouID),
+		audit.Resource(audit.ResourceGateway, gatewayID),
+		audit.Result(err),
+	)
 	if err != nil {
 		log.Error("UpdateGateway: failed to update gateway", "error", err)
 		handleGatewayErrors(w, err, "Failed to update gateway")
@@ -363,11 +379,22 @@ func (c *gatewayController) DeleteGateway(w http.ResponseWriter, r *http.Request
 	ouID := middleware.OUIDFromRequest(r)
 	gatewayID := strings.TrimSpace(r.PathValue("gatewayID"))
 
+	attempt, ok := beginAuditOrFail(
+		w, r, "DeleteGateway", "Failed to delete gateway", audit.ActionGatewayDelete,
+		audit.Org(ouID),
+		audit.Resource(audit.ResourceGateway, gatewayID),
+	)
+	if !ok {
+		return
+	}
+
 	if err := c.gatewayService.DeleteGateway(gatewayID, ouID); err != nil {
+		attempt.Complete(ctx, err)
 		log.Error("DeleteGateway: failed to delete gateway", "error", err)
 		handleGatewayErrors(w, err, "Failed to delete gateway")
 		return
 	}
+	attempt.Complete(ctx, nil)
 
 	utils.WriteSuccessResponse(w, http.StatusNoContent, struct{}{})
 }
@@ -394,7 +421,16 @@ func (c *gatewayController) AssignGatewayToEnvironment(w http.ResponseWriter, r 
 	}
 
 	// Assign via service
-	if err := c.gatewayService.AssignGatewayToEnvironment(gatewayID, resolvedEnvID); err != nil {
+	assignErr := c.gatewayService.AssignGatewayToEnvironment(gatewayID, resolvedEnvID)
+	audit.Record(
+		ctx, audit.ActionGatewayAssignEnvironment,
+		audit.Org(ouID),
+		audit.Resource(audit.ResourceGateway, gatewayID),
+		audit.Environment(resolvedEnvID),
+		audit.Detail("environment", resolvedEnvID),
+		audit.Result(assignErr),
+	)
+	if err := assignErr; err != nil {
 		log.Error("AssignGatewayToEnvironment: failed to assign", "error", err)
 		handleGatewayErrors(w, err, "Failed to assign gateway to environment")
 		return
@@ -425,7 +461,16 @@ func (c *gatewayController) RemoveGatewayFromEnvironment(w http.ResponseWriter, 
 	}
 
 	// Remove via service
-	if err := c.gatewayService.RemoveGatewayFromEnvironment(gatewayID, resolvedEnvID); err != nil {
+	removeErr := c.gatewayService.RemoveGatewayFromEnvironment(gatewayID, resolvedEnvID)
+	audit.Record(
+		ctx, audit.ActionGatewayUnassignEnvironment,
+		audit.Org(ouID),
+		audit.Resource(audit.ResourceGateway, gatewayID),
+		audit.Environment(resolvedEnvID),
+		audit.Detail("environment", resolvedEnvID),
+		audit.Result(removeErr),
+	)
+	if err := removeErr; err != nil {
 		log.Error("RemoveGatewayFromEnvironment: failed to remove mapping", "error", err)
 		if errors.Is(err, gorm.ErrRecordNotFound) || strings.Contains(err.Error(), "mapping not found") {
 			utils.WriteErrorResponse(w, http.StatusNotFound, "Gateway-environment mapping not found")
@@ -545,13 +590,28 @@ func (c *gatewayController) RotateGatewayToken(w http.ResponseWriter, r *http.Re
 		}
 	}
 
+	// Emitted here rather than in the service because RotateToken takes no
+	// context; the audit trail needs the caller identity that only the request
+	// context carries. A rotated gateway token is live credential material, so
+	// the operation is refused when it cannot be recorded.
+	attempt, ok := beginAuditOrFail(
+		w, r, "RotateGatewayToken", "Failed to rotate gateway token", audit.ActionGatewayTokenRotate,
+		audit.Org(ouID),
+		audit.Resource(audit.ResourceGateway, gatewayID),
+	)
+	if !ok {
+		return
+	}
+
 	// Call service to rotate the token
 	tokenResp, err := c.gatewayService.RotateToken(gatewayID, ouID)
 	if err != nil {
+		attempt.Complete(ctx, err)
 		log.Error("RotateGatewayToken: failed to rotate token", "error", err)
 		handleGatewayErrors(w, err, "Failed to rotate gateway token")
 		return
 	}
+	attempt.Complete(ctx, nil, audit.Detail("tokenId", tokenResp.ID))
 
 	// Convert to spec response
 	response := spec.GatewayTokenResponse{
@@ -574,7 +634,18 @@ func (c *gatewayController) RevokeGatewayToken(w http.ResponseWriter, r *http.Re
 
 	log.Info("RevokeGatewayToken: starting", "ouID", ouID, "gatewayID", gatewayID, "tokenID", tokenID)
 
+	attempt, ok := beginAuditOrFail(
+		w, r, "RevokeGatewayToken", "Failed to revoke token", audit.ActionGatewayTokenRevoke,
+		audit.Org(ouID),
+		audit.Resource(audit.ResourceGateway, gatewayID),
+		audit.Detail("tokenId", tokenID),
+	)
+	if !ok {
+		return
+	}
+
 	if err := c.gatewayService.RevokeTokenByID(tokenID, gatewayID, ouID); err != nil {
+		attempt.Complete(ctx, err)
 		log.Error("RevokeGatewayToken: failed to revoke token", "error", err)
 		switch {
 		case errors.Is(err, utils.ErrGatewayNotFound):
@@ -589,6 +660,7 @@ func (c *gatewayController) RevokeGatewayToken(w http.ResponseWriter, r *http.Re
 		}
 		return
 	}
+	attempt.Complete(ctx, nil)
 
 	log.Info("RevokeGatewayToken: token revoked successfully", "ouID", ouID, "gatewayID", gatewayID, "tokenID", tokenID)
 	w.WriteHeader(http.StatusNoContent)
@@ -768,4 +840,15 @@ func convertGatewayEnvironmentToSpecResponse(env *models.GatewayEnvironmentRespo
 		response.Description = &env.Description
 	}
 	return response
+}
+
+// gatewayResponseID returns a registered gateway's identifier for an audit
+// record, tolerating a nil gateway so a failed registration still records the
+// attempt. Named to avoid reading like the many local gatewayUUID variables in
+// this package, which hold a different thing.
+func gatewayResponseID(gateway *services.GatewayResponse) string {
+	if gateway == nil {
+		return ""
+	}
+	return gateway.ID
 }

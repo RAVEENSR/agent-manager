@@ -106,6 +106,18 @@ for tool in kubectl helm jq curl; do
     fi
 done
 
+# `command -v kubectl` passes with no kubeconfig, so check reachability too — otherwise
+# this surfaces much later as an opaque "UPGRADE FAILED: cluster unreachable".
+if ! kubectl version > /dev/null 2>&1; then
+    echo "❌ kubectl is installed but cannot reach the cluster."
+    echo "   Check: kubectl config current-context"
+    echo "   A single-VM install configures the cluster for root only, so either:"
+    echo "     - re-run this command with sudo (place it before 'bash'), or"
+    echo "     - give your user a context:"
+    echo "         sudo k3d kubeconfig merge amp-local --kubeconfig-merge-default --kubeconfig-switch-context"
+    exit 1
+fi
+
 echo "=== ${ACTION} identity provider '${IDP_NAME}' on '${ENV_NAME}' ==="
 echo ""
 
@@ -113,6 +125,7 @@ echo ""
 echo "⏳ Checking Agent Manager is healthy..."
 if ! curl -sf "${AGENT_MANAGER_URL}/healthz" > /dev/null 2>&1; then
     echo "❌ Agent Manager not reachable at ${AGENT_MANAGER_URL}/healthz"
+    echo "   Set AGENT_MANAGER_URL to the URL you use to reach the console's API."
     exit 1
 fi
 echo "✅ Agent Manager is healthy"

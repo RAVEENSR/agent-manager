@@ -22,6 +22,8 @@ var _ MappedNullable = &DeploymentDetailsResponse{}
 type DeploymentDetailsResponse struct {
 	// Container image ID
 	ImageId string `json:"imageId"`
+	// Agent Kind version this deployment runs, resolved from the deployed image. Per-environment, so it reflects what is actually deployed rather than the version the agent was created from. Absent for source-built agents and when the image matches no published version.
+	KindVersion *string `json:"kindVersion,omitempty"`
 	// Deployment status
 	Status string `json:"status"`
 	// Timestamp of last deployment
@@ -75,6 +77,38 @@ func (o *DeploymentDetailsResponse) GetImageIdOk() (*string, bool) {
 // SetImageId sets field value
 func (o *DeploymentDetailsResponse) SetImageId(v string) {
 	o.ImageId = v
+}
+
+// GetKindVersion returns the KindVersion field value if set, zero value otherwise.
+func (o *DeploymentDetailsResponse) GetKindVersion() string {
+	if o == nil || IsNil(o.KindVersion) {
+		var ret string
+		return ret
+	}
+	return *o.KindVersion
+}
+
+// GetKindVersionOk returns a tuple with the KindVersion field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *DeploymentDetailsResponse) GetKindVersionOk() (*string, bool) {
+	if o == nil || IsNil(o.KindVersion) {
+		return nil, false
+	}
+	return o.KindVersion, true
+}
+
+// HasKindVersion returns a boolean if a field has been set.
+func (o *DeploymentDetailsResponse) HasKindVersion() bool {
+	if o != nil && !IsNil(o.KindVersion) {
+		return true
+	}
+
+	return false
+}
+
+// SetKindVersion gets a reference to the given string and assigns it to the KindVersion field.
+func (o *DeploymentDetailsResponse) SetKindVersion(v string) {
+	o.KindVersion = &v
 }
 
 // GetStatus returns the Status field value
@@ -232,6 +266,9 @@ func (o DeploymentDetailsResponse) MarshalJSON() ([]byte, error) {
 func (o DeploymentDetailsResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["imageId"] = o.ImageId
+	if !IsNil(o.KindVersion) {
+		toSerialize["kindVersion"] = o.KindVersion
+	}
 	toSerialize["status"] = o.Status
 	if !IsNil(o.LastDeployed) {
 		toSerialize["lastDeployed"] = o.LastDeployed

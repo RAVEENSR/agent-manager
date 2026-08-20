@@ -138,6 +138,9 @@ type ClientInterface interface {
 	// GetAgentKindVersion request
 	GetAgentKindVersion(ctx context.Context, orgName string, kindName string, versionTag string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ListOrgAgents request
+	ListOrgAgents(ctx context.Context, orgName string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListCatalogResources request
 	ListCatalogResources(ctx context.Context, orgName string, params *ListCatalogResourcesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -189,6 +192,17 @@ type ClientInterface interface {
 	SetEnvironmentThunderSystemClientWithBody(ctx context.Context, orgName string, envID string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	SetEnvironmentThunderSystemClient(ctx context.Context, orgName string, envID string, body SetEnvironmentThunderSystemClientJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DeleteEnvironmentThunderUrl request
+	DeleteEnvironmentThunderUrl(ctx context.Context, orgName string, envID string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetEnvironmentThunderUrl request
+	GetEnvironmentThunderUrl(ctx context.Context, orgName string, envID string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// SetEnvironmentThunderUrlWithBody request with any body
+	SetEnvironmentThunderUrlWithBody(ctx context.Context, orgName string, envID string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	SetEnvironmentThunderUrl(ctx context.Context, orgName string, envID string, body SetEnvironmentThunderUrlJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListAgentIdentityAgents request
 	ListAgentIdentityAgents(ctx context.Context, orgName AgentIdentityOrgName, envName AgentIdentityEnvName, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -451,7 +465,7 @@ type ClientInterface interface {
 	CreateLLMProvider(ctx context.Context, orgName string, body CreateLLMProviderJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListAvailableLLMPolicies request
-	ListAvailableLLMPolicies(ctx context.Context, orgName string, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ListAvailableLLMPolicies(ctx context.Context, orgName string, params *ListAvailableLLMPoliciesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// DeleteLLMProvider request
 	DeleteLLMProvider(ctx context.Context, orgName string, id string, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -671,6 +685,11 @@ type ClientInterface interface {
 	// ProvisionAgentIdentity request
 	ProvisionAgentIdentity(ctx context.Context, orgName string, projName string, agentName string, params *ProvisionAgentIdentityParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// RetryAgentIdentityProvisioningWithBody request with any body
+	RetryAgentIdentityProvisioningWithBody(ctx context.Context, orgName string, projName string, agentName string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	RetryAgentIdentityProvisioning(ctx context.Context, orgName string, projName string, agentName string, body RetryAgentIdentityProvisioningJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListAgentMCPConfigs request
 	ListAgentMCPConfigs(ctx context.Context, orgName string, projName string, agentName string, params *ListAgentMCPConfigsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -862,20 +881,23 @@ type ClientInterface interface {
 
 	RotateLLMProxyAPIKey(ctx context.Context, orgName string, projName string, id string, keyName string, body RotateLLMProxyAPIKeyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ListRepositoryBranchesWithBody request with any body
+	ListRepositoryBranchesWithBody(ctx context.Context, orgName string, params *ListRepositoryBranchesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ListRepositoryBranches(ctx context.Context, orgName string, params *ListRepositoryBranchesParams, body ListRepositoryBranchesJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListRepositoryCommitsWithBody request with any body
+	ListRepositoryCommitsWithBody(ctx context.Context, orgName string, params *ListRepositoryCommitsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ListRepositoryCommits(ctx context.Context, orgName string, params *ListRepositoryCommitsParams, body ListRepositoryCommitsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CheckThunderUrlAvailability request
+	CheckThunderUrlAvailability(ctx context.Context, orgName string, params *CheckThunderUrlAvailabilityParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetNameByDisplayNameWithBody request with any body
 	GetNameByDisplayNameWithBody(ctx context.Context, orgName string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	GetNameByDisplayName(ctx context.Context, orgName string, body GetNameByDisplayNameJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// ListRepositoryBranchesWithBody request with any body
-	ListRepositoryBranchesWithBody(ctx context.Context, params *ListRepositoryBranchesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	ListRepositoryBranches(ctx context.Context, params *ListRepositoryBranchesParams, body ListRepositoryBranchesJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// ListRepositoryCommitsWithBody request with any body
-	ListRepositoryCommitsWithBody(ctx context.Context, params *ListRepositoryCommitsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	ListRepositoryCommits(ctx context.Context, params *ListRepositoryCommitsParams, body ListRepositoryCommitsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
 func (c *Client) GetJWKS(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -1072,6 +1094,18 @@ func (c *Client) DeleteAgentKindVersion(ctx context.Context, orgName string, kin
 
 func (c *Client) GetAgentKindVersion(ctx context.Context, orgName string, kindName string, versionTag string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetAgentKindVersionRequest(c.Server, orgName, kindName, versionTag)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListOrgAgents(ctx context.Context, orgName string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListOrgAgentsRequest(c.Server, orgName)
 	if err != nil {
 		return nil, err
 	}
@@ -1300,6 +1334,54 @@ func (c *Client) SetEnvironmentThunderSystemClientWithBody(ctx context.Context, 
 
 func (c *Client) SetEnvironmentThunderSystemClient(ctx context.Context, orgName string, envID string, body SetEnvironmentThunderSystemClientJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewSetEnvironmentThunderSystemClientRequest(c.Server, orgName, envID, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DeleteEnvironmentThunderUrl(ctx context.Context, orgName string, envID string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteEnvironmentThunderUrlRequest(c.Server, orgName, envID)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetEnvironmentThunderUrl(ctx context.Context, orgName string, envID string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetEnvironmentThunderUrlRequest(c.Server, orgName, envID)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) SetEnvironmentThunderUrlWithBody(ctx context.Context, orgName string, envID string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSetEnvironmentThunderUrlRequestWithBody(c.Server, orgName, envID, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) SetEnvironmentThunderUrl(ctx context.Context, orgName string, envID string, body SetEnvironmentThunderUrlJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSetEnvironmentThunderUrlRequest(c.Server, orgName, envID, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2450,8 +2532,8 @@ func (c *Client) CreateLLMProvider(ctx context.Context, orgName string, body Cre
 	return c.Client.Do(req)
 }
 
-func (c *Client) ListAvailableLLMPolicies(ctx context.Context, orgName string, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListAvailableLLMPoliciesRequest(c.Server, orgName)
+func (c *Client) ListAvailableLLMPolicies(ctx context.Context, orgName string, params *ListAvailableLLMPoliciesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListAvailableLLMPoliciesRequest(c.Server, orgName, params)
 	if err != nil {
 		return nil, err
 	}
@@ -3422,6 +3504,30 @@ func (c *Client) ProvisionAgentIdentity(ctx context.Context, orgName string, pro
 	return c.Client.Do(req)
 }
 
+func (c *Client) RetryAgentIdentityProvisioningWithBody(ctx context.Context, orgName string, projName string, agentName string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRetryAgentIdentityProvisioningRequestWithBody(c.Server, orgName, projName, agentName, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RetryAgentIdentityProvisioning(ctx context.Context, orgName string, projName string, agentName string, body RetryAgentIdentityProvisioningJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRetryAgentIdentityProvisioningRequest(c.Server, orgName, projName, agentName, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) ListAgentMCPConfigs(ctx context.Context, orgName string, projName string, agentName string, params *ListAgentMCPConfigsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewListAgentMCPConfigsRequest(c.Server, orgName, projName, agentName, params)
 	if err != nil {
@@ -4262,6 +4368,66 @@ func (c *Client) RotateLLMProxyAPIKey(ctx context.Context, orgName string, projN
 	return c.Client.Do(req)
 }
 
+func (c *Client) ListRepositoryBranchesWithBody(ctx context.Context, orgName string, params *ListRepositoryBranchesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListRepositoryBranchesRequestWithBody(c.Server, orgName, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListRepositoryBranches(ctx context.Context, orgName string, params *ListRepositoryBranchesParams, body ListRepositoryBranchesJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListRepositoryBranchesRequest(c.Server, orgName, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListRepositoryCommitsWithBody(ctx context.Context, orgName string, params *ListRepositoryCommitsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListRepositoryCommitsRequestWithBody(c.Server, orgName, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListRepositoryCommits(ctx context.Context, orgName string, params *ListRepositoryCommitsParams, body ListRepositoryCommitsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListRepositoryCommitsRequest(c.Server, orgName, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CheckThunderUrlAvailability(ctx context.Context, orgName string, params *CheckThunderUrlAvailabilityParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCheckThunderUrlAvailabilityRequest(c.Server, orgName, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) GetNameByDisplayNameWithBody(ctx context.Context, orgName string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetNameByDisplayNameRequestWithBody(c.Server, orgName, contentType, body)
 	if err != nil {
@@ -4276,54 +4442,6 @@ func (c *Client) GetNameByDisplayNameWithBody(ctx context.Context, orgName strin
 
 func (c *Client) GetNameByDisplayName(ctx context.Context, orgName string, body GetNameByDisplayNameJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetNameByDisplayNameRequest(c.Server, orgName, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) ListRepositoryBranchesWithBody(ctx context.Context, params *ListRepositoryBranchesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListRepositoryBranchesRequestWithBody(c.Server, params, contentType, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) ListRepositoryBranches(ctx context.Context, params *ListRepositoryBranchesParams, body ListRepositoryBranchesJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListRepositoryBranchesRequest(c.Server, params, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) ListRepositoryCommitsWithBody(ctx context.Context, params *ListRepositoryCommitsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListRepositoryCommitsRequestWithBody(c.Server, params, contentType, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) ListRepositoryCommits(ctx context.Context, params *ListRepositoryCommitsParams, body ListRepositoryCommitsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListRepositoryCommitsRequest(c.Server, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -4959,6 +5077,40 @@ func NewGetAgentKindVersionRequest(server string, orgName string, kindName strin
 	}
 
 	operationPath := fmt.Sprintf("/orgs/%s/agent-kinds/%s/versions/%s", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewListOrgAgentsRequest generates requests for ListOrgAgents
+func NewListOrgAgentsRequest(server string, orgName string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "orgName", orgName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/orgs/%s/agents", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -5700,6 +5852,142 @@ func NewSetEnvironmentThunderSystemClientRequestWithBody(server string, orgName 
 	}
 
 	operationPath := fmt.Sprintf("/orgs/%s/environments/%s/thunder-system-client", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("PUT", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewDeleteEnvironmentThunderUrlRequest generates requests for DeleteEnvironmentThunderUrl
+func NewDeleteEnvironmentThunderUrlRequest(server string, orgName string, envID string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "orgName", orgName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "envID", envID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/orgs/%s/environments/%s/thunder-url", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("DELETE", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetEnvironmentThunderUrlRequest generates requests for GetEnvironmentThunderUrl
+func NewGetEnvironmentThunderUrlRequest(server string, orgName string, envID string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "orgName", orgName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "envID", envID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/orgs/%s/environments/%s/thunder-url", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewSetEnvironmentThunderUrlRequest calls the generic SetEnvironmentThunderUrl builder with application/json body
+func NewSetEnvironmentThunderUrlRequest(server string, orgName string, envID string, body SetEnvironmentThunderUrlJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewSetEnvironmentThunderUrlRequestWithBody(server, orgName, envID, "application/json", bodyReader)
+}
+
+// NewSetEnvironmentThunderUrlRequestWithBody generates requests for SetEnvironmentThunderUrl with any type of body
+func NewSetEnvironmentThunderUrlRequestWithBody(server string, orgName string, envID string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "orgName", orgName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "envID", envID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/orgs/%s/environments/%s/thunder-url", pathParam0, pathParam1)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -9361,7 +9649,7 @@ func NewCreateLLMProviderRequestWithBody(server string, orgName string, contentT
 }
 
 // NewListAvailableLLMPoliciesRequest generates requests for ListAvailableLLMPolicies
-func NewListAvailableLLMPoliciesRequest(server string, orgName string) (*http.Request, error) {
+func NewListAvailableLLMPoliciesRequest(server string, orgName string, params *ListAvailableLLMPoliciesParams) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -9384,6 +9672,28 @@ func NewListAvailableLLMPoliciesRequest(server string, orgName string) (*http.Re
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.ProviderId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "providerId", *params.ProviderId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: "uuid"}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
 	}
 
 	req, err := http.NewRequest("GET", queryURL.String(), nil)
@@ -12716,6 +13026,67 @@ func NewProvisionAgentIdentityRequest(server string, orgName string, projName st
 	if err != nil {
 		return nil, err
 	}
+
+	return req, nil
+}
+
+// NewRetryAgentIdentityProvisioningRequest calls the generic RetryAgentIdentityProvisioning builder with application/json body
+func NewRetryAgentIdentityProvisioningRequest(server string, orgName string, projName string, agentName string, body RetryAgentIdentityProvisioningJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewRetryAgentIdentityProvisioningRequestWithBody(server, orgName, projName, agentName, "application/json", bodyReader)
+}
+
+// NewRetryAgentIdentityProvisioningRequestWithBody generates requests for RetryAgentIdentityProvisioning with any type of body
+func NewRetryAgentIdentityProvisioningRequestWithBody(server string, orgName string, projName string, agentName string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "orgName", orgName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projName", projName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "agentName", agentName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/orgs/%s/projects/%s/agents/%s/identities/retry", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -16200,19 +16571,19 @@ func NewRotateLLMProxyAPIKeyRequestWithBody(server string, orgName string, projN
 	return req, nil
 }
 
-// NewGetNameByDisplayNameRequest calls the generic GetNameByDisplayName builder with application/json body
-func NewGetNameByDisplayNameRequest(server string, orgName string, body GetNameByDisplayNameJSONRequestBody) (*http.Request, error) {
+// NewListRepositoryBranchesRequest calls the generic ListRepositoryBranches builder with application/json body
+func NewListRepositoryBranchesRequest(server string, orgName string, params *ListRepositoryBranchesParams, body ListRepositoryBranchesJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	bodyReader = bytes.NewReader(buf)
-	return NewGetNameByDisplayNameRequestWithBody(server, orgName, "application/json", bodyReader)
+	return NewListRepositoryBranchesRequestWithBody(server, orgName, params, "application/json", bodyReader)
 }
 
-// NewGetNameByDisplayNameRequestWithBody generates requests for GetNameByDisplayName with any type of body
-func NewGetNameByDisplayNameRequestWithBody(server string, orgName string, contentType string, body io.Reader) (*http.Request, error) {
+// NewListRepositoryBranchesRequestWithBody generates requests for ListRepositoryBranches with any type of body
+func NewListRepositoryBranchesRequestWithBody(server string, orgName string, params *ListRepositoryBranchesParams, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -16227,47 +16598,7 @@ func NewGetNameByDisplayNameRequestWithBody(server string, orgName string, conte
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/orgs/%s/utils/generate-name", pathParam0)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("POST", queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
-// NewListRepositoryBranchesRequest calls the generic ListRepositoryBranches builder with application/json body
-func NewListRepositoryBranchesRequest(server string, params *ListRepositoryBranchesParams, body ListRepositoryBranchesJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewListRepositoryBranchesRequestWithBody(server, params, "application/json", bodyReader)
-}
-
-// NewListRepositoryBranchesRequestWithBody generates requests for ListRepositoryBranches with any type of body
-func NewListRepositoryBranchesRequestWithBody(server string, params *ListRepositoryBranchesParams, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/repositories/branches")
+	operationPath := fmt.Sprintf("/orgs/%s/repositories/branches", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -16326,26 +16657,33 @@ func NewListRepositoryBranchesRequestWithBody(server string, params *ListReposit
 }
 
 // NewListRepositoryCommitsRequest calls the generic ListRepositoryCommits builder with application/json body
-func NewListRepositoryCommitsRequest(server string, params *ListRepositoryCommitsParams, body ListRepositoryCommitsJSONRequestBody) (*http.Request, error) {
+func NewListRepositoryCommitsRequest(server string, orgName string, params *ListRepositoryCommitsParams, body ListRepositoryCommitsJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	bodyReader = bytes.NewReader(buf)
-	return NewListRepositoryCommitsRequestWithBody(server, params, "application/json", bodyReader)
+	return NewListRepositoryCommitsRequestWithBody(server, orgName, params, "application/json", bodyReader)
 }
 
 // NewListRepositoryCommitsRequestWithBody generates requests for ListRepositoryCommits with any type of body
-func NewListRepositoryCommitsRequestWithBody(server string, params *ListRepositoryCommitsParams, contentType string, body io.Reader) (*http.Request, error) {
+func NewListRepositoryCommitsRequestWithBody(server string, orgName string, params *ListRepositoryCommitsParams, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "orgName", orgName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
 
 	serverURL, err := url.Parse(server)
 	if err != nil {
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/repositories/commits")
+	operationPath := fmt.Sprintf("/orgs/%s/repositories/commits", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -16391,6 +16729,105 @@ func NewListRepositoryCommitsRequestWithBody(server string, params *ListReposito
 		}
 
 		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewCheckThunderUrlAvailabilityRequest generates requests for CheckThunderUrlAvailability
+func NewCheckThunderUrlAvailabilityRequest(server string, orgName string, params *CheckThunderUrlAvailabilityParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "orgName", orgName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/orgs/%s/thunder-url-availability", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if queryFrag, err := runtime.StyleParamWithOptions("form", true, "handle", params.Handle, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+			return nil, err
+		} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+			return nil, err
+		} else {
+			for k, v := range parsed {
+				for _, v2 := range v {
+					queryValues.Add(k, v2)
+				}
+			}
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetNameByDisplayNameRequest calls the generic GetNameByDisplayName builder with application/json body
+func NewGetNameByDisplayNameRequest(server string, orgName string, body GetNameByDisplayNameJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewGetNameByDisplayNameRequestWithBody(server, orgName, "application/json", bodyReader)
+}
+
+// NewGetNameByDisplayNameRequestWithBody generates requests for GetNameByDisplayName with any type of body
+func NewGetNameByDisplayNameRequestWithBody(server string, orgName string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "orgName", orgName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/orgs/%s/utils/generate-name", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
 	}
 
 	req, err := http.NewRequest("POST", queryURL.String(), body)
@@ -16494,6 +16931,9 @@ type ClientWithResponsesInterface interface {
 	// GetAgentKindVersionWithResponse request
 	GetAgentKindVersionWithResponse(ctx context.Context, orgName string, kindName string, versionTag string, reqEditors ...RequestEditorFn) (*GetAgentKindVersionResp, error)
 
+	// ListOrgAgentsWithResponse request
+	ListOrgAgentsWithResponse(ctx context.Context, orgName string, reqEditors ...RequestEditorFn) (*ListOrgAgentsResp, error)
+
 	// ListCatalogResourcesWithResponse request
 	ListCatalogResourcesWithResponse(ctx context.Context, orgName string, params *ListCatalogResourcesParams, reqEditors ...RequestEditorFn) (*ListCatalogResourcesResp, error)
 
@@ -16545,6 +16985,17 @@ type ClientWithResponsesInterface interface {
 	SetEnvironmentThunderSystemClientWithBodyWithResponse(ctx context.Context, orgName string, envID string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SetEnvironmentThunderSystemClientResp, error)
 
 	SetEnvironmentThunderSystemClientWithResponse(ctx context.Context, orgName string, envID string, body SetEnvironmentThunderSystemClientJSONRequestBody, reqEditors ...RequestEditorFn) (*SetEnvironmentThunderSystemClientResp, error)
+
+	// DeleteEnvironmentThunderUrlWithResponse request
+	DeleteEnvironmentThunderUrlWithResponse(ctx context.Context, orgName string, envID string, reqEditors ...RequestEditorFn) (*DeleteEnvironmentThunderUrlResp, error)
+
+	// GetEnvironmentThunderUrlWithResponse request
+	GetEnvironmentThunderUrlWithResponse(ctx context.Context, orgName string, envID string, reqEditors ...RequestEditorFn) (*GetEnvironmentThunderUrlResp, error)
+
+	// SetEnvironmentThunderUrlWithBodyWithResponse request with any body
+	SetEnvironmentThunderUrlWithBodyWithResponse(ctx context.Context, orgName string, envID string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SetEnvironmentThunderUrlResp, error)
+
+	SetEnvironmentThunderUrlWithResponse(ctx context.Context, orgName string, envID string, body SetEnvironmentThunderUrlJSONRequestBody, reqEditors ...RequestEditorFn) (*SetEnvironmentThunderUrlResp, error)
 
 	// ListAgentIdentityAgentsWithResponse request
 	ListAgentIdentityAgentsWithResponse(ctx context.Context, orgName AgentIdentityOrgName, envName AgentIdentityEnvName, reqEditors ...RequestEditorFn) (*ListAgentIdentityAgentsResp, error)
@@ -16807,7 +17258,7 @@ type ClientWithResponsesInterface interface {
 	CreateLLMProviderWithResponse(ctx context.Context, orgName string, body CreateLLMProviderJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateLLMProviderResp, error)
 
 	// ListAvailableLLMPoliciesWithResponse request
-	ListAvailableLLMPoliciesWithResponse(ctx context.Context, orgName string, reqEditors ...RequestEditorFn) (*ListAvailableLLMPoliciesResp, error)
+	ListAvailableLLMPoliciesWithResponse(ctx context.Context, orgName string, params *ListAvailableLLMPoliciesParams, reqEditors ...RequestEditorFn) (*ListAvailableLLMPoliciesResp, error)
 
 	// DeleteLLMProviderWithResponse request
 	DeleteLLMProviderWithResponse(ctx context.Context, orgName string, id string, reqEditors ...RequestEditorFn) (*DeleteLLMProviderResp, error)
@@ -17027,6 +17478,11 @@ type ClientWithResponsesInterface interface {
 	// ProvisionAgentIdentityWithResponse request
 	ProvisionAgentIdentityWithResponse(ctx context.Context, orgName string, projName string, agentName string, params *ProvisionAgentIdentityParams, reqEditors ...RequestEditorFn) (*ProvisionAgentIdentityResp, error)
 
+	// RetryAgentIdentityProvisioningWithBodyWithResponse request with any body
+	RetryAgentIdentityProvisioningWithBodyWithResponse(ctx context.Context, orgName string, projName string, agentName string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RetryAgentIdentityProvisioningResp, error)
+
+	RetryAgentIdentityProvisioningWithResponse(ctx context.Context, orgName string, projName string, agentName string, body RetryAgentIdentityProvisioningJSONRequestBody, reqEditors ...RequestEditorFn) (*RetryAgentIdentityProvisioningResp, error)
+
 	// ListAgentMCPConfigsWithResponse request
 	ListAgentMCPConfigsWithResponse(ctx context.Context, orgName string, projName string, agentName string, params *ListAgentMCPConfigsParams, reqEditors ...RequestEditorFn) (*ListAgentMCPConfigsResp, error)
 
@@ -17218,20 +17674,23 @@ type ClientWithResponsesInterface interface {
 
 	RotateLLMProxyAPIKeyWithResponse(ctx context.Context, orgName string, projName string, id string, keyName string, body RotateLLMProxyAPIKeyJSONRequestBody, reqEditors ...RequestEditorFn) (*RotateLLMProxyAPIKeyResp, error)
 
+	// ListRepositoryBranchesWithBodyWithResponse request with any body
+	ListRepositoryBranchesWithBodyWithResponse(ctx context.Context, orgName string, params *ListRepositoryBranchesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ListRepositoryBranchesResp, error)
+
+	ListRepositoryBranchesWithResponse(ctx context.Context, orgName string, params *ListRepositoryBranchesParams, body ListRepositoryBranchesJSONRequestBody, reqEditors ...RequestEditorFn) (*ListRepositoryBranchesResp, error)
+
+	// ListRepositoryCommitsWithBodyWithResponse request with any body
+	ListRepositoryCommitsWithBodyWithResponse(ctx context.Context, orgName string, params *ListRepositoryCommitsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ListRepositoryCommitsResp, error)
+
+	ListRepositoryCommitsWithResponse(ctx context.Context, orgName string, params *ListRepositoryCommitsParams, body ListRepositoryCommitsJSONRequestBody, reqEditors ...RequestEditorFn) (*ListRepositoryCommitsResp, error)
+
+	// CheckThunderUrlAvailabilityWithResponse request
+	CheckThunderUrlAvailabilityWithResponse(ctx context.Context, orgName string, params *CheckThunderUrlAvailabilityParams, reqEditors ...RequestEditorFn) (*CheckThunderUrlAvailabilityResp, error)
+
 	// GetNameByDisplayNameWithBodyWithResponse request with any body
 	GetNameByDisplayNameWithBodyWithResponse(ctx context.Context, orgName string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*GetNameByDisplayNameResp, error)
 
 	GetNameByDisplayNameWithResponse(ctx context.Context, orgName string, body GetNameByDisplayNameJSONRequestBody, reqEditors ...RequestEditorFn) (*GetNameByDisplayNameResp, error)
-
-	// ListRepositoryBranchesWithBodyWithResponse request with any body
-	ListRepositoryBranchesWithBodyWithResponse(ctx context.Context, params *ListRepositoryBranchesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ListRepositoryBranchesResp, error)
-
-	ListRepositoryBranchesWithResponse(ctx context.Context, params *ListRepositoryBranchesParams, body ListRepositoryBranchesJSONRequestBody, reqEditors ...RequestEditorFn) (*ListRepositoryBranchesResp, error)
-
-	// ListRepositoryCommitsWithBodyWithResponse request with any body
-	ListRepositoryCommitsWithBodyWithResponse(ctx context.Context, params *ListRepositoryCommitsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ListRepositoryCommitsResp, error)
-
-	ListRepositoryCommitsWithResponse(ctx context.Context, params *ListRepositoryCommitsParams, body ListRepositoryCommitsJSONRequestBody, reqEditors ...RequestEditorFn) (*ListRepositoryCommitsResp, error)
 }
 
 type GetJWKSResp struct {
@@ -17560,6 +18019,30 @@ func (r GetAgentKindVersionResp) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r GetAgentKindVersionResp) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type ListOrgAgentsResp struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *AgentSummaryListResponse
+	JSON404      *ErrorResponse
+	JSON500      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r ListOrgAgentsResp) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListOrgAgentsResp) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -17913,6 +18396,83 @@ func (r SetEnvironmentThunderSystemClientResp) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r SetEnvironmentThunderSystemClientResp) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type DeleteEnvironmentThunderUrlResp struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON401      *ErrorResponse
+	JSON403      *ErrorResponse
+	JSON500      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r DeleteEnvironmentThunderUrlResp) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteEnvironmentThunderUrlResp) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetEnvironmentThunderUrlResp struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ThunderUrlResponse
+	JSON401      *ErrorResponse
+	JSON403      *ErrorResponse
+	JSON404      *ErrorResponse
+	JSON500      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r GetEnvironmentThunderUrlResp) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetEnvironmentThunderUrlResp) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type SetEnvironmentThunderUrlResp struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ThunderUrlResponse
+	JSON400      *ErrorResponse
+	JSON401      *ErrorResponse
+	JSON403      *ErrorResponse
+	JSON409      *ErrorResponse
+	JSON500      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r SetEnvironmentThunderUrlResp) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r SetEnvironmentThunderUrlResp) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -19657,6 +20217,7 @@ type ListAvailableLLMPoliciesResp struct {
 	HTTPResponse *http.Response
 	JSON200      *LLMPolicyAvailabilityResponse
 	JSON401      *ErrorResponse
+	JSON404      *ErrorResponse
 	JSON500      *ErrorResponse
 }
 
@@ -21134,6 +21695,33 @@ func (r ProvisionAgentIdentityResp) StatusCode() int {
 	return 0
 }
 
+type RetryAgentIdentityProvisioningResp struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *AgentIdentityEnvironmentView
+	JSON400      *ErrorResponse
+	JSON401      *ErrorResponse
+	JSON404      *ErrorResponse
+	JSON409      *ErrorResponse
+	JSON500      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r RetryAgentIdentityProvisioningResp) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RetryAgentIdentityProvisioningResp) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type ListAgentMCPConfigsResp struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -22414,30 +23002,6 @@ func (r RotateLLMProxyAPIKeyResp) StatusCode() int {
 	return 0
 }
 
-type GetNameByDisplayNameResp struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON200      *ResourceNameResponse
-	JSON404      *ErrorResponse
-	JSON500      *ErrorResponse
-}
-
-// Status returns HTTPResponse.Status
-func (r GetNameByDisplayNameResp) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r GetNameByDisplayNameResp) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
 type ListRepositoryBranchesResp struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -22484,6 +23048,56 @@ func (r ListRepositoryCommitsResp) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r ListRepositoryCommitsResp) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CheckThunderUrlAvailabilityResp struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ThunderUrlAvailabilityResponse
+	JSON400      *ErrorResponse
+	JSON401      *ErrorResponse
+	JSON403      *ErrorResponse
+	JSON500      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r CheckThunderUrlAvailabilityResp) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CheckThunderUrlAvailabilityResp) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetNameByDisplayNameResp struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ResourceNameResponse
+	JSON404      *ErrorResponse
+	JSON500      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r GetNameByDisplayNameResp) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetNameByDisplayNameResp) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -22638,6 +23252,15 @@ func (c *ClientWithResponses) GetAgentKindVersionWithResponse(ctx context.Contex
 		return nil, err
 	}
 	return ParseGetAgentKindVersionResp(rsp)
+}
+
+// ListOrgAgentsWithResponse request returning *ListOrgAgentsResp
+func (c *ClientWithResponses) ListOrgAgentsWithResponse(ctx context.Context, orgName string, reqEditors ...RequestEditorFn) (*ListOrgAgentsResp, error) {
+	rsp, err := c.ListOrgAgents(ctx, orgName, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListOrgAgentsResp(rsp)
 }
 
 // ListCatalogResourcesWithResponse request returning *ListCatalogResourcesResp
@@ -22804,6 +23427,41 @@ func (c *ClientWithResponses) SetEnvironmentThunderSystemClientWithResponse(ctx 
 		return nil, err
 	}
 	return ParseSetEnvironmentThunderSystemClientResp(rsp)
+}
+
+// DeleteEnvironmentThunderUrlWithResponse request returning *DeleteEnvironmentThunderUrlResp
+func (c *ClientWithResponses) DeleteEnvironmentThunderUrlWithResponse(ctx context.Context, orgName string, envID string, reqEditors ...RequestEditorFn) (*DeleteEnvironmentThunderUrlResp, error) {
+	rsp, err := c.DeleteEnvironmentThunderUrl(ctx, orgName, envID, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteEnvironmentThunderUrlResp(rsp)
+}
+
+// GetEnvironmentThunderUrlWithResponse request returning *GetEnvironmentThunderUrlResp
+func (c *ClientWithResponses) GetEnvironmentThunderUrlWithResponse(ctx context.Context, orgName string, envID string, reqEditors ...RequestEditorFn) (*GetEnvironmentThunderUrlResp, error) {
+	rsp, err := c.GetEnvironmentThunderUrl(ctx, orgName, envID, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetEnvironmentThunderUrlResp(rsp)
+}
+
+// SetEnvironmentThunderUrlWithBodyWithResponse request with arbitrary body returning *SetEnvironmentThunderUrlResp
+func (c *ClientWithResponses) SetEnvironmentThunderUrlWithBodyWithResponse(ctx context.Context, orgName string, envID string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SetEnvironmentThunderUrlResp, error) {
+	rsp, err := c.SetEnvironmentThunderUrlWithBody(ctx, orgName, envID, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseSetEnvironmentThunderUrlResp(rsp)
+}
+
+func (c *ClientWithResponses) SetEnvironmentThunderUrlWithResponse(ctx context.Context, orgName string, envID string, body SetEnvironmentThunderUrlJSONRequestBody, reqEditors ...RequestEditorFn) (*SetEnvironmentThunderUrlResp, error) {
+	rsp, err := c.SetEnvironmentThunderUrl(ctx, orgName, envID, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseSetEnvironmentThunderUrlResp(rsp)
 }
 
 // ListAgentIdentityAgentsWithResponse request returning *ListAgentIdentityAgentsResp
@@ -23637,8 +24295,8 @@ func (c *ClientWithResponses) CreateLLMProviderWithResponse(ctx context.Context,
 }
 
 // ListAvailableLLMPoliciesWithResponse request returning *ListAvailableLLMPoliciesResp
-func (c *ClientWithResponses) ListAvailableLLMPoliciesWithResponse(ctx context.Context, orgName string, reqEditors ...RequestEditorFn) (*ListAvailableLLMPoliciesResp, error) {
-	rsp, err := c.ListAvailableLLMPolicies(ctx, orgName, reqEditors...)
+func (c *ClientWithResponses) ListAvailableLLMPoliciesWithResponse(ctx context.Context, orgName string, params *ListAvailableLLMPoliciesParams, reqEditors ...RequestEditorFn) (*ListAvailableLLMPoliciesResp, error) {
+	rsp, err := c.ListAvailableLLMPolicies(ctx, orgName, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -24343,6 +25001,23 @@ func (c *ClientWithResponses) ProvisionAgentIdentityWithResponse(ctx context.Con
 	return ParseProvisionAgentIdentityResp(rsp)
 }
 
+// RetryAgentIdentityProvisioningWithBodyWithResponse request with arbitrary body returning *RetryAgentIdentityProvisioningResp
+func (c *ClientWithResponses) RetryAgentIdentityProvisioningWithBodyWithResponse(ctx context.Context, orgName string, projName string, agentName string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RetryAgentIdentityProvisioningResp, error) {
+	rsp, err := c.RetryAgentIdentityProvisioningWithBody(ctx, orgName, projName, agentName, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRetryAgentIdentityProvisioningResp(rsp)
+}
+
+func (c *ClientWithResponses) RetryAgentIdentityProvisioningWithResponse(ctx context.Context, orgName string, projName string, agentName string, body RetryAgentIdentityProvisioningJSONRequestBody, reqEditors ...RequestEditorFn) (*RetryAgentIdentityProvisioningResp, error) {
+	rsp, err := c.RetryAgentIdentityProvisioning(ctx, orgName, projName, agentName, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRetryAgentIdentityProvisioningResp(rsp)
+}
+
 // ListAgentMCPConfigsWithResponse request returning *ListAgentMCPConfigsResp
 func (c *ClientWithResponses) ListAgentMCPConfigsWithResponse(ctx context.Context, orgName string, projName string, agentName string, params *ListAgentMCPConfigsParams, reqEditors ...RequestEditorFn) (*ListAgentMCPConfigsResp, error) {
 	rsp, err := c.ListAgentMCPConfigs(ctx, orgName, projName, agentName, params, reqEditors...)
@@ -24954,6 +25629,49 @@ func (c *ClientWithResponses) RotateLLMProxyAPIKeyWithResponse(ctx context.Conte
 	return ParseRotateLLMProxyAPIKeyResp(rsp)
 }
 
+// ListRepositoryBranchesWithBodyWithResponse request with arbitrary body returning *ListRepositoryBranchesResp
+func (c *ClientWithResponses) ListRepositoryBranchesWithBodyWithResponse(ctx context.Context, orgName string, params *ListRepositoryBranchesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ListRepositoryBranchesResp, error) {
+	rsp, err := c.ListRepositoryBranchesWithBody(ctx, orgName, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListRepositoryBranchesResp(rsp)
+}
+
+func (c *ClientWithResponses) ListRepositoryBranchesWithResponse(ctx context.Context, orgName string, params *ListRepositoryBranchesParams, body ListRepositoryBranchesJSONRequestBody, reqEditors ...RequestEditorFn) (*ListRepositoryBranchesResp, error) {
+	rsp, err := c.ListRepositoryBranches(ctx, orgName, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListRepositoryBranchesResp(rsp)
+}
+
+// ListRepositoryCommitsWithBodyWithResponse request with arbitrary body returning *ListRepositoryCommitsResp
+func (c *ClientWithResponses) ListRepositoryCommitsWithBodyWithResponse(ctx context.Context, orgName string, params *ListRepositoryCommitsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ListRepositoryCommitsResp, error) {
+	rsp, err := c.ListRepositoryCommitsWithBody(ctx, orgName, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListRepositoryCommitsResp(rsp)
+}
+
+func (c *ClientWithResponses) ListRepositoryCommitsWithResponse(ctx context.Context, orgName string, params *ListRepositoryCommitsParams, body ListRepositoryCommitsJSONRequestBody, reqEditors ...RequestEditorFn) (*ListRepositoryCommitsResp, error) {
+	rsp, err := c.ListRepositoryCommits(ctx, orgName, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListRepositoryCommitsResp(rsp)
+}
+
+// CheckThunderUrlAvailabilityWithResponse request returning *CheckThunderUrlAvailabilityResp
+func (c *ClientWithResponses) CheckThunderUrlAvailabilityWithResponse(ctx context.Context, orgName string, params *CheckThunderUrlAvailabilityParams, reqEditors ...RequestEditorFn) (*CheckThunderUrlAvailabilityResp, error) {
+	rsp, err := c.CheckThunderUrlAvailability(ctx, orgName, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCheckThunderUrlAvailabilityResp(rsp)
+}
+
 // GetNameByDisplayNameWithBodyWithResponse request with arbitrary body returning *GetNameByDisplayNameResp
 func (c *ClientWithResponses) GetNameByDisplayNameWithBodyWithResponse(ctx context.Context, orgName string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*GetNameByDisplayNameResp, error) {
 	rsp, err := c.GetNameByDisplayNameWithBody(ctx, orgName, contentType, body, reqEditors...)
@@ -24969,40 +25687,6 @@ func (c *ClientWithResponses) GetNameByDisplayNameWithResponse(ctx context.Conte
 		return nil, err
 	}
 	return ParseGetNameByDisplayNameResp(rsp)
-}
-
-// ListRepositoryBranchesWithBodyWithResponse request with arbitrary body returning *ListRepositoryBranchesResp
-func (c *ClientWithResponses) ListRepositoryBranchesWithBodyWithResponse(ctx context.Context, params *ListRepositoryBranchesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ListRepositoryBranchesResp, error) {
-	rsp, err := c.ListRepositoryBranchesWithBody(ctx, params, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseListRepositoryBranchesResp(rsp)
-}
-
-func (c *ClientWithResponses) ListRepositoryBranchesWithResponse(ctx context.Context, params *ListRepositoryBranchesParams, body ListRepositoryBranchesJSONRequestBody, reqEditors ...RequestEditorFn) (*ListRepositoryBranchesResp, error) {
-	rsp, err := c.ListRepositoryBranches(ctx, params, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseListRepositoryBranchesResp(rsp)
-}
-
-// ListRepositoryCommitsWithBodyWithResponse request with arbitrary body returning *ListRepositoryCommitsResp
-func (c *ClientWithResponses) ListRepositoryCommitsWithBodyWithResponse(ctx context.Context, params *ListRepositoryCommitsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ListRepositoryCommitsResp, error) {
-	rsp, err := c.ListRepositoryCommitsWithBody(ctx, params, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseListRepositoryCommitsResp(rsp)
-}
-
-func (c *ClientWithResponses) ListRepositoryCommitsWithResponse(ctx context.Context, params *ListRepositoryCommitsParams, body ListRepositoryCommitsJSONRequestBody, reqEditors ...RequestEditorFn) (*ListRepositoryCommitsResp, error) {
-	rsp, err := c.ListRepositoryCommits(ctx, params, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseListRepositoryCommitsResp(rsp)
 }
 
 // ParseGetJWKSResp parses an HTTP response from a GetJWKSWithResponse call
@@ -25513,6 +26197,46 @@ func ParseGetAgentKindVersionResp(rsp *http.Response) (*GetAgentKindVersionResp,
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest AgentKindVersionResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListOrgAgentsResp parses an HTTP response from a ListOrgAgentsWithResponse call
+func ParseListOrgAgentsResp(rsp *http.Response) (*ListOrgAgentsResp, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListOrgAgentsResp{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AgentSummaryListResponse
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -26191,6 +26915,161 @@ func ParseSetEnvironmentThunderSystemClientResp(rsp *http.Response) (*SetEnviron
 			return nil, err
 		}
 		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDeleteEnvironmentThunderUrlResp parses an HTTP response from a DeleteEnvironmentThunderUrlWithResponse call
+func ParseDeleteEnvironmentThunderUrlResp(rsp *http.Response) (*DeleteEnvironmentThunderUrlResp, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteEnvironmentThunderUrlResp{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetEnvironmentThunderUrlResp parses an HTTP response from a GetEnvironmentThunderUrlWithResponse call
+func ParseGetEnvironmentThunderUrlResp(rsp *http.Response) (*GetEnvironmentThunderUrlResp, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetEnvironmentThunderUrlResp{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ThunderUrlResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseSetEnvironmentThunderUrlResp parses an HTTP response from a SetEnvironmentThunderUrlWithResponse call
+func ParseSetEnvironmentThunderUrlResp(rsp *http.Response) (*SetEnvironmentThunderUrlResp, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &SetEnvironmentThunderUrlResp{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ThunderUrlResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest ErrorResponse
@@ -29391,6 +30270,13 @@ func ParseListAvailableLLMPoliciesResp(rsp *http.Response) (*ListAvailableLLMPol
 		}
 		response.JSON401 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -32170,6 +33056,67 @@ func ParseProvisionAgentIdentityResp(rsp *http.Response) (*ProvisionAgentIdentit
 	return response, nil
 }
 
+// ParseRetryAgentIdentityProvisioningResp parses an HTTP response from a RetryAgentIdentityProvisioningWithResponse call
+func ParseRetryAgentIdentityProvisioningResp(rsp *http.Response) (*RetryAgentIdentityProvisioningResp, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RetryAgentIdentityProvisioningResp{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest AgentIdentityEnvironmentView
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseListAgentMCPConfigsResp parses an HTTP response from a ListAgentMCPConfigsWithResponse call
 func ParseListAgentMCPConfigsResp(rsp *http.Response) (*ListAgentMCPConfigsResp, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -34602,46 +35549,6 @@ func ParseRotateLLMProxyAPIKeyResp(rsp *http.Response) (*RotateLLMProxyAPIKeyRes
 	return response, nil
 }
 
-// ParseGetNameByDisplayNameResp parses an HTTP response from a GetNameByDisplayNameWithResponse call
-func ParseGetNameByDisplayNameResp(rsp *http.Response) (*GetNameByDisplayNameResp, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &GetNameByDisplayNameResp{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest ResourceNameResponse
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest ErrorResponse
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest ErrorResponse
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON500 = &dest
-
-	}
-
-	return response, nil
-}
-
 // ParseListRepositoryBranchesResp parses an HTTP response from a ListRepositoryBranchesWithResponse call
 func ParseListRepositoryBranchesResp(rsp *http.Response) (*ListRepositoryBranchesResp, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -34737,6 +35644,100 @@ func ParseListRepositoryCommitsResp(rsp *http.Response) (*ListRepositoryCommitsR
 			return nil, err
 		}
 		response.JSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCheckThunderUrlAvailabilityResp parses an HTTP response from a CheckThunderUrlAvailabilityWithResponse call
+func ParseCheckThunderUrlAvailabilityResp(rsp *http.Response) (*CheckThunderUrlAvailabilityResp, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CheckThunderUrlAvailabilityResp{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ThunderUrlAvailabilityResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetNameByDisplayNameResp parses an HTTP response from a GetNameByDisplayNameWithResponse call
+func ParseGetNameByDisplayNameResp(rsp *http.Response) (*GetNameByDisplayNameResp, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetNameByDisplayNameResp{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ResourceNameResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest ErrorResponse

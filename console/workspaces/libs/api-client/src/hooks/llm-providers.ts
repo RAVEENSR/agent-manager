@@ -240,6 +240,9 @@ export function useUpdateLLMProvider() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["llm-providers"] });
       queryClient.invalidateQueries({ queryKey: ["llm-provider"] });
+      // An update can change `gateways`, which deploys/undeploys; invoke URLs
+      // derived from ["llm-deployments"] must refetch or they go stale.
+      queryClient.invalidateQueries({ queryKey: ["llm-deployments"] });
     },
   });
 }

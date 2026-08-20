@@ -63,6 +63,21 @@ func ValidateLabels(labels map[string]string) error {
 	return nil
 }
 
+// ValidateLabelValue checks a single value against the Kubernetes label-value
+// rules, for values the platform stores as labels on OpenChoreo resources
+// rather than accepting from the user's label map. field names the offending
+// input in the detail message.
+func ValidateLabelValue(value, field string) error {
+	if len(value) > maxLabelLength || !labelValueRegex.MatchString(value) {
+		return NewValidationErrorf(
+			fmt.Sprintf("%s must be at most %d characters of letters, digits, '.', '_' or '-', starting and ending with a letter or digit",
+				field, maxLabelLength),
+			"%s: invalid value %q", field, value,
+		)
+	}
+	return nil
+}
+
 // ParseLabelSelectors parses repeated `label=key:value` query parameters into
 // a label map. Each entry is split on the first ':'; the key and value must
 // satisfy the same rules as stored labels. Repeating the same key with

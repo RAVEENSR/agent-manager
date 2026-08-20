@@ -64,6 +64,7 @@ type OpenChoreoClient interface {
 	PatchProject(ctx context.Context, ouID, projectName string, req PatchProjectRequest) error
 	DeleteProject(ctx context.Context, ouID, projectName string) error
 	ListProjects(ctx context.Context, ouID string) ([]*models.ProjectResponse, error)
+	EnsureProjectReleaseBinding(ctx context.Context, ouID, projectName, environmentName string) error
 
 	// Component Operations
 	CreateComponent(ctx context.Context, ouID, projectName string, req CreateComponentRequest) error

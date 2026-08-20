@@ -24,6 +24,7 @@ type MCPProxyEndpoint struct {
 	// Human-readable endpoint name
 	Name         *string               `json:"name,omitempty"`
 	Upstream     UpstreamConfig        `json:"upstream"`
+	Resilience   *Resilience           `json:"resilience,omitempty"`
 	Policies     []MCPPolicy           `json:"policies,omitempty"`
 	Capabilities *MCPProxyCapabilities `json:"capabilities,omitempty"`
 	Security     *SecurityConfig       `json:"security,omitempty"`
@@ -128,6 +129,38 @@ func (o *MCPProxyEndpoint) GetUpstreamOk() (*UpstreamConfig, bool) {
 // SetUpstream sets field value
 func (o *MCPProxyEndpoint) SetUpstream(v UpstreamConfig) {
 	o.Upstream = v
+}
+
+// GetResilience returns the Resilience field value if set, zero value otherwise.
+func (o *MCPProxyEndpoint) GetResilience() Resilience {
+	if o == nil || IsNil(o.Resilience) {
+		var ret Resilience
+		return ret
+	}
+	return *o.Resilience
+}
+
+// GetResilienceOk returns a tuple with the Resilience field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *MCPProxyEndpoint) GetResilienceOk() (*Resilience, bool) {
+	if o == nil || IsNil(o.Resilience) {
+		return nil, false
+	}
+	return o.Resilience, true
+}
+
+// HasResilience returns a boolean if a field has been set.
+func (o *MCPProxyEndpoint) HasResilience() bool {
+	if o != nil && !IsNil(o.Resilience) {
+		return true
+	}
+
+	return false
+}
+
+// SetResilience gets a reference to the given Resilience and assigns it to the Resilience field.
+func (o *MCPProxyEndpoint) SetResilience(v Resilience) {
+	o.Resilience = &v
 }
 
 // GetPolicies returns the Policies field value if set, zero value otherwise.
@@ -273,6 +306,9 @@ func (o MCPProxyEndpoint) ToMap() (map[string]interface{}, error) {
 		toSerialize["name"] = o.Name
 	}
 	toSerialize["upstream"] = o.Upstream
+	if !IsNil(o.Resilience) {
+		toSerialize["resilience"] = o.Resilience
+	}
 	if !IsNil(o.Policies) {
 		toSerialize["policies"] = o.Policies
 	}

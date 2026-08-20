@@ -18,6 +18,7 @@ package opensearch
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1206,7 +1207,7 @@ func TestIsErrorStatus(t *testing.T) {
 func TestExtractSpanStatus(t *testing.T) {
 	t.Run("error.type attribute", func(t *testing.T) {
 		attrs := map[string]interface{}{"error.type": "RuntimeError"}
-		status := extractSpanStatus(attrs, "")
+		status := extractSpanStatus(attrs, "", "")
 		if !status.Error {
 			t.Error("expected error=true")
 		}
@@ -1217,7 +1218,7 @@ func TestExtractSpanStatus(t *testing.T) {
 
 	t.Run("gen_ai.tool.status error", func(t *testing.T) {
 		attrs := map[string]interface{}{"gen_ai.tool.status": "error"}
-		status := extractSpanStatus(attrs, "")
+		status := extractSpanStatus(attrs, "", "")
 		if !status.Error {
 			t.Error("expected error=true")
 		}
@@ -1228,7 +1229,7 @@ func TestExtractSpanStatus(t *testing.T) {
 
 	t.Run("http.status_code >= 400", func(t *testing.T) {
 		attrs := map[string]interface{}{"http.status_code": float64(500)}
-		status := extractSpanStatus(attrs, "")
+		status := extractSpanStatus(attrs, "", "")
 		if !status.Error {
 			t.Error("expected error=true")
 		}
@@ -1239,7 +1240,7 @@ func TestExtractSpanStatus(t *testing.T) {
 
 	t.Run("fallback to span status", func(t *testing.T) {
 		attrs := map[string]interface{}{"some.attr": "value"}
-		status := extractSpanStatus(attrs, "error")
+		status := extractSpanStatus(attrs, "error", "")
 		if !status.Error {
 			t.Error("expected error=true from span status")
 		}
@@ -1247,16 +1248,36 @@ func TestExtractSpanStatus(t *testing.T) {
 
 	t.Run("no error", func(t *testing.T) {
 		attrs := map[string]interface{}{"some.attr": "value"}
-		status := extractSpanStatus(attrs, "OK")
+		status := extractSpanStatus(attrs, "OK", "")
 		if status.Error {
 			t.Error("expected error=false")
 		}
 	})
 
 	t.Run("nil attributes with error status", func(t *testing.T) {
-		status := extractSpanStatus(nil, "error")
+		status := extractSpanStatus(nil, "error", "")
 		if !status.Error {
 			t.Error("expected error=true from span status")
+		}
+	})
+
+	t.Run("carries status message through (OpenChoreo 1.2.0+)", func(t *testing.T) {
+		status := extractSpanStatus(map[string]interface{}{"error.type": "RuntimeError"}, "error", "boom: connection refused")
+		if !status.Error {
+			t.Error("expected error=true")
+		}
+		if status.Message != "boom: connection refused" {
+			t.Errorf("expected message to be carried through, got %q", status.Message)
+		}
+	})
+
+	t.Run("message set even when no error", func(t *testing.T) {
+		status := extractSpanStatus(nil, "ok", "all good")
+		if status.Error {
+			t.Error("expected error=false")
+		}
+		if status.Message != "all good" {
+			t.Errorf("expected message %q, got %q", "all good", status.Message)
 		}
 	})
 }
@@ -1996,4 +2017,126 @@ func TestExtractTraceInputOutputWithFallback(t *testing.T) {
 			t.Errorf("expected nil,nil got %v,%v", input, output)
 		}
 	})
+}
+
+func TestEventLoopCycleClassifiesAsChain(t *testing.T) {
+	if got := DetermineSpanKindFromName("execute_event_loop_cycle"); got != SpanTypeChain {
+		t.Errorf("DetermineSpanKindFromName = %q, want %q", got, SpanTypeChain)
+	}
+	// Nil attributes, not an empty map: real event-loop spans can arrive without
+	// any, and an empty map would pass even while the nil path returned unknown.
+	if got := DetermineSpanType(Span{Name: "execute_event_loop_cycle"}); got != SpanTypeChain {
+		t.Errorf("DetermineSpanType with nil attributes = %q, want %q", got, SpanTypeChain)
+	}
+	cycle := Span{Name: "execute_event_loop_cycle", Attributes: map[string]interface{}{}}
+	if got := DetermineSpanType(cycle); got != SpanTypeChain {
+		t.Errorf("DetermineSpanType = %q, want %q", got, SpanTypeChain)
+	}
+}
+
+// strandsTrace mirrors a real Strands turn: two event-loop cycles, each with a
+// Strands "chat" span wrapping Traceloop's "openai.chat" and repeating its usage,
+// and an agent span carrying the whole turn's total again.
+func strandsTrace(base time.Time) []Span {
+	ms := func(n int) time.Time { return base.Add(time.Duration(n) * time.Millisecond) }
+	cycle := func(n int, ask, answer string) []Span {
+		c, w, prov := fmt.Sprintf("cycle%d", n), fmt.Sprintf("wrap%d", n), fmt.Sprintf("prov%d", n)
+		off := n * 10
+		return []Span{
+			{SpanID: c, ParentSpanID: "agent", Name: "execute_event_loop_cycle", StartTime: ms(off)},
+			{
+				SpanID: w, ParentSpanID: c, Name: "chat", StartTime: ms(off + 1),
+				Attributes: map[string]interface{}{
+					"gen_ai.usage.input_tokens":  float64(42),
+					"gen_ai.usage.output_tokens": float64(12),
+				},
+			},
+			{
+				SpanID: prov, ParentSpanID: w, Name: "openai.chat", StartTime: ms(off + 2),
+				Attributes: map[string]interface{}{
+					"gen_ai.usage.input_tokens":  float64(42),
+					"gen_ai.usage.output_tokens": float64(12),
+					"gen_ai.input.messages":      fmt.Sprintf(`[{"role":"user","content":%q}]`, ask),
+					"gen_ai.output.messages":     fmt.Sprintf(`[{"role":"assistant","content":%q}]`, answer),
+				},
+			},
+		}
+	}
+	spans := []Span{{
+		SpanID: "agent", Name: "invoke_agent Strands Agents", StartTime: base,
+		Attributes: map[string]interface{}{
+			"gen_ai.usage.input_tokens":  float64(84),
+			"gen_ai.usage.output_tokens": float64(24),
+		},
+	}}
+	spans = append(spans, cycle(1, "status of O2412?", "calling get_flight_status")...)
+	return append(spans, cycle(2, "tool said on time", "O2412 is on time.")...)
+}
+
+func TestExtractTraceInputOutputSkipsContentFreeLeaf(t *testing.T) {
+	spans := strandsTrace(time.Date(2026, 8, 15, 9, 0, 0, 0, time.UTC))
+	root := spans[0]
+	input, output := ExtractTraceInputOutputWithFallback(&root, spans)
+	// The "chat" wrapper sorts ahead of the provider span it wraps and carries no
+	// messages, so taking the first leaf verbatim used to yield a nil input.
+	if input != "status of O2412?" {
+		t.Errorf("input = %v, want the user turn from the first provider span", input)
+	}
+	if output != "O2412 is on time." {
+		t.Errorf("output = %v, want the final assistant turn", output)
+	}
+}
+
+func TestExtractTokenUsagePrefersOutermostReport(t *testing.T) {
+	usage := ExtractTokenUsage(strandsTrace(time.Date(2026, 8, 15, 9, 0, 0, 0, time.UTC)))
+	if usage == nil {
+		t.Fatal("expected token usage, got nil")
+	}
+	// Summing every reporting span would give 84+4*42 = 252 input tokens.
+	if usage.InputTokens != 84 || usage.OutputTokens != 24 {
+		t.Errorf("got %d/%d, want 84/24 (the turn total, counted once)",
+			usage.InputTokens, usage.OutputTokens)
+	}
+}
+
+func TestExtractTokenUsageKeepsAggregateWhenChildrenPartiallyReport(t *testing.T) {
+	base := time.Date(2026, 8, 15, 9, 0, 0, 0, time.UTC)
+	spans := []Span{
+		{
+			SpanID: "agent", Name: "invoke_agent Strands Agents", StartTime: base,
+			Attributes: map[string]interface{}{
+				"gen_ai.usage.input_tokens":  float64(100),
+				"gen_ai.usage.output_tokens": float64(40),
+			},
+		},
+		{
+			SpanID: "reported", ParentSpanID: "agent", Name: "openai.chat", StartTime: base.Add(time.Millisecond),
+			Attributes: map[string]interface{}{
+				"gen_ai.usage.input_tokens":  float64(40),
+				"gen_ai.usage.output_tokens": float64(15),
+			},
+		},
+		// A streamed call that never emitted gen_ai.usage.*.
+		{SpanID: "silent", ParentSpanID: "agent", Name: "openai.chat", StartTime: base.Add(2 * time.Millisecond)},
+	}
+	usage := ExtractTokenUsage(spans)
+	if usage == nil {
+		t.Fatal("expected token usage, got nil")
+	}
+	if usage.InputTokens != 100 || usage.OutputTokens != 40 {
+		t.Errorf("got %d/%d, want the agent aggregate 100/40 — dropping it would under-count the silent call",
+			usage.InputTokens, usage.OutputTokens)
+	}
+}
+
+func TestExtractTokenUsageSurvivesParentCycle(t *testing.T) {
+	spans := []Span{
+		{SpanID: "a", ParentSpanID: "b", Name: "openai.chat", Attributes: map[string]interface{}{
+			"gen_ai.usage.input_tokens": float64(10), "gen_ai.usage.output_tokens": float64(5),
+		}},
+		{SpanID: "b", ParentSpanID: "a", Name: "chat"},
+	}
+	if usage := ExtractTokenUsage(spans); usage == nil || usage.InputTokens != 10 {
+		t.Errorf("expected 10 input tokens without hanging, got %+v", usage)
+	}
 }

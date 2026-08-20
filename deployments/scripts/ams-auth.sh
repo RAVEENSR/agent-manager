@@ -40,3 +40,39 @@ get_ams_token() {
   [ -z "$access_token" ] && return 1
   printf '%s' "$access_token"
 }
+
+# get_thunder_url_handle ORG ENV [max_retries] -> prints ORG/ENV's registered
+# env-Thunder URL handle (learned via GET — the caller has no other way to know
+# whether register_thunder_url stored a caller-supplied or server-generated
+# value), or returns 1 if none is registered / the lookup fails.
+#
+# Every script that needs to ADDRESS an already-provisioned env-Thunder (as
+# opposed to add-environment-thunder.sh's register_thunder_url, which REGISTERS
+# one) calls this single implementation instead of re-deriving the handle
+# locally — thunder_host/thunder_issuer (see thunder-naming.sh) require the
+# real registered handle as input and have no fallback of their own, so a
+# caller that skips this lookup and guesses a value instead wires the gateway
+# to a hostname Thunder never actually issues tokens for.
+get_thunder_url_handle() {
+  local org="$1" env_name="$2" max_retries="${3:-5}"
+  local amp_api_url="${AMP_API_URL:-http://localhost:9000/api/v1}"
+
+  local access_token
+  if ! access_token="$(get_ams_token "$max_retries")"; then
+    return 1
+  fi
+
+  local response http_code resp_body
+  response="$(curl -s -w '\n%{http_code}' \
+    --max-time 30 --retry "$max_retries" --retry-delay 5 \
+    -X GET "${amp_api_url}/orgs/${org}/environments/${env_name}/thunder-url" \
+    -H "Authorization: Bearer ${access_token}" 2>/dev/null)"
+  http_code="$(printf '%s' "$response" | tail -n1)"
+  resp_body="$(printf '%s' "$response" | sed '$d')"
+  [ "$http_code" = "200" ] || return 1
+
+  local handle
+  handle="$(printf '%s' "$resp_body" | grep -o '"handle":"[^"]*"' | cut -d'"' -f4)"
+  [ -z "$handle" ] && return 1
+  printf '%s' "$handle"
+}

@@ -17,6 +17,7 @@
 package repositories
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -38,12 +39,19 @@ type DeploymentRepository interface {
 	CreateWithLimitEnforcement(deployment *models.Deployment, hardLimit int) error
 	GetWithContent(deploymentID, artifactUUID, orgUUID string) (*models.Deployment, error)
 	GetWithState(deploymentID, artifactUUID, orgUUID string) (*models.Deployment, error)
+	// GetWithStateCtx is GetWithState with context propagation, for call paths
+	// (e.g. UndeployLLMProxyDeployment) that need cancellation to reach the
+	// query. GetWithState itself is left as-is to avoid forcing ctx onto its
+	// other existing caller.
+	GetWithStateCtx(ctx context.Context, deploymentID, artifactUUID, orgUUID string) (*models.Deployment, error)
 	GetDeploymentsWithState(artifactUUID, orgUUID string, gatewayID *string, status *string, maxPerAPIGW int) ([]*models.Deployment, error)
 	Delete(deploymentID, artifactUUID, orgUUID string) error
 	GetCurrentByGateway(artifactUUID, gatewayID, orgUUID string) (*models.Deployment, error)
 
 	// Deployment status methods (mutable state tracking)
 	SetCurrent(artifactUUID, orgUUID, gatewayID, deploymentID string, status models.DeploymentStatus) (updatedAt time.Time, err error)
+	// SetCurrentCtx is SetCurrent with context propagation — see GetWithStateCtx.
+	SetCurrentCtx(ctx context.Context, artifactUUID, orgUUID, gatewayID, deploymentID string, status models.DeploymentStatus) (updatedAt time.Time, err error)
 	GetStatus(artifactUUID, orgUUID, gatewayID string) (deploymentID string, status models.DeploymentStatus, updatedAt *time.Time, err error)
 	DeleteStatus(artifactUUID, orgUUID, gatewayID string) error
 
@@ -205,6 +213,11 @@ func (r *DeploymentRepo) GetCurrentByGateway(artifactUUID, gatewayID, orgUUID st
 
 // SetCurrent inserts or updates the deployment status record
 func (r *DeploymentRepo) SetCurrent(artifactUUID, orgUUID, gatewayID, deploymentID string, status models.DeploymentStatus) (time.Time, error) {
+	return r.SetCurrentCtx(context.Background(), artifactUUID, orgUUID, gatewayID, deploymentID, status)
+}
+
+// SetCurrentCtx is SetCurrent with context propagation — see the interface doc comment.
+func (r *DeploymentRepo) SetCurrentCtx(ctx context.Context, artifactUUID, orgUUID, gatewayID, deploymentID string, status models.DeploymentStatus) (time.Time, error) {
 	updatedAt := time.Now()
 
 	artifactUUID_uuid, err := uuid.Parse(artifactUUID)
@@ -229,7 +242,7 @@ func (r *DeploymentRepo) SetCurrent(artifactUUID, orgUUID, gatewayID, deployment
 		UpdatedAt:    updatedAt,
 	}
 
-	err = r.db.Clauses(clause.OnConflict{
+	err = r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "artifact_uuid"}, {Name: "ou_id"}, {Name: "gateway_uuid"}},
 		DoUpdates: clause.AssignmentColumns([]string{"deployment_id", "status", "updated_at"}),
 	}).Create(deploymentStatus).Error
@@ -289,8 +302,13 @@ func (r *DeploymentRepo) DeleteStatus(artifactUUID, orgUUID, gatewayID string) e
 
 // GetWithState retrieves a deployment with its lifecycle state populated (without content)
 func (r *DeploymentRepo) GetWithState(deploymentID, artifactUUID, orgUUID string) (*models.Deployment, error) {
+	return r.GetWithStateCtx(context.Background(), deploymentID, artifactUUID, orgUUID)
+}
+
+// GetWithStateCtx is GetWithState with context propagation — see the interface doc comment.
+func (r *DeploymentRepo) GetWithStateCtx(ctx context.Context, deploymentID, artifactUUID, orgUUID string) (*models.Deployment, error) {
 	var deployment models.Deployment
-	err := r.db.Table("deployments d").
+	err := r.db.WithContext(ctx).Table("deployments d").
 		Select("d.deployment_id, d.name, d.artifact_uuid, d.ou_id, d.gateway_uuid, "+
 			"d.base_deployment_id, d.metadata, d.created_at, "+
 			"s.status, s.updated_at AS status_updated_at").

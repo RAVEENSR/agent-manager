@@ -17,6 +17,7 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,7 +27,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware"
+	"github.com/wso2/agent-manager/agent-manager-service/middleware/jwtassertion"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/logger"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/services"
@@ -77,7 +80,10 @@ func (c *agentConfigurationController) CreateAgentModelConfig(w http.ResponseWri
 	projectName := r.PathValue(utils.PathParamProjName)
 	agentName := r.PathValue(utils.PathParamAgentName)
 
-	createdBy := "system"
+	// The token subject, not a hardcoded literal. This column previously
+	// recorded "system" for every config a user created, so it attributed real
+	// user actions to the platform.
+	createdBy := callerSubject(ctx)
 
 	// Bind request body
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
@@ -359,7 +365,7 @@ func (c *agentConfigurationController) CreateAgentMCPConfig(w http.ResponseWrite
 	ouID := middleware.OUIDFromRequest(r)
 	projectName := r.PathValue(utils.PathParamProjName)
 	agentName := r.PathValue(utils.PathParamAgentName)
-	createdBy := "system"
+	createdBy := callerSubject(ctx)
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
 	var specReq spec.CreateAgentModelConfigRequest
@@ -603,7 +609,8 @@ func convertCreateAgentModelConfigRequest(specReq spec.CreateAgentModelConfigReq
 		envMappings[envName] = models.EnvModelConfigRequest{
 			ProviderName: proxyName,
 			Configuration: models.EnvProviderConfiguration{
-				Policies: convertToModelPolicies(&envConfig.Configuration),
+				Policies:   convertToModelPolicies(&envConfig.Configuration),
+				Resilience: utils.ConvertSpecToModelResilience(envConfig.Configuration.Resilience),
 			},
 		}
 	}
@@ -644,7 +651,8 @@ func convertUpdateAgentModelConfigRequest(specReq spec.UpdateAgentModelConfigReq
 			envMappings[envName] = models.EnvModelConfigRequest{
 				ProviderName: proxyName,
 				Configuration: models.EnvProviderConfiguration{
-					Policies: convertToModelPolicies(&envConfig.Configuration),
+					Policies:   convertToModelPolicies(&envConfig.Configuration),
+					Resilience: utils.ConvertSpecToModelResilience(envConfig.Configuration.Resilience),
 				},
 			}
 		}
@@ -679,9 +687,14 @@ func convertAgentModelConfigResponse(modelResp models.AgentModelConfigResponse) 
 				proxyUUID = *envConfig.LLMProxy.ProxyUUID
 			}
 			modelEnvConfig := &spec.ProviderConfig{
-				ProxyUuid:    proxyUUID,
-				ProviderName: providerName,
-				Policies:     convertToSpecPolicies(&envConfig.LLMProxy.Policies),
+				ProxyUuid:        proxyUUID,
+				ProviderName:     providerName,
+				Policies:         convertToSpecPolicies(&envConfig.LLMProxy.Policies),
+				ProviderPolicies: convertToSpecPolicies(&envConfig.LLMProxy.ProviderPolicies),
+				Resilience:       utils.ConvertModelToSpecResilience(envConfig.LLMProxy.Resilience),
+			}
+			if envConfig.LLMProxy.ProviderUUID != nil {
+				modelEnvConfig.SetProviderUuid(*envConfig.LLMProxy.ProviderUUID)
 			}
 			if modelResp.Type == "mcp" {
 				modelEnvConfig.SetProxyName(providerName)
@@ -956,15 +969,23 @@ func (c *agentConfigurationController) CreateMCPConfigAPIKey(w http.ResponseWrit
 		return
 	}
 
+	attempt, ok := beginConfigAPIKeyAudit(w, r, "CreateMCPConfigAPIKey", "Failed to issue API key", audit.ActionAPIKeyCreate, audit.APIKeyOwnerMCPConfig,
+		ouID, projName, agentName, envName, configUUID.String(), name)
+	if !ok {
+		return
+	}
+
 	response, err := c.agentConfigService.CreateMCPConfigAPIKey(ctx, ouID, projName, agentName, configUUID, envName, &models.CreateAPIKeyRequest{
 		Name:        name,
 		DisplayName: displayName,
 		ExpiresAt:   specReq.ExpiresAt,
 	})
 	if err != nil {
+		attempt.Complete(ctx, err)
 		c.writeConfigAPIKeyError(w, log, "CreateMCPConfigAPIKey", err)
 		return
 	}
+	attempt.Complete(ctx, nil)
 	utils.WriteSuccessResponse(w, http.StatusCreated, response)
 }
 
@@ -987,14 +1008,22 @@ func (c *agentConfigurationController) RotateMCPConfigAPIKey(w http.ResponseWrit
 		return
 	}
 
+	attempt, ok := beginConfigAPIKeyAudit(w, r, "RotateMCPConfigAPIKey", "Failed to issue API key", audit.ActionAPIKeyRotate, audit.APIKeyOwnerMCPConfig,
+		ouID, projName, agentName, envName, configUUID.String(), keyName)
+	if !ok {
+		return
+	}
+
 	response, err := c.agentConfigService.RotateMCPConfigAPIKey(ctx, ouID, projName, agentName, configUUID, envName, keyName, &models.RotateAPIKeyRequest{
 		DisplayName: specReq.DisplayName,
 		ExpiresAt:   specReq.ExpiresAt,
 	})
 	if err != nil {
+		attempt.Complete(ctx, err)
 		c.writeConfigAPIKeyError(w, log, "RotateMCPConfigAPIKey", err)
 		return
 	}
+	attempt.Complete(ctx, nil)
 	utils.WriteSuccessResponse(w, http.StatusOK, response)
 }
 
@@ -1009,10 +1038,18 @@ func (c *agentConfigurationController) RevokeMCPConfigAPIKey(w http.ResponseWrit
 	}
 	keyName := r.PathValue("keyName")
 
+	attempt, ok := beginConfigAPIKeyAudit(w, r, "RevokeMCPConfigAPIKey", "Failed to revoke API key", audit.ActionAPIKeyRevoke, audit.APIKeyOwnerMCPConfig,
+		ouID, projName, agentName, envName, configUUID.String(), keyName)
+	if !ok {
+		return
+	}
+
 	if err := c.agentConfigService.RevokeMCPConfigAPIKey(ctx, ouID, projName, agentName, configUUID, envName, keyName); err != nil {
+		attempt.Complete(ctx, err)
 		c.writeConfigAPIKeyError(w, log, "RevokeMCPConfigAPIKey", err)
 		return
 	}
+	attempt.Complete(ctx, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1059,15 +1096,23 @@ func (c *agentConfigurationController) CreateLLMConfigAPIKey(w http.ResponseWrit
 		return
 	}
 
+	attempt, ok := beginConfigAPIKeyAudit(w, r, "CreateLLMConfigAPIKey", "Failed to issue API key", audit.ActionAPIKeyCreate, audit.APIKeyOwnerModelConfig,
+		ouID, projName, agentName, envName, configUUID.String(), name)
+	if !ok {
+		return
+	}
+
 	response, err := c.agentConfigService.CreateLLMConfigAPIKey(ctx, ouID, projName, agentName, configUUID, envName, &models.CreateAPIKeyRequest{
 		Name:        name,
 		DisplayName: displayName,
 		ExpiresAt:   specReq.ExpiresAt,
 	})
 	if err != nil {
+		attempt.Complete(ctx, err)
 		c.writeConfigAPIKeyError(w, log, "CreateLLMConfigAPIKey", err)
 		return
 	}
+	attempt.Complete(ctx, nil)
 	utils.WriteSuccessResponse(w, http.StatusCreated, response)
 }
 
@@ -1090,14 +1135,22 @@ func (c *agentConfigurationController) RotateLLMConfigAPIKey(w http.ResponseWrit
 		return
 	}
 
+	attempt, ok := beginConfigAPIKeyAudit(w, r, "RotateLLMConfigAPIKey", "Failed to issue API key", audit.ActionAPIKeyRotate, audit.APIKeyOwnerModelConfig,
+		ouID, projName, agentName, envName, configUUID.String(), keyName)
+	if !ok {
+		return
+	}
+
 	response, err := c.agentConfigService.RotateLLMConfigAPIKey(ctx, ouID, projName, agentName, configUUID, envName, keyName, &models.RotateAPIKeyRequest{
 		DisplayName: specReq.DisplayName,
 		ExpiresAt:   specReq.ExpiresAt,
 	})
 	if err != nil {
+		attempt.Complete(ctx, err)
 		c.writeConfigAPIKeyError(w, log, "RotateLLMConfigAPIKey", err)
 		return
 	}
+	attempt.Complete(ctx, nil)
 	utils.WriteSuccessResponse(w, http.StatusOK, response)
 }
 
@@ -1112,9 +1165,27 @@ func (c *agentConfigurationController) RevokeLLMConfigAPIKey(w http.ResponseWrit
 	}
 	keyName := r.PathValue("keyName")
 
+	attempt, ok := beginConfigAPIKeyAudit(w, r, "RevokeLLMConfigAPIKey", "Failed to revoke API key", audit.ActionAPIKeyRevoke, audit.APIKeyOwnerModelConfig,
+		ouID, projName, agentName, envName, configUUID.String(), keyName)
+	if !ok {
+		return
+	}
+
 	if err := c.agentConfigService.RevokeLLMConfigAPIKey(ctx, ouID, projName, agentName, configUUID, envName, keyName); err != nil {
+		attempt.Complete(ctx, err)
 		c.writeConfigAPIKeyError(w, log, "RevokeLLMConfigAPIKey", err)
 		return
 	}
+	attempt.Complete(ctx, nil)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// callerSubject returns the acting user's token subject for created_by
+// attribution, falling back to a marker when there is no user behind the call
+// (a system client) rather than to a literal that would misattribute the change.
+func callerSubject(ctx context.Context) string {
+	if claims := jwtassertion.GetTokenClaims(ctx); claims != nil && claims.Sub != "" {
+		return claims.Sub
+	}
+	return "system"
 }

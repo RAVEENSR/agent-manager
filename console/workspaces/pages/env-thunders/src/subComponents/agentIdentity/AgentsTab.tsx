@@ -27,7 +27,10 @@ import {
 } from "@wso2/oxygen-ui";
 import { AlertTriangle, Search, Users } from "@wso2/oxygen-ui-icons-react";
 import { generatePath, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { useListAgentIdentityAgents } from "@agent-management-platform/api-client";
+import {
+  useListAgentIdentityAgents,
+  useOrgAgentDisplayNames,
+} from "@agent-management-platform/api-client";
 import { absoluteRouteMap, type AgentIdentityAgentResponse } from "@agent-management-platform/types";
 import { withSearchParams } from "../../utils/withSearchParams";
 
@@ -43,12 +46,6 @@ const STATUS_COLORS: Record<string, StatusColor> = {
   failed: "error",
 };
 
-const matchesQuery = (agent: AgentIdentityAgentResponse, query: string) =>
-  [agent.agentName, agent.projectName, agent.status, agent.thunderAgentId ?? ""]
-    .join(" ")
-    .toLowerCase()
-    .includes(query);
-
 export const AgentsTab: React.FC = () => {
   const { orgId } = useParams<{ orgId: string }>();
   const [searchParams] = useSearchParams();
@@ -60,8 +57,36 @@ export const AgentsTab: React.FC = () => {
     orgName: orgId,
     envName,
   });
+  const { resolveAgentName, resolveProjectName } = useOrgAgentDisplayNames({ orgName: orgId });
 
   const agents = useMemo(() => data?.agents ?? [], [data]);
+
+  // Resolve each row's display name/project display name once here — every
+  // downstream consumer (search filtering, the rendered cells) reads the
+  // precomputed fields instead of re-resolving on every render.
+  const enrichedAgents = useMemo(
+    () =>
+      agents.map((agent) => {
+        const displayName = resolveAgentName(agent.projectName, agent.agentName);
+        const projectDisplayName = resolveProjectName(agent.projectName, agent.agentName);
+        return {
+          ...agent,
+          displayName,
+          projectDisplayName,
+          filterText: [
+            agent.agentName,
+            displayName,
+            agent.projectName,
+            projectDisplayName,
+            agent.status,
+            agent.thunderAgentId ?? "",
+          ]
+            .join(" ")
+            .toLowerCase(),
+        };
+      }),
+    [agents, resolveAgentName, resolveProjectName],
+  );
 
   const agentsNode =
     absoluteRouteMap.children.org.children.thunderInstances.children.agents;
@@ -79,8 +104,8 @@ export const AgentsTab: React.FC = () => {
 
   const filteredAgents = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return query ? agents.filter((a) => matchesQuery(a, query)) : agents;
-  }, [agents, search]);
+    return query ? enrichedAgents.filter((a) => a.filterText.includes(query)) : enrichedAgents;
+  }, [enrichedAgents, search]);
 
   if (error != null) {
     return (
@@ -146,13 +171,13 @@ export const AgentsTab: React.FC = () => {
                       <ListingTable.CellIcon
                         icon={
                           <Avatar sx={AVATAR_SX}>
-                            {agent.agentName.charAt(0).toUpperCase() || "A"}
+                            {agent.displayName.charAt(0).toUpperCase() || "A"}
                           </Avatar>
                         }
-                        primary={agent.agentName}
+                        primary={agent.displayName}
                       />
                     </ListingTable.Cell>
-                    <ListingTable.Cell>{agent.projectName}</ListingTable.Cell>
+                    <ListingTable.Cell>{agent.projectDisplayName}</ListingTable.Cell>
                     <ListingTable.Cell>
                       <Chip
                         label={agent.status}

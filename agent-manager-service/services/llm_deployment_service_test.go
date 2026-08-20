@@ -311,6 +311,57 @@ func TestGenerateLLMProviderDeploymentYAML_BasicProvider(t *testing.T) {
 	}
 }
 
+// TestGenerateLLMProviderDeploymentYAML_WithResilience verifies that the
+// resilience block passes through directly to the deployment spec.
+func TestGenerateLLMProviderDeploymentYAML_WithResilience(t *testing.T) {
+	service := &LLMProviderDeploymentService{}
+	timeout := "15s"
+	idleTimeout := "20s"
+
+	provider := &models.LLMProvider{
+		TemplateHandle: "openai",
+		Artifact: &models.Artifact{
+			Handle: "openai-provider",
+		},
+		Configuration: models.LLMProviderConfig{
+			Name:    "OpenAI Provider",
+			Version: "v1.0",
+			Context: strPtr("/"),
+			Upstream: &models.UpstreamConfig{
+				Main: &models.UpstreamEndpoint{URL: "https://api.openai.com"},
+			},
+			Resilience: &models.Resilience{
+				Timeout:     &timeout,
+				IdleTimeout: &idleTimeout,
+			},
+		},
+	}
+
+	yamlStr, err := service.generateLLMProviderDeploymentYAML(provider, "test-org")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	var out LLMProviderDeploymentYAML
+	if err := yaml.Unmarshal([]byte(yamlStr), &out); err != nil {
+		t.Fatalf("failed to unmarshal generated yaml: %v", err)
+	}
+
+	if out.Spec.Resilience == nil {
+		t.Fatalf("expected resilience to be set")
+	}
+	if out.Spec.Resilience.Timeout == nil || *out.Spec.Resilience.Timeout != "15s" {
+		t.Fatalf("expected resilience.timeout 15s, got: %+v", out.Spec.Resilience.Timeout)
+	}
+	if out.Spec.Resilience.IdleTimeout == nil || *out.Spec.Resilience.IdleTimeout != "20s" {
+		t.Fatalf("expected resilience.idleTimeout 20s, got: %+v", out.Spec.Resilience.IdleTimeout)
+	}
+
+	if out.Spec.Upstream.URL != "https://api.openai.com" {
+		t.Fatalf("expected upstream.url to remain inline, got: %s", out.Spec.Upstream.URL)
+	}
+}
+
 // TestGenerateLLMProviderDeploymentYAML_WithSecurityAPIKey tests security transformation
 func TestGenerateLLMProviderDeploymentYAML_WithSecurityAPIKey(t *testing.T) {
 	service := &LLMProviderDeploymentService{}
