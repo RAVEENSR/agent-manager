@@ -27,7 +27,10 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 )
 
-func TestBuildProxyURLUsesStoredRuntimeURLForInternal(t *testing.T) {
+// Internal and external consumers both reach the gateway through its vhost. The stored
+// RuntimeURL is deliberately not used: it is set here to pin that it stays unused, so a
+// reintroduced in-cluster address for internal agents is caught rather than silently shipped.
+func TestBuildProxyURLUsesVhostForInternalAndExternal(t *testing.T) {
 	contextPath := "/llm/proxy"
 	gateway := &models.Gateway{
 		Name:       "api-platform-acme-dev",
@@ -37,7 +40,7 @@ func TestBuildProxyURLUsesStoredRuntimeURLForInternal(t *testing.T) {
 
 	require.Equal(
 		t,
-		"http://api-platform-acme-dev-gw-gateway-gateway-runtime.acme-dev:22893/llm/proxy",
+		"https://dev-acme.gateway.example.com/llm/proxy",
 		buildProxyURL(gateway, &contextPath, true),
 	)
 	require.Equal(
@@ -47,10 +50,9 @@ func TestBuildProxyURLUsesStoredRuntimeURLForInternal(t *testing.T) {
 	)
 }
 
-// An empty runtime URL is the designed path for external agents and a diagnosable
-// failure for internal ones — the ERROR log is what makes deleting the derivation
-// survivable, so exercise both branches rather than only the happy one.
-func TestBuildProxyURLFallsBackToVhostWhenRuntimeURLEmpty(t *testing.T) {
+// An absent RuntimeURL is no longer a misconfiguration for either consumer, so neither
+// branch may log: an ERROR here would page someone about a field nothing reads.
+func TestBuildProxyURLIsSilentWhenRuntimeURLEmpty(t *testing.T) {
 	contextPath := "/llm/proxy"
 	gateway := &models.Gateway{
 		UUID:  uuid.New(),
@@ -61,14 +63,8 @@ func TestBuildProxyURLFallsBackToVhostWhenRuntimeURLEmpty(t *testing.T) {
 	logs := captureDefaultLogger(t)
 
 	require.Equal(t, "https://dev-acme.gateway.example.com/llm/proxy", buildProxyURL(gateway, &contextPath, true))
+	require.Empty(t, logs.String())
 
-	// Pin the level and the identifying attributes, not the prose: a downgrade to WARN or a
-	// dropped gateway identifier would silently remove the only signal of a misconfigured gateway.
-	require.Contains(t, logs.String(), "level=ERROR")
-	require.Contains(t, logs.String(), "gatewayName=default")
-	require.Contains(t, logs.String(), "gatewayID="+gateway.UUID.String())
-
-	// The external branch is not a misconfiguration, so it must stay silent.
 	logs.Reset()
 	require.Equal(t, "https://dev-acme.gateway.example.com/llm/proxy", buildProxyURL(gateway, &contextPath, false))
 	require.Empty(t, logs.String())
@@ -91,10 +87,10 @@ func TestBuildProxyURLWithoutContextPath(t *testing.T) {
 		RuntimeURL: "http://runtime.acme-dev:22893",
 	}
 
-	require.Equal(t, "http://runtime.acme-dev:22893", buildProxyURL(gateway, nil, true))
+	require.Equal(t, "https://dev-acme.gateway.example.com", buildProxyURL(gateway, nil, true))
 }
 
-func TestBuildMCPProxyURLUsesStoredRuntimeURLForInternal(t *testing.T) {
+func TestBuildMCPProxyURLUsesVhostForInternalAndExternal(t *testing.T) {
 	contextPath := "  /tools/  "
 	gateway := &models.Gateway{
 		Name:       "api-platform-acme-dev",
@@ -104,7 +100,7 @@ func TestBuildMCPProxyURLUsesStoredRuntimeURLForInternal(t *testing.T) {
 
 	require.Equal(
 		t,
-		"http://api-platform-acme-dev-gw-gateway-gateway-runtime.acme-dev:22893/tools/mcp",
+		"https://dev-acme.gateway.example.com/tools/mcp",
 		buildMCPProxyURL(gateway, &contextPath, true),
 	)
 	require.Equal(

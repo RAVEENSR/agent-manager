@@ -186,9 +186,11 @@ func TestAnchoring_MonitorRunAgainstDeployedProxy(t *testing.T) {
 		}
 		url, err := exec.resolveProxyURL(context.Background(), "org", env.String(), proxy)
 		require.NoError(t, err)
-		// The monitor runs in-cluster, so the stored internal address is the correct base —
-		// asserting it rules out the vhost fallback as well as the wrong gateway.
-		require.Equal(t, both.RuntimeURL, url)
+		// Every consumer reaches the gateway through its vhost, the monitor included. What this
+		// pins is the gateway choice: the vhost belongs to the one the proxy is deployed to, not
+		// to the other candidate.
+		require.Equal(t, both.Vhost, url)
+		require.NotEqual(t, egress.Vhost, url)
 	})
 
 	t.Run("ambiguity fires only with no deployment", func(t *testing.T) {

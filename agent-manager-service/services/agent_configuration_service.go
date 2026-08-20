@@ -275,11 +275,11 @@ func buildProxyURL(gateway *models.Gateway, contextPath *string, isInternal bool
 	return base
 }
 
-// internalBaseOrVhost picks the stored runtime address for internal consumers and the vhost
-// otherwise. An internal consumer with no stored address logs at ERROR: falling back to the
-// vhost is correct for external agents but an unreachable address for a sandboxed pod, and
-// naming that condition is what replaces the deleted name-based derivation as a diagnostic.
-func internalBaseOrVhost(gateway *models.Gateway, isInternal bool) string {
+// internalBaseOrVhost returns the gateway's vhost for every consumer. Internal agents once
+// used the stored in-cluster RuntimeURL, but they now reach the gateway the same way external
+// callers do, so isInternal and Gateway.RuntimeURL are both unread here — kept only because
+// the callers still thread isInternal through.
+func internalBaseOrVhost(gateway *models.Gateway, _ bool) string {
 	return gateway.Vhost
 }
 

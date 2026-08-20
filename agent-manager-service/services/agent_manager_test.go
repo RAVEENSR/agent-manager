@@ -518,6 +518,10 @@ func TestDeployAgent_IdentityInjectionError_AbortsDeploy(t *testing.T) {
 		GetComponentConfigurationsFunc: func(context.Context, string, string, string, string) ([]models.EnvVars, error) {
 			return nil, nil
 		},
+		// Not blocked, so the deploy reaches the identity injection this test is about.
+		GetComponentReconcileBlockFunc: func(context.Context, string, string) (*client.ComponentReconcileBlock, error) {
+			return nil, nil //nolint:nilnil // nil block is the "not blocked" signal this API defines
+		},
 		DeployFunc: func(context.Context, string, string, string, client.DeployRequest) error {
 			deployCalled = true
 			return nil
@@ -1623,6 +1627,10 @@ func deployAPIAgentMocks(existingConfig *models.AgentConfig) (*agentManagerServi
 		// instead of silently leaking config into every environment.
 		ReplaceReleaseBindingWorkloadOverridesFunc: func(context.Context, string, string, string, []client.EnvVar, []client.FileVar) error {
 			return nil
+		},
+		// Not blocked, so the deploy runs to completion.
+		GetComponentReconcileBlockFunc: func(context.Context, string, string) (*client.ComponentReconcileBlock, error) {
+			return nil, nil //nolint:nilnil // nil block is the "not blocked" signal this API defines
 		},
 		UpdateComponentDeploymentConfigFunc: func(_ context.Context, _, _, _ string, req client.ComponentDeploymentConfigRequest) error {
 			capturedDeployConfig = req
