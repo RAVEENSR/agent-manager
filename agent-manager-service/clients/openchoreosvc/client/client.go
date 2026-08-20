@@ -86,7 +86,6 @@ type OpenChoreoClient interface {
 	UpdateComponentEnvVars(ctx context.Context, ouID, projectName, componentName string, envVars []EnvVar) error
 	ReplaceComponentEnvVars(ctx context.Context, ouID, projectName, componentName string, envVars []EnvVar) error
 	ReplaceComponentFileMounts(ctx context.Context, ouID, projectName, componentName string, files []FileVar) error
-	ClearComponentBaseWorkloadConfig(ctx context.Context, ouID, projectName, componentName string) error
 	UpdateReleaseBindingEnvVars(ctx context.Context, ouID, projectName, componentName, envName string, envVars []EnvVar) error
 	RemoveComponentEnvironmentVariables(ctx context.Context, ouID, projectName, componentName string, envVarKeys []string) error
 	RemoveReleaseBindingEnvVars(ctx context.Context, ouID, projectName, componentName, envName string, envVarKeys []string) error

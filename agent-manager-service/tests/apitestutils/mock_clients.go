@@ -116,20 +116,6 @@ func CreateMockOpenChoreoClient() *clientmocks.OpenChoreoClientMock {
 		EnsureProjectReleaseBindingFunc: func(ctx context.Context, namespaceName, projectName, environmentName string) error {
 			return nil
 		},
-		// Deploy and promote run a reconcile pre-flight; the default component
-		// reconciles fine, so tests reach the behaviour they actually assert on.
-		GetComponentReconcileBlockFunc: func(ctx context.Context, namespaceName, componentName string) (*client.ComponentReconcileBlock, error) {
-			// A nil block is the documented "not blocked" result.
-			return nil, nil
-		},
-		// Deploy-time env vars and file mounts are written to the environment's
-		// ReleaseBinding overrides, then the component-wide base is cleared.
-		ReplaceReleaseBindingWorkloadOverridesFunc: func(ctx context.Context, namespaceName, componentName, environmentName string, envOverrides []client.EnvVar, fileOverrides []client.FileVar) error {
-			return nil
-		},
-		ClearComponentBaseWorkloadConfigFunc: func(ctx context.Context, namespaceName, projectName, componentName string) error {
-			return nil
-		},
 		GetComponentFunc: func(ctx context.Context, namespaceName, projectName, componentName string) (*models.AgentResponse, error) {
 			if strings.Contains(componentName, "nonexistent-agent") {
 				return nil, utils.ErrAgentNotFound
@@ -213,6 +199,16 @@ func CreateMockOpenChoreoClient() *clientmocks.OpenChoreoClientMock {
 		},
 		ReplaceComponentFileMountsFunc: func(ctx context.Context, namespaceName string, projectName string, componentName string, files []client.FileVar) error {
 			return nil
+		},
+		// Where deploy writes an environment's env vars and file mounts. Deploy sends only the
+		// image through DeployRequest, so assertions on deploy-time config read this call.
+		ReplaceReleaseBindingWorkloadOverridesFunc: func(ctx context.Context, namespaceName string, componentName string, environment string, envOverrides []client.EnvVar, fileOverrides []client.FileVar) error {
+			return nil
+		},
+		// nil means OpenChoreo can reconcile the component; deploy aborts early otherwise.
+		GetComponentReconcileBlockFunc: func(ctx context.Context, namespaceName string, componentName string) (*client.ComponentReconcileBlock, error) {
+			// A nil block is the "not blocked" signal this API defines.
+			return nil, nil
 		},
 		RemoveWorkloadEnvVarsFunc: func(ctx context.Context, namespaceName string, componentName string, envVarKeys []string) error {
 			return nil

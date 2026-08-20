@@ -508,7 +508,6 @@ func TestDeployAgent_IdentityInjectionError_AbortsDeploy(t *testing.T) {
 		ReplaceReleaseBindingWorkloadOverridesFunc: func(_ context.Context, _, _, _ string, _ []client.EnvVar, _ []client.FileVar) error {
 			return nil
 		},
-		ClearComponentBaseWorkloadConfigFunc: func(_ context.Context, _, _, _ string) error { return nil },
 		GetOrganizationFunc: func(_ context.Context, name string) (*models.OrganizationResponse, error) {
 			return &models.OrganizationResponse{Name: name}, nil
 		},
@@ -523,11 +522,9 @@ func TestDeployAgent_IdentityInjectionError_AbortsDeploy(t *testing.T) {
 		GetComponentConfigurationsFunc: func(context.Context, string, string, string, string) ([]models.EnvVars, error) {
 			return nil, nil
 		},
-		// The deploy pre-flight reads the component's reconcile conditions; an
-		// unblocked component lets this test reach the identity-injection step
-		// it actually covers.
-		GetComponentReconcileBlockFunc: func(_ context.Context, _, _ string) (*client.ComponentReconcileBlock, error) {
-			return nil, nil //nolint:nilnil // documented contract: a nil block means "not blocked"
+		// Not blocked, so the deploy reaches the identity injection this test is about.
+		GetComponentReconcileBlockFunc: func(context.Context, string, string) (*client.ComponentReconcileBlock, error) {
+			return nil, nil //nolint:nilnil // nil block is the "not blocked" signal this API defines
 		},
 		EnsureProjectReleaseBindingFunc: func(_ context.Context, _, _, _ string) error { return nil },
 		DeployFunc: func(context.Context, string, string, string, client.DeployRequest) error {
@@ -642,7 +639,6 @@ func promoteAgentTestFixture(t *testing.T, tgtIdentityEnvVars []client.EnvVar, t
 		ReplaceReleaseBindingWorkloadOverridesFunc: func(_ context.Context, _, _, _ string, _ []client.EnvVar, _ []client.FileVar) error {
 			return nil
 		},
-		ClearComponentBaseWorkloadConfigFunc: func(_ context.Context, _, _, _ string) error { return nil },
 		GetOrganizationFunc: func(_ context.Context, orgName string) (*models.OrganizationResponse, error) {
 			return &models.OrganizationResponse{Name: orgName}, nil
 		},
@@ -968,7 +964,6 @@ func TestPromoteAgent_KickOffThenRetry_SucceedsOnceTargetIdentityCompletes(t *te
 		ReplaceReleaseBindingWorkloadOverridesFunc: func(_ context.Context, _, _, _ string, _ []client.EnvVar, _ []client.FileVar) error {
 			return nil
 		},
-		ClearComponentBaseWorkloadConfigFunc: func(_ context.Context, _, _, _ string) error { return nil },
 		GetOrganizationFunc: func(_ context.Context, orgName string) (*models.OrganizationResponse, error) {
 			return &models.OrganizationResponse{Name: orgName}, nil
 		},
@@ -1076,7 +1071,6 @@ func TestPromoteAgent_PollSucceedsWithinBudget_PromotesOnFirstCall(t *testing.T)
 		ReplaceReleaseBindingWorkloadOverridesFunc: func(_ context.Context, _, _, _ string, _ []client.EnvVar, _ []client.FileVar) error {
 			return nil
 		},
-		ClearComponentBaseWorkloadConfigFunc: func(_ context.Context, _, _, _ string) error { return nil },
 		GetOrganizationFunc: func(_ context.Context, orgName string) (*models.OrganizationResponse, error) {
 			return &models.OrganizationResponse{Name: orgName}, nil
 		},
@@ -1210,7 +1204,6 @@ func TestPromoteAgent_ProvisioningDisabled_SkipsIdentityCheckAndPromotes(t *test
 		ReplaceReleaseBindingWorkloadOverridesFunc: func(_ context.Context, _, _, _ string, _ []client.EnvVar, _ []client.FileVar) error {
 			return nil
 		},
-		ClearComponentBaseWorkloadConfigFunc: func(_ context.Context, _, _, _ string) error { return nil },
 		GetOrganizationFunc: func(_ context.Context, orgName string) (*models.OrganizationResponse, error) {
 			return &models.OrganizationResponse{Name: orgName}, nil
 		},
@@ -1283,7 +1276,6 @@ func TestPromoteAgent_ProvisioningDisabledButLowestEnvHasRealCredential_StillBlo
 		ReplaceReleaseBindingWorkloadOverridesFunc: func(_ context.Context, _, _, _ string, _ []client.EnvVar, _ []client.FileVar) error {
 			return nil
 		},
-		ClearComponentBaseWorkloadConfigFunc: func(_ context.Context, _, _, _ string) error { return nil },
 		GetOrganizationFunc: func(_ context.Context, orgName string) (*models.OrganizationResponse, error) {
 			return &models.OrganizationResponse{Name: orgName}, nil
 		},
@@ -1630,15 +1622,6 @@ func TestResolveResilienceTimeoutSeconds(t *testing.T) {
 func deployAPIAgentMocks(existingConfig *models.AgentConfig) (*agentManagerService, *client.ComponentDeploymentConfigRequest) {
 	var capturedDeployConfig client.ComponentDeploymentConfigRequest
 	ocClient := &clientmocks.OpenChoreoClientMock{
-		ReplaceReleaseBindingWorkloadOverridesFunc: func(_ context.Context, _, _, _ string, _ []client.EnvVar, _ []client.FileVar) error {
-			return nil
-		},
-		ClearComponentBaseWorkloadConfigFunc: func(_ context.Context, _, _, _ string) error { return nil },
-		// The deploy/promote pre-flight reads the component's reconcile conditions;
-		// an unblocked component keeps this test on the path it actually covers.
-		GetComponentReconcileBlockFunc: func(_ context.Context, _, _ string) (*client.ComponentReconcileBlock, error) {
-			return nil, nil //nolint:nilnil // documented contract: a nil block means "not blocked"
-		},
 		GetOrganizationFunc: func(_ context.Context, name string) (*models.OrganizationResponse, error) {
 			return &models.OrganizationResponse{Name: name}, nil
 		},
@@ -1663,11 +1646,16 @@ func deployAPIAgentMocks(existingConfig *models.AgentConfig) (*agentManagerServi
 		IsDeploymentInProgressFunc: func(context.Context, string, string, string) (bool, error) {
 			return false, nil
 		},
-		ReplaceComponentEnvVarsFunc: func(context.Context, string, string, string, []client.EnvVar) error {
+		// Deploy writes env vars and file mounts to the environment's ReleaseBinding and leaves the
+		// component-wide base alone. ReplaceComponentEnvVars and ReplaceComponentFileMounts are
+		// left unstubbed on purpose: a regression that writes the shared base again panics here
+		// instead of silently leaking config into every environment.
+		ReplaceReleaseBindingWorkloadOverridesFunc: func(context.Context, string, string, string, []client.EnvVar, []client.FileVar) error {
 			return nil
 		},
-		ReplaceComponentFileMountsFunc: func(context.Context, string, string, string, []client.FileVar) error {
-			return nil
+		// Not blocked, so the deploy runs to completion.
+		GetComponentReconcileBlockFunc: func(context.Context, string, string) (*client.ComponentReconcileBlock, error) {
+			return nil, nil //nolint:nilnil // nil block is the "not blocked" signal this API defines
 		},
 		UpdateComponentDeploymentConfigFunc: func(_ context.Context, _, _, _ string, req client.ComponentDeploymentConfigRequest) error {
 			capturedDeployConfig = req

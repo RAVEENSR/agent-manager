@@ -206,7 +206,6 @@ func TestPromoteAgent_BindingFailureAbortsBeforeAnyTargetWrite(t *testing.T) {
 		ReplaceReleaseBindingWorkloadOverridesFunc: func(_ context.Context, _, _, _ string, _ []client.EnvVar, _ []client.FileVar) error {
 			return nil
 		},
-		ClearComponentBaseWorkloadConfigFunc: func(_ context.Context, _, _, _ string) error { return nil },
 		// The deploy/promote pre-flight reads the component's reconcile conditions;
 		// an unblocked component keeps this test on the path it actually covers.
 		GetComponentReconcileBlockFunc: func(_ context.Context, _, _ string) (*client.ComponentReconcileBlock, error) {
@@ -276,7 +275,6 @@ func TestDeployAgent_BindingFailureAbortsDeploy(t *testing.T) {
 		ReplaceReleaseBindingWorkloadOverridesFunc: func(_ context.Context, _, _, _ string, _ []client.EnvVar, _ []client.FileVar) error {
 			return nil
 		},
-		ClearComponentBaseWorkloadConfigFunc: func(_ context.Context, _, _, _ string) error { return nil },
 		// The deploy/promote pre-flight reads the component's reconcile conditions;
 		// an unblocked component keeps this test on the path it actually covers.
 		GetComponentReconcileBlockFunc: func(_ context.Context, _, _ string) (*client.ComponentReconcileBlock, error) {
