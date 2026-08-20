@@ -12,7 +12,7 @@
 #
 # Go can't source bash, so agent-manager-service/clients/thundersvc/naming.go
 # necessarily keeps its OWN implementation of the same algorithm
-# (ThunderReleaseName/ThunderNamespace/ThunderHost/ThunderIssuerURL). Its
+# (ThunderReleaseName/ThunderNamespace/ThunderIssuerURL). Its
 # maxReleaseNameLen/truncatePrefixLen constants (53/46) must stay numerically
 # identical to this file's — that pairing is the one naming duplication that
 # can't be eliminated, only kept in sync by convention.
@@ -50,44 +50,53 @@ thunder_namespace() {
   thunder_release_name "$1" "$2"
 }
 
-# thunder_host ORG ENV -> single DNS label under thunder.<THUNDER_HOST_BASE_DOMAIN>
-# (wildcard-cert friendly: *.thunder.<base-domain>), capped at 63 characters.
+# thunder_host HANDLE -> single DNS label "<HANDLE>.<THUNDER_HOST_BASE_DOMAIN>"
+# (wildcard-friendly: *.<base-domain>) — HANDLE sits directly under the base
+# domain, with no fixed subdomain segment in between, so a VM's own real domain
+# shape is honored exactly as configured, not just the local-dev default.
 #
 # THUNDER_HOST_BASE_DOMAIN defaults to "amp.localhost" (local dev, k3d's
 # *.amp.localhost wildcard cert). VM/production deployments override it
 # deployment-wide (see deployments/vm/lib-vm.sh) — NEVER per call: the Go side
-# (agent-manager-service/clients/thundersvc/naming.go's ThunderHost) always
-# computes this same value purely from (org, env) plus its OWN copy of this same
+# (agent-manager-service/clients/thundersvc/naming.go's ThunderIssuerURL) always
+# computes this same value purely from the handle plus its OWN copy of this same
 # config (THUNDER_HOST_BASE_DOMAIN env var), with no way to learn about a one-off
 # override here. Both sides must be set to the identical value on any given
 # deployment, or the URLs AMS reports and the host env-Thunder actually answers to
 # will diverge.
+#
+# HANDLE is the unguessable label (see agent-manager-service/models/env_thunder_url.go)
+# AMS registered for this environment — either user-chosen or server-generated;
+# AMS always reports back whichever one ended up stored. There is no fallback: an
+# empty HANDLE here means the caller skipped registering with AMS first, which is
+# a bug in the caller, not something to paper over with a guessed hostname.
+# agent-manager-service's reservedThunderHandles list blocks handles that would
+# collide with the platform's own fixed subdomains (console, api, thunder, etc.)
+# under the same base domain — this function does not re-check that itself.
 thunder_host() {
-  local org env label hash prefix base_domain
-  org="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
-  env="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"
-  base_domain="${THUNDER_HOST_BASE_DOMAIN:-amp.localhost}"
-  label="${org}-${env}"
-  if [ "${#label}" -le 63 ]; then
-    printf '%s.thunder.%s' "${label%-}" "$base_domain"
-    return 0
+  local handle base_domain
+  handle="$1"
+  if [ -z "$handle" ]; then
+    echo "thunder_host: HANDLE is required (register via PUT .../thunder-url first)" >&2
+    return 1
   fi
-  hash="$(_sha6 "${org}/${env}")"
-  prefix="${label:0:56}"
-  prefix="${prefix%-}"
-  printf '%s-%s.thunder.%s' "$prefix" "$hash" "$base_domain"
+  base_domain="${THUNDER_HOST_BASE_DOMAIN:-amp.localhost}"
+  printf '%s.%s' "$handle" "$base_domain"
 }
 
-# thunder_issuer ORG ENV -> the OIDC issuer / publicUrl (immutable once minting).
+# thunder_issuer HANDLE -> the OIDC issuer / publicUrl (immutable once minted).
+# See thunder_host for HANDLE.
 #
 # TLS_ENABLED (default false; the SAME flag deployments/vm/lib-vm.sh already sets
 # for platform Thunder's own advertised URLs) switches to https with no explicit
 # port, matching a VM's Caddy terminating TLS on the standard HTTPS port instead of
 # the k3d gateway's plain-HTTP :8080 used in local dev.
 thunder_issuer() {
+  local host
+  host="$(thunder_host "$1")" || return 1
   if [ "${TLS_ENABLED:-false}" = "true" ]; then
-    printf 'https://%s' "$(thunder_host "$1" "$2")"
+    printf 'https://%s' "$host"
   else
-    printf 'http://%s:8080' "$(thunder_host "$1" "$2")"
+    printf 'http://%s:8080' "$host"
   fi
 }

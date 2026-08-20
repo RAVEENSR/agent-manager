@@ -44,6 +44,18 @@ go test -run 'TestAgentKindService' ./services/    # needs DB_*/OPEN_CHOREO_BASE
 ```
 Services that sign tokens need `make gen-keys` first.
 
+## Services that emit audit events
+
+Operations that must not happen unrecorded — minting a token, rotating a key, deploying, deleting — refuse to proceed when no audit recorder is installed. A bare `context.Background()` therefore makes them fail with `audit: recorder unavailable`.
+
+Pass `auditableCtx(t)` (declared in `services/audit_testing_test.go`, do not redeclare it):
+
+```go
+resp, err := svc.RotateAPIKey(auditableCtx(t), ouID, proj, agent, env, keyName, req)
+```
+
+To assert the refusal itself, pass a bare context and expect `audit.ErrRecorderUnavailable`.
+
 ## Done checklist
 
 - [ ] `make test-unit` passes.

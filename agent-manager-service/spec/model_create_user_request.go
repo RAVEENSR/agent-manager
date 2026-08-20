@@ -19,8 +19,6 @@ var _ MappedNullable = &CreateUserRequest{}
 
 // CreateUserRequest struct for CreateUserRequest
 type CreateUserRequest struct {
-	// Organization unit ID (optional; resolved from org context when omitted)
-	OuId *string `json:"ouId,omitempty"`
 	// User type
 	Type string `json:"type"`
 	// User attributes map (include password when creating credentials)
@@ -44,38 +42,6 @@ func NewCreateUserRequest(type_ string, attributes map[string]string) *CreateUse
 func NewCreateUserRequestWithDefaults() *CreateUserRequest {
 	this := CreateUserRequest{}
 	return &this
-}
-
-// GetOuId returns the OuId field value if set, zero value otherwise.
-func (o *CreateUserRequest) GetOuId() string {
-	if o == nil || IsNil(o.OuId) {
-		var ret string
-		return ret
-	}
-	return *o.OuId
-}
-
-// GetOuIdOk returns a tuple with the OuId field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *CreateUserRequest) GetOuIdOk() (*string, bool) {
-	if o == nil || IsNil(o.OuId) {
-		return nil, false
-	}
-	return o.OuId, true
-}
-
-// HasOuId returns a boolean if a field has been set.
-func (o *CreateUserRequest) HasOuId() bool {
-	if o != nil && !IsNil(o.OuId) {
-		return true
-	}
-
-	return false
-}
-
-// SetOuId gets a reference to the given string and assigns it to the OuId field.
-func (o *CreateUserRequest) SetOuId(v string) {
-	o.OuId = &v
 }
 
 // GetType returns the Type field value
@@ -136,9 +102,6 @@ func (o CreateUserRequest) MarshalJSON() ([]byte, error) {
 
 func (o CreateUserRequest) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
-	if !IsNil(o.OuId) {
-		toSerialize["ouId"] = o.OuId
-	}
 	toSerialize["type"] = o.Type
 	toSerialize["attributes"] = o.Attributes
 	return toSerialize, nil

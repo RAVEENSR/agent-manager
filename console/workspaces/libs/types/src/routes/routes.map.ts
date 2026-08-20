@@ -350,16 +350,15 @@ export const rootRouteMap: AppRoute = {
                                             index: true,
                                             children: {},
                                         },
+                                        editKind: {
+                                            path: 'edit-kind',
+                                            index: true,
+                                            children: {},
+                                        },
                                         versionDetails: {
                                             path: 'version-details/:versionId',
                                             index: true,
-                                            children: {
-                                                edit:{
-                                                    path: 'edit',
-                                                    index: true,
-                                                    children: {},
-                                                }
-                                            },
+                                            children: {},
                                         },
                                     },
                                 },

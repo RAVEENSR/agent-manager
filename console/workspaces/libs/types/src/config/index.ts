@@ -61,6 +61,21 @@ export interface AppConfig {
    * add-environment.sh command in the Create Environment drawer.
    */
   agentManagerInternalCpHost?: string;
+  /**
+   * Base domain env-Thunder instances are hosted under (e.g. amp.localhost,
+   * or a VM/production deployment's own domain). Mirrors the backend's
+   * THUNDER_HOST_BASE_DOMAIN. Used to render the correct
+   * THUNDER_HOST_BASE_DOMAIN value in the Create Environment drawer's
+   * generated add-environment.sh command, and to build the handle preview.
+   */
+  thunderHostBaseDomain?: string;
+  /**
+   * Whether this deployment serves env-Thunder over TLS. Mirrors the
+   * backend's TLS_ENABLED. Piped into the Create Environment drawer's
+   * generated command so the chained add-environment-thunder.sh script
+   * provisions the matching scheme.
+   */
+  tlsEnabled?: boolean;
   guardrailsCatalogUrl: string;
   guardrailsDefinitionBaseUrl: string;
   /**

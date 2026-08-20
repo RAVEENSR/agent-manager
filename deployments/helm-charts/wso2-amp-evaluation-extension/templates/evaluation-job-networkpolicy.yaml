@@ -14,6 +14,8 @@ spec:
       app.kubernetes.io/component: evaluation-job
   policyTypes: [Egress]
   egress:
+    # Matched post-DNAT: every rule names the backing pod's address and containerPort, not the Service's.
+
     # Scoped to the cluster DNS workload, not left open — this pod runs untrusted code.
     - to:
         - namespaceSelector:
@@ -34,8 +36,10 @@ spec:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.networkPolicy.evaluationJob.observer.namespace }}
       ports:
-        - port: {{ .Values.networkPolicy.evaluationJob.observer.port }}
+        {{- range .Values.networkPolicy.evaluationJob.observer.ports }}
+        - port: {{ . }}
           protocol: TCP
+        {{- end }}
 
     # amp-thunder IDP — mints the token used to call amp-observer and amp-api below.
     - to:
@@ -43,8 +47,10 @@ spec:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.networkPolicy.evaluationJob.idp.namespace }}
       ports:
-        - port: {{ .Values.networkPolicy.evaluationJob.idp.port }}
+        {{- range .Values.networkPolicy.evaluationJob.idp.ports }}
+        - port: {{ . }}
           protocol: TCP
+        {{- end }}
 
     # agent-manager-service publisher endpoint (amp-api) — publish evaluation scores.
     - to:
@@ -52,8 +58,10 @@ spec:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.networkPolicy.evaluationJob.publisher.namespace }}
       ports:
-        - port: {{ .Values.networkPolicy.evaluationJob.publisher.port }}
+        {{- range .Values.networkPolicy.evaluationJob.publisher.ports }}
+        - port: {{ . }}
           protocol: TCP
+        {{- end }}
 
     # LLM gateway for llm_judge evaluators — unconditional since NetworkPolicy can't scope by workflow.
     # Two selectors, because the gateway's namespace is a deployment choice: the
@@ -70,32 +78,40 @@ spec:
               kubernetes.io/metadata.name: {{ . }}
         {{- end }}
       ports:
-        - port: {{ .Values.networkPolicy.evaluationJob.llmGateway.port }}
+        {{- range .Values.networkPolicy.evaluationJob.llmGateway.ports }}
+        - port: {{ . }}
           protocol: TCP
+        {{- end }}
 
-    {{- if .Values.networkPolicy.evaluationJob.devEgress.cidr }}
-    # Local-dev only: agent-manager-service runs outside the cluster, so namespaceSelector can't match it.
+    {{- with .Values.networkPolicy.evaluationJob.devEgress }}
+    {{- if and .cidr .ports }}
+    # Local-dev only: agent-manager-service and the gateway are reached over the node network,
+    # so namespaceSelector can't match them.
     - to:
         - ipBlock:
-            cidr: {{ .Values.networkPolicy.evaluationJob.devEgress.cidr }}
+            cidr: {{ .cidr }}
       ports:
-        - port: {{ .Values.networkPolicy.evaluationJob.devEgress.port }}
+        {{- range .ports }}
+        - port: {{ . }}
           protocol: TCP
+        {{- end }}
+    {{- end }}
     {{- end }}
 
-    {{- $apiServerCIDR := .Values.networkPolicy.evaluationJob.apiServer.cidr }}
-    {{- if not $apiServerCIDR }}
-    {{- with lookup "v1" "Service" "default" "kubernetes" }}
-    {{- $apiServerCIDR = printf "%s/32" .spec.clusterIP }}
-    {{- end }}
-    {{- end }}
-    {{- if $apiServerCIDR }}
-    # wait reports WorkflowTaskResults to the API server; no pod backs it, so only ipBlock matches.
+    {{- with .Values.networkPolicy.evaluationJob.apiServer }}
+    {{- $cidrs := without (.cidrs | default list) "" nil }}
+    {{- if and $cidrs .ports }}
+    # wait reports WorkflowTaskResults here; no pod backs the API server, so ipBlock.
     - to:
+        {{- range $cidrs }}
         - ipBlock:
-            cidr: {{ $apiServerCIDR }}
+            cidr: {{ . }}
+        {{- end }}
       ports:
-        - port: 443
+        {{- range .ports }}
+        - port: {{ . }}
           protocol: TCP
+        {{- end }}
+    {{- end }}
     {{- end }}
 {{- end }}

@@ -17,7 +17,7 @@ set -euo pipefail
 # Configuration
 CLUSTER_NAME="amp-local"
 CLUSTER_CONTEXT="k3d-${CLUSTER_NAME}"
-OPENCHOREO_VERSION="1.1.1"
+OPENCHOREO_VERSION="1.2.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 K3D_CONFIG="${K3D_CONFIG:-${SCRIPT_DIR}/k3d-config.yaml}"
 
@@ -37,7 +37,7 @@ else
 fi
 
 # WSO2 API Platform / Gateway Operator versions
-GATEWAY_OPERATOR_VERSION="0.10.1"
+GATEWAY_OPERATOR_VERSION="0.11.0"
 # gateway-controller/gateway-runtime 1.1.x reject every RestApi/LlmProvider
 # deployment with a bare 404 despite correctly-configured basic auth (confirmed
 # via a live tcpdump of the operator's request — same 404 across 1.1.0 and
@@ -45,16 +45,16 @@ GATEWAY_OPERATOR_VERSION="0.10.1"
 # reaches Programmed=True). Chart *version* and container *image tag* are
 # pinned separately below — setting chartVersion alone still runs an older
 # default image, so GATEWAY_IMAGE_VERSION must also be threaded through.
-GATEWAY_CHART_VERSION="1.2.0-beta"
-GATEWAY_IMAGE_VERSION="1.2.0-beta"
+GATEWAY_CHART_VERSION="1.2.0"
+GATEWAY_IMAGE_VERSION="1.2.0"
 
-# The 1.2.0-beta gateway chart requires an encryption key to be mounted from a Kubernetes Secret
+# The gateway chart (1.2.0-beta+) requires an encryption key to be mounted from a Kubernetes Secret
 GATEWAY_ENCRYPTION_SECRET_NAME="gateway-encryption-keys"
 GATEWAY_ENCRYPTION_SECRET_KEY="default-aesgcm256-v1.bin"
 
 # OpenChoreo community module versions compatible with OpenChoreo ${OPENCHOREO_VERSION}
-OBSERVABILITY_LOGS_OPENSEARCH_VERSION="0.4.1"
-OBSERVABILITY_TRACING_OPENSEARCH_VERSION="0.4.1"
+OBSERVABILITY_LOGS_OPENSEARCH_VERSION="0.5.3"
+OBSERVABILITY_TRACING_OPENSEARCH_VERSION="0.6.0"
 OBSERVABILITY_METRICS_PROMETHEUS_VERSION="0.6.1"
 
 # Source AMP installation helpers
@@ -895,7 +895,8 @@ else
     log_info "Installing openchoreo-control-plane..."
     log_info "This may take several minutes..."
     CP_INSTALL_OUTPUT=""
-    if ! CP_INSTALL_OUTPUT=$(helm install "openchoreo-control-plane" \
+    # instead of demanding clean state reconcile from a stale state or fresh install
+    if ! CP_INSTALL_OUTPUT=$(helm upgrade --install "openchoreo-control-plane" \
         "oci://ghcr.io/openchoreo/helm-charts/openchoreo-control-plane" \
         --namespace "openchoreo-control-plane" \
         --create-namespace \
@@ -1714,11 +1715,15 @@ if [[ "${SHOW_LOCALHOST_URLS:-true}" == "true" ]]; then
 fi
 
 # Print the default environment's Thunder ID console + admin credentials — the
-# release/namespace/host follow the fixed ENV_NAME=default ORG_NAME=default naming
-# convention (see thunder_release_name/thunder_namespace/thunder_host in
-# deployments/scripts/thunder-naming.sh). The password lives only in a K8s Secret (never written
-# to disk by add-environment-thunder.sh), so it's fetched fresh here rather than
-# re-printed from that script's own (long since scrolled-past) console output.
+# release/namespace follow the fixed ENV_NAME=default ORG_NAME=default naming
+# convention (see thunder_release_name/thunder_namespace in
+# deployments/scripts/thunder-naming.sh), but the external URL does NOT — it is
+# built ONLY from DEFAULT_ENV_THUNDER_HANDLE (populated by install_default_env_thunder,
+# see install-helpers.sh), the registered handle learned via GET, since there is
+# no pattern computable from org/env alone. The password lives only in a K8s
+# Secret (never written to disk by add-environment-thunder.sh), so it's fetched
+# fresh here rather than re-printed from that script's own (long since
+# scrolled-past) console output.
 if [[ "${ENV_THUNDER_PROVISIONED}" == "true" ]]; then
   # Dynamically derive the coordinates using the shared naming helper.
   # Avoids hardcoded literals which would break if custom org/env names are used
@@ -1730,9 +1735,9 @@ if [[ "${ENV_THUNDER_PROVISIONED}" == "true" ]]; then
 
   ENV_THUNDER_ADMIN_PASSWORD="$(kubectl get secret "${default_release}-admin-credentials" \
     -n "${default_ns}" -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || true)"
-  if [[ -n "${ENV_THUNDER_ADMIN_PASSWORD}" ]]; then
+  if [[ -n "${ENV_THUNDER_ADMIN_PASSWORD}" && -n "${DEFAULT_ENV_THUNDER_HANDLE:-}" ]]; then
     log_step "Default Environment Thunder ID Console"
-    log_info "URL:      http://${default_org}-${default_env}.thunder.amp.localhost:8080/console"
+    log_info "URL:      $(thunder_issuer "${DEFAULT_ENV_THUNDER_HANDLE}")/console"
     log_info "Username: admin"
     log_info "Password: ${ENV_THUNDER_ADMIN_PASSWORD}"
   fi
@@ -1741,9 +1746,18 @@ fi
 echo ""
 echo ""
 log_info "To check status: kubectl get pods -A"
-echo ""
-log_step "Uninstall Options"
-log_info "Uninstall platform (keep cluster):       ./uninstall.sh"
-log_info "Uninstall and delete k3d cluster:        ./uninstall.sh --delete-cluster"
-log_info "Full cleanup (including Colima profile):  ./uninstall.sh --delete-cluster --delete-colima"
+
+# These hints point at ./uninstall.sh, a sibling of this script in the repo
+# checkout. Wrappers that source install.sh from a bundle (e.g. the VM installer)
+# have no such sibling left on disk — bootstrap.sh deletes the unpacked bundle on
+# exit — and tear down extra host state of their own, so they suppress these lines
+# and document their own teardown. Defaults to SHOW_LOCALHOST_URLS: both answer
+# "is this the plain local quick-start?".
+if [[ "${SHOW_UNINSTALL_HINTS:-${SHOW_LOCALHOST_URLS:-true}}" == "true" ]]; then
+  echo ""
+  log_step "Uninstall Options"
+  log_info "Uninstall platform (keep cluster):       ./uninstall.sh"
+  log_info "Uninstall and delete k3d cluster:        ./uninstall.sh --delete-cluster"
+  log_info "Full cleanup (including Colima profile):  ./uninstall.sh --delete-cluster --delete-colima"
+fi
 echo ""

@@ -13,6 +13,7 @@ Go control-plane API. Layered **controller → service → repository**, wired w
 | Persistence (SQL/GORM) | `repositories/` |
 | Route + authz registration | `api/*_routes.go` |
 | Permission constants | `rbac/permissions.go` |
+| Audit trail (actions, redaction, sinks) | `audit/` |
 | Role → permission map | `rbac/predefined_roles.go` |
 | Sentinel errors | `utils/errors.go` |
 | Generated mocks | `repositories/repomocks/`, `clients/clientmocks/` |
@@ -31,6 +32,8 @@ Do these in order. Steps 1–2 are mandatory before writing any Go type for the 
 7. **`make codegen`** — only if you added/changed an interface (regenerates wire DI + mocks).
 8. **Test** — write a service unit test (see Testing). Run the done-checklist.
 
+**Audit logging is automatic for step 5** — registering a route audits it. You only act when the build tells you to, or when the operation is security-critical. See Audit logging.
+
 ## Layering
 
 Each layer depends on the **interface** of the layer below, injected via constructor. That seam is what makes services unit-testable.
@@ -38,6 +41,8 @@ Each layer depends on the **interface** of the layer below, injected via constru
 - **Controller** (`controllers/`) — HTTP only: parse/validate request, map result → status code, translate sentinel errors → HTTP errors. No business logic.
 - **Service** (`services/`) — business logic: validation gates, orchestration, error mapping. Depends on repo/client **interfaces**, never concrete types.
 - **Repository** (`repositories/`) — persistence only. Interface + concrete impl.
+
+**Documented exception — the identity surface.** `controllers/identity_controller.go` is constructed as `NewIdentityController(client thundersvc.IdentityClient)` and calls the Thunder client directly; there is no identity service. Its business logic, including fail-closed audit emits, therefore lives in the controller. This predates the audit trail and is not a pattern to copy: a new resource gets a service. Introducing an identity service is worthwhile but is its own change.
 
 When you change an interface, update **all** implementations: concrete impl, generated mocks (`make codegen`), and any noop/static impls. Don't re-fetch a resource already loaded earlier in the request path — pass it down.
 
@@ -61,6 +66,31 @@ Rules:
 - **Name permissions `resource:verb`** — `:create`/`:read`/`:update`/`:delete`, or a coarser `:manage` only where existing resources do.
 - **Every new permission must be granted by at least one role** in `PredefinedRolePermissions` (`RoleAdmin` / `RoleDeveloper` / `RoleAILead` / `RolePlatformEngineer`) — an ungranted permission is unreachable.
 - Scope/audience is a first-pass filter; the per-route permission is enforcement. `RequireOrgMatch` checks org-vs-path, but the service must **also** validate org against the target resource it loads (defense in depth).
+
+## Audit logging
+
+Every route registered through `RouteRegistrar` is audited automatically: non-GET routes always, GET routes only if listed in `sensitiveReadPaths`. You do not add anything to get that. The record names the actor, org, action, resource, outcome and source.
+
+**Three things can require action from you.**
+
+**1. The build fails because an action cannot be derived.** The action defaults to the route's `rbac.Permission` (already `resource:verb`). A route registered with **no** permission has nothing to derive from, so `audit.NewRouteMeta` panics at startup and `api/audit_coverage_test.go` fails. Fix it by adding one line to `actionOverrides` in `audit/policy.go`. (A multi-permission route derives from the first permission's resource and does not panic — check the label is right.)
+
+**2. The permission does not describe the effect.** Same fix, and this is the common case. Add an override when:
+
+- one permission gates several operations — every API-key route is `*:api-key-manage`, so create/rotate/revoke would otherwise be indistinguishable;
+- the permission names a different resource than the operation acts on (`publish-kind` is gated by `agent-kind:create` but acts on an agent);
+- the permission is narrower than the effect (`deployments/state` is gated by `agent:suspend` but also resumes).
+
+Queries stay exact regardless, because `requestPath` records the route pattern — the derived action is only the human-readable label.
+
+**3. The operation is security-critical.** The envelope record says a route was called; it cannot say *what changed*. `POST .../permissions/add -> 200` does not name the permission granted. Add a semantic event when the operation touches credentials, privileges, membership, deployment or deletion — use the **`add-audit-event` skill**.
+
+Rules:
+
+- **Never read a request or response body into a record.** Bodies are out of reach by design; that is what makes auditing every route safe. Pass named fields via `audit.Detail` instead.
+- **`audit.Detail` records only scalars, `[]string` and `fmt.Stringer`.** Anything else is replaced with a `[unsupported:<type>]` marker rather than serialised — so a struct cannot leak, but do not rely on that: pass the field you mean. Undeclared keys are dropped at write time and reported under `_droppedKeys`.
+- **Never pass a secret.** Use `audit.SecretRef` (stores a fingerprint) or record the key *name* only.
+- A new action needs a class, a severity and a detail schema, all declared together in `audit/actions_domain.go`. A test fails if a registered action has no schema.
 
 ## Code generation
 
@@ -121,6 +151,18 @@ func TestAgentKindService_GetKind(t *testing.T) {
 }
 ```
 
+## Testing a service that emits audit events
+
+Operations that must not happen unrecorded refuse to proceed when no recorder is installed, so a bare `context.Background()` makes them fail by design — you will see `audit: recorder unavailable`.
+
+Use `auditableCtx(t)` (`services/audit_testing_test.go`), which installs a discarding recorder:
+
+```go
+resp, err := svc.RotateAPIKey(auditableCtx(t), ouID, proj, agent, env, keyName, req)
+```
+
+To assert the refusal itself, pass a bare context and expect `audit.ErrRecorderUnavailable` — see `TestAgentTokenManager_GenerateToken_RefusesWithoutAuditRecorder`.
+
 ## Mocks in tests
 
 - Repositories → `repomocks.<Iface>Mock`; clients → `clientmocks.<Iface>Mock` (both `moq`-generated).
@@ -164,6 +206,7 @@ go test -run 'TestAgentKindService' ./services/
       `golangci-lint run --config .github/linters/.golangci.yaml ./...`
 - [ ] `gofmt -l` clean on changed files.
 - [ ] Regenerated `spec/`/mocks committed if the YAML or an interface changed.
+- [ ] `go test ./api/ -run TestEveryMutatingRouteIsAudited` passes (also runs in `make test-unit`).
 
 CI lints **test files too**, with a strict config (`.github/linters/.golangci.yaml`). Trip-ups that bite test authors:
 

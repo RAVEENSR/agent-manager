@@ -38,10 +38,14 @@ import {
   useTheme,
 } from "@wso2/oxygen-ui";
 import { ChevronDown, HelpCircle } from "@wso2/oxygen-ui-icons-react";
-import { validateEndpointUrl } from "@agent-management-platform/shared-component";
+import {
+  ResilienceTimeoutFields,
+  validateEndpointUrl,
+} from "@agent-management-platform/shared-component";
 import { AuthHeaderRow } from "./AuthHeaderRow";
 
 const MASKED_CREDENTIAL_VALUE = "••••••••••••";
+const DURATION_PATTERN = /^\d+(\.\d+)?(ms|s|m|h)$/;
 
 export type MCPProxyConnectionTabProps = {
   config: MCPEndpointConfig | undefined;
@@ -69,7 +73,15 @@ export function MCPProxyConnectionTab({
   const [credentialValue, setCredentialValue] = useState("");
   const [isCredentialMasked, setIsCredentialMasked] = useState(false);
   const [showCredential, setShowCredential] = useState(false);
+  const [resilienceTimeout, setResilienceTimeout] = useState("");
+  const [resilienceIdleTimeout, setResilienceIdleTimeout] = useState("");
   const [endpointError, setEndpointError] = useState<string | null>(null);
+  const [resilienceTimeoutError, setResilienceTimeoutError] = useState<string | null>(
+    null,
+  );
+  const [resilienceIdleTimeoutError, setResilienceIdleTimeoutError] = useState<
+    string | null
+  >(null);
   const [status, setStatus] = useState<{
     message: string;
     severity: "success" | "error";
@@ -90,7 +102,11 @@ export function MCPProxyConnectionTab({
     setCredentialValue(hasCredential ? MASKED_CREDENTIAL_VALUE : "");
     setIsCredentialMasked(hasCredential);
     setShowCredential(false);
+    setResilienceTimeout(config?.resilience?.timeout ?? "");
+    setResilienceIdleTimeout(config?.resilience?.idleTimeout ?? "");
     setEndpointError(null);
+    setResilienceTimeoutError(null);
+    setResilienceIdleTimeoutError(null);
   }, [config]);
 
   useEffect(() => {
@@ -108,6 +124,26 @@ export function MCPProxyConnectionTab({
     return err;
   }, []);
 
+  const validateResilienceTimeout = useCallback((value: string): string | null => {
+    const trimmed = value.trim();
+    const err =
+      trimmed && !DURATION_PATTERN.test(trimmed)
+        ? "Enter a duration like 5s, 500ms, or 1m"
+        : null;
+    setResilienceTimeoutError(err);
+    return err;
+  }, []);
+
+  const validateResilienceIdleTimeout = useCallback((value: string): string | null => {
+    const trimmed = value.trim();
+    const err =
+      trimmed && !DURATION_PATTERN.test(trimmed)
+        ? "Enter a duration like 5s, 500ms, or 1m"
+        : null;
+    setResilienceIdleTimeoutError(err);
+    return err;
+  }, []);
+
   const credentialChanged =
     authEnabled &&
     !isCredentialMasked &&
@@ -118,11 +154,22 @@ export function MCPProxyConnectionTab({
     if (!config) return false;
     const savedUrl = (config.upstream?.main?.url ?? "").trim();
     const savedHeader = (config.upstream?.main?.auth?.header ?? "").trim();
+    const savedResilienceTimeout = (config.resilience?.timeout ?? "").trim();
+    const savedResilienceIdleTimeout = (config.resilience?.idleTimeout ?? "").trim();
     if (endpoint.trim() !== savedUrl) return true;
     if (effectiveAuthHeader !== savedHeader) return true;
+    if (resilienceTimeout.trim() !== savedResilienceTimeout) return true;
+    if (resilienceIdleTimeout.trim() !== savedResilienceIdleTimeout) return true;
     if (credentialChanged) return true;
     return false;
-  }, [config, endpoint, effectiveAuthHeader, credentialChanged]);
+  }, [
+    config,
+    endpoint,
+    effectiveAuthHeader,
+    resilienceTimeout,
+    resilienceIdleTimeout,
+    credentialChanged,
+  ]);
 
   const handleDiscard = useCallback(() => {
     resetFromConfig();
@@ -138,6 +185,18 @@ export function MCPProxyConnectionTab({
       return;
     }
 
+    const resilienceTimeoutValidationError = validateResilienceTimeout(resilienceTimeout);
+    if (resilienceTimeoutValidationError) {
+      setStatus({ message: resilienceTimeoutValidationError, severity: "error" });
+      return;
+    }
+
+    const resilienceIdleTimeoutValidationError =
+      validateResilienceIdleTimeout(resilienceIdleTimeout);
+    if (resilienceIdleTimeoutValidationError) {
+      setStatus({ message: resilienceIdleTimeoutValidationError, severity: "error" });
+      return;
+    }
     const existingAuth = config.upstream?.main?.auth;
     // Preserve any existing auth (including its type); only override header,
     // and value when the user typed a new one — otherwise the backend keeps
@@ -151,6 +210,9 @@ export function MCPProxyConnectionTab({
         }
       : undefined;
 
+    const trimmedResilienceTimeout = resilienceTimeout.trim();
+    const trimmedResilienceIdleTimeout = resilienceIdleTimeout.trim();
+
     try {
       await onUpdate({
         upstream: {
@@ -161,6 +223,13 @@ export function MCPProxyConnectionTab({
             auth,
           },
         },
+        resilience:
+          trimmedResilienceTimeout || trimmedResilienceIdleTimeout
+            ? {
+                timeout: trimmedResilienceTimeout || undefined,
+                idleTimeout: trimmedResilienceIdleTimeout || undefined,
+              }
+            : undefined,
       });
       setStatus({
         message: "Connection updated successfully.",
@@ -177,10 +246,14 @@ export function MCPProxyConnectionTab({
     config,
     endpoint,
     effectiveAuthHeader,
+    resilienceTimeout,
+    resilienceIdleTimeout,
     credentialChanged,
     credentialValue,
     onUpdate,
     validateEndpoint,
+    validateResilienceTimeout,
+    validateResilienceIdleTimeout,
   ]);
 
   if (isLoading) {
@@ -268,6 +341,25 @@ export function MCPProxyConnectionTab({
         </Grid>
 
         <Grid size={{ xs: 12 }}>
+          <ResilienceTimeoutFields
+            requestTimeout={resilienceTimeout}
+            onRequestTimeoutChange={(value) => {
+              setResilienceTimeout(value);
+              if (resilienceTimeoutError) validateResilienceTimeout(value);
+            }}
+            onRequestTimeoutBlur={() => validateResilienceTimeout(resilienceTimeout)}
+            requestTimeoutError={resilienceTimeoutError}
+            idleTimeout={resilienceIdleTimeout}
+            onIdleTimeoutChange={(value) => {
+              setResilienceIdleTimeout(value);
+              if (resilienceIdleTimeoutError) validateResilienceIdleTimeout(value);
+            }}
+            onIdleTimeoutBlur={() => validateResilienceIdleTimeout(resilienceIdleTimeout)}
+            idleTimeoutError={resilienceIdleTimeoutError}
+          />
+        </Grid>
+
+        <Grid size={{ xs: 12 }}>
           <Stack spacing={1.5} width="100%">
             <Collapse in={!!status} timeout={300}>
               {status && (
@@ -291,7 +383,13 @@ export function MCPProxyConnectionTab({
               <Button
                 variant="contained"
                 onClick={() => void handleSave()}
-                disabled={isUpdating || !isDirty || !!endpointError}
+                disabled={
+                  isUpdating ||
+                  !isDirty ||
+                  !!endpointError ||
+                  !!resilienceTimeoutError ||
+                  !!resilienceIdleTimeoutError
+                }
               >
                 {isUpdating ? "Saving..." : "Save"}
               </Button>

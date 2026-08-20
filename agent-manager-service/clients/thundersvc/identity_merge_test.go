@@ -43,17 +43,19 @@ func TestNewRoleReplace_AppliesOverrides(t *testing.T) {
 	assert.Equal(t, "ou-1", req.OuID)
 }
 
-func TestNewGroupReplace_PreservesNameWhenNil(t *testing.T) {
-	cur := ThunderGroup{Name: "team-a", Description: "d"}
+func TestNewGroupReplace_PreservesOUAndNameWhenNil(t *testing.T) {
+	cur := ThunderGroup{OuID: "ou-1", Name: "team-a", Description: "d"}
 	req := NewGroupReplace(cur, nil, nil)
+	assert.Equal(t, "ou-1", req.OuID)
 	assert.Equal(t, "team-a", req.Name)
 	assert.Equal(t, "d", req.Description)
 }
 
 func TestNewGroupReplace_AppliesOverrides(t *testing.T) {
-	cur := ThunderGroup{Name: "team-a", Description: "old"}
+	cur := ThunderGroup{OuID: "ou-1", Name: "team-a", Description: "old"}
 	name := "team-b"
 	req := NewGroupReplace(cur, &name, nil)
 	assert.Equal(t, "team-b", req.Name)
 	assert.Equal(t, "old", req.Description)
+	assert.Equal(t, "ou-1", req.OuID)
 }

@@ -67,6 +67,17 @@ type AgentThunderClientRepository interface {
 	// pending/stale) — the caller must skip the attempt.
 	ClaimForAttempt(ctx context.Context, id uuid.UUID) (claimed bool, err error)
 
+	// ResetFailedForRetry atomically transitions a binding from FAILED back to
+	// PENDING for a manual retry — clearing attempt_count, last_error, and
+	// last_attempted_at so it starts a fresh attempt budget, and setting
+	// next_retry_at to now so the reconciler's sweep is a safety net even if
+	// the caller's own inline attempt never runs. Conditioned on the row's
+	// CURRENT status being FAILED, so two concurrent retry calls (e.g. a
+	// double click) can only ever reset it once; reset=false means it already
+	// changed state (a concurrent retry won, or the reconciler got there
+	// first) and the caller must treat that as a conflict, not a silent no-op.
+	ResetFailedForRetry(ctx context.Context, id uuid.UUID) (reset bool, err error)
+
 	// UpdateAfterAttempt records the outcome of a provisioning attempt: the resolved
 	// Thunder identity (on success), status, attempt bookkeeping, and the next retry
 	// time (nil once the binding is COMPLETED or FAILED).
@@ -223,6 +234,23 @@ func (r *AgentThunderClientRepo) ClaimForAttempt(ctx context.Context, id uuid.UU
 		})
 	if result.Error != nil {
 		return false, fmt.Errorf("claim agent thunder client for attempt: %w", result.Error)
+	}
+	return result.RowsAffected > 0, nil
+}
+
+func (r *AgentThunderClientRepo) ResetFailedForRetry(ctx context.Context, id uuid.UUID) (bool, error) {
+	result := r.db.WithContext(ctx).Model(&models.AgentThunderClient{}).
+		Where("id = ? AND status = ?", id, models.AgentThunderStatusFailed).
+		Updates(map[string]interface{}{
+			"status":            models.AgentThunderStatusPending,
+			"attempt_count":     0,
+			"last_error":        "",
+			"last_attempted_at": nil,
+			"next_retry_at":     clause.Expr{SQL: "NOW()"},
+			"updated_at":        clause.Expr{SQL: "NOW()"},
+		})
+	if result.Error != nil {
+		return false, fmt.Errorf("reset failed agent thunder client for retry: %w", result.Error)
 	}
 	return result.RowsAffected > 0, nil
 }

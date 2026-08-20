@@ -78,10 +78,14 @@ data:
           logging:
             level: info
             format: json
-        {{- if .Values.apiGateway.config.policyConfigurations }}
-        policy_configurations:
-          {{- .Values.apiGateway.config.policyConfigurations | toYaml | nindent 10 }}
+        {{- $policyConfigs := deepCopy (.Values.apiGateway.config.policyConfigurations | default dict) }}
+        {{- $mcpauth := $policyConfigs.mcpauth_v1 | default dict }}
+        {{- if not $mcpauth.gatewayhost }}
+        {{- $_ := set $mcpauth "gatewayhost" (include "wso2-amp-gateway-extension.mcpGatewayHost" .) }}
         {{- end }}
+        {{- $_ := set $policyConfigs "mcpauth_v1" $mcpauth }}
+        policy_configurations:
+          {{- $policyConfigs | toYaml | nindent 10 }}
 
       controller:
         controlPlane:

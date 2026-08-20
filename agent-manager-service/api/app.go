@@ -19,43 +19,23 @@ package api
 import (
 	"net/http"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/config"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware"
+	"github.com/wso2/agent-manager/agent-manager-service/middleware/jwtassertion"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/logger"
 	"github.com/wso2/agent-manager/agent-manager-service/wiring"
 
 	"github.com/wso2/agent-manager/agent-manager-service/mcp"
 )
 
-// MakeHTTPHandler creates a new HTTP handler with middleware and routes.
-// extraAPIRoutes, if non-nil, is called to register additional routes onto the
-// authenticated /api/v1 sub-mux before middleware is applied.
-func MakeHTTPHandler(params *wiring.AppParams, extraAPIRoutes func(*http.ServeMux, *wiring.AppParams)) http.Handler {
-	mux := http.NewServeMux()
-
-	// Register health check
-	registerHealthCheck(mux)
-
-	// Register JWKS endpoint at root level (no authentication required)
-	registerJWKSRoute(mux, params.AgentTokenController)
-
-	// Register OAuth 2.0 Protected Resource Metadata (RFC 9728) at root level (no authentication required)
-	registerWellKnownRoutes(mux)
-
-	// Register service-configuration discovery endpoint at root level (no authentication required)
-	registerConfigRoutes(mux)
-
-	// Register MCP at root level
-	mcp.RegisterRoute(mux, mcp.Dependencies{
-		InfraResourceManager:     params.InfraResourceManager,
-		AgentManagerService:      params.AgentManagerService,
-		AgentTokenManagerService: params.AgentTokenManagerService,
-		EnvironmentService:       params.EnvironmentService,
-	}, params.AuthMiddleware)
-
-	// Create a sub-mux for API v1 routes (JWT-authenticated)
-	apiMux := http.NewServeMux()
-	rr := middleware.NewRouteRegistrar(apiMux, params.OrgResolver)
+// registerAPIRoutes registers every authenticated /api/v1 route.
+//
+// It is separated from MakeHTTPHandler so the audit coverage test can drive
+// registration with a bare registrar and assert that no mutating route shipped
+// unaudited. Keeping the list in one function is what makes that check total
+// rather than a sample.
+func registerAPIRoutes(rr *middleware.RouteRegistrar, params *wiring.AppParams) {
 	registerAgentRoutes(rr, params.AgentController)
 	registerAgentKindRoutes(rr, params.AgentKindController)
 	registerAgentTokenRoutes(rr, params.AgentTokenController)
@@ -81,7 +61,58 @@ func MakeHTTPHandler(params *wiring.AppParams, extraAPIRoutes func(*http.ServeMu
 	registerIdentityRoutes(rr, params.IdentityController)
 	registerMCPProxyScopeRoutes(rr, params.MCPProxyScopeController)
 	registerAgentIdentityRoutes(rr, params.AgentIdentityController)
+}
 
+// MakeHTTPHandler creates a new HTTP handler with middleware and routes.
+// extraAPIRoutes, if non-nil, is called to register additional routes onto the
+// authenticated /api/v1 sub-mux before middleware is applied.
+func MakeHTTPHandler(params *wiring.AppParams, extraAPIRoutes func(*http.ServeMux, *wiring.AppParams)) http.Handler {
+	mux := http.NewServeMux()
+
+	// Register health check
+	registerHealthCheck(mux)
+
+	// Register JWKS endpoint at root level (no authentication required)
+	registerJWKSRoute(mux, params.AgentTokenController)
+
+	// Register OAuth 2.0 Protected Resource Metadata (RFC 9728) at root level (no authentication required)
+	registerWellKnownRoutes(mux)
+
+	// Register service-configuration discovery endpoint at root level (no authentication required)
+	registerConfigRoutes(mux)
+
+	// Register Caddy's on-demand TLS ask endpoint at root level (no authentication
+	// required — see registerThunderAskRoute's doc comment)
+	registerThunderAskRoute(mux, params.EnvironmentService)
+
+	// Register MCP at root level.
+	//
+	// MCP does not go through the route registrar, so the recorder is installed
+	// by composing it into the middleware MCP is given. Without it, services
+	// that refuse to act when they cannot be audited would fail every MCP call
+	// that reaches them. Auth stays outermost so claims are present by the time
+	// a handler emits.
+	mcpMiddleware := func(next http.Handler) http.Handler {
+		return params.AuthMiddleware(
+			middleware.WithAuditRecorder(params.AuditRecorder, audit.SurfaceMCP)(next),
+		)
+	}
+	mcp.RegisterRoute(mux, mcp.Dependencies{
+		InfraResourceManager:     params.InfraResourceManager,
+		AgentManagerService:      params.AgentManagerService,
+		AgentTokenManagerService: params.AgentTokenManagerService,
+		EnvironmentService:       params.EnvironmentService,
+	}, mcpMiddleware)
+
+	// Authentication is rejected before route matching, so the audit middleware
+	// installed per route never sees it. This hook is how a failed token
+	// reaches the trail; it is set once because the auth middleware is global.
+	jwtassertion.SetAuthFailureHook(audit.AuthFailureRecorder(params.AuditRecorder))
+
+	// Create a sub-mux for API v1 routes (JWT-authenticated)
+	apiMux := http.NewServeMux()
+	rr := middleware.NewRouteRegistrar(apiMux, params.OrgResolver, params.AuditRecorder)
+	registerAPIRoutes(rr, params)
 	if extraAPIRoutes != nil {
 		extraAPIRoutes(apiMux, params)
 	}
@@ -115,11 +146,17 @@ func MakeInternalHTTPHandler(params *wiring.AppParams) http.Handler {
 	// Create internal mux for gateway internal and WebSocket routes (NO JWT middleware)
 	// These routes use api-key header authentication instead
 	internalMux := http.NewServeMux()
-	RegisterGatewayInternalRoutes(internalMux, params.GatewayInternalController)
+	internalRR := middleware.NewInternalRouteRegistrar(internalMux, params.AuditRecorder)
+	RegisterGatewayInternalRoutes(internalRR, params.GatewayInternalController)
 	RegisterWebSocketRoutes(internalMux, params.WebSocketController)
 
 	// Apply basic middleware (no JWT auth)
 	internalHandler := http.Handler(internalMux)
+	// The registrar above audits the routes it owns. This installs the recorder
+	// for everything else on the internal chain — the WebSocket upgrade, and the
+	// handler-level emits for api-key rejections, which happen before any route
+	// wrapper could see them.
+	internalHandler = middleware.WithAuditRecorder(params.AuditRecorder, audit.SurfaceInternal)(internalHandler)
 	internalHandler = logger.RequestLogger()(internalHandler)
 	internalHandler = middleware.AddCorrelationID()(internalHandler)
 	internalHandler = middleware.CORS(config.GetConfig().CORSAllowedOrigin)(internalHandler)

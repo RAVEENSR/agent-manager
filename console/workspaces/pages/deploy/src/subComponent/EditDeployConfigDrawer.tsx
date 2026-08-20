@@ -33,6 +33,7 @@ import {
   DrawerContent,
   DrawerHeader,
   DrawerWrapper,
+  EnvFileUploadButton,
   EnvVariableEditor,
   FileMountEditor,
   TokenExpirySelector,
@@ -41,6 +42,7 @@ import {
 } from "@agent-management-platform/views";
 import { useConfirmationDialog } from "@agent-management-platform/shared-component";
 import {
+  extractServerErrorMessage,
   useAgentBuildOptions,
   useDeployAgent,
   useGetAgentConfigurations,
@@ -54,6 +56,7 @@ import type {
   UpdateAgentDeploySettingsRequest,
 } from "@agent-management-platform/types";
 import { compatibleInstrumentationVersions, pickInstrumentationVersion } from "../utils/instrumentation";
+import { excludeSystemVars, sortSystemLast } from "../utils/envVars";
 import { SecurityConfigSections, type SecurityConfigHandle } from "./SecurityConfigSections";
 
 export interface EditDeployConfigDrawerProps {
@@ -140,9 +143,15 @@ export function EditDeployConfigDrawer({
     }
     if (seededRef.current || !configurations) return;
     const cfg = configurations.configurations;
-    setEnv(cfg?.env?.map(
-      (e) => ({ key: e.key, value: e.value ?? "", isSensitive: e.isSensitive, secretRef: e.secretRef }),
-    ) ?? []);
+    setEnv(sortSystemLast(cfg?.env?.map(
+      (e) => ({
+        key: e.key,
+        value: e.value ?? "",
+        isSensitive: e.isSensitive,
+        secretRef: e.secretRef,
+        isSystem: e.isSystem,
+      }),
+    ) ?? []));
     setFiles(cfg?.files ?? []);
     setTracingEnabled(configurations.enableAutoInstrumentation ?? false);
     setInstrumentationVersion("");
@@ -175,19 +184,16 @@ export function EditDeployConfigDrawer({
   const { mutate: regenerateToken, isPending: isRegenerating } = useRegenerateTracingToken();
   const isPending = isDeploying || isUpdating || isUpdatingSettings;
 
-  const errorHandler = useCallback((error: unknown) => {
-    const body = (error as { body?: { message?: string } })?.body;
-    pushSnackBar({ message: body?.message ?? "Failed to apply configuration", type: "error" });
-  }, [pushSnackBar]);
-
   const handleSave = useCallback(() => {
-    const validEnv = env.filter((e) => e.key).map(({ key, value, isSensitive, secretRef }) => {
-      // Preserve secretRef for secrets the user did not edit
-      if (isSensitive && secretRef && !value) {
-        return { key, isSensitive, secretRef } as EnvironmentVariable;
-      }
-      return { key, value, isSensitive };
-    });
+    const validEnv = excludeSystemVars(env).map(
+      ({ key, value, isSensitive, secretRef }) => {
+        // Preserve secretRef for secrets the user did not edit
+        if (isSensitive && secretRef && !value) {
+          return { key, isSensitive, secretRef } as EnvironmentVariable;
+        }
+        return { key, value, isSensitive };
+      },
+    );
     const validFiles = files.filter((f) => f.key && f.mountPath);
 
     if (mode === "update") {
@@ -202,7 +208,7 @@ export function EditDeployConfigDrawer({
             params: { orgName, projName, agentName },
             body: { environmentName: environment, env: validEnv, files: validFiles },
           },
-          { onSuccess: () => onClose(), onError: errorHandler },
+          { onSuccess: () => onClose() },
         );
 
       // Combine CORS/Auth (security) and tracing into a single deploy-settings call. The version is
@@ -222,7 +228,7 @@ export function EditDeployConfigDrawer({
       if (showSecurity || showTracing) {
         updateDeploySettings(
           { params: { orgName, projName, agentName }, body: deploySettingsBody },
-          { onSuccess: applyConfigs, onError: errorHandler },
+          { onSuccess: applyConfigs },
         );
       } else {
         applyConfigs();
@@ -243,13 +249,13 @@ export function EditDeployConfigDrawer({
           ...(validFiles.length && { files: validFiles }),
         },
       },
-      { onSuccess: () => onClose(), onError: errorHandler },
+      { onSuccess: () => onClose() },
     );
   }, [
     mode, env, files, environment, imageId, orgName, projName, agentName,
     showSecurity, showTracing, tracingEnabled, instrumentationVersion, versionDirty,
     versionInCompatibleSet,
-    deployAgent, updateConfigs, updateDeploySettings, onClose, pushSnackBar, errorHandler,
+    deployAgent, updateConfigs, updateDeploySettings, onClose, pushSnackBar,
   ]);
 
   // Regenerate mints + stores the new key immediately (no pre-confirm). The key only takes effect
@@ -275,17 +281,27 @@ export function EditDeployConfigDrawer({
             onConfirm: () => handleSave(),
           });
         },
-        onError: errorHandler,
+        // useDeployAgent/useUpdateAgentConfigurations/useUpdateAgentDeploySettings already
+        // show the server's message (+ reason, when the backend sends one) via their own
+        // showError:true default — useRegenerateTracingToken suppresses its generic one
+        // (showError:false) instead because its success path is custom (an expiry-aware
+        // confirmation), so it needs its own error snackbar here.
+        onError: (error: unknown) => {
+          pushSnackBar({
+            message: extractServerErrorMessage(error) ?? "Failed to regenerate tracing token",
+            type: "error",
+          });
+        },
       },
     );
   }, [
     regenerateToken, orgName, projName, agentName, environment, tokenExpiry,
-    addConfirmation, handleSave, errorHandler,
+    addConfirmation, handleSave, pushSnackBar,
   ]);
 
   // ── Env handlers ─────────────────────────────────────────────────────────
   const handleAddEnv = useCallback(() => {
-    setEnv((prev) => [...prev, { key: "", value: "", isSensitive: false }]);
+    setEnv((prev) => [{ key: "", value: "", isSensitive: false }, ...prev]);
   }, []);
 
   const handleEnvChange = useCallback(
@@ -304,9 +320,26 @@ export function EditDeployConfigDrawer({
     setEnv((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
+  const handleEnvFileParsed = useCallback((entries: { key: string; value: string }[]) => {
+    setEnv((prev) => {
+      const next = [...prev];
+      for (const { key, value } of entries) {
+        const existingIndex = next.findIndex((e) => e.key === key);
+        if (existingIndex !== -1) {
+          // Never let an uploaded .env file shadow a system-injected key.
+          if (next[existingIndex].isSystem) continue;
+          next[existingIndex] = { ...next[existingIndex], key, value, secretRef: undefined };
+        } else {
+          next.push({ key, value, isSensitive: false });
+        }
+      }
+      return sortSystemLast(next);
+    });
+  }, []);
+
   // ── File handlers ─────────────────────────────────────────────────────────
   const handleAddFile = useCallback(() => {
-    setFiles((prev) => [...prev, { key: "", mountPath: "", value: "" }]);
+    setFiles((prev) => [{ key: "", mountPath: "", value: "" }, ...prev]);
   }, []);
 
   const handleFileChange = useCallback(
@@ -417,15 +450,21 @@ export function EditDeployConfigDrawer({
           <Form.Section>
             <Stack direction="row" justifyContent="space-between" alignItems="center">
               <Form.Header>Environment Variables</Form.Header>
-              <Button
-                size="small"
-                variant="outlined"
-                startIcon={<Plus size={14} />}
-                onClick={handleAddEnv}
-                disabled={isPending}
-              >
-                Add
-              </Button>
+              <Stack direction="row" gap={1}>
+                <EnvFileUploadButton
+                  onParsed={handleEnvFileParsed}
+                  disabled={isPending || !seededRef.current}
+                />
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<Plus size={14} />}
+                  onClick={handleAddEnv}
+                  disabled={isPending || !seededRef.current}
+                >
+                  Add
+                </Button>
+              </Stack>
             </Stack>
             {env.length === 0 ? (
               <Typography variant="body2" color="text.secondary">
@@ -441,6 +480,7 @@ export function EditDeployConfigDrawer({
                     valueValue={item.value}
                     isSensitive={item.isSensitive ?? false}
                     isExistingSecret={!!(item.secretRef && item.isSensitive)}
+                    isSystem={item.isSystem}
                     onKeyChange={(v) => handleEnvChange(index, "key", v)}
                     onValueChange={(v) => handleEnvChange(index, "value", v)}
                     onSensitiveChange={(v) => handleEnvChange(index, "isSensitive", v)}

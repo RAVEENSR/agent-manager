@@ -17,6 +17,7 @@
 package repositories
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -32,6 +33,11 @@ import (
 type LLMProxyRepository interface {
 	Create(p *models.LLMProxy, handle, name, version string, ouID string) error
 	GetByID(proxyID, ouID string) (*models.LLMProxy, error)
+	// GetByIDCtx is GetByID with context propagation, for call paths (e.g.
+	// UndeployLLMProxyDeployment) that need cancellation to reach the query.
+	// GetByID itself is left as-is to avoid forcing ctx onto its many other
+	// existing callers.
+	GetByIDCtx(ctx context.Context, proxyID, ouID string) (*models.LLMProxy, error)
 	GetByIDAndProject(proxyID, ouID, projectUUID string) (*models.LLMProxy, error)
 	List(ouID string, limit, offset int) ([]*models.LLMProxy, error)
 	ListByProject(ouID, projectUUID string, limit, offset int) ([]*models.LLMProxy, error)
@@ -136,9 +142,14 @@ func (r *LLMProxyRepo) Create(p *models.LLMProxy, handle, name, version string, 
 
 // GetByID retrieves an LLM proxy by ID (handle)
 func (r *LLMProxyRepo) GetByID(proxyID, ouID string) (*models.LLMProxy, error) {
+	return r.GetByIDCtx(context.Background(), proxyID, ouID)
+}
+
+// GetByIDCtx is GetByID with context propagation — see the interface doc comment.
+func (r *LLMProxyRepo) GetByIDCtx(ctx context.Context, proxyID, ouID string) (*models.LLMProxy, error) {
 	var result proxyWithArtifact
 
-	err := r.db.
+	err := r.db.WithContext(ctx).
 		Table("llm_proxies").
 		Select("llm_proxies.*, a.ou_id as artifact_org_uuid, a.handle as artifact_handle, a.name as artifact_name, a.version as artifact_version, a.created_at as artifact_created_at, a.updated_at as artifact_updated_at").
 		Joins("JOIN artifacts a ON llm_proxies.uuid = a.uuid").

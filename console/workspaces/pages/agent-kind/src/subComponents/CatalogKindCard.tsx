@@ -1,8 +1,10 @@
 import React from "react";
-import { Box, Form, Stack, Tooltip, Typography } from "@wso2/oxygen-ui";
+import { Avatar, Box, Divider, Form, formatRelativeTime, Tooltip, Typography } from "@wso2/oxygen-ui";
 import { Link } from "react-router-dom";
+import { Layers, Tag, Clock as TimerOutlined } from "@wso2/oxygen-ui-icons-react";
 import type { AgentKindResponse } from "@agent-management-platform/types";
-import { LabelChips } from "@agent-management-platform/shared-component";
+
+export const CARD_HEIGHT = 116;
 
 interface CatalogKindCardProps {
     item: AgentKindResponse;
@@ -11,85 +13,90 @@ interface CatalogKindCardProps {
 
 export const CatalogKindCard: React.FC<CatalogKindCardProps> = ({ item, viewPath }) => {
 
-    const description = item.description ?? "";
-    const latestReleaseLabel = item.latestVersion
-        ? `Latest: ${item.latestVersion}`
-        : null;
+    const createdAtText = item.createdAt
+        ? formatRelativeTime(new Date(item.createdAt))
+        : "—";
 
     return (
         <Link to={viewPath} style={{ textDecoration: "none" }}>
             <Form.CardButton
                 sx={{
+                    position: "relative",
                     width: "100%",
+                    height: CARD_HEIGHT,
                     textAlign: "left",
-                    textDecoration: "none",
-                    height: 160,
                     display: "flex",
                     flexDirection: "column",
-                    justifyContent: "flex-start",
+                    p: 2,
+                    pt: 3,
+                    boxSizing: "border-box",
+                    overflow: "hidden",
                 }}
             >
-                <Form.CardHeader
-                    sx={{ pb: 0.5 }}
-                    title={
-                        <Tooltip title={item.displayName} placement="top">
+                {/* Top: avatar + name + latest version */}
+                <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1.5, width: "100%", minWidth: 0 }}>
+                    <Avatar
+                        sx={{
+                            bgcolor: "secondary.main",
+                            color: "primary.light",
+                            height: 44,
+                            width: 44,
+                            flexShrink: 0,
+                        }}
+                    >
+                        <Layers size={26} />
+                    </Avatar>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Tooltip title={item.displayName} placement="top-start">
                             <Typography
-                                variant="h6"
-                                textOverflow="ellipsis"
-                                overflow="hidden"
-                                whiteSpace="nowrap"
+                                variant="h5"
+                                sx={{
+                                    lineHeight: 1.3,
+                                    mb: 0.4,
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    whiteSpace: "nowrap",
+                                    minWidth: 0,
+                                }}
                             >
                                 {item.displayName}
                             </Typography>
                         </Tooltip>
-                    }
-                />
-                <Form.CardContent
-                    sx={{
-                        width: "100%",
-                        display: "flex",
-                        flexDirection: "column",
-                        flexGrow: 1,
-                        minHeight: 0,
-                        pt: 0,
-                    }}
-                >
-                    {/* Name, description, and version form one tight metadata group. */}
-                    <Stack spacing={0.5} minHeight={0}>
-                        {/*
-                          Box is a plain block element, not a flex item directly —
-                          -webkit-line-clamp collapses to zero height (causing the
-                          next line to overlap it) when applied straight to a flex
-                          child, so it needs this non-flex wrapper to size correctly.
-                        */}
-                        <Box>
-                            <Tooltip title={description} placement="top" disableHoverListener={!description}>
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, overflow: "hidden" }}>
+                            <Tag size={13} style={{ opacity: 0.5, flexShrink: 0 }} />
+                            {item.latestVersion ? (
                                 <Typography
                                     variant="caption"
                                     color="text.secondary"
-                                    sx={{
-                                        display: "-webkit-box",
-                                        WebkitBoxOrient: "vertical",
-                                        WebkitLineClamp: 2,
-                                        overflow: "hidden",
-                                    }}
+                                    noWrap
+                                    sx={{ minWidth: 0 }}
                                 >
-                                    {description || "No description provided."}
+                                    Latest: {item.latestVersion}
                                 </Typography>
-                            </Tooltip>
+                            ) : (
+                                <Typography variant="caption" color="text.disabled" sx={{ fontStyle: "italic" }}>
+                                    No versions published
+                                </Typography>
+                            )}
                         </Box>
-                        {latestReleaseLabel && (
-                            <Typography variant="caption" color="text.secondary">
-                                {latestReleaseLabel}
-                            </Typography>
-                        )}
-                    </Stack>
-
-                    {/* Labels are a distinct group, anchored to the bottom of the card. */}
-                    <Box sx={{ mt: "auto", pt: 1 }}>
-                        <LabelChips labels={item.labels} />
                     </Box>
-                </Form.CardContent>
+                </Box>
+
+                <Box sx={{ flex: 1 }} />
+
+                <Divider sx={{ mb: 1 }} />
+
+                {/* Bottom: time */}
+                <Box sx={{ width: "100%", minWidth: 0 }}>
+                    <Typography
+                        variant="caption"
+                        color="text.disabled"
+                        sx={{ display: "flex", alignItems: "center", gap: 0.4 }}
+                    >
+                        <TimerOutlined size={12} />
+                        {createdAtText}
+                    </Typography>
+                </Box>
             </Form.CardButton>
         </Link>
     );

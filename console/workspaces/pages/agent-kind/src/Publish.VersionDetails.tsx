@@ -16,62 +16,24 @@
  * under the License.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { generatePath, useLocation, useNavigate, useParams } from "react-router-dom";
+import React, { useMemo } from "react";
+import { generatePath, useParams } from "react-router-dom";
 import {
   Alert,
   Box,
-  Button,
   Chip,
-  Divider,
-  Form,
   ListingTable,
   Skeleton,
   Stack,
   Typography,
 } from "@wso2/oxygen-ui";
-import { Edit } from "@wso2/oxygen-ui-icons-react";
-import { DrawerWrapper, DrawerHeader, DrawerContent, TextInput, PageLayout } from "@agent-management-platform/views";
+import { PageLayout } from "@agent-management-platform/views";
 import { absoluteRouteMap } from "@agent-management-platform/types";
-import { useGetAgentKind, useGetAgentKindVersion, useGetBuild, useUpdateAgentKind } from "@agent-management-platform/api-client";
-import { LabelsEditor, SwaggerSpecViewer, parseOpenApiSpecContent, useConfirmationDialog } from "@agent-management-platform/shared-component";
-import { RuntimeConfigEditor, createRuntimeConfigRow, type RuntimeConfigRow } from "./RuntimeConfigEditor";
-
-const deepEqual = (a: unknown, b: unknown): boolean => {
-  if (a === b) {
-    return true;
-  }
-
-  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") {
-    return false;
-  }
-
-  if (Array.isArray(a) && Array.isArray(b)) {
-    if (a.length !== b.length) {
-      return false;
-    }
-    return a.every((value, index) => deepEqual(value, b[index]));
-  }
-
-  if (Array.isArray(a) || Array.isArray(b)) {
-    return false;
-  }
-
-  const aObj = a as Record<string, unknown>;
-  const bObj = b as Record<string, unknown>;
-  const aKeys = Object.keys(aObj);
-  const bKeys = Object.keys(bObj);
-
-  if (aKeys.length !== bKeys.length) {
-    return false;
-  }
-
-  return aKeys.every((key) => deepEqual(aObj[key], bObj[key]));
-};
+import { useGetAgentKind, useGetAgentKindVersion, useGetBuild } from "@agent-management-platform/api-client";
+import { SwaggerSpecViewer, parseOpenApiSpecContent } from "@agent-management-platform/shared-component";
+import { SectionCard } from "./SectionCard";
 
 export const PublishVersionDetails: React.FC = () => {
-  const navigate = useNavigate();
-  const location = useLocation();
   const { orgId, projectId, agentId, versionId } = useParams<{
     orgId: string;
     projectId: string;
@@ -79,25 +41,18 @@ export const PublishVersionDetails: React.FC = () => {
     versionId: string;
   }>();
 
-  const versionDetailsHref = generatePath(
-    absoluteRouteMap.children.org.children.projects.children.agents
-      .children.publish.children.versionDetails.path,
-    { orgId: orgId ?? "", projectId: projectId ?? "", agentId: agentId ?? "", versionId: versionId ?? "" },
-  );
-
   const backHref = generatePath(
     absoluteRouteMap.children.org.children.projects.children.agents.children.publish.path,
     { orgId: orgId ?? "", projectId: projectId ?? "", agentId: agentId ?? "" },
   );
 
-  const isEditOpen = location.pathname.endsWith("/edit");
-
   const { data: kind } = useGetAgentKind({ orgName: orgId!, kindName: agentId! });
-  const { data: version, isLoading: isVersionLoading } = useGetAgentKindVersion({
-    orgName: orgId!,
-    kindName: agentId!,
-    versionTag: versionId!,
-  });
+  const { data: version, isLoading: isVersionLoading, isError: isVersionError }
+    = useGetAgentKindVersion({
+      orgName: orgId!,
+      kindName: agentId!,
+      versionTag: versionId!,
+    });
 
   const { data: build, isLoading: isBuildLoading } = useGetBuild({
     orgName: orgId!,
@@ -123,291 +78,112 @@ export const PublishVersionDetails: React.FC = () => {
     [version],
   );
 
-  // Edit drawer state — kind fields
-  const [displayName, setDisplayName] = useState("");
-  const [description, setDescription] = useState("");
-  const [labels, setLabels] = useState<Record<string, string>>({});
-
-  useEffect(() => {
-    if (kind) {
-      setDisplayName(kind.displayName);
-      setDescription(kind.description ?? "");
-      setLabels(kind.labels ?? {});
-    }
-  }, [kind]);
-
-  // Edit drawer state — config schema
-  const [editSchema, setEditSchema] = useState<RuntimeConfigRow[]>([]);
-
-  useEffect(() => {
-    if (version) {
-      setEditSchema(
-        version.configSchema.map((item) => ({
-          ...createRuntimeConfigRow({
-            key: item.name,
-            isSecret: item.isSecret,
-            isMandatory: item.isMandatory,
-            defaultValue: item.defaultValue ?? "",
-          }),
-        }))
-      );
-    }
-  }, [version]);
-
-  const initialSchemaRows = useMemo(
-    () =>
-      version?.configSchema.map((item) => ({
-        ...createRuntimeConfigRow({
-          key: item.name,
-
-          defaultValue: item.defaultValue ?? "",
-        }),
-      })) ?? [],
-    [version],
-  );
-
-  const initialDisplayName = kind?.displayName ?? "";
-  const initialDescription = kind?.description ?? "";
-
-  const isSchemaChanged = !deepEqual(
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    editSchema.map(({ id, ...row }) => row),
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    initialSchemaRows.map(({ id, ...row }) => row),
-  );
-  const initialLabels = useMemo(() => kind?.labels ?? {}, [kind]);
-  const isLabelsChanged = !deepEqual(labels, initialLabels);
-  const isDirty =
-    displayName !== initialDisplayName || description !== initialDescription ||
-    isSchemaChanged || isLabelsChanged;
-
-  const { mutateAsync: updateKind, isPending: isSaving } = useUpdateAgentKind();
-  const { addConfirmation } = useConfirmationDialog();
-
-  const handleDrawerClose = useCallback(() => {
-    if (isDirty) {
-      addConfirmation({
-        title: "Discard Changes?",
-        description: "You have unsaved changes. Are you sure you want to close without saving?",
-        confirmButtonText: "Discard",
-        confirmButtonColor: "error",
-        onConfirm: () => {
-          setDisplayName(initialDisplayName);
-          setDescription(initialDescription);
-          setLabels(initialLabels);
-          setEditSchema(initialSchemaRows.map((r) => ({ ...r })));
-          navigate(versionDetailsHref);
-        },
-      });
-    } else {
-      navigate(versionDetailsHref);
-    }
-  }, [isDirty, addConfirmation, initialDisplayName, initialDescription, initialLabels,
-    initialSchemaRows, navigate, versionDetailsHref]);
-
-  const handleSave = useCallback(async () => {
-    if (agentId && orgId) {
-      // Labels are always sent so removing the last one clears them ({} =
-      // clear, absent = leave unchanged on the backend).
-      await updateKind({
-        params: { orgName: orgId, kindName: agentId },
-        body: {
-          displayName: displayName.trim(),
-          description: description.trim() || undefined,
-          labels,
-        },
-      });
-      navigate(versionDetailsHref);
-    }
-  }, [orgId, agentId, displayName, description, labels, updateKind, navigate, versionDetailsHref]);
-
   return (
-    <>
-      <PageLayout
-        title={`${displayName || agentId} ${versionId}`}
-        description={version ? `Build Id: ${version.buildName ?? "—"}` : ""}
-        disableIcon
-        backHref={backHref}
-        backLabel="Back to Publish"
-        actions={
-          <Button
-            variant="outlined"
-            startIcon={<Edit />}
-            onClick={() => navigate(versionDetailsHref + "/edit")}
-          >
-            Edit
-          </Button>
-        }
-      >
-        {isVersionLoading ? (
-          <Box sx={{ p: 2 }}>
-            <Skeleton variant="rounded" height={32} sx={{ mb: 2, maxWidth: 320 }} />
-            <Skeleton variant="rounded" height={48} sx={{ mb: 1 }} />
-            <Skeleton variant="rounded" height={48} sx={{ mb: 1 }} />
-            <Skeleton variant="rounded" height={48} />
-          </Box>
-        ) : !version ? (
-          <Alert severity="error">Version not found.</Alert>
-        ) : (
-          <Stack spacing={3}>
-            {/* Metadata chips */}
-            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-              {version.agentSubType && (
-                <Chip label={version.agentSubType} size="small" variant="outlined" />
-              )}
-              {formattedDate && (
-                <Typography variant="body2" color="text.secondary">
-                  Published on {formattedDate}
-                </Typography>
-              )}
-            </Stack>
-
-            <Divider />
-
-            {/* Config Schema */}
-            <Stack spacing={1.5}>
-              <Typography variant="subtitle1" fontWeight={600}>
-                Configuration Schema
-              </Typography>
-              {version.configSchema.length > 0 ? (
-                <ListingTable.Container>
-                  <ListingTable>
-                    <ListingTable.Head>
-                      <ListingTable.Row>
-                        <ListingTable.Cell width="25%">Name</ListingTable.Cell>
-                        <ListingTable.Cell width="30%">Description</ListingTable.Cell>
-                        <ListingTable.Cell width="15%">Mandatory</ListingTable.Cell>
-                        <ListingTable.Cell width="15%">Secret</ListingTable.Cell>
-                        <ListingTable.Cell width="15%">Default Value</ListingTable.Cell>
-                      </ListingTable.Row>
-                    </ListingTable.Head>
-                    <ListingTable.Body>
-                      {version.configSchema.map((item) => (
-                        <ListingTable.Row key={item.name}>
-                          <ListingTable.Cell>
-                            <Typography variant="body2" fontWeight={500}>{item.name}</Typography>
-                          </ListingTable.Cell>
-                          <ListingTable.Cell>
-                            <Typography variant="body2" color="text.secondary">
-                              {item.description ?? "—"}
-                            </Typography>
-                          </ListingTable.Cell>
-                          <ListingTable.Cell>
-                            <Typography variant="body2" color="text.secondary">
-                              {item.isMandatory ? "Yes" : "No"}
-                            </Typography>
-                          </ListingTable.Cell>
-                          <ListingTable.Cell>
-                            <Typography variant="body2" color="text.secondary">
-                              {item.isSecret ? "Yes" : "No"}
-                            </Typography>
-                          </ListingTable.Cell>
-                          <ListingTable.Cell>
-                            <Typography variant="body2" color="text.secondary">
-                              {item.defaultValue ? (item.isSecret ? "••••••••••••••••" : item.defaultValue) : "—"}
-                            </Typography>
-                          </ListingTable.Cell>
-                        </ListingTable.Row>
-                      ))}
-                    </ListingTable.Body>
-                  </ListingTable>
-                </ListingTable.Container>
-              ) : (
-                <Alert severity="info">No configuration schema defined for this version.</Alert>
-              )}
-            </Stack>
-
-            <Divider />
-
-            {/* API Specification */}
-            <Stack spacing={1.5}>
-              <Typography variant="subtitle1" fontWeight={600}>
-                API Specification
-              </Typography>
-              {isBuildLoading ? (
-                <Skeleton variant="rounded" height={300} />
-              ) : apiSpec ? (
-                <SwaggerSpecViewer
-                  spec={apiSpec}
-                  docExpansion="list"
-                  hideInfoSection
-                  hideServers
-                  hideAuthorizeButton
-                />
-              ) : (
-                <Alert severity="info">No API specification available for this version.</Alert>
-              )}
-            </Stack>
-          </Stack>
-        )}
-      </PageLayout>
-
-      {/* Edit Drawer */}
-      <DrawerWrapper open={isEditOpen} onClose={handleDrawerClose} minWidth={700} maxWidth={700}>
-        <DrawerHeader title="Edit Agent Kind" icon={<Edit size={24} />} onClose={handleDrawerClose} />
-        <DrawerContent>
-          <Form.Stack spacing={3}>
-            <Form.Section>
-              <Form.Subheader>Kind Details</Form.Subheader>
-              <Form.Stack spacing={2}>
-                <Form.ElementWrapper label="Display Name" name="displayName">
-                  <TextInput
-                    id="displayName"
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    fullWidth
-                    size="small"
-                  />
-                </Form.ElementWrapper>
-                <Form.ElementWrapper label="Description" name="description">
-                  <TextInput
-                    id="description"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    fullWidth
-                    size="small"
-                    multiline
-                    rows={3}
-                  />
-                </Form.ElementWrapper>
-                <Form.ElementWrapper label="Labels (optional)" name="labels">
-                  <LabelsEditor
-                    hideTitle
-                    description="Attach key/value labels to organize and filter kinds."
-                    value={labels}
-                    onChange={setLabels}
-                    disabled={isSaving}
-                  />
-                </Form.ElementWrapper>
-              </Form.Stack>
-            </Form.Section>
-
-            {editSchema.length > 0 && (
-              <Form.Section>
-                <Form.Subheader>Configuration Schema</Form.Subheader>
-                <RuntimeConfigEditor rows={editSchema} onChange={setEditSchema} readonlyKey />
-              </Form.Section>
+    <PageLayout
+      title={`${kind?.displayName || agentId} ${versionId}`}
+      description={version ? `Build Id: ${version.buildName ?? "—"}` : ""}
+      disableIcon
+      backHref={backHref}
+      backLabel="Back to Publish"
+    >
+      {isVersionLoading ? (
+        <Box sx={{ p: 2 }}>
+          <Skeleton variant="rounded" height={32} sx={{ mb: 2, maxWidth: 320 }} />
+          <Skeleton variant="rounded" height={48} sx={{ mb: 1 }} />
+          <Skeleton variant="rounded" height={48} sx={{ mb: 1 }} />
+          <Skeleton variant="rounded" height={48} />
+        </Box>
+      ) : isVersionError ? (
+        <Alert severity="error">Failed to load this version. Please try again.</Alert>
+      ) : !version ? (
+        <Alert severity="error">Version not found.</Alert>
+      ) : (
+        <Stack spacing={3}>
+          {/* Metadata chips */}
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+            {version.agentSubType && (
+              <Chip label={version.agentSubType} size="small" variant="outlined" />
             )}
+            {formattedDate && (
+              <Typography variant="body2" color="text.secondary">
+                Published on {formattedDate}
+              </Typography>
+            )}
+          </Stack>
 
-            <Box display="flex" justifyContent="flex-end" gap={1}>
-              <Button variant="outlined" color="inherit" onClick={handleDrawerClose} disabled={isSaving}>
-                Cancel
-              </Button>
-              <Button
-                variant="contained"
-                color="primary"
-                onClick={handleSave}
-                disabled={isSaving || !displayName.trim()}
-              >
-                {isSaving ? "Saving..." : "Save Changes"}
-              </Button>
-            </Box>
-          </Form.Stack>
-        </DrawerContent>
-      </DrawerWrapper>
-    </>
+          {/* Config Schema */}
+          <SectionCard title="Configuration Schema">
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+              Set when this version was published — publish a new version to change it.
+            </Typography>
+            {version.configSchema.length > 0 ? (
+              <ListingTable.Container>
+                <ListingTable>
+                  <ListingTable.Head>
+                    <ListingTable.Row>
+                      <ListingTable.Cell width="25%">Name</ListingTable.Cell>
+                      <ListingTable.Cell width="30%">Description</ListingTable.Cell>
+                      <ListingTable.Cell width="15%">Mandatory</ListingTable.Cell>
+                      <ListingTable.Cell width="15%">Secret</ListingTable.Cell>
+                      <ListingTable.Cell width="15%">Default Value</ListingTable.Cell>
+                    </ListingTable.Row>
+                  </ListingTable.Head>
+                  <ListingTable.Body>
+                    {version.configSchema.map((item) => (
+                      <ListingTable.Row key={item.name}>
+                        <ListingTable.Cell>
+                          <Typography variant="body2" fontWeight={500}>{item.name}</Typography>
+                        </ListingTable.Cell>
+                        <ListingTable.Cell>
+                          <Typography variant="body2" color="text.secondary">
+                            {item.description ?? "—"}
+                          </Typography>
+                        </ListingTable.Cell>
+                        <ListingTable.Cell>
+                          <Typography variant="body2" color="text.secondary">
+                            {item.isMandatory ? "Yes" : "No"}
+                          </Typography>
+                        </ListingTable.Cell>
+                        <ListingTable.Cell>
+                          <Typography variant="body2" color="text.secondary">
+                            {item.isSecret ? "Yes" : "No"}
+                          </Typography>
+                        </ListingTable.Cell>
+                        <ListingTable.Cell>
+                          <Typography variant="body2" color="text.secondary">
+                            {item.defaultValue ? (item.isSecret ? "••••••••••••••••" : item.defaultValue) : "—"}
+                          </Typography>
+                        </ListingTable.Cell>
+                      </ListingTable.Row>
+                    ))}
+                  </ListingTable.Body>
+                </ListingTable>
+              </ListingTable.Container>
+            ) : (
+              <Alert severity="info">No configuration schema defined for this version.</Alert>
+            )}
+          </SectionCard>
+
+          {/* API Specification */}
+          <SectionCard title="API Specification">
+            {isBuildLoading ? (
+              <Skeleton variant="rounded" height={300} />
+            ) : apiSpec ? (
+              <SwaggerSpecViewer
+                spec={apiSpec}
+                docExpansion="list"
+                hideInfoSection
+                hideServers
+                hideAuthorizeButton
+              />
+            ) : (
+              <Alert severity="info">No API specification available for this version.</Alert>
+            )}
+          </SectionCard>
+        </Stack>
+      )}
+    </PageLayout>
   );
 };
 
 export default PublishVersionDetails;
-

@@ -136,6 +136,11 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.agentManagerService.config.encryptionKey.existingSecret | default (include "agent-management-platform.agentManagerService.fullname" .) }}
                   key: {{ .Values.agentManagerService.config.encryptionKey.existingSecretKey | default "encryption-key" }}
+            - name: THUNDER_ASK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.agentManagerService.config.thunderAskSecret.existingSecret | default (include "agent-management-platform.agentManagerService.fullname" .) }}
+                  key: {{ .Values.agentManagerService.config.thunderAskSecret.existingSecretKey | default "thunder-ask-secret" }}
             {{- if or .Values.agentManagerService.config.thunder.clientSecret .Values.agentManagerService.config.thunder.existingSecret }}
             - name: THUNDER_CLIENT_SECRET
               {{- if .Values.agentManagerService.config.thunder.existingSecret }}
@@ -149,6 +154,18 @@ spec:
                   name: {{ include "agent-management-platform.agentManagerService.fullname" . }}
                   key: thunder-client-secret
               {{- end }}
+            {{- end }}
+            {{- if or .Values.agentManagerService.config.gatewayManifestCache.redis.password .Values.agentManagerService.config.gatewayManifestCache.redis.existingSecret }}
+            - name: GATEWAY_MANIFEST_CACHE_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  {{- if .Values.agentManagerService.config.gatewayManifestCache.redis.existingSecret }}
+                  name: {{ .Values.agentManagerService.config.gatewayManifestCache.redis.existingSecret }}
+                  key: {{ .Values.agentManagerService.config.gatewayManifestCache.redis.existingSecretKey | default "gateway-manifest-cache-redis-password" }}
+                  {{- else }}
+                  name: {{ include "agent-management-platform.agentManagerService.fullname" . }}
+                  key: gateway-manifest-cache-redis-password
+                  {{- end }}
             {{- end }}
           envFrom:
             - configMapRef:

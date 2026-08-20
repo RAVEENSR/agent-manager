@@ -25,6 +25,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/logger"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
@@ -73,27 +74,13 @@ func (c *gatewayInternalController) GetLLMProvider(w http.ResponseWriter, r *htt
 	ctx := r.Context()
 	log := logger.GetLogger(ctx)
 
-	// Extract client IP for logging
-	clientIP := getClientIP(r)
-
-	// Extract and validate API key from header
-	apiKey := r.Header.Get("api-key")
-	if apiKey == "" {
-		log.Warn("Unauthorized access attempt - Missing API key", "ip", clientIP)
-		http.Error(w, "API key is required. Provide 'api-key' header.", http.StatusUnauthorized)
+	identity, ok := c.authenticateGateway(w, r, "internal-read")
+	if !ok {
 		return
 	}
 
-	// Authenticate gateway using API key
-	gateway, err := c.gatewayService.VerifyToken(apiKey)
-	if err != nil {
-		log.Warn("Authentication failed", "ip", clientIP, "error", err)
-		http.Error(w, "Invalid or expired API key", http.StatusUnauthorized)
-		return
-	}
-
-	ouID := gateway.OUID
-	gatewayID := gateway.UUID.String()
+	ouID := identity.OUID
+	gatewayID := identity.ID
 	providerID := r.PathValue("providerId")
 	if providerID == "" {
 		http.Error(w, "Provider ID is required", http.StatusBadRequest)
@@ -140,27 +127,13 @@ func (c *gatewayInternalController) GetLLMProxy(w http.ResponseWriter, r *http.R
 	ctx := r.Context()
 	log := logger.GetLogger(ctx)
 
-	// Extract client IP for logging
-	clientIP := getClientIP(r)
-
-	// Extract and validate API key from header
-	apiKey := r.Header.Get("api-key")
-	if apiKey == "" {
-		log.Warn("Unauthorized access attempt - Missing API key", "ip", clientIP)
-		http.Error(w, "API key is required. Provide 'api-key' header.", http.StatusUnauthorized)
+	identity, ok := c.authenticateGateway(w, r, "internal-read")
+	if !ok {
 		return
 	}
 
-	// Authenticate gateway using API key
-	gateway, err := c.gatewayService.VerifyToken(apiKey)
-	if err != nil {
-		log.Warn("Authentication failed", "ip", clientIP, "error", err)
-		http.Error(w, "Invalid or expired API key", http.StatusUnauthorized)
-		return
-	}
-
-	ouID := gateway.OUID
-	gatewayID := gateway.UUID.String()
+	ouID := identity.OUID
+	gatewayID := identity.ID
 	proxyID := r.PathValue("proxyId")
 	if proxyID == "" {
 		http.Error(w, "Proxy ID is required", http.StatusBadRequest)
@@ -206,24 +179,13 @@ func (c *gatewayInternalController) GetLLMProxy(w http.ResponseWriter, r *http.R
 func (c *gatewayInternalController) GetMCPProxy(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	log := logger.GetLogger(ctx)
-	clientIP := getClientIP(r)
-
-	apiKey := r.Header.Get("api-key")
-	if apiKey == "" {
-		log.Warn("Unauthorized access attempt - Missing API key", "ip", clientIP)
-		http.Error(w, "API key is required. Provide 'api-key' header.", http.StatusUnauthorized)
+	identity, ok := c.authenticateGateway(w, r, "internal-read")
+	if !ok {
 		return
 	}
 
-	gateway, err := c.gatewayService.VerifyToken(apiKey)
-	if err != nil {
-		log.Warn("Authentication failed", "ip", clientIP, "error", err)
-		http.Error(w, "Invalid or expired API key", http.StatusUnauthorized)
-		return
-	}
-
-	ouID := gateway.OUID
-	gatewayID := gateway.UUID.String()
+	ouID := identity.OUID
+	gatewayID := identity.ID
 	proxyID := r.PathValue("proxyId")
 	if proxyID == "" {
 		http.Error(w, "Proxy ID is required", http.StatusBadRequest)
@@ -303,30 +265,26 @@ func (c *gatewayInternalController) getAPIKeysByKind(w http.ResponseWriter, r *h
 func (c *gatewayInternalController) getAPIKeysByKinds(w http.ResponseWriter, r *http.Request, kinds ...string) {
 	log := logger.GetLogger(r.Context())
 
-	apiKey := r.Header.Get("api-key")
-	if apiKey == "" {
-		http.Error(w, "API key is required", http.StatusUnauthorized)
-		return
-	}
-
-	gateway, err := c.gatewayService.VerifyToken(apiKey)
-	if err != nil {
-		http.Error(w, "Invalid or expired API key", http.StatusUnauthorized)
+	identity, ok := c.authenticateGateway(w, r, "internal-read")
+	if !ok {
 		return
 	}
 
 	keys := make([]models.StoredAPIKey, 0)
 	var envUUIDs []string
 	for _, kind := range kinds {
-		var kindKeys []models.StoredAPIKey
+		var (
+			kindKeys []models.StoredAPIKey
+			err      error
+		)
 		if kind == models.KindAgent {
 			// Agent API keys are environment-scoped: only return keys for environments
 			// assigned to this gateway so the gateway controller doesn't try to load
 			// API configurations that belong to a different environment's data plane.
 			if envUUIDs == nil {
-				mappings, mappingErr := c.gatewayService.GetGatewayEnvironmentMappings(gateway.UUID.String())
+				mappings, mappingErr := c.gatewayService.GetGatewayEnvironmentMappings(identity.ID)
 				if mappingErr != nil {
-					log.Error("Failed to get gateway environment mappings", "gatewayID", gateway.UUID, "error", mappingErr)
+					log.Error("Failed to get gateway environment mappings", "gatewayID", identity.ID, "error", mappingErr)
 					http.Error(w, "Failed to list API keys", http.StatusInternalServerError)
 					return
 				}
@@ -335,9 +293,9 @@ func (c *gatewayInternalController) getAPIKeysByKinds(w http.ResponseWriter, r *
 					envUUIDs = append(envUUIDs, m.EnvironmentUUID.String())
 				}
 			}
-			kindKeys, err = c.apiKeyRepo.ListByArtifactKindAndEnvs(gateway.OUID, kind, envUUIDs)
+			kindKeys, err = c.apiKeyRepo.ListByArtifactKindAndEnvs(identity.OUID, kind, envUUIDs)
 		} else {
-			kindKeys, err = c.apiKeyRepo.ListByArtifactKind(gateway.OUID, kind)
+			kindKeys, err = c.apiKeyRepo.ListByArtifactKind(identity.OUID, kind)
 		}
 		if err != nil {
 			log.Error("Failed to list API keys", "kind", kind, "error", err)
@@ -374,14 +332,7 @@ func (c *gatewayInternalController) getAPIKeysByKinds(w http.ResponseWriter, r *
 // Returns subscription plans for the authenticated gateway's organization.
 // Currently returns an empty list as subscription-based rate limiting is not used.
 func (c *gatewayInternalController) GetSubscriptionPlans(w http.ResponseWriter, r *http.Request) {
-	apiKey := r.Header.Get("api-key")
-	if apiKey == "" {
-		http.Error(w, "API key is required", http.StatusUnauthorized)
-		return
-	}
-
-	if _, err := c.gatewayService.VerifyToken(apiKey); err != nil {
-		http.Error(w, "Invalid or expired API key", http.StatusUnauthorized)
+	if _, ok := c.authenticateGateway(w, r, "internal-read"); !ok {
 		return
 	}
 
@@ -400,14 +351,7 @@ type controlPlaneDeploymentsResponse struct {
 // not in agent-manager's own DB, so there is nothing yet to report here —
 // returns an empty list, matching GetSubscriptionPlans/GetApplications above.
 func (c *gatewayInternalController) GetDeployments(w http.ResponseWriter, r *http.Request) {
-	apiKey := r.Header.Get("api-key")
-	if apiKey == "" {
-		http.Error(w, "API key is required", http.StatusUnauthorized)
-		return
-	}
-
-	if _, err := c.gatewayService.VerifyToken(apiKey); err != nil {
-		http.Error(w, "Invalid or expired API key", http.StatusUnauthorized)
+	if _, ok := c.authenticateGateway(w, r, "internal-read"); !ok {
 		return
 	}
 
@@ -434,19 +378,12 @@ func (c *gatewayInternalController) GetApplications(w http.ResponseWriter, r *ht
 	ctx := r.Context()
 	log := logger.GetLogger(ctx)
 
-	apiKey := r.Header.Get("api-key")
-	if apiKey == "" {
-		http.Error(w, "API key is required", http.StatusUnauthorized)
+	identity, ok := c.authenticateGateway(w, r, "internal-read")
+	if !ok {
 		return
 	}
 
-	gateway, err := c.gatewayService.VerifyToken(apiKey)
-	if err != nil {
-		http.Error(w, "Invalid or expired API key", http.StatusUnauthorized)
-		return
-	}
-
-	apps, err := c.aiApplicationRepo.ListByOrg(ctx, gateway.OUID)
+	apps, err := c.aiApplicationRepo.ListByOrg(ctx, identity.OUID)
 	if err != nil {
 		log.Error("Failed to list AI applications", "error", err)
 		http.Error(w, "Failed to list applications", http.StatusInternalServerError)
@@ -489,20 +426,16 @@ func (c *gatewayInternalController) PushGatewayManifest(w http.ResponseWriter, r
 		return
 	}
 
-	apiKey := r.Header.Get("api-key")
-	if apiKey == "" {
-		log.Warn("Unauthorized gateway manifest push - Missing API key", "gatewayId", gatewayID)
-		http.Error(w, "API key is required. Provide 'api-key' header.", http.StatusUnauthorized)
+	identity, ok := c.authenticateGateway(w, r, "push-manifest")
+	if !ok {
 		return
 	}
-	gateway, err := c.gatewayService.VerifyToken(apiKey)
-	if err != nil {
-		log.Warn("Gateway manifest authentication failed", "gatewayId", gatewayID, "error", err)
-		http.Error(w, "Invalid or expired API key", http.StatusUnauthorized)
-		return
-	}
-	if gateway.UUID.String() != gatewayID {
-		log.Warn("Gateway manifest token does not match gateway", "gatewayId", gatewayID, "tokenGatewayId", gateway.UUID)
+	if identity.ID != gatewayID {
+		// A gateway presenting a valid key for a different gateway. Recorded
+		// separately from a bad key: it is a valid credential used out of
+		// scope, which is a stronger signal than an invalid one.
+		log.Warn("Gateway manifest token does not match gateway", "gatewayId", gatewayID, "tokenGatewayId", identity.ID)
+		recordGatewayAuthFailure(r, "gateway-id-mismatch", identity.ID)
 		http.Error(w, "Gateway token does not match gateway ID", http.StatusForbidden)
 		return
 	}
@@ -513,7 +446,23 @@ func (c *gatewayInternalController) PushGatewayManifest(w http.ResponseWriter, r
 		http.Error(w, "Invalid gateway manifest", http.StatusBadRequest)
 		return
 	}
-	if err := c.gatewayService.SaveGatewayPolicyManifest(gatewayID, manifest); err != nil {
+
+	// The only mutating route on the internal server: it replaces the policy
+	// manifest the gateway reports as installed. Recorded after the fact — the
+	// gateway is a machine client that retries, so refusing the push when the
+	// trail is unavailable would leave the mirror stale for no gain.
+	err := c.gatewayService.SaveGatewayPolicyManifest(r.Context(), gatewayID, manifest)
+	audit.Record(
+		r.Context(), audit.ActionGatewayPushManifest,
+		audit.Org(identity.OUID),
+		audit.Resource(audit.ResourceGateway, gatewayID),
+		audit.SurfaceOpt(audit.SurfaceInternal),
+		audit.Actor(audit.ActorGateway, gatewayID, ""),
+		audit.AuthMethod("api-key"),
+		audit.Detail("policyCount", len(manifest)),
+		audit.Result(err),
+	)
+	if err != nil {
 		if errors.Is(err, utils.ErrGatewayNotFound) {
 			http.Error(w, "Gateway not found", http.StatusNotFound)
 			return

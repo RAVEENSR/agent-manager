@@ -26,7 +26,7 @@ import { AlertTriangle, BookOpen } from "@wso2/oxygen-ui-icons-react";
 import {
   EnvironmentVariablesReference,
   type EnvVarReferenceRow,
-} from "./EnvironmentVariablesReference";
+} from "@agent-management-platform/shared-component";
 
 interface EnvironmentVariablesGuideDrawerProps {
   open: boolean;

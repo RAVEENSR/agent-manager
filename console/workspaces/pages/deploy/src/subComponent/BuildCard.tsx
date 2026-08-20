@@ -31,6 +31,7 @@ import {
   useGetAgent,
   useGetAgentBuilds,
   useGetAgentKind,
+  useListAgentDeployments,
 } from "@agent-management-platform/api-client";
 import { useMemo, useCallback, useEffect } from "react";
 import {
@@ -129,18 +130,52 @@ export function BuildCard(props: BuildCardProps) {
   const selectedVersionFromParams = searchParams.get("selectedVersion");
   const isVersionSelectorOpen = searchParams.get("versionSelector") === "open";
 
-  // Default selected version to latest kind version when no version is in params
+  const { data: deployments, isLoading: isDeploymentsLoading } =
+    useListAgentDeployments({
+      orgName: orgId,
+      projName: projectId,
+      agentName: agentId,
+    });
+
+  // What the card opens on, in order: the version this environment already runs,
+  // then the one the agent was created from, then the kind's newest. Defaulting to
+  // newest — as this did — turns "Configure & Deploy" into an unannounced upgrade
+  // for anyone who just wanted to redeploy, and shows a version the agent has
+  // never run. Only versions the kind still publishes are offered, since a
+  // deleted one cannot be deployed.
+  const defaultKindVersion = useMemo(() => {
+    const published = (v?: string) =>
+      v && sortedKindVersions.some((kv) => kv.version === v) ? v : undefined;
+    return (
+      published(deployments?.[initialEnvironment?.name ?? ""]?.kindVersion) ??
+      published(agent?.kindVersion) ??
+      sortedKindVersions[0]?.version ??
+      ""
+    );
+  }, [deployments, initialEnvironment?.name, agent?.kindVersion, sortedKindVersions]);
+
   useEffect(() => {
-    if (isKindAgent && !selectedVersionFromParams && sortedKindVersions.length > 0) {
+    // Writing the param pins the selection — the effect cannot correct it later,
+    // because selectedVersionFromParams is set from then on. So wait for the
+    // deployments query: pinning first would lock the card onto the fallback
+    // (the creation version, or the kind's newest) even though this environment
+    // runs something else.
+    if (isDeploymentsLoading) return;
+    if (isKindAgent && !selectedVersionFromParams && defaultKindVersion) {
       const next = new URLSearchParams(searchParams);
-      next.set("selectedVersion", sortedKindVersions[0].version);
+      next.set("selectedVersion", defaultKindVersion);
       setSearchParams(next, { replace: true });
     }
-  }, [isKindAgent, selectedVersionFromParams, sortedKindVersions, searchParams, setSearchParams]);
+  }, [
+    isDeploymentsLoading,
+    isKindAgent,
+    selectedVersionFromParams,
+    defaultKindVersion,
+    searchParams,
+    setSearchParams,
+  ]);
 
-  const selectedVersion =
-    selectedVersionFromParams ||
-    (sortedKindVersions.length > 0 ? sortedKindVersions[0].version : "");
+  const selectedVersion = selectedVersionFromParams || defaultKindVersion;
 
   const currentKindVersion = sortedKindVersions.find(
     (v) => v.version === selectedVersion

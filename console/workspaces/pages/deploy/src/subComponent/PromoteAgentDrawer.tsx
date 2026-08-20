@@ -38,10 +38,12 @@ import {
   DrawerContent,
   DrawerHeader,
   DrawerWrapper,
+  EnvFileUploadButton,
   EnvVariableEditor,
   FileMountEditor,
 } from "@agent-management-platform/views";
 import {
+  extractServerErrorMessage,
   useAgentBuildOptions,
   usePromoteAgent,
   useGetAgent,
@@ -60,6 +62,7 @@ import {
   normalizePythonMinor,
   pickInstrumentationVersion,
 } from "../utils/instrumentation";
+import { excludeSystemVars, sortSystemLast } from "../utils/envVars";
 
 interface PromoteAgentDrawerProps {
   open: boolean;
@@ -178,6 +181,13 @@ export function PromoteAgentDrawer({
   // once per target rather than on every background refetch.
   const [filledForTarget, setFilledForTarget] = useState<string | null>(null);
 
+  // True once the target's config has loaded AND been seeded into formState.
+  // Gates Add/Upload so a user can't add/merge entries into the editor while
+  // it's still holding the previous target's (or blank) state, which the
+  // seed effect below would otherwise clobber once it fires.
+  const targetConfigReady =
+    targetConfigLoaded && filledForTarget === formState.targetEnvironment;
+
   // Pick a default target environment when the drawer opens, and clear state on close.
   useEffect(() => {
     if (!open) {
@@ -194,29 +204,29 @@ export function PromoteAgentDrawer({
   }, [open, targetEnvOptions, resetMutation]);
 
   // Pre-fill the editor with the destination environment's existing config so the
-  // user edits from its previous values rather than starting blank. Only the
-  // user-managed keys (isSystem=false) are editable; system entries are
-  // platform-injected. We wait for the target's query to settle (targetConfigLoaded)
-  // before filling, so switching to a target with no config clears the previous
-  // target's values to empty rather than leaving them stale. We fill once per
-  // target (tracked by filledForTarget) so a background refetch of the same target
-  // doesn't clobber in-progress edits.
+  // user edits from its previous values rather than starting blank. System-injected
+  // entries (isSystem=true) are included for visibility but rendered disabled by
+  // EnvVariableEditor and excluded from the submit payload in handleSubmit, since
+  // they're platform-managed rather than user-managed. We wait for the target's
+  // query to settle (targetConfigLoaded) before filling, so switching to a target
+  // with no config clears the previous target's values to empty rather than leaving
+  // them stale. We fill once per target (tracked by filledForTarget) so a background
+  // refetch of the same target doesn't clobber in-progress edits.
   useEffect(() => {
     if (!open) return;
     const target = formState.targetEnvironment;
     if (!target || filledForTarget === target || !targetConfigLoaded) return;
     const cfg = targetConfigs?.configurations;
-    const userEditableEnv = (cfg?.env ?? [])
-      .filter((e) => !e.isSystem)
-      .map((e) => ({
-        key: e.key,
-        value: e.value ?? "",
-        isSensitive: e.isSensitive,
-        secretRef: e.secretRef,
-      }));
+    const displayEnv = sortSystemLast((cfg?.env ?? []).map((e) => ({
+      key: e.key,
+      value: e.value ?? "",
+      isSensitive: e.isSensitive,
+      secretRef: e.secretRef,
+      isSystem: e.isSystem,
+    })));
     setFormState((prev) => ({
       ...prev,
-      env: userEditableEnv,
+      env: displayEnv,
       files: cfg?.files ?? [],
     }));
     setFilledForTarget(target);
@@ -279,7 +289,7 @@ export function PromoteAgentDrawer({
   const handleAddEnv = useCallback(() => {
     setFormState((prev) => ({
       ...prev,
-      env: [...prev.env, { key: "", value: "", isSensitive: false }],
+      env: [{ key: "", value: "", isSensitive: false }, ...prev.env],
     }));
   }, []);
 
@@ -290,10 +300,27 @@ export function PromoteAgentDrawer({
     }));
   }, []);
 
+  const handleEnvFileParsed = useCallback((entries: { key: string; value: string }[]) => {
+    setFormState((prev) => {
+      const nextEnv = [...prev.env];
+      for (const { key, value } of entries) {
+        const existingIndex = nextEnv.findIndex((e) => e.key === key);
+        if (existingIndex !== -1) {
+          // Never let an uploaded .env file shadow a system-injected key.
+          if (nextEnv[existingIndex].isSystem) continue;
+          nextEnv[existingIndex] = { ...nextEnv[existingIndex], key, value, secretRef: undefined };
+        } else {
+          nextEnv.push({ key, value, isSensitive: false });
+        }
+      }
+      return { ...prev, env: sortSystemLast(nextEnv) };
+    });
+  }, []);
+
   const handleAddFile = useCallback(() => {
     setFormState((prev) => ({
       ...prev,
-      files: [...prev.files, { key: "", mountPath: "", value: "" }],
+      files: [{ key: "", mountPath: "", value: "" }, ...prev.files],
     }));
   }, []);
 
@@ -331,9 +358,8 @@ export function PromoteAgentDrawer({
             ...(formState.useConfigFromSourceEnv
               ? {}
               : {
-                  env: formState.env
-                    .filter((envVar) => envVar.key)
-                    .map(({ key, value, isSensitive, secretRef }) =>
+                  env: excludeSystemVars(formState.env).map(
+                    ({ key, value, isSensitive, secretRef }) =>
                       // Preserve the secret reference for secrets the user did not edit.
                       isSensitive && secretRef && !value
                         ? ({
@@ -342,7 +368,7 @@ export function PromoteAgentDrawer({
                             secretRef,
                           } as EnvironmentVariable)
                         : { key, value, isSensitive },
-                    ),
+                  ),
                   files: formState.files,
                   // Only send the version when the user explicitly picked a
                   // compatible one; otherwise omit it so the backend inherits
@@ -378,8 +404,7 @@ export function PromoteAgentDrawer({
   );
 
   const errorMessage = useMemo(
-    () =>
-      error ? ((error as Error)?.message ?? "Failed to promote agent") : null,
+    () => (error ? (extractServerErrorMessage(error) ?? "Failed to promote agent") : null),
     [error],
   );
 
@@ -490,15 +515,21 @@ export function PromoteAgentDrawer({
                             <Typography variant="h6">
                               Environment Variables
                             </Typography>
-                            <Button
-                              size="small"
-                              variant="outlined"
-                              startIcon={<Plus size={14} />}
-                              onClick={handleAddEnv}
-                              disabled={isPending}
-                            >
-                              Add
-                            </Button>
+                            <Stack direction="row" gap={1}>
+                              <EnvFileUploadButton
+                                onParsed={handleEnvFileParsed}
+                                disabled={isPending || !targetConfigReady}
+                              />
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                startIcon={<Plus size={14} />}
+                                onClick={handleAddEnv}
+                                disabled={isPending || !targetConfigReady}
+                              >
+                                Add
+                              </Button>
+                            </Stack>
                           </Stack>
                           {formState.env.length === 0 ? (
                             <Typography variant="body2" color="text.secondary">
@@ -517,6 +548,7 @@ export function PromoteAgentDrawer({
                                   isExistingSecret={
                                     !!(item.secretRef && item.isSensitive)
                                   }
+                                  isSystem={item.isSystem}
                                   onKeyChange={(v) =>
                                     handleEnvChange(index, "key", v)
                                   }

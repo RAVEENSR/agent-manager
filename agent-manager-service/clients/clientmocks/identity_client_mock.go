@@ -52,7 +52,7 @@ import (
 //			DeleteUserFunc: func(ctx context.Context, userID string) error {
 //				panic("mock out the DeleteUser method")
 //			},
-//			EnsureProxyResourceServerFunc: func(ctx context.Context, proxyHandle string, displayName string, actions []string) (string, error) {
+//			EnsureProxyResourceServerFunc: func(ctx context.Context, proxyHandle string, displayName string, identifier string, actions []string) (string, error) {
 //				panic("mock out the EnsureProxyResourceServer method")
 //			},
 //			GetAgentGroupsFunc: func(ctx context.Context, ouID string, agentID string) ([]thundersvc.ThunderGroup, error) {
@@ -139,6 +139,9 @@ import (
 //			UpdateUserFunc: func(ctx context.Context, userID string, req thundersvc.UpdateUserRequest) (*thundersvc.ThunderUser, error) {
 //				panic("mock out the UpdateUser method")
 //			},
+//			UpdateUserCredentialsFunc: func(ctx context.Context, userID string, password string) error {
+//				panic("mock out the UpdateUserCredentials method")
+//			},
 //		}
 //
 //		// use mockedIdentityClient in code that requires thundersvc.IdentityClient
@@ -183,7 +186,7 @@ type IdentityClientMock struct {
 	DeleteUserFunc func(ctx context.Context, userID string) error
 
 	// EnsureProxyResourceServerFunc mocks the EnsureProxyResourceServer method.
-	EnsureProxyResourceServerFunc func(ctx context.Context, proxyHandle string, displayName string, actions []string) (string, error)
+	EnsureProxyResourceServerFunc func(ctx context.Context, proxyHandle string, displayName string, identifier string, actions []string) (string, error)
 
 	// GetAgentGroupsFunc mocks the GetAgentGroups method.
 	GetAgentGroupsFunc func(ctx context.Context, ouID string, agentID string) ([]thundersvc.ThunderGroup, error)
@@ -268,6 +271,9 @@ type IdentityClientMock struct {
 
 	// UpdateUserFunc mocks the UpdateUser method.
 	UpdateUserFunc func(ctx context.Context, userID string, req thundersvc.UpdateUserRequest) (*thundersvc.ThunderUser, error)
+
+	// UpdateUserCredentialsFunc mocks the UpdateUserCredentials method.
+	UpdateUserCredentialsFunc func(ctx context.Context, userID string, password string) error
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -373,6 +379,8 @@ type IdentityClientMock struct {
 			ProxyHandle string
 			// DisplayName is the displayName argument value.
 			DisplayName string
+			// Identifier is the identifier argument value.
+			Identifier string
 			// Actions is the actions argument value.
 			Actions []string
 		}
@@ -618,6 +626,15 @@ type IdentityClientMock struct {
 			// Req is the req argument value.
 			Req thundersvc.UpdateUserRequest
 		}
+		// UpdateUserCredentials holds details about calls to the UpdateUserCredentials method.
+		UpdateUserCredentials []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// UserID is the userID argument value.
+			UserID string
+			// Password is the password argument value.
+			Password string
+		}
 	}
 	lockAddGroupMemberEntries           sync.RWMutex
 	lockAddGroupMembers                 sync.RWMutex
@@ -660,6 +677,7 @@ type IdentityClientMock struct {
 	lockUpdateGroup                     sync.RWMutex
 	lockUpdateRole                      sync.RWMutex
 	lockUpdateUser                      sync.RWMutex
+	lockUpdateUserCredentials           sync.RWMutex
 }
 
 // AddGroupMemberEntries calls AddGroupMemberEntriesFunc.
@@ -1115,7 +1133,7 @@ func (mock *IdentityClientMock) DeleteUserCalls() []struct {
 }
 
 // EnsureProxyResourceServer calls EnsureProxyResourceServerFunc.
-func (mock *IdentityClientMock) EnsureProxyResourceServer(ctx context.Context, proxyHandle string, displayName string, actions []string) (string, error) {
+func (mock *IdentityClientMock) EnsureProxyResourceServer(ctx context.Context, proxyHandle string, displayName string, identifier string, actions []string) (string, error) {
 	if mock.EnsureProxyResourceServerFunc == nil {
 		panic("IdentityClientMock.EnsureProxyResourceServerFunc: method is nil but IdentityClient.EnsureProxyResourceServer was just called")
 	}
@@ -1123,17 +1141,19 @@ func (mock *IdentityClientMock) EnsureProxyResourceServer(ctx context.Context, p
 		Ctx         context.Context
 		ProxyHandle string
 		DisplayName string
+		Identifier  string
 		Actions     []string
 	}{
 		Ctx:         ctx,
 		ProxyHandle: proxyHandle,
 		DisplayName: displayName,
+		Identifier:  identifier,
 		Actions:     actions,
 	}
 	mock.lockEnsureProxyResourceServer.Lock()
 	mock.calls.EnsureProxyResourceServer = append(mock.calls.EnsureProxyResourceServer, callInfo)
 	mock.lockEnsureProxyResourceServer.Unlock()
-	return mock.EnsureProxyResourceServerFunc(ctx, proxyHandle, displayName, actions)
+	return mock.EnsureProxyResourceServerFunc(ctx, proxyHandle, displayName, identifier, actions)
 }
 
 // EnsureProxyResourceServerCalls gets all the calls that were made to EnsureProxyResourceServer.
@@ -1144,12 +1164,14 @@ func (mock *IdentityClientMock) EnsureProxyResourceServerCalls() []struct {
 	Ctx         context.Context
 	ProxyHandle string
 	DisplayName string
+	Identifier  string
 	Actions     []string
 } {
 	var calls []struct {
 		Ctx         context.Context
 		ProxyHandle string
 		DisplayName string
+		Identifier  string
 		Actions     []string
 	}
 	mock.lockEnsureProxyResourceServer.RLock()
@@ -2255,5 +2277,45 @@ func (mock *IdentityClientMock) UpdateUserCalls() []struct {
 	mock.lockUpdateUser.RLock()
 	calls = mock.calls.UpdateUser
 	mock.lockUpdateUser.RUnlock()
+	return calls
+}
+
+// UpdateUserCredentials calls UpdateUserCredentialsFunc.
+func (mock *IdentityClientMock) UpdateUserCredentials(ctx context.Context, userID string, password string) error {
+	if mock.UpdateUserCredentialsFunc == nil {
+		panic("IdentityClientMock.UpdateUserCredentialsFunc: method is nil but IdentityClient.UpdateUserCredentials was just called")
+	}
+	callInfo := struct {
+		Ctx      context.Context
+		UserID   string
+		Password string
+	}{
+		Ctx:      ctx,
+		UserID:   userID,
+		Password: password,
+	}
+	mock.lockUpdateUserCredentials.Lock()
+	mock.calls.UpdateUserCredentials = append(mock.calls.UpdateUserCredentials, callInfo)
+	mock.lockUpdateUserCredentials.Unlock()
+	return mock.UpdateUserCredentialsFunc(ctx, userID, password)
+}
+
+// UpdateUserCredentialsCalls gets all the calls that were made to UpdateUserCredentials.
+// Check the length with:
+//
+//	len(mockedIdentityClient.UpdateUserCredentialsCalls())
+func (mock *IdentityClientMock) UpdateUserCredentialsCalls() []struct {
+	Ctx      context.Context
+	UserID   string
+	Password string
+} {
+	var calls []struct {
+		Ctx      context.Context
+		UserID   string
+		Password string
+	}
+	mock.lockUpdateUserCredentials.RLock()
+	calls = mock.calls.UpdateUserCredentials
+	mock.lockUpdateUserCredentials.RUnlock()
 	return calls
 }

@@ -93,6 +93,11 @@ func (s *LLMTemplateSeeder) SeedForOrg(ouID string) error {
 					current.Metadata.OpenapiSpecURL = tpl.Metadata.OpenapiSpecURL
 					updated = true
 				}
+				// Backfill only when absent, so an operator-set auth block survives re-seeding.
+				if current.Metadata.Auth == nil && tpl.Metadata.Auth != nil {
+					current.Metadata.Auth = tpl.Metadata.Auth
+					updated = true
+				}
 			}
 			if current.Name == "" && tpl.Name != "" {
 				current.Name = tpl.Name

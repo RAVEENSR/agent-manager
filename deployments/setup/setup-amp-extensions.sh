@@ -30,7 +30,7 @@ install_thunder_extension() {
 
     # Detect an image mismatch and do a clean uninstall+install so the
     # pre-install setup job re-runs and re-bootstraps the database.
-    local target_image="ghcr.io/thunder-id/thunderid:0.45.0"
+    local target_image="ghcr.io/thunder-id/thunderid:1.0.0"
     local selector="app.kubernetes.io/instance=amp-thunder-extension"
     if helm status amp-thunder-extension -n amp-thunder &>/dev/null; then
         local current_image
@@ -88,12 +88,12 @@ install_evaluation_workflows() {
     # (idempotent) so install order doesn't depend on a workflow having already run.
     kubectl create namespace workflows-default --dry-run=client -o yaml | kubectl apply -f -
 
-    # agent-manager-service runs outside the cluster (docker-compose) in local dev, so it
-    # needs an ipBlock exception to the NetworkPolicy; disable the policy if we can't compute it.
-    local dev_egress_cidr network_policy_enabled
-    dev_egress_cidr=$(docker network inspect "k3d-${CLUSTER_NAME}" \
+    # The k3d node network carries both the API server and the host-published agent-manager-service,
+    # so it is the ipBlock for both NetworkPolicy exceptions; disable the policy if we can't compute it.
+    local node_cidr network_policy_enabled
+    node_cidr=$(docker network inspect "k3d-${CLUSTER_NAME}" \
         --format '{{ (index .IPAM.Config 0).Subnet }}' 2>/dev/null || echo "")
-    if [[ -z "$dev_egress_cidr" ]]; then
+    if [[ -z "$node_cidr" ]]; then
         echo "⚠️  Could not determine k3d docker network subnet for k3d-${CLUSTER_NAME} — disabling"
         echo "   the evaluation-job egress NetworkPolicy for this install so local eval runs keep working."
         network_policy_enabled="false"
@@ -108,8 +108,9 @@ install_evaluation_workflows() {
         --set ampEvaluation.publisher.idpTokenUrl="http://amp-thunder-extension-service.amp-thunder.svc.cluster.local:8090/oauth2/token" \
         --set ampEvaluation.publisher.clientId="amp-publisher-client" \
         --set networkPolicy.evaluationJob.enabled="${network_policy_enabled}" \
-        --set networkPolicy.evaluationJob.devEgress.cidr="${dev_egress_cidr}" \
-        --set networkPolicy.evaluationJob.devEgress.port=8080
+        --set networkPolicy.evaluationJob.devEgress.cidr="${node_cidr}" \
+        --set "networkPolicy.evaluationJob.devEgress.ports={8080,19080}" \
+        --set "networkPolicy.evaluationJob.apiServer.cidrs[0]=${node_cidr}"
     echo "✅ Evaluation Workflows Extension installed/upgraded successfully"
 }
 

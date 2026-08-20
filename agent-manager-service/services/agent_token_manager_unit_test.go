@@ -40,6 +40,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/clientmocks"
 	"github.com/wso2/agent-manager/agent-manager-service/config"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
@@ -132,7 +133,7 @@ func TestAgentTokenManager_GenerateToken_ValidationGates(t *testing.T) {
 		// GetComponent must NOT be reached — leaving the mock unconfigured asserts that.
 		svc := newTokenManager(t, &clientmocks.OpenChoreoClientMock{})
 
-		_, err := svc.GenerateToken(context.Background(), GenerateTokenRequest{
+		_, err := svc.GenerateToken(auditableCtx(t), GenerateTokenRequest{
 			OrgName:     "acme",
 			ProjectName: "proj",
 			AgentName:   "agent",
@@ -153,7 +154,7 @@ func TestAgentTokenManager_GenerateToken_ValidationGates(t *testing.T) {
 		}
 		svc := newTokenManager(t, oc)
 
-		_, err := svc.GenerateToken(context.Background(), GenerateTokenRequest{
+		_, err := svc.GenerateToken(auditableCtx(t), GenerateTokenRequest{
 			OrgName:     "acme",
 			ProjectName: "proj",
 			AgentName:   "agent",
@@ -183,7 +184,7 @@ func TestAgentTokenManager_GenerateToken_ClientErrors(t *testing.T) {
 		}
 		svc := newTokenManager(t, oc)
 
-		_, err := svc.GenerateToken(context.Background(), base)
+		_, err := svc.GenerateToken(auditableCtx(t), base)
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, boom)
@@ -201,7 +202,7 @@ func TestAgentTokenManager_GenerateToken_ClientErrors(t *testing.T) {
 		}
 		svc := newTokenManager(t, oc)
 
-		_, err := svc.GenerateToken(context.Background(), base)
+		_, err := svc.GenerateToken(auditableCtx(t), base)
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, boom)
@@ -224,7 +225,7 @@ func TestAgentTokenManager_GenerateToken_ClientErrors(t *testing.T) {
 		req := base
 		req.ProjectName = "requested-project" // deliberately different from the agent's real project
 
-		resp, err := svc.GenerateToken(context.Background(), req)
+		resp, err := svc.GenerateToken(auditableCtx(t), req)
 
 		require.Error(t, err)
 		assert.Nil(t, resp)
@@ -248,7 +249,7 @@ func TestAgentTokenManager_GenerateToken_ClientErrors(t *testing.T) {
 		}
 		svc := newTokenManager(t, oc)
 
-		resp, err := svc.GenerateToken(context.Background(), base) // base.ProjectName == "proj"
+		resp, err := svc.GenerateToken(auditableCtx(t), base) // base.ProjectName == "proj"
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
@@ -275,7 +276,7 @@ func TestAgentTokenManager_GenerateToken_ClientErrors(t *testing.T) {
 		}
 		svc := newTokenManager(t, oc)
 
-		_, err := svc.GenerateToken(context.Background(), base)
+		_, err := svc.GenerateToken(auditableCtx(t), base)
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, boom)
@@ -318,7 +319,7 @@ func TestAgentTokenManager_GenerateToken_ExpiryValidation(t *testing.T) {
 		req := base
 		req.ExpiresIn = "not-a-duration"
 
-		_, err := svc.GenerateToken(context.Background(), req)
+		_, err := svc.GenerateToken(auditableCtx(t), req)
 
 		assert.ErrorIs(t, err, utils.ErrInvalidInput)
 	})
@@ -328,7 +329,7 @@ func TestAgentTokenManager_GenerateToken_ExpiryValidation(t *testing.T) {
 		req := base
 		req.ExpiresIn = "-5h"
 
-		_, err := svc.GenerateToken(context.Background(), req)
+		_, err := svc.GenerateToken(auditableCtx(t), req)
 
 		assert.ErrorIs(t, err, utils.ErrInvalidInput)
 	})
@@ -338,7 +339,7 @@ func TestAgentTokenManager_GenerateToken_ExpiryValidation(t *testing.T) {
 		req := base
 		req.ExpiresIn = "100000h" // > 10 years
 
-		_, err := svc.GenerateToken(context.Background(), req)
+		_, err := svc.GenerateToken(auditableCtx(t), req)
 
 		assert.ErrorIs(t, err, utils.ErrInvalidInput)
 	})
@@ -357,7 +358,7 @@ func TestAgentTokenManager_GenerateToken_HappyPath(t *testing.T) {
 		ExpiresIn:   "1h",
 	}
 
-	resp, err := svc.GenerateToken(context.Background(), req)
+	resp, err := svc.GenerateToken(auditableCtx(t), req)
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)
@@ -390,7 +391,7 @@ func TestAgentTokenManager_GenerateToken_DefaultExpiry(t *testing.T) {
 	oc := fullClientMock("c", "e", "p")
 	svc := newTokenManager(t, oc)
 
-	resp, err := svc.GenerateToken(context.Background(), GenerateTokenRequest{
+	resp, err := svc.GenerateToken(auditableCtx(t), GenerateTokenRequest{
 		OrgName:     "acme",
 		ProjectName: "proj",
 		AgentName:   "agent",
@@ -430,4 +431,28 @@ func TestAgentTokenManager_GetJWKS(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "JWKS must include the active key-1")
+}
+
+// TestAgentTokenManager_GenerateToken_RefusesWithoutAuditRecorder pins the
+// fail-closed contract for credential issuance.
+//
+// A minted agent token is live credential material. If the trail cannot record
+// who issued it, the token must not be handed back — minting is local and
+// stateless, so refusing here leaves nothing in circulation.
+func TestAgentTokenManager_GenerateToken_RefusesWithoutAuditRecorder(t *testing.T) {
+	oc := fullClientMock("c", "e", "p")
+	svc := newTokenManager(t, oc)
+
+	// A context with no recorder installed stands for a wiring defect.
+	resp, err := svc.GenerateToken(context.Background(), GenerateTokenRequest{
+		OrgName:     "acme",
+		ProjectName: "proj",
+		AgentName:   "agent",
+		Environment: "dev",
+		OrgId:       "org-123",
+	})
+
+	require.Error(t, err, "an unrecordable token issue must be refused")
+	require.ErrorIs(t, err, audit.ErrRecorderUnavailable)
+	assert.Nil(t, resp, "no token may be returned when the issue was not recorded")
 }

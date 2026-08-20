@@ -7,7 +7,54 @@ source "$SCRIPT_DIR/env.sh"
 source "$SCRIPT_DIR/utils.sh"
 
 # ============================================================================
-# Configuration
+# Linux: skip the VM entirely
+# ============================================================================
+# Colima exists to give macOS a Linux Docker daemon. On Linux that daemon is
+# already native, and interposing a VM would strand k3d and docker-compose in a
+# daemon separate from the host's — bind mounts, published ports and
+# host.docker.internal all stop lining up. So on Linux we validate the native
+# daemon and hand straight over to the k3d setup.
+if [ "$(uname -s)" = "Linux" ]; then
+    echo "=== Checking prerequisites ==="
+    check_command docker
+    check_command k3d
+    check_command kubectl
+    check_command helm
+
+    echo ""
+    echo "=== Linux detected — using the native Docker daemon (no Colima VM) ==="
+
+    # Checked before reachability: a stale Colima context makes `docker info`
+    # fail too, and the honest diagnosis is the wrong context rather than a
+    # stopped daemon. Such a context silently points every later docker/k3d
+    # call at a VM daemon while the cluster and compose state live on the
+    # native one.
+    DOCKER_CONTEXT_NAME="$(docker context show)"
+    case "$DOCKER_CONTEXT_NAME" in
+        colima*)
+            echo "❌ Active Docker context is '$DOCKER_CONTEXT_NAME' (a Colima VM)."
+            echo "   On Linux this hides the native daemon from k3d and docker compose."
+            echo "   Switch back with:  docker context use default"
+            exit 1
+            ;;
+    esac
+
+    if ! docker info > /dev/null 2>&1; then
+        echo "❌ Cannot reach the Docker daemon."
+        echo "   Start it with:  sudo systemctl start docker"
+        echo "   If this user has never used Docker:"
+        echo "     sudo usermod -aG docker \$USER   (then log out and back in)"
+        exit 1
+    fi
+
+    echo "✅ Docker is running (context: $DOCKER_CONTEXT_NAME)"
+    echo ""
+    echo "✅ Setup complete! You can now proceed with k3d cluster setup."
+    exit 0
+fi
+
+# ============================================================================
+# Configuration (macOS)
 # ============================================================================
 PROFILE="${1:-dev}"
 COLIMA_CPU="${COLIMA_CPU:-8}"

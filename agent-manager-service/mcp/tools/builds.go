@@ -24,6 +24,7 @@ import (
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/rbac"
 	"github.com/wso2/agent-manager/agent-manager-service/spec"
@@ -93,7 +94,7 @@ func (t *Toolsets) registerBuildTools(server *gomcp.Server, reg *toolRegistry) {
 			"limit":        intProperty(fmt.Sprintf("Optional. Max builds to return (default %d, min %d, max %d).", utils.DefaultLimit, utils.MinLimit, utils.MaxLimit)),
 			"offset":       intProperty(fmt.Sprintf("Optional. Pagination offset (default %d, min %d).", utils.DefaultOffset, utils.MinOffset)),
 		}, []string{"project_name", "agent_name"}),
-	}, listBuilds(t.BuildToolset), rbac.AgentRead)
+	}, audit.ActionAgentRead, listBuilds(t.BuildToolset), rbac.AgentRead)
 
 	addTool(reg, server, &gomcp.Tool{
 		Name: "get_build_details",
@@ -104,7 +105,7 @@ func (t *Toolsets) registerBuildTools(server *gomcp.Server, reg *toolRegistry) {
 			"agent_name":   stringProperty("Required. Agent name that owns the build."),
 			"build_name":   stringProperty("Required. Build name to fetch details for."),
 		}, []string{"project_name", "agent_name", "build_name"}),
-	}, getBuildDetails(t.BuildToolset), rbac.AgentRead)
+	}, audit.ActionAgentRead, getBuildDetails(t.BuildToolset), rbac.AgentRead)
 
 	addTool(reg, server, &gomcp.Tool{
 		Name: "build_agent",
@@ -116,7 +117,7 @@ func (t *Toolsets) registerBuildTools(server *gomcp.Server, reg *toolRegistry) {
 			"agent_name":   stringProperty("Required. Agent name to trigger build for."),
 			"commit_id":    stringProperty("Optional. Commit ID to build. Defaults to latest."),
 		}, []string{"project_name", "agent_name"}),
-	}, buildAgent(t.BuildToolset), rbac.AgentBuild)
+	}, audit.ActionAgentBuild, buildAgent(t.BuildToolset), rbac.AgentBuild)
 }
 
 func listBuilds(handler BuildToolsetHandler) func(context.Context, *gomcp.CallToolRequest, listBuildsInput) (*gomcp.CallToolResult, any, error) {

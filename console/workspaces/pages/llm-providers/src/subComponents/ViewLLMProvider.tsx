@@ -42,6 +42,7 @@ import { LLMProviderAccessControlTab } from "./LLMProviderAccessControlTab";
 import { LLMProviderAPIKeysTab } from "./LLMProviderAPIKeysTab";
 import { LLMProviderConnectionTab } from "./LLMProviderConnectionTab";
 import { LLMProviderConsumersTab } from "./LLMProviderConsumersTab";
+import { LLMProviderDeploymentTab } from "./LLMProviderDeploymentTab";
 import { LLMProviderGuardrailsTab } from "./LLMProviderGuardrailsTab";
 // import { LLMProviderModelsTab } from "./LLMProviderModelsTab";
 import { LLMProviderOverviewTab } from "./LLMProviderOverviewTab";
@@ -54,6 +55,7 @@ import { LLMProviderSecurityTab } from "./LLMProviderSecurityTab";
 const TABS = [
   "Overview",
   "Connection",
+  "Deployment",
   "Access Control",
   "Security",
   "API Keys",
@@ -204,6 +206,9 @@ export const ViewLLMProvider: React.FC = () => {
                   : providerError ? new Error(getErrorMessage(providerError)) : null}
                 onUpdate={updateProvider}
                 isUpdating={isUpdating}
+                onGoToDeploymentTab={() =>
+                  setTabIndex(TABS.indexOf("Deployment"))
+                }
               />
             </TabPanel>
 
@@ -218,8 +223,19 @@ export const ViewLLMProvider: React.FC = () => {
               />
             </TabPanel>
 
-            {/* Access Control tab */}
+            {/* Deployment tab */}
             <TabPanel value={tabIndex} index={2}>
+              <LLMProviderDeploymentTab
+                providerData={providerData}
+                orgName={orgId}
+                isLoading={isLoading}
+                onUpdate={updateProvider}
+                isUpdating={isUpdating}
+              />
+            </TabPanel>
+
+            {/* Access Control tab */}
+            <TabPanel value={tabIndex} index={3}>
               <LLMProviderAccessControlTab
                 providerData={providerData}
                 openapiSpecUrl={openapiSpecUrl}
@@ -230,7 +246,7 @@ export const ViewLLMProvider: React.FC = () => {
             </TabPanel>
 
             {/* Security tab */}
-            <TabPanel value={tabIndex} index={3}>
+            <TabPanel value={tabIndex} index={4}>
               <LLMProviderSecurityTab
                 providerData={providerData}
                 isLoading={isLoading}
@@ -240,7 +256,7 @@ export const ViewLLMProvider: React.FC = () => {
             </TabPanel>
 
             {/* API Keys tab */}
-            <TabPanel value={tabIndex} index={4}>
+            <TabPanel value={tabIndex} index={5}>
               <LLMProviderAPIKeysTab
                 providerData={providerData}
                 orgName={orgId}
@@ -253,7 +269,7 @@ export const ViewLLMProvider: React.FC = () => {
             </TabPanel>
 
             {/* Rate Limiting tab */}
-            <TabPanel value={tabIndex} index={5}>
+            <TabPanel value={tabIndex} index={6}>
               <LLMProviderRateLimitingTab
                 providerData={providerData}
                 openapiSpecUrl={openapiSpecUrl}
@@ -264,7 +280,7 @@ export const ViewLLMProvider: React.FC = () => {
             </TabPanel>
 
             {/* Guardrails tab */}
-            <TabPanel value={tabIndex} index={6}>
+            <TabPanel value={tabIndex} index={7}>
               <LLMProviderGuardrailsTab
                 providerData={providerData}
                 openapiSpecUrl={openapiSpecUrl}
@@ -277,7 +293,7 @@ export const ViewLLMProvider: React.FC = () => {
             </TabPanel>
 
             {/* Consumers tab */}
-            <TabPanel value={tabIndex} index={7}>
+            <TabPanel value={tabIndex} index={8}>
               <LLMProviderConsumersTab
                 orgName={orgId}
                 providerId={providerId}
@@ -285,7 +301,7 @@ export const ViewLLMProvider: React.FC = () => {
             </TabPanel>
 
             {/* Models tab */}
-            {/* <TabPanel value={tabIndex} index={6}>
+            {/* <TabPanel value={tabIndex} index={9}>
               <LLMProviderModelsTab
                 providerData={providerData}
                 isLoading={isLoading}

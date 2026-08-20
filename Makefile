@@ -1,4 +1,4 @@
-.PHONY: help setup setup-colima setup-k3d setup-openchoreo setup-default-env-thunder setup-sandbox setup-gvisor setup-kata setup-platform setup-gateway setup-console-local setup-console-local-force setup-amp teardown-amp reset-amp dev-up dev-down dev-restart dev-rebuild dev-logs dev-migrate openchoreo-up openchoreo-down openchoreo-status teardown db-connect db-logs service-logs service-shell console-logs port-forward stop-port-forward gen-eval-artifacts gen-instrumentation-contract check-contract-drift check-matrix-manifest e2e-test
+.PHONY: help setup setup-colima setup-k3d setup-openchoreo setup-default-env-thunder setup-sandbox setup-gvisor setup-kata setup-platform setup-gateway setup-console-local setup-console-local-force setup-amp teardown-amp reset-amp dev-up dev-down dev-restart dev-rebuild dev-logs dev-migrate openchoreo-up openchoreo-down openchoreo-status thunder-up thunder-down thunder-restart thunder-reset teardown db-connect db-logs service-logs service-shell console-logs port-forward stop-port-forward gen-eval-artifacts gen-instrumentation-contract check-contract-drift check-matrix-manifest e2e-test
 
 # Absolute path to the console directory on the host. Passed to docker-compose
 # so the container mounts and builds at the same path, keeping rush/pnpm
@@ -36,6 +36,12 @@ help:
 	@echo "  make openchoreo-status  - Check OpenChoreo cluster status"
 	@echo "  make port-forward       - Stop and restart all port-forwards (interactive)"
 	@echo "  make stop-port-forward  - Stop all active port-forwards"
+	@echo ""
+	@echo "⚡ Platform Thunder (Control Plane IDP):"
+	@echo "  make thunder-up         - Install or upgrade Platform Thunder"
+	@echo "  make thunder-down       - Uninstall Platform Thunder"
+	@echo "  make thunder-restart    - Restart Platform Thunder pods"
+	@echo "  make thunder-reset      - Reset Platform Thunder (uninstall + PVC wipe + reinstall)"
 	@echo ""
 	@echo "🗄️  Database:"
 	@echo "  make db-connect         - Connect to PostgreSQL"
@@ -265,6 +271,37 @@ openchoreo-status:
 	@echo ""
 	@echo "OpenChoreo Pods:"
 	@kubectl get pods -n openchoreo-system --context kind-openchoreo-local 2>/dev/null || echo "Cluster not accessible"
+
+# Platform Thunder management
+thunder-up:
+	@echo "📦 Installing/Upgrading Platform Thunder (amp-thunder-extension)..."
+	@helm dependency update deployments/helm-charts/wso2-amp-thunder-extension
+	@helm upgrade --install amp-thunder-extension deployments/helm-charts/wso2-amp-thunder-extension \
+		--namespace amp-thunder --create-namespace \
+		--set thunder.bootstrap.agentManagerMcpDevBaseUrl=http://localhost:9000
+	@echo "⏳ Waiting for Platform Thunder deployment..."
+	@kubectl rollout status deployment -n amp-thunder -l app.kubernetes.io/instance=amp-thunder-extension --timeout=120s 2>/dev/null || true
+	@echo "✅ Platform Thunder is up and running!"
+
+thunder-down:
+	@echo "🛑 Uninstalling Platform Thunder (amp-thunder-extension)..."
+	@helm uninstall amp-thunder-extension -n amp-thunder 2>/dev/null || true
+	@kubectl delete job -n amp-thunder -l app.kubernetes.io/instance=amp-thunder-extension --wait --timeout=60s 2>/dev/null || true
+	@echo "✅ Platform Thunder uninstalled"
+
+thunder-restart:
+	@echo "🔄 Restarting Platform Thunder deployment..."
+	@kubectl rollout restart deployment -n amp-thunder -l app.kubernetes.io/instance=amp-thunder-extension 2>/dev/null || true
+	@kubectl rollout status deployment -n amp-thunder -l app.kubernetes.io/instance=amp-thunder-extension --timeout=120s 2>/dev/null || true
+	@echo "✅ Platform Thunder restarted"
+
+thunder-reset:
+	@echo "🧹 Resetting Platform Thunder (uninstall + job/PVC delete + reinstall)..."
+	@helm uninstall amp-thunder-extension -n amp-thunder --wait --timeout=2m 2>/dev/null || true
+	@kubectl delete job -n amp-thunder -l app.kubernetes.io/instance=amp-thunder-extension --wait --timeout=60s 2>/dev/null || true
+	@kubectl delete pvc -n amp-thunder -l app.kubernetes.io/instance=amp-thunder-extension --wait --timeout=60s 2>/dev/null || true
+	@$(MAKE) thunder-up
+	@echo "✅ Platform Thunder reset complete!"
 
 # Port forwarding for OpenChoreo
 PLATFORM   ?=

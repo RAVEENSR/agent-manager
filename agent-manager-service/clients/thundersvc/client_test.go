@@ -18,6 +18,7 @@ package thundersvc
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -45,7 +46,7 @@ func TestNewThunderClientWithDialOverride_UsesOverrideAddress(t *testing.T) {
 	defer server.Close()
 
 	overrideHost := strings.TrimPrefix(server.URL, "http://")
-	client := newThunderClientWithDialOverride("http://unreachable.invalid:9999", "cid", "secret", overrideHost)
+	client := NewThunderClientWithDialOverride("http://unreachable.invalid:9999", "cid", "secret", overrideHost, "http://unreachable.invalid:9999/mcp")
 
 	tc, ok := client.(*thunderClient)
 	require.True(t, ok)
@@ -68,7 +69,7 @@ func TestNewThunderClientWithDialOverride_EmptyOverrideDialsBaseURLDirectly(t *t
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	client := newThunderClientWithDialOverride(server.URL, "cid", "secret", "")
+	client := NewThunderClientWithDialOverride(server.URL, "cid", "secret", "", server.URL+"/mcp")
 
 	tc, ok := client.(*thunderClient)
 	require.True(t, ok)
@@ -80,4 +81,40 @@ func TestNewThunderClientWithDialOverride_EmptyOverrideDialsBaseURLDirectly(t *t
 	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// TestCreateApp_SendsRequiredApplicationType guards against a regression:
+// applications require a "type" field on create, and a POST /applications
+// missing it fails outright. createApp's payload must always include it.
+func TestCreateApp_SendsRequiredApplicationType(t *testing.T) {
+	var gotBody map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("/applications", func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"clientId": "amp-publisher-acme", "clientSecret": "s3cret"})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := NewThunderClient(server.URL, "cid", "secret")
+	tc, ok := client.(*thunderClient)
+	require.True(t, ok)
+
+	clientID, clientSecret, err := tc.createApp(context.Background(), "test-token", "amp-publisher-acme", "ou-1")
+	require.NoError(t, err)
+	assert.Equal(t, "amp-publisher-acme", clientID)
+	assert.Equal(t, "s3cret", clientSecret)
+	assert.Equal(t, "m2m", gotBody["type"], "type is required by ThunderID 1.0.0-alpha2 and must be sent on every application create")
+
+	inboundAuthConfig, ok := gotBody["inboundAuthConfig"].([]any)
+	require.True(t, ok)
+	require.Len(t, inboundAuthConfig, 1)
+	config, ok := inboundAuthConfig[0].(map[string]any)["config"].(map[string]any)
+	require.True(t, ok)
+	clientConfig, ok := config["token"].(map[string]any)["accessToken"].(map[string]any)["clientConfig"].(map[string]any)
+	require.True(t, ok)
+	assert.ElementsMatch(t, []any{"ouId", "ouHandle"}, clientConfig["attributes"],
+		"clientConfig.attributes must opt this client_credentials app into ouId/ouHandle token claims, or RequireOrgMatch rejects its tokens as missing ou identity")
 }

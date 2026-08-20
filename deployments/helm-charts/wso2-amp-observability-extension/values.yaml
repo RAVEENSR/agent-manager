@@ -42,11 +42,13 @@ amObserver:
     defaultNamespace: "default"
   # JWT authentication — must match the agent-manager keyManager config so the
   # same user token issued by Thunder is accepted by both services. Thunder
-  # (v0.45+) stamps the resource-server identifier "amp" as the token audience,
-  # so query tokens (console/CLI) carry aud=amp. The agent-manager-service's own
+  # stamps the resource-server identifier as the token audience, so query tokens
+  # (console/CLI) carry aud=urn:wso2:amp — the amp resource server's identifier,
+  # which must stay in sync with 60-amp-resource-server.yaml in the Thunder
+  # extension chart. The agent-manager-service's own
   # amp-api-client client-credentials token (used for the monitor-run-logs
   # server-to-server call) requests the full amp:* scope set and resolves to the
-  # same "amp" resource-server audience; "amp-api-client" is listed too as a
+  # same resource-server audience; "amp-api-client" is listed too as a
   # defensive fallback for any client-credentials request that carries no scope
   # (in which case Thunder falls back to the client ID as the audience).
   # Publisher tokens (aud amp-publisher-*) are matched by a separate regex in
@@ -70,12 +72,11 @@ amObserver:
     # agentManagerService.config.keyManager.issuer — otherwise every traces
     # request 401s with "invalid issuer".
     issuer: "http://thunder.amp.localhost:8080"
-    audience: "amp,amp-api-client,am-obs-mcp"
+    audience: "urn:wso2:amp,amp-api-client,am-obs-mcp"
     # Enables scope-based authorization on the observer REST data routes.
     # Mirrors agent-manager-service's rbacEnabled. MUST stay a quoted string:
     # Helm's `default` treats boolean false as unset, which would make the
-    # kill-switch impossible to turn off (see wso2-agent-manager/values.yaml:134
-    # for the same convention).
+    # kill-switch impossible to turn off.
     rbacEnabled: "true"
   # Externally reachable base URL of this service.
   # Used as the `resource` identifier in RFC 9728 protected resource metadata

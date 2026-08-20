@@ -82,6 +82,14 @@ export function getGatewayControlPlaneUrl(): string {
   return url || DEFAULT_GATEWAY_CONTROL_PLANE_URL;
 }
 
+const DEFAULT_AGENT_MANAGER_URL = "http://api.amp.localhost:8080";
+
+/** Slash stripped because the scripts append /api/v1. */
+export function getAgentManagerUrl(): string {
+  const url = globalConfig.apiBaseUrl?.trim().replace(/\/+$/, "");
+  return url || DEFAULT_AGENT_MANAGER_URL;
+}
+
 export function getGatewayEnvFile(): string {
   return `wso2apip-ai-gateway-${getGatewayVersionHelm()}/configs/keys.env`;
 }

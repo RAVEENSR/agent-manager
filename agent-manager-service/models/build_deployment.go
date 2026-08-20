@@ -29,6 +29,12 @@ type DeploymentResponse struct {
 	PromotionTargetEnvironment *PromotionTargetEnvironment `json:"promotionTargetEnvironment,omitempty"`
 	LastDeployedAt             *time.Time                  `json:"lastDeployedAt,omitempty"`
 	Endpoints                  []Endpoint                  `json:"endpoints"`
+	// KindVersion is the published Agent Kind version whose image this deployment
+	// runs, resolved from ImageId. It is per-environment and reflects what is
+	// actually deployed, unlike the component's creation-time kind-version label,
+	// which does not move when an agent is redeployed on a newer version. Empty
+	// for source-built agents and when the image matches no published version.
+	KindVersion string `json:"kindVersion,omitempty"`
 }
 
 // PromotionTargetEnvironment represents environment promotion targets

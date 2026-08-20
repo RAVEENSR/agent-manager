@@ -29,6 +29,57 @@ echo ""
 # CORE COMPONENTS (Required)
 # ============================================================================
 
+# Helm does NOT update a chart's crds/ directory on `helm upgrade` — only on the
+# first install.
+sync_chart_crds() {
+    local chart="$1"
+    local tmp rc=0
+    if ! tmp="$(mktemp -d)"; then
+        echo "❌ Failed to create temp dir for ${chart} CRD synchronization" >&2
+        return 1
+    fi
+    _sync_chart_crds_body "$chart" "$tmp" || rc=$?
+    rm -rf "$tmp"
+    return "$rc"
+}
+
+_sync_chart_crds_body() {
+    local chart="$1"
+    local tmp="$2"
+    if ! helm pull "oci://ghcr.io/openchoreo/helm-charts/${chart}" \
+        --version "${OPENCHOREO_VERSION}" --untar --untardir "$tmp" >/dev/null 2>&1; then
+        echo "❌ Failed to download ${chart} chart for CRD synchronization" >&2
+        return 1
+    fi
+    if compgen -G "$tmp/${chart}/crds/*.yaml" >/dev/null; then
+        echo "   Syncing ${chart} CRDs to ${OPENCHOREO_VERSION} (helm upgrade does not update crds/)..."
+        if ! kubectl apply --server-side --force-conflicts -f "$tmp/${chart}/crds/" >/dev/null; then
+            echo "❌ Failed to apply ${chart} CRDs" >&2
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# verify_agent_logs prints a plane's cluster-agent logs as a post-setup sanity
+# check.
+verify_agent_logs() {
+    local ns="$1"
+    local out
+    if out=$(kubectl logs -n "$ns" -l app=cluster-agent --tail=10 2>&1); then
+        echo "$out"
+        return 0
+    fi
+    if printf '%s' "$out" | grep -qiE "ContainerCreating|waiting to start|PodInitializing"; then
+        echo "⚠️  cluster-agent logs not available yet in ${ns} (pod still starting):"
+        printf '   %s\n' "$out"
+        return 0
+    fi
+    echo "❌ Failed to read cluster-agent logs in ${ns}:" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+}
+
 # Function to install Control Plane
 install_control_plane() {
     echo "📦 Installing/Upgrading OpenChoreo Control Plane..."
@@ -38,6 +89,10 @@ install_control_plane() {
     # with a clean field manager state. Prevents Apply/Update operation splits that
     # cause 'conflict with helm' errors on repeated setup runs.
     kubectl delete configmap openchoreo-api-config -n openchoreo-control-plane &>/dev/null || true
+
+    # Apply CRDs before the upgrade so new/changed kinds are registered before the
+    # controllers start (helm upgrade skips crds/). No-op on a clean first install.
+    sync_chart_crds openchoreo-control-plane
 
     local install_output
     if ! install_output=$(helm upgrade --install openchoreo-control-plane oci://ghcr.io/openchoreo/helm-charts/openchoreo-control-plane \
@@ -66,7 +121,8 @@ install_control_plane() {
     echo "⏳ Waiting for Control Plane deployments to be ready (timeout: 5 minutes)..."
     kubectl wait -n openchoreo-control-plane --for=condition=available --timeout=300s deployment --all
 
-    # ThunderID v0.45.0 uses 'client_id' (not 'sub') for client_credentials tokens.
+    # Thunder's client_credentials tokens carry the subject as 'client_id', not the
+    # 'sub' OpenChoreo's own service-account entitlement claim mapping defaults to.
     # The Helm chart schema doesn't expose this setting, so patch the configmap using
     # server-side apply (Apply operation) to stay compatible with Helm's field manager.
     echo "🔧 Patching openchoreo-api-config: service_account entitlement claim → client_id..."
@@ -149,7 +205,9 @@ install_data_plane() {
     echo ""
     echo "🔍 Verifying DataPlane..."
     kubectl get clusterdataplane -n default
-    kubectl logs -n openchoreo-data-plane -l app=cluster-agent --tail=10
+    # Non-fatal: a freshly-rolled agent pod may still be ContainerCreating, which
+    # makes `kubectl logs` return BadRequest and abort the script under `set -e`.
+    verify_agent_logs openchoreo-data-plane
     echo "✅ OpenChoreo Data Plane registered and verified"
 }
 
@@ -186,7 +244,7 @@ install_workflow_plane() {
     echo ""
     echo "🔍 Verifying WorkflowPlane ..."
     kubectl get clusterworkflowplane -n default
-    kubectl logs -n openchoreo-workflow-plane -l app=cluster-agent --tail=10
+    verify_agent_logs openchoreo-workflow-plane
     echo "✅ OpenChoreo Workflow Plane ready"
 }
 
@@ -207,6 +265,8 @@ install_observability_plane() {
 
     echo "   This may take up to 15 minutes..."
     kubectl apply -f ${PROJECT_ROOT}/deployments/values/oc-collector-configmap.yaml -n openchoreo-observability-plane
+    # Apply CRDs before the upgrade (helm upgrade skips crds/). No-op on first install.
+    sync_chart_crds openchoreo-observability-plane
     helm upgrade --install openchoreo-observability-plane oci://ghcr.io/openchoreo/helm-charts/openchoreo-observability-plane \
     --version ${OPENCHOREO_VERSION} \
     --namespace openchoreo-observability-plane \
@@ -341,7 +401,7 @@ install_observability_plane() {
     echo ""
     echo "🔍 Verifying ObservabilityPlane ..."
     kubectl get observabilityplane -n default
-    kubectl logs -n openchoreo-observability-plane -l app=cluster-agent --tail=10
+    verify_agent_logs openchoreo-observability-plane
     echo "✅ OpenChoreo Observability Plane ready"
 }
 

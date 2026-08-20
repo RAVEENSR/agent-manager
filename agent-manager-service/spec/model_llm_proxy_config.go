@@ -28,9 +28,10 @@ type LLMProxyConfig struct {
 	// Virtual host
 	Vhost *string `json:"vhost,omitempty"`
 	// Provider reference
-	Provider *string         `json:"provider,omitempty"`
-	Policies []LLMPolicy     `json:"policies,omitempty"`
-	Security *SecurityConfig `json:"security,omitempty"`
+	Provider   *string         `json:"provider,omitempty"`
+	Resilience *Resilience     `json:"resilience,omitempty"`
+	Policies   []LLMPolicy     `json:"policies,omitempty"`
+	Security   *SecurityConfig `json:"security,omitempty"`
 }
 
 // NewLLMProxyConfig instantiates a new LLMProxyConfig object
@@ -210,6 +211,38 @@ func (o *LLMProxyConfig) SetProvider(v string) {
 	o.Provider = &v
 }
 
+// GetResilience returns the Resilience field value if set, zero value otherwise.
+func (o *LLMProxyConfig) GetResilience() Resilience {
+	if o == nil || IsNil(o.Resilience) {
+		var ret Resilience
+		return ret
+	}
+	return *o.Resilience
+}
+
+// GetResilienceOk returns a tuple with the Resilience field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *LLMProxyConfig) GetResilienceOk() (*Resilience, bool) {
+	if o == nil || IsNil(o.Resilience) {
+		return nil, false
+	}
+	return o.Resilience, true
+}
+
+// HasResilience returns a boolean if a field has been set.
+func (o *LLMProxyConfig) HasResilience() bool {
+	if o != nil && !IsNil(o.Resilience) {
+		return true
+	}
+
+	return false
+}
+
+// SetResilience gets a reference to the given Resilience and assigns it to the Resilience field.
+func (o *LLMProxyConfig) SetResilience(v Resilience) {
+	o.Resilience = &v
+}
+
 // GetPolicies returns the Policies field value if set, zero value otherwise.
 func (o *LLMProxyConfig) GetPolicies() []LLMPolicy {
 	if o == nil || IsNil(o.Policies) {
@@ -298,6 +331,9 @@ func (o LLMProxyConfig) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.Provider) {
 		toSerialize["provider"] = o.Provider
+	}
+	if !IsNil(o.Resilience) {
+		toSerialize["resilience"] = o.Resilience
 	}
 	if !IsNil(o.Policies) {
 		toSerialize["policies"] = o.Policies

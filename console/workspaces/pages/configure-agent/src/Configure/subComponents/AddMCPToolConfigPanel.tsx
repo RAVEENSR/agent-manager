@@ -46,17 +46,18 @@ import { absoluteRouteMap } from "@agent-management-platform/types";
 import {
   useCreateAgentMCPConfig,
   useGetAgent,
-  useGetMCPProxy,
   useListAgentMCPConfigs,
   useListMCPProxies,
 } from "@agent-management-platform/api-client";
-import { usePipelineEnvironmentsState } from "@agent-management-platform/shared-component";
-import { ConfigNameSection } from "./ConfigNameSection";
-import { EnvironmentVariablesReference } from "./EnvironmentVariablesReference";
-import { MCPServerDisplay } from "./MCPServerDisplay";
-import { AGENTID_ENV_VAR_ROWS } from "../../ViewMCPServer.Component";
 import {
-  ENV_VAR_KEYS,
+  AGENTID_ENV_VAR_ROWS,
+  EnvironmentVariablesReference,
+  usePipelineEnvironmentsState,
+  useMCPProxySecurity,
+} from "@agent-management-platform/shared-component";
+import { ConfigNameSection } from "./ConfigNameSection";
+import { MCPServerDisplay } from "./MCPServerDisplay";
+import {
   generateEnvVarNames,
   generateUniqueConfigName,
   type EnvVarKey,
@@ -140,22 +141,26 @@ export function AddMCPToolConfigPanel({
     [servers, selectedProxyId],
   );
 
-  // The list item has no security info, so fetch the full proxy to get it.
-  const { data: selectedProxyDetails } = useGetMCPProxy({
+  // The list item has no security info, so the hook fetches the full proxy. No
+  // environmentUuid is passed on purpose: this proxy maps to every environment at
+  // once, so the hook's every-endpoint rule applies and a mixed-security proxy
+  // keeps both fields.
+  const {
+    authenticationType,
+    usesIdentitySecurity,
+    spec,
+    isLoading: isSecurityLoading,
+    isResolved: isSecurityResolved,
+  } = useMCPProxySecurity({
     orgName: orgId,
-    proxyId: selectedProxyId ?? "",
+    proxyId: selectedProxyId,
   });
-
-  // No single environment to check security against (this proxy maps to all at once).
-  // Hide apikey only when every endpoint uses OAuth, so mixed security keeps both fields.
-  const proxyEndpoints = selectedProxyDetails?.endpoints ?? [];
-  const usesIdentitySecurity =
-    proxyEndpoints.length > 0 &&
-    proxyEndpoints.every((endpoint) => endpoint.security?.identity?.enabled === true);
-  const relevantEnvVarKeys: EnvVarKey[] = useMemo(
-    () => (usesIdentitySecurity ? ["url"] : [...ENV_VAR_KEYS]),
-    [usesIdentitySecurity],
-  );
+  // A failed fetch reports "" (unsecured), which is indistinguishable from a
+  // genuinely open endpoint — acting on it would drop an API key variable the
+  // agent needs. Hold the section until the answer is real.
+  const isSecurityUnknown = !isSecurityLoading && !isSecurityResolved;
+  const isSecurityPending = isSecurityLoading || isSecurityUnknown;
+  const relevantEnvVarKeys: EnvVarKey[] = spec.editableKeys;
 
   const filteredServers = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -277,7 +282,11 @@ export function AddMCPToolConfigPanel({
     Boolean(selectedProxyId) &&
     !createConfig.isPending &&
     !isLoadingEnvironments &&
-    environments.length > 0;
+    environments.length > 0 &&
+    // Saving before the proxy's security resolves would write whichever env vars
+    // the unknown default implies (issue #1597). External agents get no env vars
+    // at all, so they are unaffected.
+    (isExternal || !isSecurityPending);
 
   return (
     <DrawerWrapper open={open} onClose={onClose} minWidth={740}>
@@ -417,7 +426,26 @@ export function AddMCPToolConfigPanel({
                 placeholder="my-mcp-configuration"
               />
 
-              {!isExternal ? (
+              {!isExternal && isSecurityUnknown ? (
+                <Form.Section>
+                  <Form.Subheader>Environment Variable Names</Form.Subheader>
+                  <Alert severity="error">
+                    Couldn&apos;t load this MCP server&apos;s security settings, so
+                    the runtime variables it needs are unknown. Reselect the server
+                    or retry once it is reachable — saving now could leave the agent
+                    without a credential it needs.
+                  </Alert>
+                </Form.Section>
+              ) : null}
+
+              {!isExternal && isSecurityLoading ? (
+                <Form.Section>
+                  <Form.Subheader>Environment Variable Names</Form.Subheader>
+                  <Skeleton variant="rounded" height={120} />
+                </Form.Section>
+              ) : null}
+
+              {!isExternal && !isSecurityPending ? (
                 <Form.Section>
                   <Form.Subheader>Environment Variable Names</Form.Subheader>
                   <Typography
@@ -425,9 +453,11 @@ export function AddMCPToolConfigPanel({
                     color="text.secondary"
                     sx={{ mb: 2 }}
                   >
-                    {usesIdentitySecurity
+                    {authenticationType === "identity"
                       ? "Your agent still needs this tool's URL, even with OAuth. Shared across all environments; edit only if your code uses a different name."
-                      : "These names are shared across all environments. The platform injects the MCP server URL and API key values at runtime per environment (empty in environments the proxy is not configured for). Edit only if your code uses different names."}
+                      : authenticationType === ""
+                        ? "This MCP server is unsecured, so your agent needs only its URL. Shared across all environments; edit only if your code uses a different name."
+                        : "These names are shared across all environments. The platform injects the MCP server URL and API key values at runtime per environment (empty in environments the proxy is not configured for). Edit only if your code uses different names."}
                   </Typography>
                   <ListingTable.Container>
                     <ListingTable density="compact">

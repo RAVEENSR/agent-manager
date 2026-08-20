@@ -24,6 +24,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
+	"sync"
 
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/logger"
 	"github.com/wso2/agent-manager/agent-manager-service/rbac"
@@ -32,6 +35,8 @@ import (
 //go:generate moq -rm -fmt goimports -skip-ensure -pkg clientmocks -out ../clientmocks/identity_client_mock.go . IdentityClient:IdentityClientMock
 
 // IdentityClient provides user, group, and role management operations via the Thunder API.
+//
+//go:generate moq -rm -fmt goimports -skip-ensure -pkg clientmocks -out ../clientmocks/identity_client_mock.go . IdentityClient:IdentityClientMock
 type IdentityClient interface {
 	// Users
 	ListUsers(ctx context.Context, offset, limit int) ([]ThunderUser, int, error)
@@ -39,6 +44,11 @@ type IdentityClient interface {
 	GetUser(ctx context.Context, userID string) (*ThunderUser, error)
 	CreateUser(ctx context.Context, req CreateUserRequest) (*ThunderUser, error)
 	UpdateUser(ctx context.Context, userID string, req UpdateUserRequest) (*ThunderUser, error)
+	// UpdateUserCredentials changes a user's password via Thunder's dedicated credential
+	// endpoint (POST /users/{id}/update-credentials). Thunder rejects a password field
+	// inside a regular UpdateUser call with USR-1028 "Credential update not allowed" —
+	// credential changes are only accepted through this separate endpoint.
+	UpdateUserCredentials(ctx context.Context, userID, password string) error
 	DeleteUser(ctx context.Context, userID string) error
 	GetUserGroups(ctx context.Context, userID string) ([]ThunderGroup, error)
 	GetUserRoles(ctx context.Context, userID string) ([]ThunderRole, error)
@@ -94,14 +104,25 @@ type IdentityClient interface {
 	// Permissions catalog
 	ListAMPPermissions(ctx context.Context) ([]ThunderPermission, string, error)
 	// EnsureProxyResourceServer makes sure the proxy's resource server exists
-	// (handle = identifier = proxyHandle, delimiter ":", type MCP) with every
-	// given action registered at the RS root, and returns the RS ID.
-	EnsureProxyResourceServer(ctx context.Context, proxyHandle, displayName string, actions []string) (string, error)
-	// DeleteProxyResourceServerAction best-effort deletes one root action.
-	// Missing RS or action is not an error. Returns the RS ID ("" if RS absent).
+	// (handle = proxyHandle, identifier = the proxy's public invocation URI in
+	// this environment, delimiter ":", type MCP), that its permission-anchor
+	// resource exists (handle = proxyHandle), and every given action is
+	// registered under that resource, then returns the RS ID. Anchoring under
+	// a resource (rather than registering actions at the RS root) is required
+	// for Thunder to derive a "<proxyHandle>:<action>" permission string — see
+	// ensureProxyResource's doc comment for why. The identifier must be an
+	// RFC 8707 absolute URI; it is normalized into canonical form (lowercased
+	// host, default port and trailing slash stripped), so non-canonical input
+	// is accepted, not rejected. A drifted identifier is updated in place; the
+	// handle never changes.
+	EnsureProxyResourceServer(ctx context.Context, proxyHandle, displayName, identifier string, actions []string) (string, error)
+	// DeleteProxyResourceServerAction best-effort deletes one action from the
+	// proxy's permission-anchor resource. Missing RS, anchor resource, or
+	// action is not an error. Returns the RS ID ("" if RS absent).
 	DeleteProxyResourceServerAction(ctx context.Context, proxyHandle, action string) (string, error)
-	// DeleteProxyResourceServer deletes every root action, then the RS itself
-	// (Thunder blocks RS deletion while actions exist). Missing RS is not an error.
+	// DeleteProxyResourceServer deletes every action under the proxy's
+	// permission-anchor resource, then that resource, then the RS itself
+	// (Thunder blocks deletion while children exist). Missing RS is not an error.
 	DeleteProxyResourceServer(ctx context.Context, proxyHandle string) error
 
 	// Organization units
@@ -111,13 +132,30 @@ type IdentityClient interface {
 
 // NewIdentityClient creates a Thunder client for identity management operations.
 // It shares the same transport and token-caching as ThunderClient.
+// baseURL is the platform Thunder public/issuer URL, so it also derives the System
+// resource indicator used to obtain system-scoped tokens for the admin identity APIs.
 func NewIdentityClient(baseURL, clientID, clientSecret string) IdentityClient {
 	return &thunderClient{
-		baseURL:      baseURL,
-		clientID:     clientID,
-		clientSecret: clientSecret,
-		httpClient:   &http.Client{Timeout: httpClientTimeout},
+		baseURL:        baseURL,
+		clientID:       clientID,
+		clientSecret:   clientSecret,
+		systemResource: SystemResourceIdentifier(baseURL),
+		httpClient:     &http.Client{Timeout: httpClientTimeout},
 	}
+}
+
+// NewIdentityClientWithDialOverride creates a Thunder identity client that dials
+// resolveToHost instead of baseURL's own host, while still using baseURL for the
+// HTTP Host header and to derive the System resource server identifier (see
+// SystemResourceIdentifier). Needed when baseURL is Thunder's public/issuer URL
+// (required, since that's the only identifier Thunder's System resource server is
+// registered under) but that hostname isn't directly dialable from this process —
+// e.g. agent-manager-service running in-cluster while Thunder's public URL only
+// resolves via the host machine's own DNS/hosts setup. An empty resolveToHost
+// behaves exactly like NewIdentityClient.
+func NewIdentityClientWithDialOverride(baseURL, clientID, clientSecret, resolveToHost string) IdentityClient {
+	c := NewThunderClientWithDialOverride(baseURL, clientID, clientSecret, resolveToHost, SystemResourceIdentifier(baseURL))
+	return c.(IdentityClient)
 }
 
 // --- Users ---
@@ -186,6 +224,19 @@ func (c *thunderClient) UpdateUser(ctx context.Context, userID string, req Updat
 		return nil, fmt.Errorf("thunder update user decode: %w", err)
 	}
 	return &user, nil
+}
+
+func (c *thunderClient) UpdateUserCredentials(ctx context.Context, userID, password string) error {
+	token, err := c.getSystemToken(ctx)
+	if err != nil {
+		return err
+	}
+	req := UpdateUserCredentialsRequest{Credentials: map[string]string{"password": password}}
+	_, err = c.doRequest(ctx, http.MethodPost, c.baseURL+"/users/"+userID+"/update-credentials", token, req)
+	if err != nil {
+		return fmt.Errorf("thunder update user credentials: %w", err)
+	}
+	return nil
 }
 
 func (c *thunderClient) DeleteUser(ctx context.Context, userID string) error {
@@ -649,6 +700,15 @@ func (c *thunderClient) GetAgentGroups(ctx context.Context, ouID, agentID string
 // only role with this name in the default OU is the native one.
 const NativeAdministratorRoleName = "Administrator"
 
+// AMPSystemClientRoleName is the role env-Thunder's own bootstrap seeds (see
+// add-environment-thunder.sh's render_system_client_role) to grant the
+// amp-system-client app Thunder's "system" scope — infrastructure the agent-manager
+// backend uses to provision per-agent OAuth apps, not something an operator manages
+// through agent identities. Hidden the same way and for the same reason as
+// NativeAdministratorRoleName: it must never surface as an assignable agent-identity
+// role, since agents/groups are the only things this API is meant to expose.
+const AMPSystemClientRoleName = "AMP System Client Thunder Admin"
+
 // ListRoles returns roles scoped to ouID when non-empty, by fetching all pages
 // from Thunder and filtering client-side (Thunder has no OU-scoped list endpoint for roles).
 func (c *thunderClient) ListRoles(ctx context.Context, ouID string, offset, limit int) ([]ThunderRole, int, error) {
@@ -685,9 +745,9 @@ func (c *thunderClient) ListRoles(ctx context.Context, ouID string, offset, limi
 		for _, role := range wrapped.Roles {
 			// The exclusion happens before the client-side pagination below so
 			// offset/limit/total stay consistent. The unfiltered ouID=="" branch
-			// above deliberately keeps the native role: rolesForAssignee and the
+			// above deliberately keeps both hidden roles: rolesForAssignee and the
 			// scope-cleanup sweep must still see every role in the instance.
-			if role.OuID == ouID && role.Name != NativeAdministratorRoleName {
+			if role.OuID == ouID && role.Name != NativeAdministratorRoleName && role.Name != AMPSystemClientRoleName {
 				all = append(all, role)
 			}
 		}
@@ -949,16 +1009,18 @@ func (c *thunderClient) RemoveRoleAssignees(ctx context.Context, roleID string, 
 
 // --- Permissions catalog ---
 
-// ListAMPPermissions returns all permissions registered under the "amp" resource server.
-// It returns the permissions as strings (e.g. "amp:agents:create") and the resource server ID.
+// ListAMPPermissions returns all permissions registered under the "amp" resource
+// server (each entry's Name is the scope string, e.g. "amp:agents:create") and
+// the resource server ID.
 func (c *thunderClient) ListAMPPermissions(ctx context.Context) ([]ThunderPermission, string, error) {
 	token, err := c.getSystemToken(ctx)
 	if err != nil {
 		return nil, "", err
 	}
 
-	// Find the "amp" resource server.
-	ampRSID, err := c.findResourceServerID(ctx, token, rbac.ResourceServer)
+	// Find the "amp" resource server by its Thunder IDENTIFIER (a different field/value
+	// than rbac.ResourceServer, the scope-string prefix — see ResourceServerIdentifier's doc comment).
+	ampRSID, err := c.findResourceServerID(ctx, token, rbac.ResourceServerIdentifier)
 	if err != nil {
 		return nil, "", err
 	}
@@ -967,30 +1029,34 @@ func (c *thunderClient) ListAMPPermissions(ctx context.Context) ([]ThunderPermis
 		return []ThunderPermission{}, "", nil
 	}
 
-	// Fetch all resources for the amp resource server using pagination.
-	const resPageSize = 20
-	var resources []ThunderResource
-	resOffset := 0
-	for {
-		resURL := fmt.Sprintf("%s/resource-servers/%s/resources?offset=%d&limit=%d", c.baseURL, ampRSID, resOffset, resPageSize)
-		resBody, err := c.doRequest(ctx, http.MethodGet, resURL, token, nil)
+	// Fetch every resource under the amp resource server. GET .../resources
+	// without parentId only returns TOP-LEVEL resources — despite Thunder's own
+	// handler comment claiming it returns "all resources" when parentId is
+	// omitted, it does not: every actual AMP permission resource (org, profile,
+	// project, ...) lives one level below the "amp" anchor resource (see
+	// amp-thunder-bootstrap.yaml's "Top-level parent for every resource below"
+	// comment), so each top-level resource's children must be fetched
+	// explicitly via parentId or they're silently missing from this list —
+	// which is exactly why the permission-assignment UI showed an empty list.
+	topLevel, err := c.listResources(ctx, token, ampRSID, "")
+	if err != nil {
+		return nil, "", fmt.Errorf("thunder list amp resources: %w", err)
+	}
+	resources := append([]ThunderResource{}, topLevel...)
+	for _, top := range topLevel {
+		children, err := c.listResources(ctx, token, ampRSID, top.ID)
 		if err != nil {
-			return nil, "", fmt.Errorf("thunder list amp resources: %w", err)
+			return nil, "", fmt.Errorf("thunder list amp resource children for %q: %w", top.Handle, err)
 		}
-		var page thunderResourceList
-		if err := json.Unmarshal(resBody, &page); err != nil {
-			return nil, "", fmt.Errorf("thunder list amp resources decode: %w", err)
-		}
-		resources = append(resources, page.Resources...)
-		resOffset += len(page.Resources)
-		if resOffset >= page.TotalResults || len(page.Resources) == 0 {
-			break
-		}
+		resources = append(resources, children...)
 	}
 
 	// For each resource fetch its actions via the dedicated endpoint.
 	// Actions are not embedded in the resource list response.
-	var perms []ThunderPermission
+	// Non-nil even when empty: an all-zero-actions result (e.g. amp exists but
+	// has no children yet) must serialize as "permissions": [] to API callers,
+	// not null, matching the RS-not-found early return above.
+	perms := []ThunderPermission{}
 	for _, res := range resources {
 		actURL := fmt.Sprintf("%s/resource-servers/%s/resources/%s/actions", c.baseURL, ampRSID, res.ID)
 		actBody, err := c.doRequest(ctx, http.MethodGet, actURL, token, nil)
@@ -1018,40 +1084,98 @@ func (c *thunderClient) ListAMPPermissions(ctx context.Context) ([]ThunderPermis
 	return perms, ampRSID, nil
 }
 
-// findResourceServerID paginates through resource servers and returns the ID of
-// the one whose identifier matches, or "" if none match.
-func (c *thunderClient) findResourceServerID(ctx context.Context, token, identifier string) (string, error) {
+// listResources paginates through a resource server's resources and returns
+// them all. When parentID is "", it lists top-level resources (Thunder's
+// listing endpoint does not descend into children by default); pass a
+// resource's ID to fetch that resource's direct children instead. Used by
+// ListAMPPermissions to descend into the "amp" anchor resource's children.
+func (c *thunderClient) listResources(ctx context.Context, token, rsID, parentID string) ([]ThunderResource, error) {
+	const resPageSize = 20
+	var resources []ThunderResource
+	offset := 0
+	for {
+		url := fmt.Sprintf("%s/resource-servers/%s/resources?offset=%d&limit=%d", c.baseURL, rsID, offset, resPageSize)
+		if parentID != "" {
+			url += "&parentId=" + parentID
+		}
+		body, err := c.doRequest(ctx, http.MethodGet, url, token, nil)
+		if err != nil {
+			return nil, err
+		}
+		var page thunderResourceList
+		if err := json.Unmarshal(body, &page); err != nil {
+			return nil, fmt.Errorf("decode: %w", err)
+		}
+		resources = append(resources, page.Resources...)
+		offset += len(page.Resources)
+		if offset >= page.TotalResults || len(page.Resources) == 0 {
+			break
+		}
+	}
+	return resources, nil
+}
+
+// findResourceServer paginates through resource servers and returns the first
+// one match accepts, or nil if none match.
+func (c *thunderClient) findResourceServer(ctx context.Context, token string, match func(*ThunderResourceServer) bool) (*ThunderResourceServer, error) {
 	const rsPageSize = 20
 	rsOffset := 0
 	for {
 		rsURL := fmt.Sprintf("%s/resource-servers?offset=%d&limit=%d", c.baseURL, rsOffset, rsPageSize)
 		rsBody, err := c.doRequest(ctx, http.MethodGet, rsURL, token, nil)
 		if err != nil {
-			return "", fmt.Errorf("thunder list resource servers: %w", err)
+			return nil, fmt.Errorf("thunder list resource servers: %w", err)
 		}
 		var page thunderResourceServerList
 		if err := json.Unmarshal(rsBody, &page); err != nil {
-			return "", fmt.Errorf("thunder list resource servers decode: %w", err)
+			return nil, fmt.Errorf("thunder list resource servers decode: %w", err)
 		}
-		for _, rs := range page.ResourceServers {
-			if rs.Identifier == identifier {
-				return rs.ID, nil
+		for i := range page.ResourceServers {
+			if match(&page.ResourceServers[i]) {
+				return &page.ResourceServers[i], nil
 			}
 		}
 		rsOffset += len(page.ResourceServers)
-		if rsOffset >= page.Total || len(page.ResourceServers) == 0 {
-			return "", nil
+		if rsOffset >= page.TotalResults || len(page.ResourceServers) == 0 {
+			return nil, nil //nolint:nilnil // absent resource server is not an error
 		}
 	}
+}
+
+// findResourceServerID returns the ID of the RS whose identifier matches, or "".
+// Still used for the platform AMP resource server lookup (rbac.ResourceServerIdentifier).
+func (c *thunderClient) findResourceServerID(ctx context.Context, token, identifier string) (string, error) {
+	rs, err := c.findResourceServer(ctx, token, func(rs *ThunderResourceServer) bool { return rs.Identifier == identifier })
+	if err != nil || rs == nil {
+		return "", err
+	}
+	return rs.ID, nil
+}
+
+// findProxyResourceServer locates a proxy's RS by its stable handle, or by its
+// exact current identifier when the caller has one. Thunder's resource servers
+// carry no handle of their own (only their child resources/actions do), so the
+// handle check and the bare-handle identifier fallback below only ever match a
+// pre-migration row created before identifiers switched to invocation URIs;
+// the identifier check is what actually finds a proxy's RS day to day.
+func (c *thunderClient) findProxyResourceServer(ctx context.Context, token, proxyHandle, identifier string) (*ThunderResourceServer, error) {
+	return c.findResourceServer(ctx, token, func(rs *ThunderResourceServer) bool {
+		if identifier != "" && rs.Identifier == identifier {
+			return true
+		}
+		return rs.Handle == proxyHandle || (rs.Handle == "" && rs.Identifier == proxyHandle)
+	})
 }
 
 // --- Per-proxy resource servers ---
 
 const (
-	// proxyResourceServerDelimiter joins the resource server's handle with a root
-	// action's handle to derive that action's permission. The scope string is
-	// "<proxy-handle>:<action>", so with handle = proxyHandle the derived permission
-	// equals the scope exactly. Proxy handles are kebab-case and never contain ":".
+	// proxyResourceServerDelimiter joins a resource/action's own handle with its
+	// parent's already-composed permission to derive its permission. The scope
+	// string is "<proxy-handle>:<action>": anchoring every action under the
+	// proxyHandle-named resource created by ensureProxyResource reproduces that
+	// shape exactly (see that function's comment for why the anchor is
+	// required). Proxy handles are kebab-case and never contain ":".
 	proxyResourceServerDelimiter = ":"
 	// proxyResourceServerType marks the RS as MCP, enabling Thunder's MCP
 	// handle-collision guardrails.
@@ -1060,15 +1184,73 @@ const (
 	// handles). Over-long inputs are rejected with a clear error instead of letting
 	// Thunder reject the handle with an opaque 400.
 	thunderHandleMaxLen = 100
+	// thunderIdentifierMaxLen is Thunder's cap on the RS identifier column, which
+	// holds a URI and is far wider than a handle.
+	thunderIdentifierMaxLen = 2048
 )
 
+// canonicalMCPResourceIdentifier returns raw in RFC 8707 canonical form, or an error if it cannot be one.
+func canonicalMCPResourceIdentifier(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("resource identifier %q is not a valid URI: %w", raw, err)
+	}
+	switch {
+	case u.Scheme == "":
+		return "", fmt.Errorf("resource identifier %q has no scheme; RFC 8707 requires an absolute URI", raw)
+	case u.Scheme != "http" && u.Scheme != "https":
+		return "", fmt.Errorf("resource identifier %q must use scheme http or https, got %q", raw, u.Scheme)
+	case u.Host == "" || u.Hostname() == "":
+		return "", fmt.Errorf("resource identifier %q has no host", raw)
+	case u.User != nil:
+		return "", fmt.Errorf("resource identifier %q must not carry userinfo", raw)
+	case u.RawQuery != "" || u.ForceQuery:
+		return "", fmt.Errorf("resource identifier %q must not carry a query", raw)
+	case u.Fragment != "":
+		return "", fmt.Errorf("resource identifier %q must not carry a fragment", raw)
+	}
+	// url.Parse lowercases the scheme but not the host; the path stays as-is, being case-sensitive.
+	host := strings.ToLower(u.Host)
+	if port := u.Port(); port == defaultPortForScheme(u.Scheme) {
+		host = strings.TrimSuffix(host, ":"+port)
+	}
+	return u.Scheme + "://" + host + strings.TrimRight(u.EscapedPath(), "/"), nil
+}
+
+// defaultPortForScheme is the port an http(s) URI omits in canonical form.
+func defaultPortForScheme(scheme string) string {
+	if scheme == "https" {
+		return "443"
+	}
+	return "80"
+}
+
+// ensureProxyResourceServerMu returns the mutex serializing check-then-create
+// calls for one proxy handle. Entries are never removed; the map only grows by
+// the small set of proxy handles a client touches.
+func (c *thunderClient) ensureProxyResourceServerMu(proxyHandle string) *sync.Mutex {
+	mu, _ := c.ensureResourceServerMus.LoadOrStore(proxyHandle, &sync.Mutex{})
+	return mu.(*sync.Mutex)
+}
+
 // EnsureProxyResourceServer makes sure the resource server for a proxy exists
-// (identifier = handle = proxyHandle, delimiter ":", type MCP) and that every
-// given action is registered as a root action, then returns the resource server
-// ID. Idempotent; called lazily before role writes.
-func (c *thunderClient) EnsureProxyResourceServer(ctx context.Context, proxyHandle, displayName string, actions []string) (string, error) {
+// (handle = proxyHandle, identifier = the proxy's public invocation URI,
+// delimiter ":", type MCP), that its permission-anchor resource exists (see
+// ensureProxyResource), and that every given action is registered under that
+// resource, then returns the resource server ID. The identifier must be an
+// RFC 8707 absolute URI; it is canonicalized here, so both create and
+// drift-update write a canonical form. A drifted identifier is rewritten in
+// place. Idempotent; called lazily before role writes.
+func (c *thunderClient) EnsureProxyResourceServer(ctx context.Context, proxyHandle, displayName, identifier string, actions []string) (string, error) {
+	identifier, err := canonicalMCPResourceIdentifier(identifier)
+	if err != nil {
+		return "", err
+	}
 	if len(proxyHandle) > thunderHandleMaxLen {
 		return "", fmt.Errorf("proxy handle %q exceeds the Thunder handle limit of %d characters", proxyHandle, thunderHandleMaxLen)
+	}
+	if len(identifier) > thunderIdentifierMaxLen {
+		return "", fmt.Errorf("resource identifier %q exceeds the Thunder limit of %d characters", identifier, thunderIdentifierMaxLen)
 	}
 	for _, action := range actions {
 		if len(action) > thunderHandleMaxLen {
@@ -1082,40 +1264,62 @@ func (c *thunderClient) EnsureProxyResourceServer(ctx context.Context, proxyHand
 	}
 
 	// Avoids a TOCTOU race where concurrent callers both create a duplicate
-	// resource server or action; safe to scope per-client since clients are
-	// cached per org/env.
-	c.ensureResourceServerMu.Lock()
-	defer c.ensureResourceServerMu.Unlock()
+	// resource server, anchor resource, or action; keyed per handle so
+	// unrelated proxies don't serialize behind each other's Thunder round-trips.
+	mu := c.ensureProxyResourceServerMu(proxyHandle)
+	mu.Lock()
+	defer mu.Unlock()
 
-	rsID, err := c.findResourceServerID(ctx, token, proxyHandle)
+	rs, err := c.findProxyResourceServer(ctx, token, proxyHandle, identifier)
 	if err != nil {
 		return "", err
 	}
-	if rsID == "" {
+	var rsID string
+	if rs == nil {
 		ouID, err := c.getDefaultOUID(ctx, token)
 		if err != nil {
 			return "", fmt.Errorf("thunder ensure proxy resource server (default ou): %w", err)
 		}
 		body, err := c.doRequest(ctx, http.MethodPost, c.baseURL+"/resource-servers", token,
-			map[string]string{
-				"name":       displayName,
-				"identifier": proxyHandle,
-				"handle":     proxyHandle,
-				"ouId":       ouID,
-				"delimiter":  proxyResourceServerDelimiter,
-				"type":       proxyResourceServerType,
-			})
+			proxyResourceServerBody(displayName, identifier, proxyHandle, ouID))
 		if err != nil {
-			return "", fmt.Errorf("thunder create proxy resource server: %w", err)
+			// A 409 means a concurrent caller (different AMS replica) created
+			// the resource server first — re-run the same lookup to find the
+			// winner instead of failing the whole role write over a benign race.
+			if IsConflict(err) {
+				foundRS, findErr := c.findProxyResourceServer(ctx, token, proxyHandle, identifier)
+				if findErr != nil {
+					return "", findErr
+				}
+				if foundRS != nil {
+					rsID = foundRS.ID
+				}
+			}
+			if rsID == "" {
+				return "", fmt.Errorf("thunder create proxy resource server: %w", err)
+			}
+		} else {
+			var created ThunderResourceServer
+			if err := json.Unmarshal(body, &created); err != nil {
+				return "", fmt.Errorf("thunder create proxy resource server decode: %w", err)
+			}
+			rsID = created.ID
 		}
-		var created ThunderResourceServer
-		if err := json.Unmarshal(body, &created); err != nil {
-			return "", fmt.Errorf("thunder create proxy resource server decode: %w", err)
+	} else {
+		rsID = rs.ID
+		if rs.Identifier != identifier {
+			if err := c.updateProxyResourceServerIdentifier(ctx, token, rs, proxyHandle, identifier); err != nil {
+				return "", err
+			}
 		}
-		rsID = created.ID
 	}
 
-	existing, err := c.listProxyRootActions(ctx, token, rsID)
+	resourceID, err := c.ensureProxyResource(ctx, token, rsID, proxyHandle, displayName)
+	if err != nil {
+		return "", err
+	}
+
+	existing, err := c.listProxyActions(ctx, token, rsID, resourceID)
 	if err != nil {
 		return "", err
 	}
@@ -1126,7 +1330,11 @@ func (c *thunderClient) EnsureProxyResourceServer(ctx context.Context, proxyHand
 		if _, ok := existing[action]; ok {
 			continue
 		}
-		if err := c.createProxyRootAction(ctx, token, rsID, action); err != nil {
+		// A concurrent caller (different AMS replica, or racing after this
+		// action was missing on the listing above) may have created it first;
+		// Thunder's 409 RES-1014 "Handle conflict" means it now exists either
+		// way, so this is not a failure — see ensureProxyResource's comment.
+		if err := c.createProxyAction(ctx, token, rsID, resourceID, action); err != nil && !IsConflict(err) {
 			return "", err
 		}
 		existing[action] = "" // guard against duplicate actions in the input slice
@@ -1134,22 +1342,66 @@ func (c *thunderClient) EnsureProxyResourceServer(ctx context.Context, proxyHand
 	return rsID, nil
 }
 
-// DeleteProxyResourceServerAction best-effort deletes a single root action from
-// the proxy's resource server. A missing resource server or missing action is
-// not an error. Returns the resource server ID ("" if the RS is absent).
+// proxyResourceServerBody is the request payload shared by the proxy RS create
+// (POST) and identifier-update (PUT) calls.
+func proxyResourceServerBody(name, identifier, proxyHandle, ouID string) map[string]string {
+	return map[string]string{
+		"name":       name,
+		"identifier": identifier,
+		"handle":     proxyHandle,
+		"ouId":       ouID,
+		"delimiter":  proxyResourceServerDelimiter,
+		"type":       proxyResourceServerType,
+	}
+}
+
+// updateProxyResourceServerIdentifier rewrites a drifted identifier in place via
+// PUT /resource-servers/{id}.
+func (c *thunderClient) updateProxyResourceServerIdentifier(ctx context.Context, token string, rs *ThunderResourceServer, proxyHandle, identifier string) error {
+	ouID, err := c.getDefaultOUID(ctx, token)
+	if err != nil {
+		return fmt.Errorf("thunder update proxy resource server (default ou): %w", err)
+	}
+	name := rs.Name
+	if name == "" {
+		name = proxyHandle
+	}
+	_, err = c.doRequest(ctx, http.MethodPut, c.baseURL+"/resource-servers/"+rs.ID, token,
+		proxyResourceServerBody(name, identifier, proxyHandle, ouID))
+	if err != nil {
+		return fmt.Errorf("thunder update proxy resource server identifier: %w", err)
+	}
+	return nil
+}
+
+// DeleteProxyResourceServerAction best-effort deletes a single action from the
+// proxy's permission-anchor resource. A missing resource server, missing
+// anchor resource, or missing action is not an error. Returns the resource
+// server ID ("" if the RS is absent).
 func (c *thunderClient) DeleteProxyResourceServerAction(ctx context.Context, proxyHandle, action string) (string, error) {
 	token, err := c.getSystemToken(ctx)
 	if err != nil {
 		return "", err
 	}
-	rsID, err := c.findResourceServerID(ctx, token, proxyHandle)
+	// No identifier is known here (only the handle), so this can only find a
+	// proxy RS by the pre-migration bare-handle-identifier fallback — see
+	// findProxyResourceServer's comment.
+	rs, err := c.findProxyResourceServer(ctx, token, proxyHandle, "")
 	if err != nil {
 		return "", err
 	}
-	if rsID == "" {
+	if rs == nil {
 		return "", nil
 	}
-	actions, err := c.listProxyRootActions(ctx, token, rsID)
+	rsID := rs.ID
+	resourceID, err := c.findProxyResourceID(ctx, token, rsID, proxyHandle)
+	if err != nil {
+		return rsID, err
+	}
+	if resourceID == "" {
+		return rsID, nil
+	}
+	actions, err := c.listProxyActions(ctx, token, rsID, resourceID)
 	if err != nil {
 		return rsID, err
 	}
@@ -1157,35 +1409,47 @@ func (c *thunderClient) DeleteProxyResourceServerAction(ctx context.Context, pro
 	if !ok {
 		return rsID, nil
 	}
-	if _, err := c.doRequest(ctx, http.MethodDelete, c.baseURL+"/resource-servers/"+rsID+"/actions/"+actionID, token, nil); err != nil && !IsNotFound(err) {
-		return rsID, fmt.Errorf("thunder delete proxy root action %q: %w", action, err)
+	if _, err := c.doRequest(ctx, http.MethodDelete, c.baseURL+"/resource-servers/"+rsID+"/resources/"+resourceID+"/actions/"+actionID, token, nil); err != nil && !IsNotFound(err) {
+		return rsID, fmt.Errorf("thunder delete proxy action %q: %w", action, err)
 	}
 	return rsID, nil
 }
 
-// DeleteProxyResourceServer deletes every root action of the proxy's resource
-// server and then the resource server itself. Thunder blocks RS deletion while
-// actions exist, so actions are removed first. A missing resource server is not
-// an error.
+// DeleteProxyResourceServer deletes every action under the proxy's permission-
+// anchor resource, then that resource, then the resource server itself.
+// Thunder blocks deletion while children exist, so they are removed bottom-up.
+// A missing resource server is not an error.
 func (c *thunderClient) DeleteProxyResourceServer(ctx context.Context, proxyHandle string) error {
 	token, err := c.getSystemToken(ctx)
 	if err != nil {
 		return err
 	}
-	rsID, err := c.findResourceServerID(ctx, token, proxyHandle)
+	// Same limitation as DeleteProxyResourceServerAction: no identifier is
+	// known here, so this can only match a pre-migration bare-handle row.
+	rs, err := c.findProxyResourceServer(ctx, token, proxyHandle, "")
 	if err != nil {
 		return err
 	}
-	if rsID == "" {
+	if rs == nil {
 		return nil
 	}
-	actions, err := c.listProxyRootActions(ctx, token, rsID)
+	rsID := rs.ID
+	resourceID, err := c.findProxyResourceID(ctx, token, rsID, proxyHandle)
 	if err != nil {
 		return err
 	}
-	for action, actionID := range actions {
-		if _, err := c.doRequest(ctx, http.MethodDelete, c.baseURL+"/resource-servers/"+rsID+"/actions/"+actionID, token, nil); err != nil && !IsNotFound(err) {
-			return fmt.Errorf("thunder delete proxy root action %q: %w", action, err)
+	if resourceID != "" {
+		actions, err := c.listProxyActions(ctx, token, rsID, resourceID)
+		if err != nil {
+			return err
+		}
+		for action, actionID := range actions {
+			if _, err := c.doRequest(ctx, http.MethodDelete, c.baseURL+"/resource-servers/"+rsID+"/resources/"+resourceID+"/actions/"+actionID, token, nil); err != nil && !IsNotFound(err) {
+				return fmt.Errorf("thunder delete proxy action %q: %w", action, err)
+			}
+		}
+		if _, err := c.doRequest(ctx, http.MethodDelete, c.baseURL+"/resource-servers/"+rsID+"/resources/"+resourceID, token, nil); err != nil && !IsNotFound(err) {
+			return fmt.Errorf("thunder delete proxy resource %q: %w", proxyHandle, err)
 		}
 	}
 	if _, err := c.doRequest(ctx, http.MethodDelete, c.baseURL+"/resource-servers/"+rsID, token, nil); err != nil && !IsNotFound(err) {
@@ -1194,21 +1458,89 @@ func (c *thunderClient) DeleteProxyResourceServer(ctx context.Context, proxyHand
 	return nil
 }
 
-// listProxyRootActions returns the root actions of a resource server as a map of
-// action handle to action ID, paginating through all pages.
-func (c *thunderClient) listProxyRootActions(ctx context.Context, token, rsID string) (map[string]string, error) {
+// findProxyResourceID returns the ID of the proxy's permission-anchor resource
+// (the top-level resource with Handle == proxyHandle, created by
+// ensureProxyResource), or "" if it does not exist yet.
+func (c *thunderClient) findProxyResourceID(ctx context.Context, token, rsID, proxyHandle string) (string, error) {
+	resources, err := c.listResources(ctx, token, rsID, "")
+	if err != nil {
+		return "", fmt.Errorf("thunder list proxy resources: %w", err)
+	}
+	for _, res := range resources {
+		if res.Handle == proxyHandle {
+			return res.ID, nil
+		}
+	}
+	return "", nil
+}
+
+// ensureProxyResource makes sure a single top-level resource exists on the
+// resource server with Handle == proxyHandle, and returns its ID.
+//
+// Thunder only derives an item's permission by composing its own handle with
+// its resource *parent* chain: a root-level item with no parent resource
+// keeps its bare handle verbatim, with no resource-server-handle prefix —
+// resource servers themselves carry no handle at all. So an action
+// registered directly at the resource server's root ends up with permission
+// == its own handle (e.g. "read"), never "<proxyHandle>:read". Anchoring
+// every action under this resource instead (its own permission is just
+// proxyHandle, since it too has no parent) composes to
+// "<proxyHandle>:<action>" one level down, matching the scope string
+// exactly. This mirrors the same workaround the AMP resource server's own
+// bootstrap uses for its top-level "amp" resource (see
+// amp-thunder-bootstrap.yaml).
+func (c *thunderClient) ensureProxyResource(ctx context.Context, token, rsID, proxyHandle, displayName string) (string, error) {
+	resourceID, err := c.findProxyResourceID(ctx, token, rsID, proxyHandle)
+	if err != nil {
+		return "", err
+	}
+	if resourceID != "" {
+		return resourceID, nil
+	}
+	body, err := c.doRequest(ctx, http.MethodPost, c.baseURL+"/resource-servers/"+rsID+"/resources", token,
+		map[string]string{"name": displayName, "handle": proxyHandle})
+	if err != nil {
+		// ensureProxyResourceServerMu only serializes calls within this
+		// process; a concurrent request handled by a different AMS replica
+		// (or a client recreated after the cache entry expired mid-flight)
+		// can race to create the same anchor resource. Thunder rejects the
+		// loser with 409 RES-1014 "Handle conflict" — look the winner's
+		// resource up by handle instead of failing the whole role write over
+		// a benign race.
+		if IsConflict(err) {
+			resourceID, findErr := c.findProxyResourceID(ctx, token, rsID, proxyHandle)
+			if findErr != nil {
+				return "", findErr
+			}
+			if resourceID != "" {
+				return resourceID, nil
+			}
+		}
+		return "", fmt.Errorf("thunder create proxy resource: %w", err)
+	}
+	var created ThunderResource
+	if err := json.Unmarshal(body, &created); err != nil {
+		return "", fmt.Errorf("thunder create proxy resource decode: %w", err)
+	}
+	return created.ID, nil
+}
+
+// listProxyActions returns the actions registered under the proxy's
+// permission-anchor resource as a map of action handle to action ID,
+// paginating through all pages.
+func (c *thunderClient) listProxyActions(ctx context.Context, token, rsID, resourceID string) (map[string]string, error) {
 	const actPageSize = 20
 	actions := make(map[string]string)
 	offset := 0
 	for {
-		url := fmt.Sprintf("%s/resource-servers/%s/actions?offset=%d&limit=%d", c.baseURL, rsID, offset, actPageSize)
+		url := fmt.Sprintf("%s/resource-servers/%s/resources/%s/actions?offset=%d&limit=%d", c.baseURL, rsID, resourceID, offset, actPageSize)
 		body, err := c.doRequest(ctx, http.MethodGet, url, token, nil)
 		if err != nil {
-			return nil, fmt.Errorf("thunder list proxy root actions: %w", err)
+			return nil, fmt.Errorf("thunder list proxy actions: %w", err)
 		}
 		var page thunderActionList
 		if err := json.Unmarshal(body, &page); err != nil {
-			return nil, fmt.Errorf("thunder list proxy root actions decode: %w", err)
+			return nil, fmt.Errorf("thunder list proxy actions decode: %w", err)
 		}
 		for _, a := range page.Actions {
 			if a.Handle != "" {
@@ -1223,16 +1555,17 @@ func (c *thunderClient) listProxyRootActions(ctx context.Context, token, rsID st
 	return actions, nil
 }
 
-// createProxyRootAction registers one action at the resource server root. Thunder
-// derives the action's permission by joining the RS handle and the action handle
-// with the RS delimiter (":"), so with handle = proxyHandle the derived permission
-// equals the "<proxy-handle>:<action>" scope exactly. Callers must ensure the
-// action is within thunderHandleMaxLen before invoking this.
-func (c *thunderClient) createProxyRootAction(ctx context.Context, token, rsID, action string) error {
-	_, err := c.doRequest(ctx, http.MethodPost, c.baseURL+"/resource-servers/"+rsID+"/actions", token,
+// createProxyAction registers one action under the proxy's permission-anchor
+// resource. Thunder derives the action's permission by joining the parent
+// resource's own permission (== proxyHandle) with the action handle using the
+// RS delimiter (":"), so the derived permission equals the
+// "<proxy-handle>:<action>" scope exactly. Callers must ensure the action is
+// within thunderHandleMaxLen before invoking this.
+func (c *thunderClient) createProxyAction(ctx context.Context, token, rsID, resourceID, action string) error {
+	_, err := c.doRequest(ctx, http.MethodPost, c.baseURL+"/resource-servers/"+rsID+"/resources/"+resourceID+"/actions", token,
 		map[string]string{"name": action, "handle": action})
 	if err != nil {
-		return fmt.Errorf("thunder create proxy root action %q: %w", action, err)
+		return fmt.Errorf("thunder create proxy action %q: %w", action, err)
 	}
 	return nil
 }
@@ -1496,6 +1829,9 @@ func (c *thunderClient) doRequest(ctx context.Context, method, url, token string
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, &NotFoundError{Message: string(body)}
 	}
+	if resp.StatusCode == http.StatusConflict {
+		return nil, &ConflictError{Message: string(body)}
+	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
@@ -1516,6 +1852,23 @@ func (e *NotFoundError) Error() string {
 func IsNotFound(err error) bool {
 	var nfe *NotFoundError
 	return errors.As(err, &nfe)
+}
+
+// ConflictError is returned when Thunder responds with 409, e.g. a handle or
+// name that already exists (RES-1014 "Handle conflict" for resources/actions,
+// AGT-1013 for agents).
+type ConflictError struct {
+	Message string
+}
+
+func (e *ConflictError) Error() string {
+	return "conflict: " + e.Message
+}
+
+// IsConflict returns true if the error is a Thunder 409.
+func IsConflict(err error) bool {
+	var ce *ConflictError
+	return errors.As(err, &ce)
 }
 
 // ListChildOUs returns the direct child OUs of the given parent OU ID.

@@ -20,8 +20,10 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
@@ -208,6 +210,99 @@ func TestIntersectActiveGatewayLLMPolicies_OverlappingPoliciesSurvive(t *testing
 	assert.NotContains(t, available, "only-on-first\x00v1")
 }
 
+func TestIntersectActiveGatewayLLMPolicies_VersionMismatchFallsBackToLowest(t *testing.T) {
+	repo := &repomocks.GatewayRepositoryMock{
+		ListWithFiltersFunc: func(_ repositories.GatewayFilterOptions) ([]*models.Gateway, error) {
+			return []*models.Gateway{
+				// Old gateway, not yet upgraded.
+				gatewayWithLLMPolicyManifest(
+					map[string]interface{}{"name": "pii-filter", "version": "1.0.0"},
+				),
+				// New gateway, already upgraded — same policy, newer version.
+				gatewayWithLLMPolicyManifest(
+					map[string]interface{}{"name": "pii-filter", "version": "1.1.0"},
+				),
+			}, nil
+		},
+	}
+
+	available, err := intersectActiveGatewayLLMPolicies(repo, "org-uuid")
+
+	require.NoError(t, err)
+	// Every gateway has the policy, just at different versions — treated as
+	// backward-compatible: falls back to the lowest version instead of vanishing.
+	require.Len(t, available, 1)
+	assert.Contains(t, available, "pii-filter\x00"+"1.0.0")
+	assert.NotContains(t, available, "pii-filter\x00"+"1.1.0")
+}
+
+func TestIntersectActiveGatewayLLMPolicies_MissingFromOneGatewayStaysExcluded(t *testing.T) {
+	repo := &repomocks.GatewayRepositoryMock{
+		ListWithFiltersFunc: func(_ repositories.GatewayFilterOptions) ([]*models.Gateway, error) {
+			return []*models.Gateway{
+				gatewayWithLLMPolicyManifest(
+					map[string]interface{}{"name": "pii-filter", "version": "1.0.0"},
+				),
+				// Second gateway doesn't have this policy at all — not a version
+				// mismatch, genuinely unsupported here. Must NOT be rescued by the
+				// lowest-version fallback.
+				gatewayWithLLMPolicyManifest(),
+			}, nil
+		},
+	}
+
+	available, err := intersectActiveGatewayLLMPolicies(repo, "org-uuid")
+
+	require.NoError(t, err)
+	assert.Empty(t, available)
+}
+
+func TestIntersectActiveGatewayLLMPolicies_VersionMismatchUsesSemverComparison(t *testing.T) {
+	repo := &repomocks.GatewayRepositoryMock{
+		ListWithFiltersFunc: func(_ repositories.GatewayFilterOptions) ([]*models.Gateway, error) {
+			return []*models.Gateway{
+				gatewayWithLLMPolicyManifest(
+					map[string]interface{}{"name": "pii-filter", "version": "1.9.0"},
+				),
+				gatewayWithLLMPolicyManifest(
+					map[string]interface{}{"name": "pii-filter", "version": "1.10.0"},
+				),
+			}, nil
+		},
+	}
+
+	available, err := intersectActiveGatewayLLMPolicies(repo, "org-uuid")
+
+	require.NoError(t, err)
+	// A plain string compare would wrongly treat "1.10.0" < "1.9.0". Numeric
+	// per-segment comparison must pick 1.9.0 as the lower version.
+	require.Len(t, available, 1)
+	assert.Contains(t, available, "pii-filter\x00"+"1.9.0")
+}
+
+func TestIntersectActiveGatewayLLMPolicies_VersionMismatchStripsVPrefixForSemverComparison(t *testing.T) {
+	repo := &repomocks.GatewayRepositoryMock{
+		ListWithFiltersFunc: func(_ repositories.GatewayFilterOptions) ([]*models.Gateway, error) {
+			return []*models.Gateway{
+				gatewayWithLLMPolicyManifest(
+					map[string]interface{}{"name": "pii-filter", "version": "v2"},
+				),
+				gatewayWithLLMPolicyManifest(
+					map[string]interface{}{"name": "pii-filter", "version": "v10"},
+				),
+			}, nil
+		},
+	}
+
+	available, err := intersectActiveGatewayLLMPolicies(repo, "org-uuid")
+
+	require.NoError(t, err)
+	// A plain string compare of "v10" vs "v2" would wrongly rank "v10" lower.
+	// Stripping the leading "v" before numeric comparison must pick v2 as lower.
+	require.Len(t, available, 1)
+	assert.Contains(t, available, "pii-filter\x00"+"v2")
+}
+
 func TestIntersectActiveGatewayLLMPolicies_OnlyActiveGatewaysQueried(t *testing.T) {
 	var capturedFilters repositories.GatewayFilterOptions
 	repo := &repomocks.GatewayRepositoryMock{
@@ -234,6 +329,105 @@ func TestIntersectActiveGatewayLLMPolicies_RepoErrorIsWrapped(t *testing.T) {
 	}
 
 	_, err := intersectActiveGatewayLLMPolicies(repo, "org-uuid")
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, boom)
+}
+
+// -----------------------------------------------------------------------------
+// intersectDeployedGatewayLLMPolicies — provider-scoped intersection, restricted to
+// the gateways a specific provider is actually deployed to.
+// -----------------------------------------------------------------------------
+
+func TestIntersectDeployedGatewayLLMPolicies_NilRepoReturnsEmpty(t *testing.T) {
+	available, err := intersectDeployedGatewayLLMPolicies(nil, nil, uuid.New(), "org-uuid")
+
+	require.NoError(t, err)
+	assert.Empty(t, available)
+}
+
+func TestIntersectDeployedGatewayLLMPolicies_ScopesToDeployedGatewaysOnly(t *testing.T) {
+	providerUUID := uuid.New()
+	deployedGatewayID := "gw-1"
+	undeployedGateway := gatewayWithLLMPolicyManifest(
+		map[string]interface{}{"name": "only-on-undeployed-gateway", "version": "v1"},
+	)
+
+	deploymentRepo := &repomocks.DeploymentRepositoryMock{
+		GetDeployedGatewaysByProviderFunc: func(artifactUUID uuid.UUID, orgUUID string) ([]string, error) {
+			assert.Equal(t, providerUUID, artifactUUID)
+			assert.Equal(t, "org-uuid", orgUUID)
+			return []string{deployedGatewayID}, nil
+		},
+	}
+	gatewayRepo := &repomocks.GatewayRepositoryMock{
+		GetByUUIDFunc: func(gatewayId string) (*models.Gateway, error) {
+			assert.Equal(t, deployedGatewayID, gatewayId)
+			gw := gatewayWithLLMPolicyManifest(
+				map[string]interface{}{"name": "deployed-policy", "version": "v1"},
+			)
+			gw.OUID = "org-uuid"
+			return gw, nil
+		},
+	}
+	_ = undeployedGateway // never queried — GetByUUIDFunc only ever asked for the deployed gateway.
+
+	available, err := intersectDeployedGatewayLLMPolicies(gatewayRepo, deploymentRepo, providerUUID, "org-uuid")
+
+	require.NoError(t, err)
+	require.Len(t, available, 1)
+	assert.Contains(t, available, "deployed-policy\x00v1")
+}
+
+func TestIntersectDeployedGatewayLLMPolicies_SkipsGatewayFromAnotherOrg(t *testing.T) {
+	deploymentRepo := &repomocks.DeploymentRepositoryMock{
+		GetDeployedGatewaysByProviderFunc: func(_ uuid.UUID, _ string) ([]string, error) {
+			return []string{"gw-1"}, nil
+		},
+	}
+	gatewayRepo := &repomocks.GatewayRepositoryMock{
+		GetByUUIDFunc: func(_ string) (*models.Gateway, error) {
+			gw := gatewayWithLLMPolicyManifest(
+				map[string]interface{}{"name": "cross-org-policy", "version": "v1"},
+			)
+			gw.OUID = "another-org"
+			return gw, nil
+		},
+	}
+
+	available, err := intersectDeployedGatewayLLMPolicies(gatewayRepo, deploymentRepo, uuid.New(), "org-uuid")
+
+	require.NoError(t, err)
+	assert.Empty(t, available)
+}
+
+func TestIntersectDeployedGatewayLLMPolicies_SkipsStaleGatewayReference(t *testing.T) {
+	deploymentRepo := &repomocks.DeploymentRepositoryMock{
+		GetDeployedGatewaysByProviderFunc: func(_ uuid.UUID, _ string) ([]string, error) {
+			return []string{"gw-deleted"}, nil
+		},
+	}
+	gatewayRepo := &repomocks.GatewayRepositoryMock{
+		GetByUUIDFunc: func(_ string) (*models.Gateway, error) {
+			return nil, gorm.ErrRecordNotFound
+		},
+	}
+
+	available, err := intersectDeployedGatewayLLMPolicies(gatewayRepo, deploymentRepo, uuid.New(), "org-uuid")
+
+	require.NoError(t, err)
+	assert.Empty(t, available)
+}
+
+func TestIntersectDeployedGatewayLLMPolicies_DeploymentRepoErrorIsWrapped(t *testing.T) {
+	boom := errors.New("db unreachable")
+	deploymentRepo := &repomocks.DeploymentRepositoryMock{
+		GetDeployedGatewaysByProviderFunc: func(_ uuid.UUID, _ string) ([]string, error) {
+			return nil, boom
+		},
+	}
+
+	_, err := intersectDeployedGatewayLLMPolicies(&repomocks.GatewayRepositoryMock{}, deploymentRepo, uuid.New(), "org-uuid")
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, boom)

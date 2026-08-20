@@ -23,7 +23,9 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
+	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/clients/clientmocks"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/thundersvc"
@@ -512,4 +514,103 @@ func TestMCPDeployErrorIsFatal_UnrelatedError(t *testing.T) {
 	unrelatedErr := errors.New("some other error")
 	assert.False(t, mcpDeployErrorIsFatal(unrelatedErr),
 		"unrelated error must not be fatal")
+}
+
+// -----------------------------------------------------------------------------
+// mapMCPProxyWriteError — maps Postgres unique-violation constraints from the
+// proxy write path to friendly sentinels.
+// -----------------------------------------------------------------------------
+
+func TestMapMCPProxyWriteError_ProxyEnvSingleViolation(t *testing.T) {
+	svc := &MCPProxyService{}
+	err := &pgconn.PgError{Code: "23505", ConstraintName: "uq_proxy_env_single"}
+
+	mapped := svc.mapMCPProxyWriteError(err, "some-handle", "org-uuid")
+
+	assert.ErrorIs(t, mapped, utils.ErrMCPEnvAlreadyBound)
+}
+
+func TestMapMCPProxyWriteError_EndpointEnvViolation(t *testing.T) {
+	svc := &MCPProxyService{}
+	err := &pgconn.PgError{Code: "23505", ConstraintName: "uq_endpoint_env"}
+
+	mapped := svc.mapMCPProxyWriteError(err, "some-handle", "org-uuid")
+
+	assert.ErrorIs(t, mapped, utils.ErrMCPEnvAlreadyBound)
+}
+
+func TestMapMCPProxyWriteError_HandleConflictWithMCPProxy(t *testing.T) {
+	svc := &MCPProxyService{
+		artifactRepo: &repomocks.ArtifactRepositoryMock{
+			GetByHandleFunc: func(_, _ string) (*models.Artifact, error) {
+				return &models.Artifact{Kind: models.KindMCPProxy}, nil
+			},
+		},
+	}
+	err := &pgconn.PgError{Code: "23505", ConstraintName: "uq_artifact_handle_ou_id"}
+
+	mapped := svc.mapMCPProxyWriteError(err, "some-handle", "org-uuid")
+
+	assert.ErrorIs(t, mapped, utils.ErrMCPProxyExists)
+}
+
+func TestMapMCPProxyWriteError_HandleConflictWithNonMCPArtifact(t *testing.T) {
+	svc := &MCPProxyService{
+		artifactRepo: &repomocks.ArtifactRepositoryMock{
+			GetByHandleFunc: func(_, _ string) (*models.Artifact, error) {
+				return &models.Artifact{Kind: models.KindLLMProvider}, nil
+			},
+		},
+	}
+	err := &pgconn.PgError{Code: "23505", ConstraintName: "uq_artifact_handle_ou_id"}
+
+	mapped := svc.mapMCPProxyWriteError(err, "some-handle", "org-uuid")
+
+	// The conflicting artifact is an LLM provider, not an MCP proxy: must not
+	// falsely report "MCP proxy already exists".
+	assert.ErrorIs(t, mapped, utils.ErrArtifactExists)
+	assert.NotErrorIs(t, mapped, utils.ErrMCPProxyExists)
+}
+
+func TestMapMCPProxyWriteError_HandleConflictLookupFailureFallsBackToMCPProxyExists(t *testing.T) {
+	svc := &MCPProxyService{
+		artifactRepo: &repomocks.ArtifactRepositoryMock{
+			GetByHandleFunc: func(_, _ string) (*models.Artifact, error) {
+				return nil, gorm.ErrRecordNotFound
+			},
+		},
+	}
+	err := &pgconn.PgError{Code: "23505", ConstraintName: "uq_artifact_handle_ou_id"}
+
+	mapped := svc.mapMCPProxyWriteError(err, "some-handle", "org-uuid")
+
+	assert.ErrorIs(t, mapped, utils.ErrMCPProxyExists)
+}
+
+func TestMapMCPProxyWriteError_NameVersionConflict(t *testing.T) {
+	svc := &MCPProxyService{}
+	err := &pgconn.PgError{Code: "23505", ConstraintName: "uq_artifact_name_version_ou_id"}
+
+	mapped := svc.mapMCPProxyWriteError(err, "some-handle", "org-uuid")
+
+	assert.ErrorIs(t, mapped, utils.ErrInvalidInput)
+}
+
+func TestMapMCPProxyWriteError_UnrecognizedConstraintReturnsNil(t *testing.T) {
+	svc := &MCPProxyService{}
+	err := &pgconn.PgError{Code: "23505", ConstraintName: "some_other_constraint"}
+
+	assert.Nil(t, svc.mapMCPProxyWriteError(err, "some-handle", "org-uuid"))
+}
+
+func TestMapMCPProxyWriteError_NonUniqueViolationReturnsNil(t *testing.T) {
+	svc := &MCPProxyService{}
+	err := &pgconn.PgError{Code: "23503", ConstraintName: "uq_proxy_env_single"}
+
+	assert.Nil(t, svc.mapMCPProxyWriteError(err, "some-handle", "org-uuid"))
+}
+
+func TestMapMCPProxyWriteError_NonPgErrorReturnsNil(t *testing.T) {
+	svc := &MCPProxyService{}
+	assert.Nil(t, svc.mapMCPProxyWriteError(errors.New("plain error"), "some-handle", "org-uuid"))
 }

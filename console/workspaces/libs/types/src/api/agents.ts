@@ -16,7 +16,7 @@
  * under the License.
  */
 
-import { type AgentPathParams, type Build, type Configurations, type ListQuery, type OrgProjPathParams, type PaginationMeta, type RepositoryConfig } from './common';
+import { type AgentPathParams, type Build, type Configurations, type ListQuery, type OrgPathParams, type OrgProjPathParams, type PaginationMeta, type RepositoryConfig } from './common';
 import type { EnvProviderConfiguration, EnvironmentVariableConfig } from './agent-model-configs';
 import type { ThunderGroup, ThunderRole } from './identities';
 
@@ -130,6 +130,7 @@ export interface AgentResponse {
   inputInterface?: InputInterface;
   uuid?: string;
   kindName?: string;
+  kindVersion?: string;
   labels?: Record<string, string>;
   createdBy?: AgentCreatedBy;
 }
@@ -137,6 +138,22 @@ export interface AgentResponse {
 export interface AgentListResponse extends PaginationMeta {
   agents: AgentResponse[];
 }
+
+// Lightweight org-wide listing: every agent across all projects, unpaginated.
+// Includes the owning project's name/displayName so consumers can resolve
+// both without a separate project lookup.
+export interface AgentSummary {
+  name: string;
+  displayName: string;
+  projectName: string;
+  projectDisplayName: string;
+}
+
+export interface AgentSummaryListResponse {
+  agents: AgentSummary[];
+}
+
+export type ListOrgAgentsPathParams = OrgPathParams;
 
 // Path/Query helpers
 export type ListAgentsPathParams = OrgProjPathParams;
@@ -234,6 +251,8 @@ export interface ProvisionAgentIdentityQuery {
 }
 
 export type RegenerateAgentIdentitySecretPathParams = AgentPathParams;
+
+export type RetryAgentIdentityProvisioningPathParams = AgentPathParams;
 
 export type RevokeAgentIdentitySecretPathParams = AgentPathParams;
 export interface RevokeAgentIdentitySecretQuery {

@@ -63,6 +63,7 @@ type LLMProviderService struct {
 	artifactRepo       repositories.ArtifactRepository
 	encryptionKey      []byte
 	gatewayRepo        repositories.GatewayRepository
+	deploymentRepo     repositories.DeploymentRepository
 	agentMappingRepo   repositories.EnvAgentModelMappingRepository
 	monitorMappingRepo repositories.MonitorLLMMappingRepository
 	apiKeyService      *LLMProviderAPIKeyService
@@ -78,6 +79,7 @@ func NewLLMProviderService(
 	artifactRepo repositories.ArtifactRepository,
 	encryptionKey []byte,
 	gatewayRepo repositories.GatewayRepository,
+	deploymentRepo repositories.DeploymentRepository,
 	agentMappingRepo repositories.EnvAgentModelMappingRepository,
 	monitorMappingRepo repositories.MonitorLLMMappingRepository,
 	apiKeyService *LLMProviderAPIKeyService,
@@ -91,6 +93,7 @@ func NewLLMProviderService(
 		artifactRepo:       artifactRepo,
 		encryptionKey:      encryptionKey,
 		gatewayRepo:        gatewayRepo,
+		deploymentRepo:     deploymentRepo,
 		agentMappingRepo:   agentMappingRepo,
 		monitorMappingRepo: monitorMappingRepo,
 		apiKeyService:      apiKeyService,
@@ -188,6 +191,10 @@ func (s *LLMProviderService) Create(ctx context.Context, ouID, createdBy string,
 		if err := provider.Configuration.Upstream.Main.Auth.Validate(); err != nil {
 			return nil, err
 		}
+	}
+
+	if err := provider.Configuration.Resilience.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: %w", utils.ErrInvalidInput, err)
 	}
 
 	// Encrypt upstream API key if provided
@@ -289,10 +296,29 @@ func (s *LLMProviderService) List(ouID string, limit, offset int) ([]*models.LLM
 
 // ListAvailableLLMPolicies returns full guardrail policy definitions reported by active
 // gateways in the organization, so the console can list and configure them directly
-// without depending on the external policy hub.
-func (s *LLMProviderService) ListAvailableLLMPolicies(ctx context.Context, ouID string) (*models.LLMPolicyAvailabilityResponse, error) {
+// without depending on the external policy hub. When providerID is non-empty, the result
+// is scoped to the gateways that provider is currently deployed to, instead of every
+// active gateway in the org.
+func (s *LLMProviderService) ListAvailableLLMPolicies(ctx context.Context, ouID, providerID string) (*models.LLMPolicyAvailabilityResponse, error) {
 	_ = ctx
-	available, err := intersectActiveGatewayLLMPolicies(s.gatewayRepo, ouID)
+
+	var available map[string]llmPolicyManifestItem
+	var err error
+	if providerID != "" {
+		provider, resolveErr := s.resolveProvider(providerID, ouID)
+		if resolveErr != nil {
+			if errors.Is(resolveErr, gorm.ErrRecordNotFound) {
+				return nil, utils.ErrLLMProviderNotFound
+			}
+			return nil, fmt.Errorf("failed to resolve provider: %w", resolveErr)
+		}
+		if provider == nil {
+			return nil, utils.ErrLLMProviderNotFound
+		}
+		available, err = intersectDeployedGatewayLLMPolicies(s.gatewayRepo, s.deploymentRepo, provider.UUID, ouID)
+	} else {
+		available, err = intersectActiveGatewayLLMPolicies(s.gatewayRepo, ouID)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -400,6 +426,10 @@ func (s *LLMProviderService) Update(ctx context.Context, providerID, ouID string
 		if err := updates.Configuration.Upstream.Main.Auth.Validate(); err != nil {
 			return nil, err
 		}
+	}
+
+	if err := updates.Configuration.Resilience.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: %w", utils.ErrInvalidInput, err)
 	}
 
 	// Encrypt upstream API key if a new value is provided

@@ -39,10 +39,12 @@ func NewRoleReplace(cur ThunderRole, name, description *string) UpdateRoleReques
 }
 
 // NewGroupReplace builds a full-replace UpdateGroupRequest from a group's current
-// state. A nil name/description override preserves the current value; a non-nil
-// override replaces it.
+// state. Thunder's PUT /groups/{id} is a full replace: an omitted ouId is rejected
+// (INVALID_INPUT_METADATA), so it is always carried over from cur. A nil
+// name/description override preserves the current value; a non-nil override
+// replaces it.
 func NewGroupReplace(cur ThunderGroup, name, description *string) UpdateGroupRequest {
-	req := UpdateGroupRequest{Name: cur.Name, Description: cur.Description}
+	req := UpdateGroupRequest{OuID: cur.OuID, Name: cur.Name, Description: cur.Description}
 	if name != nil {
 		req.Name = *name
 	}

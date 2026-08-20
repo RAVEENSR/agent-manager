@@ -103,6 +103,10 @@ func (s *LLMProxyService) Create(ouID, createdBy string, proxy *models.LLMProxy)
 		proxy.Configuration.Context = &defaultContext
 	}
 
+	if err := proxy.Configuration.Resilience.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: %w", utils.ErrInvalidInput, err)
+	}
+
 	// Encrypt upstream auth value if provided
 	if proxy.Configuration.UpstreamAuth != nil &&
 		proxy.Configuration.UpstreamAuth.Value != nil {
@@ -212,6 +216,10 @@ func (s *LLMProxyService) Update(proxyID, ouID string, updates *models.LLMProxy)
 			return nil, utils.ErrLLMProviderNotFound
 		}
 		updates.ProviderUUID = providerModel.UUID
+	}
+
+	if err := updates.Configuration.Resilience.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: %w", utils.ErrInvalidInput, err)
 	}
 
 	// Preserve stored upstream auth credential when not supplied in update payload

@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/wso2/agent-manager/agent-manager-service/api"
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	occlient "github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/secretmanagersvc"
 	"github.com/wso2/agent-manager/agent-manager-service/config"
@@ -118,6 +119,16 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 	// Get the raw DB instance without context - repositories will add context per-operation
 	database := db.GetDB()
 
+	// Select the gateway-manifest cache backend before anything reads or writes it —
+	// see services.SetGatewayManifestCacheBackend's doc comment for why this is a
+	// direct call rather than part of the wire dependency graph below.
+	manifestCacheBackend, err := wiring.ProvideGatewayManifestCacheBackend(*cfg)
+	if err != nil {
+		slog.Error("failed to initialize gateway manifest cache backend", "error", err)
+		os.Exit(1)
+	}
+	services.SetGatewayManifestCacheBackend(manifestCacheBackend)
+
 	// Deployment-specific AgentID provisioning; nil disables it.
 	var agentThunderProvisioning services.AgentThunderProvisioningService
 	if opts.AgentThunderProvisioning != nil {
@@ -166,16 +177,23 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 	}
 	dependencies.RepositoryService.SetCommitProvider(opts.RepositoryCommitProvider)
 
+	// Background workers have no request behind them, so nothing installs a
+	// recorder on their contexts the way the HTTP middleware does. Install one
+	// here, or their audit emits would reach the "not installed" fallback and
+	// be lost — silently, which is the failure mode a context-carried recorder
+	// is most prone to.
+	backgroundCtx := audit.WithRecorder(context.Background(), dependencies.AuditRecorder)
+
 	// So a rotated agent's deferred pod rollout (see RefreshAfterRotation)
 	// stops waiting, or aborts an in-flight roll, once shutdown starts below
 	// instead of firing an outbound update afterward.
-	agentIdentityRolloutCtx, agentIdentityRolloutCancel := context.WithCancel(context.Background())
+	agentIdentityRolloutCtx, agentIdentityRolloutCancel := context.WithCancel(backgroundCtx)
 	if setter, ok := dependencies.AgentIdentityInjectionService.(services.AgentIdentityShutdownContextSetter); ok {
 		setter.SetShutdownContext(agentIdentityRolloutCtx)
 	}
 
 	// Start monitor scheduler with background context
-	schedulerCtx, schedulerCancel := context.WithCancel(context.Background())
+	schedulerCtx, schedulerCancel := context.WithCancel(backgroundCtx)
 	if err := dependencies.MonitorScheduler.Start(schedulerCtx); err != nil {
 		slog.Error("failed to start monitor scheduler", "error", err)
 		os.Exit(1)
@@ -183,7 +201,7 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 
 	// Start the AgentID provisioning retry reconciler, but only when provisioning
 	// is enabled — otherwise there is nothing to reconcile.
-	agentThunderReconcilerCtx, agentThunderReconcilerCancel := context.WithCancel(context.Background())
+	agentThunderReconcilerCtx, agentThunderReconcilerCancel := context.WithCancel(backgroundCtx)
 	if agentThunderProvisioning != nil {
 		if err := dependencies.AgentThunderReconciler.Start(agentThunderReconcilerCtx); err != nil {
 			slog.Error("failed to start agent thunder provisioning reconciler", "error", err)
@@ -196,6 +214,8 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 		slog.Error("Failed to load built-in LLM provider templates", "error", err)
 		// Don't exit - templates can still be created via API
 	}
+
+	recordStartupPosture(cfg, dependencies.AuditRecorder)
 
 	// Create main API server handler
 	handler := api.MakeHTTPHandler(dependencies, opts.ExtraAPIRoutes)
@@ -280,6 +300,17 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 		if err := internalServer.Shutdown(shutdownCtx); err != nil {
 			slog.Error("Internal server forced shutdown after timeout", "error", err)
 		}
+
+		// Flush the audit buffer last. Both servers have stopped, so no further
+		// events can be produced and every in-flight request has finished
+		// recording. Draining any earlier would discard the audit records of the
+		// requests still being served — note this is deliberately not where
+		// EventHub.Close sits, which runs before the servers stop.
+		if dependencies.AuditRecorder != nil {
+			if err := dependencies.AuditRecorder.Close(shutdownCtx); err != nil {
+				slog.Error("error flushing audit recorder; some events may be lost", "error", err)
+			}
+		}
 	})
 
 	// Start internal server in a goroutine
@@ -310,6 +341,48 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 	// Wait for graceful shutdown to complete
 	wg.Wait()
 	slog.Info("All servers shut down successfully")
+}
+
+// recordStartupPosture writes the audit trail's own bookend events.
+//
+// The startup record bounds any gap in the trail to a restart: a reader can
+// tell "nothing happened" apart from "the service was not running".
+//
+// The RBAC record matters more. Authorization enforcement is off by default, and
+// when it is off every permission check returns early. Without an event saying
+// so, that gap is visible only in a config file no auditor reads — and every
+// request in the trail would imply a check that never happened.
+func recordStartupPosture(cfg *config.Config, recorder audit.Recorder) {
+	if recorder == nil {
+		return
+	}
+	ctx := audit.WithRecorder(context.Background(), recorder)
+
+	// rbacEnforced is set explicitly here. Outside a request there is no source
+	// to carry it, so it would otherwise serialise as false — and false is not a
+	// neutral default on this field: it is the assertion that no authorization
+	// check happened. On an RBAC-enabled deployment the startup record, which is
+	// the first thing a reader of the trail sees, then contradicts every request
+	// record that follows it.
+	audit.RecordAncillary(
+		ctx, audit.ActionSystemStartup,
+		audit.Actor(audit.ActorSystem, "system:agent-manager-service", ""),
+		audit.SurfaceOpt(audit.SurfaceSystem),
+		audit.RBACEnforced(cfg.RBACEnabled),
+		audit.Detail("sinks", []string{"stdout"}),
+	)
+
+	if !cfg.RBACEnabled {
+		audit.RecordAncillary(
+			ctx, audit.ActionSystemRBACDisabled,
+			audit.Actor(audit.ActorSystem, "system:agent-manager-service", ""),
+			audit.SurfaceOpt(audit.SurfaceSystem),
+			audit.RBACEnforced(false),
+			audit.Detail("reason", "rbac-enabled-false"),
+		)
+		slog.Warn("RBAC is disabled; every authenticated request is allowed regardless of token scopes",
+			"setting", "RBAC_ENABLED")
+	}
 }
 
 func setupLogger(cfg *config.Config) {

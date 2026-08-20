@@ -370,26 +370,9 @@ func (s *mcpProxyScopeService) List(ctx context.Context, ouID, proxyHandle strin
 }
 
 func (s *mcpProxyScopeService) ListEnvironmentScopes(ctx context.Context, ouID, envName string) ([]models.EnvironmentScopeEntry, error) {
-	envs, err := s.infraManager.ListOrgEnvironments(ctx, ouID)
+	envUUID, err := environmentUUIDByName(ctx, s.infraManager, ouID, envName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list org environments: %w", err)
-	}
-
-	var envUUID uuid.UUID
-	found := false
-	for _, env := range envs {
-		if env.Name == envName {
-			parsed, err := uuid.Parse(env.UUID)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse environment UUID %q: %w", env.UUID, err)
-			}
-			envUUID = parsed
-			found = true
-			break
-		}
-	}
-	if !found {
-		return nil, fmt.Errorf("%w: %s", utils.ErrEnvironmentNotFound, envName)
+		return nil, err
 	}
 
 	const pageSize = 100

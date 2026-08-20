@@ -186,11 +186,11 @@ func TestAnchoring_MonitorRunAgainstDeployedProxy(t *testing.T) {
 		}
 		url, err := exec.resolveProxyURL(context.Background(), "org", env.String(), proxy)
 		require.NoError(t, err)
-		// Every consumer reaches the gateway through its vhost, the monitor included. What this
-		// pins is the gateway choice: the vhost belongs to the one the proxy is deployed to, not
-		// to the other candidate.
-		require.Equal(t, both.Vhost, url)
-		require.NotEqual(t, egress.Vhost, url)
+		// Every consumer reaches the gateway through its vhost, the monitor included, and a
+		// bare fixture vhost picks up the default https scheme. What this pins is the gateway
+		// choice: the vhost belongs to the one the proxy is deployed to, not the other candidate.
+		require.Equal(t, "https://"+both.Vhost, url)
+		require.NotEqual(t, "https://"+egress.Vhost, url)
 	})
 
 	t.Run("ambiguity fires only with no deployment", func(t *testing.T) {

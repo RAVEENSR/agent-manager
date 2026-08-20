@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -320,36 +319,14 @@ func (s *agentKindService) ListKindAgents(ctx context.Context, ouID, kindName st
 		return nil, fmt.Errorf("failed to get agent kind: %w", err)
 	}
 
-	projects, err := s.ocClient.ListProjects(ctx, ouID)
+	projects, err := listOrgProjects(ctx, s.ocClient, ouID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list projects: %w", err)
+		return nil, err
 	}
 
-	type result struct {
-		agents []*models.AgentResponse
-		err    error
-	}
-
-	results := make([]result, len(projects))
-	var wg sync.WaitGroup
-	for i, p := range projects {
-		wg.Add(1)
-		go func(idx int, projectName string) {
-			defer wg.Done()
-			agents, err := s.ocClient.ListComponentsByKind(ctx, ouID, projectName, kindName)
-			results[idx] = result{agents: agents, err: err}
-		}(i, p.Name)
-	}
-	wg.Wait()
-
-	var all []*models.AgentResponse
-	for _, r := range results {
-		if r.err != nil {
-			return nil, r.err
-		}
-		all = append(all, r.agents...)
-	}
-	return all, nil
+	return fetchAcrossOrgProjects(ctx, projects, ouID, func(ctx context.Context, ouID, projectName string) ([]*models.AgentResponse, error) {
+		return s.ocClient.ListComponentsByKind(ctx, ouID, projectName, kindName)
+	})
 }
 
 // -----------------------------------------------------------------------------

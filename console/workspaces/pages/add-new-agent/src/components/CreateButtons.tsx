@@ -27,10 +27,12 @@ interface SummaryPanelProps {
     mode?: 'deploy' | 'connect';
     isNameEmpty?: boolean;
     hasLLMVarConflicts?: boolean;
+    /** An MCP server's security is still loading or failed to load. */
+    hasUnresolvedMCPSecurity?: boolean;
 }
 
 export const CreateButtons = (
-    { lastSubmittedValidationErrors, isPending, onCancel, onSubmit, mode = 'deploy', isNameEmpty = false, hasLLMVarConflicts = false }: SummaryPanelProps
+    { lastSubmittedValidationErrors, isPending, onCancel, onSubmit, mode = 'deploy', isNameEmpty = false, hasLLMVarConflicts = false, hasUnresolvedMCPSecurity = false }: SummaryPanelProps
 ) => {
     const isConnectMode = mode === 'connect';
 
@@ -59,7 +61,10 @@ export const CreateButtons = (
                         <Link size={16} /> :
                         <RocketOutlined size={16} />}
                     onClick={onSubmit}
-                    disabled={isPending || isNameEmpty || hasLLMVarConflicts}
+                    disabled={
+                        isPending || isNameEmpty || hasLLMVarConflicts ||
+                        hasUnresolvedMCPSecurity
+                    }
                 >
                     {isConnectMode ? 'Register' : 'Deploy'}
                 </Button>

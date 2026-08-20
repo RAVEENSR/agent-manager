@@ -76,11 +76,21 @@ func buildInternalAgentFromKindComponentRequestBody(namespaceName, projectName s
 		string(AnnotationKeyDisplayName): req.DisplayName,
 		string(AnnotationKeyDescription): req.Description,
 	}
+	// Both the kind name and version are recorded so an agent can be traced back to
+	// the exact published kind version it was instantiated from. Version tags are
+	// free-form, and a tag that isn't a legal label value would be rejected by the
+	// API server with an opaque error — so it's checked here and reported as a
+	// validation error naming the tag, never dropped to make creation succeed with
+	// an incomplete provenance record.
+	if err := utils.ValidateLabelValue(req.AgentKind.Version, "agent kind version"); err != nil {
+		return gen.CreateComponentJSONRequestBody{}, fmt.Errorf("invalid agent kind version: %w", err)
+	}
 	labels := map[string]string{
 		string(LabelKeyProvisioningType): string(ProvisioningInternal),
 		string(LabelKeyAgentSubType):     req.AgentType.SubType,
 		string(LabelKeyBuildSource):      BuildSourceKind,
 		string(LabelKeyAgentKindName):    req.AgentKind.Name,
+		string(LabelKeyAgentKindVersion): req.AgentKind.Version,
 	}
 
 	// Mirror the same language label logic as buildInternalAgentFromSourceComponentRequestBody
@@ -106,6 +116,7 @@ func buildInternalAgentFromKindComponentRequestBody(namespaceName, projectName s
 	defaultParams := ComponentParameters{
 		Exposed:   true,
 		Resources: resourceParams,
+		RoutePath: req.Name,
 	}
 	parameters, err := structToMap(defaultParams)
 	if err != nil {
@@ -224,6 +235,7 @@ func buildInternalAgentFromSourceComponentRequestBody(namespaceName, projectName
 	defaultParams := ComponentParameters{
 		Exposed:   true,
 		Resources: resourceParams,
+		RoutePath: req.Name,
 	}
 
 	// Convert struct to map for OpenChoreo API
@@ -3012,6 +3024,8 @@ func convertComponentFromTyped(comp *gen.Component) (*models.AgentResponse, erro
 
 	if getLabel(comp.Metadata.Labels, string(LabelKeyBuildSource)) == BuildSourceKind {
 		agent.KindName = getLabel(comp.Metadata.Labels, string(LabelKeyAgentKindName))
+		// Empty for agents created before the version label existed.
+		agent.KindVersion = getLabel(comp.Metadata.Labels, string(LabelKeyAgentKindVersion))
 		// Enrich agent.Build from labels — kind agents have no workflow, so extractBuildParams
 		// is never called above, but the build source info is stored in labels at creation time.
 		language := getLabel(comp.Metadata.Labels, string(LabelKeyAgentLanguage))

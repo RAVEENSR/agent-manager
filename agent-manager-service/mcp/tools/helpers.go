@@ -26,6 +26,7 @@ import (
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/jwtassertion"
 	reqlogger "github.com/wso2/agent-manager/agent-manager-service/middleware/logger"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
@@ -158,8 +159,25 @@ func wrapToolError(toolName string, err error) error {
 	return fmt.Errorf("%s: %w", toolName, err)
 }
 
-// custom logging layer for mcp tools
-func withToolLogging[T any](toolName string, handler func(context.Context, *gomcp.CallToolRequest, T) (*gomcp.CallToolResult, any, error)) func(context.Context, *gomcp.CallToolRequest, T) (*gomcp.CallToolResult, any, error) {
+// withToolAudit wraps a tool handler with the existing logging and, for tools
+// that change state, an audit record.
+//
+// Read-only tools are skipped, matching the REST policy: recording every list
+// call would multiply volume for little forensic gain. The action's class is
+// what decides, so the decision is made once where the action is declared
+// rather than repeated at each registration.
+//
+// The record is written after the handler returns so it carries the outcome.
+// It is fail-open: MCP tools reach the same services as the REST routes, and
+// the operations that must not proceed unrecorded already refuse inside those
+// services, so refusing again here would only duplicate the check.
+func withToolAudit[T any](
+	toolName string,
+	action audit.Action,
+	handler func(context.Context, *gomcp.CallToolRequest, T) (*gomcp.CallToolResult, any, error),
+) func(context.Context, *gomcp.CallToolRequest, T) (*gomcp.CallToolResult, any, error) {
+	audited := action.Class() != audit.ClassRead
+
 	return func(ctx context.Context, req *gomcp.CallToolRequest, input T) (*gomcp.CallToolResult, any, error) {
 		log := reqlogger.GetLogger(ctx)
 		start := time.Now()
@@ -169,6 +187,17 @@ func withToolLogging[T any](toolName string, handler func(context.Context, *gomc
 			log.Error("mcp tool failed", "tool", toolName, "duration_ms", duration, "error", err)
 		} else {
 			log.Info("mcp tool succeeded", "tool", toolName, "duration_ms", duration)
+		}
+
+		if audited {
+			// A handler that already emitted its own semantic record marks the
+			// request scope, so this does not double-record; see audit.Record.
+			audit.Record(
+				ctx, action,
+				audit.SurfaceOpt(audit.SurfaceMCP),
+				audit.Detail("tool", toolName),
+				audit.Result(err),
+			)
 		}
 		return result, meta, err
 	}

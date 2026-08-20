@@ -165,8 +165,16 @@ func backfillLLMProxyHandles(config *models.AgentConfiguration) {
 	if config == nil {
 		return
 	}
-	for i := range config.EnvMappings {
-		proxy := config.EnvMappings[i].LLMProxy
+
+	backfillLLMProxyHandlesInMappings(config.EnvMappings)
+}
+
+// backfillLLMProxyHandlesInMappings is the shared implementation used by any
+// repository that preloads EnvAgentModelMapping.LLMProxy directly (see
+// backfillLLMProxyHandles for why this backfill is needed).
+func backfillLLMProxyHandlesInMappings(mappings []models.EnvAgentModelMapping) {
+	for i := range mappings {
+		proxy := mappings[i].LLMProxy
 		if proxy != nil && proxy.Handle == "" {
 			proxy.Handle = proxy.Configuration.Name
 		}

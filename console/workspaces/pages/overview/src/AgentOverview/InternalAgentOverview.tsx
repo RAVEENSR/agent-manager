@@ -87,6 +87,9 @@ export const InternalAgentOverview = () => {
     const isKindAgent = !!agent?.kindName;
     const hasMultipleEnvironments = sortedEnvironmentList.length > 1;
     const selectedEnvironmentStatus = statusOf(deployments, selectedEnvironment?.name ?? "");
+    // The kind version running in the selected environment, not the one the agent
+    // was created from — a redeploy moves the former and leaves the latter behind.
+    const deployedKindVersion = deployments?.[selectedEnvironment?.name ?? ""]?.kindVersion;
 
     return (
         <Box display="flex" flexDirection="column" gap={2}>
@@ -94,6 +97,7 @@ export const InternalAgentOverview = () => {
                 <KindInfoCard
                     orgId={orgId ?? ""}
                     kindName={agent!.kindName!}
+                    kindVersion={deployedKindVersion}
                     framework={agent?.agentType?.type}
                     model={agent?.agentType?.subType}
                 />
@@ -152,7 +156,6 @@ export const InternalAgentOverview = () => {
                                 agentId={agentId}
                                 envId={selectedEnvironment.name}
                                 configurations={agent?.configurations}
-                                isolationTier={selectedEnvironment.isolationTier}
                                 deploymentStatus={selectedEnvironmentStatus}
                             />
                         }

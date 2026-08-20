@@ -28,6 +28,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/secretmanagersvc"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/thundersvc"
@@ -101,6 +102,16 @@ type AgentThunderProvisioningService interface {
 	// ProvisionForAgent for this one environment: write-ahead PENDING, then a
 	// best-effort background attempt.
 	ProvisionForEnvironmentIfMissing(ctx context.Context, ouID, projectName, agentName, envName string, ownership models.AgentProvisioningType, requestedBy string) (alreadyExisted bool, err error)
+
+	// RetryProvisioning resets a FAILED binding back to PENDING — clearing its
+	// attempt budget and last error — and re-attempts provisioning in the
+	// background, for both Internal and External agents. Returns
+	// utils.ErrAgentIdentityNotProvisioned if no binding exists for this agent
+	// in this environment, or utils.ErrAgentIdentityRetryNotAllowed if the
+	// binding exists but its current status is not FAILED — completed,
+	// pending, and in-progress bindings already have their own path forward
+	// and are rejected rather than silently no-oped.
+	RetryProvisioning(ctx context.Context, ouID, projectName, agentName, envName string) (models.AgentIdentityEnvironmentView, error)
 
 	// RegenerateSecret rotates the secret for one binding and returns the
 	// binding's ownership type, client ID, and the new secret. The caller (the
@@ -455,9 +466,13 @@ func reconcileWorkloadInjection(ctx context.Context, injector AgentIdentityInjec
 func DBBackedAgentThunderProvisioning() func(db *gorm.DB, secretMgmtClient secretmanagersvc.SecretManagementClient, ocClient client.OpenChoreoClient, encryptionKey []byte) AgentThunderProvisioningService {
 	return func(db *gorm.DB, secretMgmtClient secretmanagersvc.SecretManagementClient, ocClient client.OpenChoreoClient, encryptionKey []byte) AgentThunderProvisioningService {
 		envThunderRepo := repositories.NewEnvThunderSystemClientRepo(db)
+		envThunderURLRepo := repositories.NewEnvThunderURLRepo(db)
 		return NewAgentThunderProvisioningService(
 			repositories.NewAgentThunderClientRepo(db),
-			thundersvc.NewEnvThunderResolver(NewEnvThunderSecretReader(envThunderRepo, encryptionKey)),
+			thundersvc.NewEnvThunderResolver(
+				NewEnvThunderSecretReader(envThunderRepo, encryptionKey),
+				NewEnvThunderURLReader(envThunderURLRepo),
+			),
 			secretMgmtClient,
 			ocClient,
 			nil, // workload injector — see doc comment above
@@ -624,6 +639,49 @@ func (s *agentThunderProvisioningService) ProvisionForEnvironmentIfMissing(
 	return false, nil
 }
 
+func (s *agentThunderProvisioningService) RetryProvisioning(ctx context.Context, ouID, projectName, agentName, envName string) (models.AgentIdentityEnvironmentView, error) {
+	binding, err := s.repo.Get(ctx, ouID, projectName, agentName, envName)
+	if err != nil {
+		if errors.Is(err, repositories.ErrAgentThunderClientNotFound) {
+			return models.AgentIdentityEnvironmentView{}, fmt.Errorf("%w: %s in %s", utils.ErrAgentIdentityNotProvisioned, agentName, envName)
+		}
+		return models.AgentIdentityEnvironmentView{}, err
+	}
+	if binding.Status != models.AgentThunderStatusFailed {
+		return models.AgentIdentityEnvironmentView{}, fmt.Errorf("%w: %s in %s is %s", utils.ErrAgentIdentityRetryNotAllowed, agentName, envName, binding.Status)
+	}
+
+	reset, err := s.repo.ResetFailedForRetry(ctx, binding.ID)
+	if err != nil {
+		return models.AgentIdentityEnvironmentView{}, fmt.Errorf("reset agent thunder binding for retry: %w", err)
+	}
+	if !reset {
+		// Lost a race with something else that moved the binding out of FAILED
+		// between the read above and this conditional update (another retry,
+		// or the reconciler) — same outward signal as "not currently failed."
+		return models.AgentIdentityEnvironmentView{}, fmt.Errorf("%w: %s in %s changed state concurrently", utils.ErrAgentIdentityRetryNotAllowed, agentName, envName)
+	}
+
+	binding.Status = models.AgentThunderStatusPending
+	binding.AttemptCount = 0
+	binding.LastError = ""
+	binding.LastAttemptedAt = nil
+	binding.NextRetryAt = nil
+
+	// Detach from the request context so the background attempt survives the
+	// HTTP handler returning, mirroring ProvisionForAgent's own attemptAll call.
+	go s.AttemptProvision(context.WithoutCancel(ctx), *binding)
+
+	return models.AgentIdentityEnvironmentView{
+		EnvironmentName:  binding.EnvironmentName,
+		ProvisioningType: binding.ProvisioningType,
+		Status:           models.AgentThunderStatusPending,
+		AgentID:          binding.ThunderAgentID,
+		ClientID:         binding.ThunderClientID,
+		RequestedBy:      binding.RequestedBy,
+	}, nil
+}
+
 func (s *agentThunderProvisioningService) AttemptProvision(ctx context.Context, binding models.AgentThunderClient) {
 	// Held for the entire attempt so this can't interleave its Thunder
 	// RegenerateAgentSecret/OpenBao Store calls with a concurrent
@@ -751,6 +809,23 @@ func (s *agentThunderProvisioningService) AttemptProvision(ctx context.Context, 
 		return
 	}
 
+	// A credential issued with no request behind it: the actor is this service,
+	// and the user who originally asked for the agent is carried as OnBehalfOf.
+	// That attribution is exactly what requested_by was captured for.
+	audit.Record(
+		ctx, audit.ActionSystemAgentIdentityProvisioned,
+		audit.Org(binding.OUID),
+		audit.ResourceNamed(audit.ResourceAgentIdentity, binding.AgentName, binding.AgentName),
+		audit.Project(binding.ProjectName),
+		audit.Environment(binding.EnvironmentName),
+		audit.Actor(audit.ActorSystem, systemActorAgentThunderReconciler, ""),
+		audit.SurfaceOpt(audit.SurfaceSystem),
+		audit.OnBehalfOf(binding.RequestedBy),
+		audit.Detail("agentName", binding.AgentName),
+		audit.Detail("environment", binding.EnvironmentName),
+		audit.Detail("clientId", clientID),
+	)
+
 	// Gateway Binding: push the credential into the live workload for internal
 	// agents that were already deployed before this attempt completed. Purely
 	// best-effort — the binding is COMPLETED either way, and the deploy flow
@@ -787,6 +862,21 @@ func (s *agentThunderProvisioningService) recordFailure(ctx context.Context, bin
 	}
 	if exhausted {
 		update.Status = models.AgentThunderStatusFailed
+		// The agent will not get an identity without operator action, so this
+		// is recorded rather than left as one more retry log line.
+		audit.Record(
+			ctx, audit.ActionSystemAgentIdentityExhausted,
+			audit.Org(binding.OUID),
+			audit.ResourceNamed(audit.ResourceAgentIdentity, binding.AgentName, binding.AgentName),
+			audit.Project(binding.ProjectName),
+			audit.Environment(binding.EnvironmentName),
+			audit.Actor(audit.ActorSystem, systemActorAgentThunderReconciler, ""),
+			audit.SurfaceOpt(audit.SurfaceSystem),
+			audit.OnBehalfOf(binding.RequestedBy),
+			audit.Detail("agentName", binding.AgentName),
+			audit.Detail("environment", binding.EnvironmentName),
+			audit.Detail("reason", "retries-exhausted"),
+		)
 	} else {
 		update.Status = models.AgentThunderStatusPending
 		next := time.Now().Add(provisionRetryDelay)
@@ -1117,3 +1207,7 @@ func (s *agentThunderProvisioningService) DeleteAllBindings(ctx context.Context,
 		}()
 	}
 }
+
+// systemActorAgentThunderReconciler identifies the AgentID provisioning
+// reconciler in audit records it produces on its own initiative.
+const systemActorAgentThunderReconciler = "system:agent-thunder-reconciler"

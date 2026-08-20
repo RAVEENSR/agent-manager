@@ -527,7 +527,6 @@ export function MonitorLLMProviderDrawer({
               submitLabel="Create & use provider"
               showAdvancedBasicDetails={false}
               showGuardrails={false}
-              showGatewaySelector={false}
               onCancel={() => setMode("list")}
               onSubmit={handleCreateProvider}
             />

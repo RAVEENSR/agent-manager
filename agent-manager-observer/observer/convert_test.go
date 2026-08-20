@@ -32,7 +32,7 @@ func TestConvertSpanInfoToSpan(t *testing.T) {
 		EndTime:      end,
 		DurationNs:   42,
 		Kind:         "INTERNAL",
-		Status:       "error",
+		Status:       &SpanStatus{Code: "error", Message: "boom: connection refused"},
 		Attributes:   map[string]interface{}{"gen_ai.system": "openai"},
 		ResourceAttributes: map[string]interface{}{
 			"openchoreo.dev/component-uid": "comp-abc",
@@ -49,6 +49,9 @@ func TestConvertSpanInfoToSpan(t *testing.T) {
 	}
 	if span.Kind != "INTERNAL" || span.Status != "error" {
 		t.Errorf("expected Kind/Status mapped, got Kind=%q Status=%q", span.Kind, span.Status)
+	}
+	if span.StatusMessage != "boom: connection refused" {
+		t.Errorf("expected StatusMessage mapped from status.message, got %q", span.StatusMessage)
 	}
 	if span.DurationInNanos != 42 {
 		t.Errorf("expected DurationInNanos 42, got %d", span.DurationInNanos)

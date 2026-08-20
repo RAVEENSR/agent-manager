@@ -16,6 +16,7 @@
  * under the License.
  */
 
+import { IsolationTierBadge } from "@agent-management-platform/shared-component";
 import type { Environment } from "@agent-management-platform/types";
 import { Box, Tab, Tabs } from "@wso2/oxygen-ui";
 
@@ -59,6 +60,12 @@ export function EnvironmentTabsBar({
           sx={{ minHeight: 0, py: 0.5 }}
           label={
             <Box display="flex" alignItems="center" gap={0.75}>
+              <IsolationTierBadge
+                tier={env.isolationTier}
+                size={14}
+                color={env.name === selectedName ? "primary.main" : undefined}
+              />
+              {env.displayName ?? env.name}
               <Box
                 sx={{
                   width: 8,
@@ -68,7 +75,6 @@ export function EnvironmentTabsBar({
                   flexShrink: 0,
                 }}
               />
-              {env.displayName ?? env.name}
             </Box>
           }
         />

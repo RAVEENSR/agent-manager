@@ -63,12 +63,22 @@ interface UseAgentRolesAndGroupsParams {
 export function useAgentRolesAndGroups({
   orgId, projectId, agentId, envId, enabled,
 }: UseAgentRolesAndGroupsParams) {
-  const { data: rolesData, isLoading: isLoadingRoles } = useGetAgentRoles(
+  const {
+    data: rolesData,
+    isLoading: isLoadingRoles,
+    isError: isRolesError,
+    error: rolesError,
+  } = useGetAgentRoles(
     { orgName: orgId, projName: projectId, agentName: agentId },
     { environment: envId },
     { enabled },
   );
-  const { data: groupsData, isLoading: isLoadingGroups } = useGetAgentGroups(
+  const {
+    data: groupsData,
+    isLoading: isLoadingGroups,
+    isError: isGroupsError,
+    error: groupsError,
+  } = useGetAgentGroups(
     { orgName: orgId, projName: projectId, agentName: agentId },
     { environment: envId },
     { enabled },
@@ -78,6 +88,8 @@ export function useAgentRolesAndGroups({
     roles: rolesData?.roles ?? [],
     groups: groupsData?.groups ?? [],
     isLoading: isLoadingRoles || isLoadingGroups,
+    isError: isRolesError || isGroupsError,
+    error: rolesError ?? groupsError,
   };
 }
 

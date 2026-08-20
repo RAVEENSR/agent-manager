@@ -59,11 +59,11 @@ assert_eq "amp keyManager.issuer (service key)" \
 # has to follow it off the chart's localhost default. Assert only that entry —
 # pinning the whole list would break on any unrelated audience change.
 assert_eq "amp keyManager.audience carries the public API URL (service key)" "yes" \
-  "$(has "$amp" 'agentManagerService.config.keyManager.audience=amp\,')"
+  "$(has "$amp" 'agentManagerService.config.keyManager.audience=urn:wso2:amp\,')"
 assert_eq "amp keyManager.audience ends with the public API URL (service key)" "yes" \
   "$(has "$amp" 'am-mcp\,https://api.amp.203.0.113.10.sslip.io/')"
 assert_eq "amp keyManager.audience carries the public API URL (legacy key)" "yes" \
-  "$(has "$amp" 'agentManager.config.keyManager.audience=amp\,')"
+  "$(has "$amp" 'agentManager.config.keyManager.audience=urn:wso2:amp\,')"
 # tlsEnabled=true makes amp-api advertise the https deployed-agent endpoint variant;
 # emitted under both keys (old agentManager + new agentManagerService).
 assert_eq "amp tlsEnabled (service key)" \
@@ -99,6 +99,31 @@ assert_eq "amp cp url by default" \
 assert_eq "amp gateway-mgmt route hostname when cp on" \
   "agentManagerService.ocIngress.gatewayMgmt.hostnames={cp.amp.203.0.113.10.sslip.io}" \
   "$(grep -F 'gatewayMgmt.hostnames' <<<"$amp")"
+# Recorded on the AMS ConfigMap for add-environment.sh to read back. The two base
+# domains give an added environment the right hostnames; the scheme/port give it a
+# vhost that is actually callable — the runtime is fronted by TLS on :443 here, and
+# the chart-default http://<host>:19080 points at a loopback-bound node port.
+assert_eq "amp agentsBaseDomain (service key)" \
+  "agentManagerService.config.agentsBaseDomain=agents.203.0.113.10.sslip.io" \
+  "$(grep -F 'agentManagerService.config.agentsBaseDomain' <<<"$amp")"
+# Both agent listener variants sit behind Caddy on :443 here — there is no :80 on a
+# VM at all — so an added environment must advertise the same pair the installer
+# writes for the default environment rather than inferring one port from the other.
+assert_eq "amp agentsHttpPort (service key)" \
+  "agentManagerService.config.agentsHttpPort=443" \
+  "$(grep -F 'agentManagerService.config.agentsHttpPort' <<<"$amp")"
+assert_eq "amp agentsHttpsPort (service key)" \
+  "agentManagerService.config.agentsHttpsPort=443" \
+  "$(grep -F 'agentManagerService.config.agentsHttpsPort' <<<"$amp")"
+assert_eq "amp gatewayBaseDomain (service key)" \
+  "agentManagerService.config.gatewayBaseDomain=gateway.amp.203.0.113.10.sslip.io" \
+  "$(grep -F 'agentManagerService.config.gatewayBaseDomain' <<<"$amp")"
+assert_eq "amp gatewayVhostScheme (service key)" \
+  "agentManagerService.config.gatewayVhostScheme=https" \
+  "$(grep -F 'agentManagerService.config.gatewayVhostScheme' <<<"$amp")"
+assert_eq "amp gatewayVhostPort (service key)" \
+  "agentManagerService.config.gatewayVhostPort=443" \
+  "$(grep -F 'agentManagerService.config.gatewayVhostPort' <<<"$amp")"
 
 # --- build_amp_helm_args (external gateways disabled) ---
 amp_nocp="$(build_amp_helm_args 203.0.113.10 false)"
@@ -141,7 +166,7 @@ assert_eq "observability oauth authorizationServers -> public thunder" \
 # slash, so the audience list has to follow publicUrl off the chart's localhost
 # default. Commas stay escaped or helm splits the value into a list.
 assert_eq "observability audience carries the public observer URL" \
-  'amObserver.auth.audience=amp\,amp-api-client\,am-obs-mcp\,https://observer.amp.203.0.113.10.sslip.io/' \
+  'amObserver.auth.audience=urn:wso2:amp\,amp-api-client\,am-obs-mcp\,https://observer.amp.203.0.113.10.sslip.io/' \
   "$(grep -F 'amObserver.auth.audience' <<<"$obs")"
 
 # --- render_dataplane_external_ingress: public host on :443, both http+https entries
@@ -248,16 +273,21 @@ assert_eq "caddy console site" "console.amp.203.0.113.10.sslip.io {" "$(grep -F 
 assert_eq "caddy console upstream (via kgateway)" "	reverse_proxy 127.0.0.1:8080" \
   "$(grep -F -A8 'console.amp.203.0.113.10.sslip.io {' <<<"$cf" | grep -F 'reverse_proxy' | head -1)"
 # Four sites proxy to the CP kgateway (8080): console, api, the fixed
-# platform-Thunder host, and the env-Thunder wildcard (*.thunder.<domain>) —
-# kgateway itself discriminates by Host header via each backend's HTTPRoute.
+# platform-Thunder host, and the env-Thunder base-domain wildcard (*.<domain>,
+# no fixed "thunder." segment) — kgateway itself discriminates by Host header
+# via each backend's HTTPRoute.
 assert_eq "caddy cp-kgateway upstream count" "4" "$(grep -cF '127.0.0.1:8080' <<<"$cf")"
-assert_eq "caddy env-thunder wildcard site" "*.thunder.amp.203.0.113.10.sslip.io {" \
-  "$(grep -F '*.thunder.amp' <<<"$cf" | head -1)"
+assert_eq "caddy env-thunder wildcard site" "*.amp.203.0.113.10.sslip.io {" \
+  "$(grep -F '*.amp.203.0.113.10.sslip.io {' <<<"$cf" | head -1)"
 # gateway host routes through the kgateway data plane (19080), not the ClusterIP
 # runtime (22893) which is not node-published; scope the grep to the gateway block
 # since 19080 is shared with the agents site.
 assert_eq "caddy gateway upstream (via kgateway)" "	reverse_proxy 127.0.0.1:19080" \
   "$(grep -F -A8 'gateway.amp.203.0.113.10.sslip.io {' <<<"$cf" | grep -F 'reverse_proxy' | head -1)"
+assert_eq "caddy env-gateway wildcard site" "*.gateway.amp.203.0.113.10.sslip.io {" \
+  "$(grep -F '*.gateway.amp' <<<"$cf" | head -1)"
+assert_eq "caddy env-gateway wildcard upstream" "	reverse_proxy 127.0.0.1:19080" \
+  "$(grep -F -A8 '*.gateway.amp.203.0.113.10.sslip.io {' <<<"$cf" | grep -F 'reverse_proxy' | head -1)"
 assert_eq "caddy no 22893 dead-end" "" "$(grep -F '127.0.0.1:22893' <<<"$cf")"
 assert_eq "caddy no cp when disabled" "" "$(grep -F 'cp.amp' <<<"$cf")"
 assert_eq "caddy api upstream (via kgateway)" "	reverse_proxy 127.0.0.1:8080" \
@@ -274,8 +304,8 @@ assert_eq "issuer acme"                "yes" "$(has "$cf_tls" 'issuer acme')"
 assert_eq "disable_http_challenge"     "yes" "$(has "$cf_tls" 'disable_http_challenge')"
 assert_eq "keeps email"                "yes" "$(has "$cf_tls" 'email ops@example.com')"
 # per-site tls block on each public host incl. cp (6) + the env-Thunder wildcard (1)
-# + the agent wildcard (1) = 8
-assert_eq "tls block per site (8)"     "8"   "$(grep -cF 'issuer acme' <<<"$cf_tls")"
+# + the env-gateway wildcard (1) + the agent wildcard (1) = 9
+assert_eq "tls block per site (9)"     "9"   "$(grep -cF 'issuer acme' <<<"$cf_tls")"
 # never serves plain http / disables auto-https
 assert_eq "no auto_https off"          "no"  "$(has "$cf_tls" 'auto_https off')"
 assert_eq "no http:// public site"     "no"  "$(has "$cf_tls" 'http://console')"
@@ -401,7 +431,7 @@ assert_eq "agent site on_demand + disable_http_challenge" "yes" \
 
   core_obs="$(observability_helm_args)"
   assert_eq "core observability audience carries the public observer URL" \
-    'amObserver.auth.audience=amp\,amp-api-client\,am-obs-mcp\,https://observer.amp.example.com/' \
+    'amObserver.auth.audience=urn:wso2:amp\,amp-api-client\,am-obs-mcp\,https://observer.amp.example.com/' \
     "$(grep -F 'amObserver.auth.audience' <<<"$core_obs")"
 
   core_gw="$(gateway_helm_args)"
@@ -416,6 +446,22 @@ assert_eq "agent site on_demand + disable_http_challenge" "yes" \
   assert_eq "core cp oidc issuer" \
     "security.oidc.issuer=https://thunder.amp.example.com" \
     "$(grep -F 'security.oidc.issuer' <<<"$core_cp")"
+
+  # The advanced install has no Caddy: one DNS-01 wildcard cert covers the dynamic
+  # tiers instead of on-demand issuance. Per-environment gateways are one of those
+  # tiers, so *.<gateway host> must be a SAN — without it an added environment gets a
+  # hostname that resolves and routes but fails the TLS handshake.
+  dns_names="$(cert_dns_names)"
+  assert_eq "cert covers the agents wildcard" "*.agents.amp.example.com" \
+    "$(grep -Fx '*.agents.amp.example.com' <<<"$dns_names")"
+  assert_eq "cert covers the env-Thunder wildcard" "*.amp.example.com" \
+    "$(grep -Fx '*.amp.example.com' <<<"$dns_names")"
+  assert_eq "cert covers the env-gateway wildcard" "*.gateway.amp.example.com" \
+    "$(grep -Fx '*.gateway.amp.example.com' <<<"$dns_names")"
+  # The exact gateway host must stay a SAN alongside its wildcard: *.gateway makes
+  # gateway.<base> an empty non-terminal, so nothing broader covers it (RFC 4592).
+  assert_eq "cert keeps the exact gateway host" "gateway.amp.example.com" \
+    "$(grep -Fx 'gateway.amp.example.com' <<<"$dns_names")"
 )
 
 # --- core respects AMP_HOST_CP="" as external-gateways-off ---
@@ -598,7 +644,10 @@ assert_eq "init has DOMAIN_BASE"   "yes" "$(has "$init_out" 'DOMAIN_BASE=')"
 assert_eq "init has ACME_EMAIL"    "yes" "$(has "$init_out" 'ACME_EMAIL=')"
 assert_eq "init has DNS_PROVIDER"  "yes" "$(has "$init_out" 'DNS_PROVIDER=')"
 assert_eq "init mentions ACME_SERVER" "yes" "$(has "$init_out" 'ACME_SERVER=')"
-assert_eq "init has no TLS_MODE (single DNS-01 path)" "no" "$(has "$init_out" 'TLS_MODE=')"
+assert_eq "init has TLS_MODE"      "yes" "$(has "$init_out" 'TLS_MODE=dns01')"
+assert_eq "init mentions TLS_CERT_FILE" "yes" "$(has "$init_out" 'TLS_CERT_FILE=')"
+assert_eq "init mentions TLS_KEY_FILE"  "yes" "$(has "$init_out" 'TLS_KEY_FILE=')"
+assert_eq "init mentions TLS_CA_FILE"   "yes" "$(has "$init_out" 'TLS_CA_FILE=')"
 # The emitted template must be valid shell (sourceable without error).
 tmp_init="$(mktemp)"; printf '%s\n' "$init_out" > "$tmp_init"
 if bash -n "$tmp_init"; then assert_eq "init template is valid shell" "0" "0"; else assert_eq "init template is valid shell" "0" "1"; fi
@@ -620,6 +669,60 @@ assert_eq "dry-run renders consolidated gateway" "yes" "$(has "$dry_out" 'kind: 
 assert_eq "dry-run renders amp helm arg" "yes" "$(has "$dry_out" 'serverPublicURL=https://api.amp.mycompany.com')"
 assert_eq "dry-run does NOT start install" "no" "$(has "$dry_out" 'Running base installer')"
 rm -f "$tmp_cfg"
+
+# --- --dry-run in byoc mode: TLS Secret instead of the cert-manager objects ---
+# A config with no ACME_EMAIL and no DNS_PROVIDER must be accepted, and the private key
+# must never reach stdout (dry-run output lands in terminal scrollback and CI logs).
+byoc_dir="$(mktemp -d)"
+byoc_d=amp.mycompany.com
+openssl req -x509 -newkey rsa:2048 -nodes -days 90 \
+  -keyout "${byoc_dir}/key.pem" -out "${byoc_dir}/cert.pem" -subj "/CN=${byoc_d}" \
+  -addext "subjectAltName=DNS:console.${byoc_d},DNS:api.${byoc_d},DNS:thunder.${byoc_d},DNS:observer.${byoc_d},DNS:gateway.${byoc_d},DNS:cp.${byoc_d},DNS:*.agents.${byoc_d},DNS:*.${byoc_d},DNS:*.gateway.${byoc_d}" \
+  >/dev/null 2>&1
+cat > "${byoc_dir}/config.env" <<CFG
+AMP_VERSION=0.15.0
+DOMAIN_BASE=${byoc_d}
+TLS_MODE=byoc
+TLS_CERT_FILE=${byoc_dir}/cert.pem
+TLS_KEY_FILE=${byoc_dir}/key.pem
+CFG
+byoc_out="$(bash "$ADV" --config "${byoc_dir}/config.env" --dry-run 2>&1)"
+assert_eq "byoc dry-run renders a TLS Secret"      "yes" "$(has "$byoc_out" 'type: kubernetes.io/tls')"
+assert_eq "byoc dry-run renders the gateway"       "yes" "$(has "$byoc_out" 'kind: Gateway')"
+assert_eq "byoc dry-run renders frontproxy routes" "yes" "$(has "$byoc_out" 'amp-frontproxy-dataplane')"
+assert_eq "byoc dry-run has no ClusterIssuer"      "no"  "$(has "$byoc_out" 'kind: ClusterIssuer')"
+assert_eq "byoc dry-run has no Certificate"        "no"  "$(has "$byoc_out" 'kind: Certificate')"
+assert_eq "byoc dry-run never prints the key"      "no"  "$(has "$byoc_out" 'PRIVATE KEY')"
+assert_eq "byoc dry-run never prints the cert"     "no"  "$(has "$byoc_out" 'BEGIN CERTIFICATE')"
+# No TLS_CA_FILE in this config, so no CA ConfigMap should be rendered.
+assert_eq "byoc without TLS_CA_FILE: no CA cm"     "no"  "$(has "$byoc_out" 'name: amp-platform-ca')"
+
+# With TLS_CA_FILE the installer must persist the CA, so environments created later
+# can trust the listener instead of falling back to the wrong in-cluster root.
+cp "${byoc_dir}/cert.pem" "${byoc_dir}/ca.pem"
+printf 'TLS_CA_FILE=%s/ca.pem\n' "$byoc_dir" >> "${byoc_dir}/config.env"
+ca_out="$(bash "$ADV" --config "${byoc_dir}/config.env" --dry-run 2>&1)"
+assert_eq "byoc with TLS_CA_FILE renders CA cm"    "yes" "$(has "$ca_out" 'name: amp-platform-ca')"
+# Scope the namespace check to the ConfigMap: the Gateway and the front-proxy routes in
+# the same dry-run output also sit in openchoreo-control-plane, so an unscoped grep would
+# pass even if the CA landed somewhere else entirely.
+assert_eq "CA cm lands in the gateway namespace"   "yes" \
+  "$(grep -A1 'name: amp-platform-ca' <<<"$ca_out" | grep -q 'namespace: openchoreo-control-plane' && echo yes || echo no)"
+assert_eq "byoc with TLS_CA_FILE still hides key"  "no"  "$(has "$ca_out" 'PRIVATE KEY')"
+
+# A cert missing one dynamic-tier wildcard must be rejected before any cluster work,
+# naming the SAN. *.<DOMAIN_BASE> covers the service hosts but NOT the deeper tiers.
+openssl req -x509 -newkey rsa:2048 -nodes -days 90 \
+  -keyout "${byoc_dir}/bad-key.pem" -out "${byoc_dir}/bad-cert.pem" -subj "/CN=${byoc_d}" \
+  -addext "subjectAltName=DNS:*.${byoc_d},DNS:*.agents.${byoc_d}" \
+  >/dev/null 2>&1
+sed -e "s#${byoc_dir}/cert.pem#${byoc_dir}/bad-cert.pem#" -e "s#${byoc_dir}/key.pem#${byoc_dir}/bad-key.pem#" \
+  "${byoc_dir}/config.env" > "${byoc_dir}/bad.env"
+bad_out="$(bash "$ADV" --config "${byoc_dir}/bad.env" --dry-run 2>&1)"; bad_rc=$?
+assert_eq "byoc bad-SAN cert exits non-zero"  "1"   "$bad_rc"
+assert_eq "byoc bad-SAN names the missing SAN" "yes" "$(has "$bad_out" "missing the wildcard SAN: *.gateway.${byoc_d}")"
+assert_eq "byoc bad-SAN stops before install" "no"  "$(has "$bad_out" 'DRY RUN — derived hosts')"
+rm -rf "$byoc_dir"
 
 # --- inotify_bump_target: bump to floor only when below it (or unreadable) ---
 assert_eq "inotify below floor bumps"         "512"    "$(inotify_bump_target 128 512)"

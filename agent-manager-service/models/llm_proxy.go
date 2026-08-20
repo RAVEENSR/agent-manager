@@ -56,6 +56,7 @@ type LLMProxyConfig struct {
 	Vhost        *string         `json:"vhost,omitempty"`
 	Provider     string          `json:"provider,omitempty"`
 	UpstreamAuth *UpstreamAuth   `json:"upstreamAuth,omitempty"`
+	Resilience   *Resilience     `json:"resilience,omitempty"`
 	Policies     []LLMPolicy     `json:"policies,omitempty"`
 	Security     *SecurityConfig `json:"security,omitempty"`
 }

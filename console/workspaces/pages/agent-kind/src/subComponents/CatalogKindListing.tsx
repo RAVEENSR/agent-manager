@@ -20,7 +20,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Box, ListingTable, SearchBar, Skeleton, Stack, TablePagination } from "@wso2/oxygen-ui";
 import { Box as CubeIcon, Search as SearchIcon } from "@wso2/oxygen-ui-icons-react";
 import type { AgentKindResponse } from "@agent-management-platform/types";
-import { CatalogKindCard } from "./CatalogKindCard";
+import { CatalogKindCard, CARD_HEIGHT } from "./CatalogKindCard";
 
 const DEFAULT_ROWS_PER_PAGE = 6;
 const ROWS_PER_PAGE_OPTIONS = [6, 12, 24];
@@ -116,7 +116,7 @@ export const CatalogKindListing: React.FC<CatalogKindListingProps> = ({
           }}
         >
           {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} variant="rounded" height={160} />
+            <Skeleton key={i} variant="rounded" height={CARD_HEIGHT} />
           ))}
         </Box>
       ) : items.length === 0 ? (

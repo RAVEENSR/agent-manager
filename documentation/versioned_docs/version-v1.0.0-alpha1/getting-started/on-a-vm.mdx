@@ -22,7 +22,7 @@ Agents run sandboxed under the standard **runc** runtime by default. Agent Manag
 Install Agent Manager on a Linux VM where Docker is the only host dependency. Pick the path that fits you:
 
 - **Simple**: give the installer the VM's public IP and it does everything else: hostnames are derived from the IP via [sslip.io](https://sslip.io) and TLS certificates are issued automatically by Let's Encrypt. No domain, no DNS setup, no certificate handling. Best for demos and quick evaluations.
-- **Advanced**: a config-file-driven installer for a **custom domain**, on a VM that is either publicly reachable or **private-network-only**. Choose how TLS is handled: automatic Let's Encrypt, the DNS-01 challenge for a private VM, your own certificate, a generated local CA, or a load balancer in front. Adds pre-flight validation of your config, certificates, and DNS.
+- **Advanced**: a config-file-driven installer for a **custom domain**, on a VM that is either publicly reachable or **private-network-only**. TLS is always a publicly-trusted wildcard certificate issued in-cluster by cert-manager through the ACME **DNS-01** challenge (Let's Encrypt by default, any ACME CA via `ACME_SERVER`), so issuance needs outbound access only and works on a private VM. Requires a DNS zone you control on a supported provider (Cloudflare, Route 53, Cloud DNS, or Azure DNS). Validates your config before installing and reports whether your DNS points at the VM.
 
 <Tabs groupId="vm-installer">
 <TabItem value="simple" label="Simple (IP + automatic TLS)" default>

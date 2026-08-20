@@ -122,12 +122,22 @@ export interface LLMModel {
   description?: string;
 }
 
-export type UpstreamAuthType = "api-key" | "bearer" | "basic" | "none";
+export type UpstreamAuthType = "api-key" | "none";
 
 export interface UpstreamAuth {
   type: UpstreamAuthType;
   header?: string;
   value?: string;
+}
+
+export interface Resilience {
+  /**
+   * Max duration for the whole request→upstream-response. "0s" disables it;
+   * omit to use the gateway's default.
+   */
+  timeout?: string;
+  /** Per-route stream idle timeout. "0s" disables it; omit to use the gateway's default. */
+  idleTimeout?: string;
 }
 
 export interface UpstreamEndpoint {
@@ -278,6 +288,7 @@ export interface LLMProviderConfig {
   vhost?: string;
   template?: string;
   upstream?: UpstreamConfig;
+  resilience?: Resilience;
   accessControl?: LLMAccessControl;
   rateLimiting?: LLMRateLimitingConfig;
   policies?: LLMPolicy[];
@@ -295,6 +306,7 @@ export interface CreateLLMProviderRequest {
   context: string;
   template: string;
   upstream: UpstreamConfig;
+  resilience?: Resilience;
   description?: string;
   accessControl?: LLMAccessControl;
   policies?: LLMPolicy[];
@@ -312,6 +324,7 @@ export interface UpdateLLMProviderRequest {
   context?: string;
   template?: string;
   upstream?: UpstreamConfig;
+  resilience?: Resilience;
   accessControl?: LLMAccessControl;
   policies?: LLMPolicy[];
   openapi?: string;
@@ -341,6 +354,7 @@ export interface LLMProviderResponse {
   context: string;
   template: string;
   upstream: UpstreamConfig;
+  resilience?: Resilience;
   status: "pending" | "deployed" | "failed";
   description?: string;
   createdBy?: string;
@@ -393,6 +407,7 @@ export interface LLMProxyConfig {
   context?: string;
   vhost?: string;
   provider?: string;
+  resilience?: Resilience;
   policies?: LLMPolicy[];
   security?: SecurityConfig;
 }

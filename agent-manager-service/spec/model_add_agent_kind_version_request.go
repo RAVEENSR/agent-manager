@@ -19,7 +19,7 @@ var _ MappedNullable = &AddAgentKindVersionRequest{}
 
 // AddAgentKindVersionRequest struct for AddAgentKindVersionRequest
 type AddAgentKindVersionRequest struct {
-	// Version tag for this release
+	// Version tag for this release. Stored as a Kubernetes label on every agent created from this version, so it must be at most 63 characters of letters, digits, '.', '_' or '-', starting and ending with a letter or digit.
 	Version string `json:"version"`
 	// Build name from the source agent's build history
 	BuildName string `json:"buildName"`

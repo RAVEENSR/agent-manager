@@ -24,7 +24,6 @@ import {
   Alert,
   Box,
   Button,
-  Divider,
   ListingTable,
   Menu,
   MenuItem,
@@ -34,11 +33,14 @@ import {
   Stack,
   Typography,
 } from "@wso2/oxygen-ui";
-import { PageLayout } from "@agent-management-platform/views";
+import { PageLayout, DescriptionCard } from "@agent-management-platform/views";
 import { absoluteRouteMap } from "@agent-management-platform/types";
 import { LabelChips, SwaggerSpecViewer, parseOpenApiSpecContent } from "@agent-management-platform/shared-component";
 import { useGetAgentKind, useGetBuild, useListKindAgents, useListProjects, useGetAgentKindVersion } from "@agent-management-platform/api-client";
-import { ExternalLink, Plus } from "@wso2/oxygen-ui-icons-react";
+import { SectionCard } from "./SectionCard";
+import { ExternalLink, Layers, Plus } from "@wso2/oxygen-ui-icons-react";
+
+const KIND_AVATAR = { children: <Layers size={32} />, color: "primary.main" };
 
 export const CatalogKindDetails: React.FC = () => {
   const navigate = useNavigate();
@@ -127,6 +129,7 @@ export const CatalogKindDetails: React.FC = () => {
 
   const versionSelector = sortedVersions.length > 1 && (
     <Select
+      key="version-selector"
       size="small"
       value={selectedVersionTag}
       onChange={(e: SelectChangeEvent<string>) =>
@@ -149,7 +152,7 @@ export const CatalogKindDetails: React.FC = () => {
   if (isLoading) {
     return (
       <PageLayout title={kindId ?? "Agent Kind Details"} backHref={backHref}
-        backLabel="Back to Agent Catalog" disableIcon>
+        backLabel="Back to Agent Catalog" variant="card" avatar={KIND_AVATAR}>
         <Box sx={{ p: 2 }}>
           <Skeleton variant="rounded" height={32} sx={{ mb: 2, maxWidth: 320 }} />
           <Skeleton variant="rounded" height={48} sx={{ mb: 1 }} />
@@ -163,7 +166,7 @@ export const CatalogKindDetails: React.FC = () => {
   if (!kind) {
     return (
       <PageLayout title="Agent Kind Details" backHref={backHref}
-        backLabel="Back to Agent Catalog" disableIcon>
+        backLabel="Back to Agent Catalog" variant="card" avatar={KIND_AVATAR}>
         <Alert severity="error">Agent kind &quot;{kindId}&quot; was not found.</Alert>
       </PageLayout>
     );
@@ -180,34 +183,31 @@ export const CatalogKindDetails: React.FC = () => {
       description={releasedLabel ?? "View details of this Agent Kind."}
       backHref={backHref}
       backLabel="Back to Agent Catalog"
-      titleTail={
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ width: "100%", minWidth: 0 }}>
-          {kindVersion?.sourceProjectName && kindVersion?.sourceAgentName && (
-            <Button
-              size="small"
-              startIcon={<ExternalLink size={14} />}
-              variant="outlined"
-              component={Link}
-              to={generatePath(
-                absoluteRouteMap.children.org.children.projects.children.agents.path,
-                {
-                  orgId,
-                  projectId: kindVersion.sourceProjectName,
-                  agentId: kindVersion.sourceAgentName,
-                },
-              )}
-              target="_blank"
-              rel="noopener noreferrer"
-              sx={{ flexShrink: 0 }}
-            >
-              View Source Agent
-            </Button>
-          )}
-          <LabelChips labels={kind.labels} />
-        </Stack>
-      }
+      variant="card"
+      avatar={KIND_AVATAR}
+      titleTail={<LabelChips labels={kind.labels} />}
       actions={[
         versionSelector || undefined,
+        kindVersion?.sourceProjectName && kindVersion?.sourceAgentName && (
+          <Button
+            key="view-source-agent"
+            startIcon={<ExternalLink size={14} />}
+            variant="outlined"
+            component={Link}
+            to={generatePath(
+              absoluteRouteMap.children.org.children.projects.children.agents.path,
+              {
+                orgId,
+                projectId: kindVersion.sourceProjectName,
+                agentId: kindVersion.sourceAgentName,
+              },
+            )}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            View Source Agent
+          </Button>
+        ),
         <React.Fragment key="add-instance-action">
           <Button
             startIcon={<Plus />}
@@ -243,25 +243,15 @@ export const CatalogKindDetails: React.FC = () => {
           </Menu>
         </React.Fragment>,
       ]}
-      disableIcon
     >
       <Stack spacing={3}>
         {/* Description */}
-        {kind.description && (
-          <Box>
-            <Typography variant="overline" color="text.secondary">
-              Description
-            </Typography>
-            <Typography variant="body1">{kind.description}</Typography>
-          </Box>
-        )}
-
-        <Divider />
+        {kind.description && <DescriptionCard content={kind.description} />}
 
         {/* Configuration Schema */}
-        <Stack spacing={1.5}>
-          <Typography variant="overline" color="text.secondary">
-            Configuration Schema
+        <SectionCard title="Configuration Schema">
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+            Set when this version was published — publish a new version to change it.
           </Typography>
           {selectedVersion && selectedVersion.configSchema.length > 0 ? (
             <ListingTable.Container>
@@ -309,15 +299,10 @@ export const CatalogKindDetails: React.FC = () => {
           ) : (
             <Alert severity="info">No configuration schema defined for this version.</Alert>
           )}
-        </Stack>
-
-        <Divider />
+        </SectionCard>
 
         {/* Usage — agents deployed from this kind */}
-        <Stack spacing={1.5}>
-          <Typography variant="overline" color="text.secondary">
-            Usage
-          </Typography>
+        <SectionCard title="Usage">
           {isKindAgentsLoading ? (
             <Skeleton variant="rounded" height={120} />
           ) : kindAgents && kindAgents.length > 0 ? (
@@ -381,14 +366,10 @@ export const CatalogKindDetails: React.FC = () => {
           ) : (
             <Alert severity="info">No agents are currently using this kind.</Alert>
           )}
-        </Stack>
+        </SectionCard>
 
-        <Divider />
         {/* API Specification */}
-        <Stack spacing={1.5}>
-          <Typography variant="overline" color="text.secondary">
-            API Specification
-          </Typography>
+        <SectionCard title="API Specification">
           {isVersionLoading || isBuildLoading ? (
             <Skeleton variant="rounded" height={300} />
           ) : (apiSpec ? (
@@ -402,7 +383,7 @@ export const CatalogKindDetails: React.FC = () => {
           ) : (
             <Alert severity="info">No API specification available for this version.</Alert>
           ))}
-        </Stack>
+        </SectionCard>
       </Stack>
     </PageLayout>
   );

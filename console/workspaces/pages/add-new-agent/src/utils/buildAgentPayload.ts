@@ -30,6 +30,7 @@ import {
   LLMProviderFormEntry,
   MCPProxyFormEntry,
 } from "../form/schema";
+import { mcpEntryHasAPIKeyVar } from "./mcpEnvVarNames";
 
 export interface CatalogEnvSeed {
   env: { key: string; value: string; isSensitive: boolean }[];
@@ -139,9 +140,15 @@ function buildOneMCPConfig(
     : null;
   if (!proxy) return null;
 
+  // Only an API-key endpoint has an API key to name: OAuth mints credentials
+  // server-side and an unsecured endpoint needs none. Submitting one anyway
+  // creates an env var row the platform injects permanently empty, with no error
+  // at create or deploy (issue #1597).
+  const apikeyVarName = mcpEntryHasAPIKeyVar(entry) ? entry.apikeyVarName : undefined;
+
   const environmentVariables = [
     ...(entry.urlVarName ? [{ key: "url", name: entry.urlVarName }] : []),
-    ...(entry.apikeyVarName ? [{ key: "apikey", name: entry.apikeyVarName }] : []),
+    ...(apikeyVarName ? [{ key: "apikey", name: apikeyVarName }] : []),
   ];
 
   return {

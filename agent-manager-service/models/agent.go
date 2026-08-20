@@ -25,25 +25,36 @@ import (
 )
 
 type AgentResponse struct {
-	UUID           string            `json:"uuid"`
-	Name           string            `json:"name"`
-	DisplayName    string            `json:"displayName,omitempty"`
-	Description    string            `json:"description,omitempty"`
-	ProjectName    string            `json:"projectName"`
-	CreatedAt      time.Time         `json:"createdAt"`
-	Status         string            `json:"status,omitempty"`
-	Provisioning   Provisioning      `json:"provisioning,omitempty"`
-	Type           AgentType         `json:"type,omitempty"`
-	Build          *Build            `json:"build,omitempty"`
-	InputInterface *InputInterface   `json:"inputInterface,omitempty"`
-	Configurations *Configurations   `json:"configurations,omitempty"`
-	KindName       string            `json:"kindName,omitempty"`
-	Labels         map[string]string `json:"labels,omitempty"`
+	UUID           string          `json:"uuid"`
+	Name           string          `json:"name"`
+	DisplayName    string          `json:"displayName,omitempty"`
+	Description    string          `json:"description,omitempty"`
+	ProjectName    string          `json:"projectName"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	Status         string          `json:"status,omitempty"`
+	Provisioning   Provisioning    `json:"provisioning,omitempty"`
+	Type           AgentType       `json:"type,omitempty"`
+	Build          *Build          `json:"build,omitempty"`
+	InputInterface *InputInterface `json:"inputInterface,omitempty"`
+	Configurations *Configurations `json:"configurations,omitempty"`
+	KindName       string          `json:"kindName,omitempty"`
+	// KindVersion is empty for agents created before the version was recorded.
+	KindVersion string            `json:"kindVersion,omitempty"`
+	Labels      map[string]string `json:"labels,omitempty"`
 	// CreatedBy is best-effort: resolved from the audit-only requester id
 	// captured at agent-creation time (see AgentThunderClient.RequestedBy).
 	// Nil when unknown — pre-existing agents, deployments without AgentID
 	// provisioning wired up, or when the id couldn't be resolved to a user.
 	CreatedBy *AgentCreatedBy `json:"createdBy,omitempty"`
+}
+
+// AgentSummary is the lightweight, org-wide agent listing shape: just enough
+// to render a name and resolve which project an agent belongs to.
+type AgentSummary struct {
+	Name               string `json:"name"`
+	DisplayName        string `json:"displayName"`
+	ProjectName        string `json:"projectName"`
+	ProjectDisplayName string `json:"projectDisplayName"`
 }
 
 // AgentCreatedBy identifies the user who created an agent, resolved

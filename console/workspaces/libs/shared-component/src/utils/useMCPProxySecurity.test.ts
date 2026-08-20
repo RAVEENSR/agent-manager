@@ -1,0 +1,201 @@
+/**
+ * Copyright (c) 2026, WSO2 LLC. (https://www.wso2.com).
+ *
+ * WSO2 LLC. licenses this file to you under the Apache License,
+ * Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License. You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderHook } from "@testing-library/react";
+import type { MCPProxy, SecurityConfig } from "@agent-management-platform/types";
+
+const useGetMCPProxy = vi.fn();
+vi.mock("@agent-management-platform/api-client", () => ({
+  useGetMCPProxy: (...args: unknown[]) => useGetMCPProxy(...args),
+}));
+
+const { useMCPProxySecurity } = await import("./useMCPProxySecurity");
+
+const apiKey: SecurityConfig = {
+  enabled: true,
+  apiKey: { enabled: true, key: "X-API-Key", in: "header" },
+  identity: { enabled: false },
+};
+const identity: SecurityConfig = {
+  enabled: true,
+  apiKey: { enabled: false, key: "", in: "header" },
+  identity: { enabled: true },
+};
+const none: SecurityConfig = {
+  enabled: true,
+  apiKey: { enabled: false, key: "", in: "header" },
+  identity: { enabled: false },
+};
+
+function proxy(
+  endpoints: { id: string; security?: SecurityConfig; envs?: string[] }[],
+): MCPProxy {
+  return {
+    id: "proxy-1",
+    name: "weather",
+    version: "1.0.0",
+    endpoints: endpoints.map((endpoint) => ({
+      id: endpoint.id,
+      security: endpoint.security,
+      environments: (endpoint.envs ?? []).map((environmentUuid) => ({
+        environmentUuid,
+      })),
+    })),
+  };
+}
+
+/** Shape react-query returns in the states this hook branches on. */
+function query({
+  data,
+  isLoading = false,
+  isError = false,
+}: {
+  data?: MCPProxy;
+  isLoading?: boolean;
+  isError?: boolean;
+}) {
+  useGetMCPProxy.mockReturnValue({ data, isLoading, isError });
+}
+
+beforeEach(() => {
+  useGetMCPProxy.mockReset();
+});
+
+describe("useMCPProxySecurity", () => {
+  it("scopes the answer to the selected environment's endpoint", () => {
+    query({
+      data: proxy([
+        { id: "dev", security: apiKey, envs: ["dev-uuid"] },
+        { id: "prod", security: identity, envs: ["prod-uuid"] },
+      ]),
+    });
+
+    const { result } = renderHook(() =>
+      useMCPProxySecurity({
+        orgName: "acme",
+        proxyId: "proxy-1",
+        environmentUuid: "prod-uuid",
+      }),
+    );
+
+    expect(result.current.authenticationType).toBe("identity");
+    expect(result.current.usesIdentitySecurity).toBe(true);
+    expect(result.current.spec.editableKeys).toEqual(["url"]);
+    expect(result.current.isResolved).toBe(true);
+  });
+
+  it("falls back to the every-endpoint rule when the environment has no uuid", () => {
+    query({
+      data: proxy([
+        { id: "a", security: identity, envs: ["dev-uuid"] },
+        { id: "b", security: apiKey, envs: ["prod-uuid"] },
+      ]),
+    });
+
+    const { result } = renderHook(() =>
+      useMCPProxySecurity({ orgName: "acme", proxyId: "proxy-1" }),
+    );
+
+    // Mixed security keeps the API key field available.
+    expect(result.current.authenticationType).toBe("apiKey");
+    expect(result.current.spec.editableKeys).toEqual(["url", "apikey"]);
+  });
+
+  it("reports none for an unsecured endpoint, with no api key and no reference rows", () => {
+    query({ data: proxy([{ id: "a", security: none, envs: ["dev-uuid"] }]) });
+
+    const { result } = renderHook(() =>
+      useMCPProxySecurity({
+        orgName: "acme",
+        proxyId: "proxy-1",
+        environmentUuid: "dev-uuid",
+      }),
+    );
+
+    expect(result.current.authenticationType).toBe("");
+    expect(result.current.spec.editableKeys).toEqual(["url"]);
+    expect(result.current.spec.referenceRows).toEqual([]);
+    expect(result.current.isResolved).toBe(true);
+  });
+
+  it("is not resolved while the fetch is in flight", () => {
+    query({ isLoading: true });
+
+    const { result } = renderHook(() =>
+      useMCPProxySecurity({ orgName: "acme", proxyId: "proxy-1" }),
+    );
+
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.isResolved).toBe(false);
+  });
+
+  // The regression this guards: react-query reports isLoading false once a fetch
+  // errors, so a failed load looks exactly like a genuinely unsecured endpoint.
+  // Callers that trusted authenticationType would hide the API key field and drop
+  // the variable from the payload — issue #1597 with the polarity reversed.
+  it("is not resolved when the fetch failed, even though it reports none", () => {
+    query({ isError: true });
+
+    const { result } = renderHook(() =>
+      useMCPProxySecurity({ orgName: "acme", proxyId: "proxy-1" }),
+    );
+
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.isError).toBe(true);
+    expect(result.current.isResolved).toBe(false);
+    expect(result.current.authenticationType).toBe("");
+  });
+
+  it("is resolved with nothing pending when no proxy is selected", () => {
+    query({ isLoading: true });
+
+    const { result } = renderHook(() =>
+      useMCPProxySecurity({ orgName: "acme", proxyId: null }),
+    );
+
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.isError).toBe(false);
+    expect(result.current.isResolved).toBe(true);
+  });
+
+  it("is not resolved when the fetch returned no data at all", () => {
+    query({ data: undefined });
+
+    const { result } = renderHook(() =>
+      useMCPProxySecurity({ orgName: "acme", proxyId: "proxy-1" }),
+    );
+
+    expect(result.current.isResolved).toBe(false);
+  });
+
+  // A proxy record that fetched successfully but has zero endpoints is not a
+  // state this hook can make a security determination from — a truthy `proxy`
+  // alone is not proof the answer is real.
+  it("is not resolved when the proxy fetched successfully but has no endpoints", () => {
+    query({ data: proxy([]) });
+
+    const { result } = renderHook(() =>
+      useMCPProxySecurity({ orgName: "acme", proxyId: "proxy-1" }),
+    );
+
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.isError).toBe(false);
+    expect(result.current.isResolved).toBe(false);
+    expect(result.current.authenticationType).toBe("");
+  });
+});

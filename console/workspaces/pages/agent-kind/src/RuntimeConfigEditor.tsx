@@ -16,7 +16,7 @@
  * under the License.
  */
 
-import React from "react";
+import React, { useRef } from "react";
 import {
     Box,
     Button,
@@ -27,7 +27,11 @@ import {
     Typography,
 } from "@wso2/oxygen-ui";
 import { Plus, Trash } from "@wso2/oxygen-ui-icons-react";
-import { TextInput } from "@agent-management-platform/views";
+import {
+    EnvFileUploadButton,
+    TextInput,
+    type ParsedEnvEntry,
+} from "@agent-management-platform/views";
 
 const KEY_REGEX = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const KEY_MAX_LENGTH = 64;
@@ -39,6 +43,17 @@ const getKeyError = (key: string, keyCounts: Map<string, number>): string | null
     if (!KEY_REGEX.test(trimmed)) return "Key must start with a letter or underscore, and contain only letters, numbers, or underscores.";
     if ((keyCounts.get(trimmed) ?? 0) > 1) return "Key must be unique.";
     return null;
+};
+
+const stripQuotes = (value: string): string => {
+    if (
+        value.length >= 2 &&
+        ((value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'")))
+    ) {
+        return value.slice(1, -1);
+    }
+    return value;
 };
 
 const createRowId = (): string => {
@@ -81,6 +96,7 @@ interface ConfigRowProps {
     readonlyKey?: boolean;
     canRemove: boolean;
     onUpdate: <K extends keyof RuntimeConfigRow>(field: K, value: RuntimeConfigRow[K]) => void;
+    onUpdateMany: (updates: Partial<RuntimeConfigRow>) => void;
     onRemove: () => void;
 }
 
@@ -90,6 +106,7 @@ const ConfigRow: React.FC<ConfigRowProps> = ({
     readonlyKey,
     canRemove,
     onUpdate,
+    onUpdateMany,
     onRemove,
 }) => (
     <Stack key={row.id} direction="row" spacing={1} alignItems="top" justifyContent="flex-start">
@@ -102,6 +119,19 @@ const ConfigRow: React.FC<ConfigRowProps> = ({
                         placeholder="Key"
                         value={row.key}
                         onChange={(e) => onUpdate("key", e.target.value.replace(/\s/g, "_"))}
+                        onPaste={(e) => {
+                            const pasted = e.clipboardData.getData("text");
+                            const equalsIdx = pasted.indexOf("=");
+                            if (equalsIdx === -1) return;
+                            const pastedKey = pasted.slice(0, equalsIdx).trim();
+                            const pastedValue = stripQuotes(pasted.slice(equalsIdx + 1).trim());
+                            if (!pastedKey) return;
+                            e.preventDefault();
+                            onUpdateMany({
+                                key: pastedKey.replace(/\s/g, "_"),
+                                defaultValue: pastedValue,
+                            });
+                        }}
                         fullWidth
                         size="small"
                         error={!!keyError}
@@ -132,6 +162,8 @@ const ConfigRow: React.FC<ConfigRowProps> = ({
                 fullWidth
                 size="small"
                 disabled={readonlyKey && row.isSecret}
+                type={row.isSecret && !readonlyKey ? "password" : "text"}
+                showPasswordToggle={row.isSecret && !readonlyKey}
             />
         </Box>
         <Box display="flex" flexDirection="row" flexGrow={1} alignItems="start" pl={2} pt={0.5} gap={1}>
@@ -195,6 +227,12 @@ export const RuntimeConfigEditor: React.FC<RuntimeConfigEditorProps> = ({
         onChange(next);
     };
 
+    const updateRowMany = (index: number, updates: Partial<RuntimeConfigRow>) => {
+        const next = [...rows];
+        next[index] = { ...next[index], ...updates };
+        onChange(next);
+    };
+
     const addRow = () => {
         if (isInvalid) {
             return;
@@ -203,6 +241,32 @@ export const RuntimeConfigEditor: React.FC<RuntimeConfigEditorProps> = ({
     };
 
     const removeRow = (index: number) => onChange(rows.filter((_, i) => i !== index));
+
+    // FileReader resolves asynchronously, so by the time it fires, `rows` closed
+    // over at render time may be behind the latest edits — read from this ref instead.
+    const rowsRef = useRef(rows);
+    rowsRef.current = rows;
+
+    const handleEnvFileParsed = (entries: ParsedEnvEntry[]) => {
+        const next = [...rowsRef.current];
+        const indexByKey = new Map<string, number>();
+        next.forEach((row, i) => {
+            const trimmedKey = row.key.trim();
+            if (trimmedKey) indexByKey.set(trimmedKey, i);
+        });
+
+        for (const { key, value } of entries) {
+            const existingIndex = indexByKey.get(key);
+            if (existingIndex !== undefined) {
+                next[existingIndex] = { ...next[existingIndex], defaultValue: value };
+            } else {
+                indexByKey.set(key, next.length);
+                next.push(createRuntimeConfigRow({ key, defaultValue: value }));
+            }
+        }
+        const withoutBlankRow = next.filter((row) => row.key.trim() !== "" || row.defaultValue?.trim());
+        onChange(withoutBlankRow.length > 0 ? withoutBlankRow : next);
+    };
 
     return (
         <Stack spacing={1} pt={1}>
@@ -214,14 +278,18 @@ export const RuntimeConfigEditor: React.FC<RuntimeConfigEditorProps> = ({
                     readonlyKey={readonlyKey}
                     canRemove={rows.length > 1}
                     onUpdate={(field, value) => updateRow(i, field, value)}
+                    onUpdateMany={(updates) => updateRowMany(i, updates)}
                     onRemove={() => removeRow(i)}
                 />
             ))}
             {!readonlyKey && (
-                <Box>
+                <Box display="flex" flexDirection="row" gap={1} alignItems="flex-start">
                     <Button size="small" variant="outlined" startIcon={<Plus />} onClick={addRow} disabled={isInvalid}>
                         Add Runtime Key
                     </Button>
+                    <Box display="flex" flexDirection="column" alignItems="flex-start">
+                        <EnvFileUploadButton onParsed={handleEnvFileParsed} label="Upload .env file" />
+                    </Box>
                 </Box>
             )}
         </Stack>

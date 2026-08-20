@@ -25,6 +25,13 @@ import (
 // building span.Service from resource attributes.
 const componentUIDResourceKey = "openchoreo.dev/component-uid"
 
+func statusCodeAndMessage(s *SpanStatus) (code, message string) {
+	if s == nil {
+		return "", ""
+	}
+	return s.Code, s.Message
+}
+
 // ConvertSpanDetailsToSpan builds an opensearch.Span from a SpanDetailsResponse.
 // The result is ready to be passed directly to opensearch.ProcessSpan.
 //
@@ -42,6 +49,7 @@ func ConvertSpanDetailsToSpan(traceID string, d *SpanDetailsResponse) opensearch
 		service = uid
 	}
 
+	code, message := statusCodeAndMessage(d.Status)
 	return opensearch.Span{
 		TraceID:         traceID,
 		SpanID:          d.SpanID,
@@ -52,7 +60,8 @@ func ConvertSpanDetailsToSpan(traceID string, d *SpanDetailsResponse) opensearch
 		EndTime:         d.EndTime,
 		DurationInNanos: d.DurationNs,
 		Kind:            d.Kind,
-		Status:          d.Status,
+		Status:          code,
+		StatusMessage:   message,
 		Attributes:      d.Attributes,
 		Resource:        d.ResourceAttributes,
 	}
@@ -72,6 +81,7 @@ func ConvertSpanInfoToSpan(traceID string, s SpanInfo) opensearch.Span {
 		service = uid
 	}
 
+	code, message := statusCodeAndMessage(s.Status)
 	return opensearch.Span{
 		TraceID:         traceID,
 		SpanID:          s.SpanID,
@@ -82,7 +92,8 @@ func ConvertSpanInfoToSpan(traceID string, s SpanInfo) opensearch.Span {
 		EndTime:         s.EndTime,
 		DurationInNanos: s.DurationNs,
 		Kind:            s.Kind,
-		Status:          s.Status,
+		Status:          code,
+		StatusMessage:   message,
 		Attributes:      s.Attributes,
 		Resource:        s.ResourceAttributes,
 	}

@@ -51,6 +51,7 @@ type LLMProviderConfig struct {
 	VHost         *string                `json:"vhost,omitempty"`
 	Template      string                 `json:"template,omitempty"`
 	Upstream      *UpstreamConfig        `json:"upstream,omitempty"`
+	Resilience    *Resilience            `json:"resilience,omitempty"`
 	AccessControl *LLMAccessControl      `json:"accessControl,omitempty"`
 	RateLimiting  *LLMRateLimitingConfig `json:"rateLimiting,omitempty"`
 	Policies      []LLMPolicy            `json:"policies,omitempty"`

@@ -24,6 +24,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/config"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/jwtassertion"
 	"github.com/wso2/agent-manager/agent-manager-service/rbac"
@@ -40,31 +41,47 @@ const methodCallTool = "tools/call"
 // org than the one whose identity established the session.
 const TokenInfoOUIDKey = "amp:ou-id"
 
-// toolRegistry records the rbac permissions each registered tool requires.
-// authzMiddleware enforces it fail-closed: a tool with no entry — one
-// registered by bypassing addTool — is always denied.
+// toolRegistry records the rbac permissions and audit action each registered
+// tool declares. authzMiddleware enforces it fail-closed: a tool with no entry —
+// one registered by bypassing addTool — is always denied.
 type toolRegistry struct {
 	permissions map[string][]rbac.Permission
+	actions     map[string]audit.Action
 }
 
 func newToolRegistry() *toolRegistry {
-	return &toolRegistry{permissions: make(map[string][]rbac.Permission)}
+	return &toolRegistry{
+		permissions: make(map[string][]rbac.Permission),
+		actions:     make(map[string]audit.Action),
+	}
 }
 
 // addTool is the only sanctioned way to register an MCP tool. It requires the
-// permissions the caller's token must hold (ALL semantics), records them for
-// authzMiddleware, and wires the standard logging wrapper. Panics when no
-// permission is declared: that is a registration bug, caught at startup and
-// by every test run, not a runtime condition.
+// permissions the caller's token must hold (ALL semantics) and the audit action
+// the tool performs, records both for authzMiddleware, and wires the logging
+// and audit wrapper.
+//
+// Panics when either is missing: those are registration bugs, caught at startup
+// and by every test run, not runtime conditions. Requiring the action is what
+// stops a new mutating tool reaching production with no audit record — the same
+// guarantee the route registrar gives the REST surface.
+//
+// The action must be the same constant the REST route for the equivalent
+// operation uses, so "who deployed agent X" is one query across both surfaces.
 func addTool[T any](reg *toolRegistry, server *gomcp.Server, tool *gomcp.Tool,
+	action audit.Action,
 	handler func(context.Context, *gomcp.CallToolRequest, T) (*gomcp.CallToolResult, any, error),
 	perms ...rbac.Permission,
 ) {
 	if len(perms) == 0 {
 		panic(fmt.Sprintf("mcp tool %q registered without permissions", tool.Name))
 	}
+	if action == "" {
+		panic(fmt.Sprintf("mcp tool %q registered without an audit action", tool.Name))
+	}
 	reg.permissions[tool.Name] = perms
-	gomcp.AddTool(server, tool, withToolLogging(tool.Name, handler))
+	reg.actions[tool.Name] = action
+	gomcp.AddTool(server, tool, withToolAudit(tool.Name, action, handler))
 }
 
 // authzMiddleware returns a server middleware that authorizes every tools/call
@@ -85,6 +102,9 @@ func (reg *toolRegistry) authzMiddleware() gomcp.Middleware {
 			}
 			perms, registered := reg.permissions[call.Params.Name]
 			if !registered {
+				// A call for a tool that was never registered. Recorded because
+				// it is a probe, not an ordinary authorization failure.
+				recordToolDeny(ctx, call.Params.Name, "unknown-tool")
 				return denyResult(fmt.Sprintf("tool %q has no registered permissions", call.Params.Name)), nil
 			}
 			// Organization-consistency guard: tool handlers resolve the org from
@@ -97,6 +117,10 @@ func (reg *toolRegistry) authzMiddleware() gomcp.Middleware {
 			// TokenInfo (in-memory transports have no HTTP layer).
 			if call.Extra != nil && call.Extra.TokenInfo != nil {
 				if !sessionOrgMatchesRequest(ctx, call.Extra.TokenInfo) {
+					// An attempt to drive a tool against a different org than
+					// the session's — an identity-integrity failure, and the
+					// clearest attack signal this surface produces.
+					recordToolDeny(ctx, call.Params.Name, "organization-mismatch")
 					return denyResult("organization mismatch: request token is not scoped to the session organization"), nil
 				}
 			}
@@ -106,6 +130,9 @@ func (reg *toolRegistry) authzMiddleware() gomcp.Middleware {
 			hasScope := scopeChecker(ctx, call)
 			for _, perm := range perms {
 				if !hasScope(perm.Scope()) {
+					recordToolDeny(ctx, call.Params.Name, "missing-scope",
+						audit.RequiredPermissions(perm),
+						audit.Detail("missingScope", perm.Scope()))
 					return denyResult(fmt.Sprintf("insufficient permissions: this tool requires the %s scope", perm.Scope())), nil
 				}
 			}
@@ -145,6 +172,21 @@ func sessionOrgMatchesRequest(ctx context.Context, info *auth.TokenInfo) bool {
 	}
 	requestOUID, _ := info.Extra[TokenInfoOUIDKey].(string)
 	return requestOUID == sessionOUID
+}
+
+// recordToolDeny records a refused MCP tool call. The tool name is recorded as
+// the request path so that MCP denials and REST denials answer the same query.
+func recordToolDeny(ctx context.Context, toolName, reason string, opts ...audit.Option) {
+	all := make([]audit.Option, 0, len(opts)+4)
+	all = append(
+		all,
+		audit.SurfaceOpt(audit.SurfaceMCP),
+		audit.OutcomeOpt(audit.OutcomeDeny),
+		audit.Detail("reason", reason),
+		audit.Detail("tool", toolName),
+	)
+	all = append(all, opts...)
+	audit.RecordAncillary(ctx, audit.ActionAuthzDeny, all...)
 }
 
 func denyResult(message string) *gomcp.CallToolResult {

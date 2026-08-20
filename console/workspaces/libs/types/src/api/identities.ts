@@ -42,7 +42,6 @@ export interface ThunderUserListResponse extends PaginationMeta {
 export interface CreateUserRequest {
   type: string;
   attributes: Record<string, string>;
-  ouId?: string;
 }
 
 export interface UpdateUserRequest {

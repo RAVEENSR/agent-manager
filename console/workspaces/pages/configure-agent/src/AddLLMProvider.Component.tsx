@@ -985,10 +985,18 @@ export const AddLLMProviderComponent: React.FC = () => {
                   name: picked.name,
                 },
               }));
+              // A different provider's gateways may not support the guardrails
+              // already selected for this env — clear them so only guardrails
+              // valid for the newly-picked provider can be re-added and saved.
+              setGuardrailsByEnv((prev) => ({
+                ...prev,
+                [selectedEnvName]: [],
+              }));
             }}
           />
           {providerByEnv[selectedEnvName] && (
             <PolicyListSection
+              providerId={providerByEnv[selectedEnvName]?.uuid}
               title="Guardrails"
               description="Add safety policies to enforce consistent protections."
               addButtonLabel="Add Guardrail"

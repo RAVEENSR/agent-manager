@@ -23,6 +23,15 @@ Spec-first, layered, per-route-authz workflow for the Go control plane. The requ
 7. **`make codegen`** — only if you added/changed an interface (regenerates wire DI + mocks; needs `moq` on PATH). A new repo interface needs a `//go:generate moq ...` directive above its declaration — copy an existing one.
 8. **Write a service unit test** — use the `add-service-unit-test` skill.
 
+## Audit logging
+
+Step 5 audits the route automatically — a mutating route cannot ship unaudited, and `api/audit_coverage_test.go` fails the build if one does. Two cases need you:
+
+- **The build says `cannot derive an action for audited route`**, or the route's `rbac.Permission` does not describe what it does (one permission gating several operations, or naming a different resource). Add one line to `actionOverrides` in `audit/policy.go`.
+- **The operation touches credentials, privileges, membership, deployment or deletion.** The envelope record cannot say *what changed*, so add a semantic event — use the **`add-audit-event` skill**.
+
+Never read a request or response body into a record; pass named fields via `audit.Detail`, which takes scalars and `[]string` only.
+
 ## Guardrails
 
 - **Multi-tenancy:** the service must validate the caller's org against the **target resource it loads**, not just the path (`RequireOrgMatch` is a first-pass filter, not the enforcement layer).
@@ -36,6 +45,7 @@ Spec-first, layered, per-route-authz workflow for the Go control plane. The requ
 - [ ] New permission exists in `rbac/permissions.go` **and** is granted in `rbac/predefined_roles.go`.
 - [ ] Route registered with an authz registrar (not plain `HandleFuncWithValidation` unless deliberate).
 - [ ] `make codegen` run + mocks committed if an interface changed.
-- [ ] Service unit test added; `make test-unit` passes.
+- [ ] Service unit test added; `make test-unit` passes (includes `TestEveryMutatingRouteIsAudited`).
+- [ ] Semantic audit event added if the operation is security-critical (`add-audit-event` skill).
 - [ ] `go build -tags=integration ./...` compiles.
 - [ ] CI lint clean: `golangci-lint run --config .github/linters/.golangci.yaml ./...`

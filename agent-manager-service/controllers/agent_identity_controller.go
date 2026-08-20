@@ -25,6 +25,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/clients/thundersvc"
@@ -38,9 +39,10 @@ import (
 )
 
 // AgentIdentityController exposes env-Thunder group/role management for agent
-// identities. Every handler is a passthrough to the environment's own Thunder
-// instance, resolved per request via EnvThunderResolver — AMS stores no
-// group/role state of its own. Roles carry catalog scopes as their permissions.
+// identities, resolved per request via EnvThunderResolver — AMS stores no
+// group/role state of its own. Roles carry catalog scopes as their
+// permissions. ListAgents is the exception: it reads the assignment picker
+// straight from AMS's own state, not Thunder.
 type AgentIdentityController interface {
 	// Groups
 	ListGroups(w http.ResponseWriter, r *http.Request)
@@ -67,11 +69,21 @@ type AgentIdentityController interface {
 	ListAgents(w http.ResponseWriter, r *http.Request)
 }
 
+// MCPResourceServerIdentifierResolver derives the absolute public URI an MCP
+// proxy is invoked at in one environment — the env-Thunder RS identifier.
+// The environment is resolved once per request and its UUID passed to each
+// per-proxy identifier derivation.
+type MCPResourceServerIdentifierResolver interface {
+	EnvironmentUUIDByName(ctx context.Context, ouID, envName string) (uuid.UUID, error)
+	MCPResourceServerIdentifier(ctx context.Context, ouID string, envID uuid.UUID, proxy *models.MCPProxy) (string, error)
+}
+
 type agentIdentityController struct {
-	resolver    thundersvc.EnvThunderResolver
-	bindingRepo repositories.AgentThunderClientRepository
-	proxyRepo   repositories.MCPProxyRepository
-	scopeRepo   repositories.MCPProxyScopeRepository
+	resolver      thundersvc.EnvThunderResolver
+	bindingRepo   repositories.AgentThunderClientRepository
+	proxyRepo     repositories.MCPProxyRepository
+	scopeRepo     repositories.MCPProxyScopeRepository
+	rsIdentifiers MCPResourceServerIdentifierResolver
 }
 
 // NewAgentIdentityController creates a new agent-identity passthrough controller.
@@ -80,8 +92,56 @@ func NewAgentIdentityController(
 	bindingRepo repositories.AgentThunderClientRepository,
 	proxyRepo repositories.MCPProxyRepository,
 	scopeRepo repositories.MCPProxyScopeRepository,
+	rsIdentifiers MCPResourceServerIdentifierResolver,
 ) AgentIdentityController {
-	return &agentIdentityController{resolver: resolver, bindingRepo: bindingRepo, proxyRepo: proxyRepo, scopeRepo: scopeRepo}
+	return &agentIdentityController{
+		resolver:      resolver,
+		bindingRepo:   bindingRepo,
+		proxyRepo:     proxyRepo,
+		scopeRepo:     scopeRepo,
+		rsIdentifiers: rsIdentifiers,
+	}
+}
+
+// resolveScopeEnvironment resolves the request's environment UUID once for the
+// resource-server ensure loop, writing the HTTP error itself when ok=false.
+func (c *agentIdentityController) resolveScopeEnvironment(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	ctx := r.Context()
+	ouID := middleware.OUIDFromRequest(r)
+	envName := r.PathValue("envName")
+	envID, err := c.rsIdentifiers.EnvironmentUUIDByName(ctx, ouID, envName)
+	if err != nil {
+		logger.GetLogger(ctx).Error("agent-identity: resolve environment failed", "env", envName, "error", err)
+		utils.WriteErrorResponse(w, http.StatusBadGateway, "Failed to resolve the MCP proxy's gateway address")
+		return uuid.Nil, false
+	}
+	return envID, true
+}
+
+// ensureGroupResourceServer derives the group's per-environment identifier and
+// ensures its resource server, writing the HTTP error itself when ok=false.
+func (c *agentIdentityController) ensureGroupResourceServer(w http.ResponseWriter, r *http.Request, client thundersvc.EnvIdentityClient, envID uuid.UUID, g *proxyScopeGroup) (string, bool) {
+	ctx := r.Context()
+	ouID := middleware.OUIDFromRequest(r)
+	envName := r.PathValue("envName")
+	identifier, err := c.rsIdentifiers.MCPResourceServerIdentifier(ctx, ouID, envID, g.proxy)
+	if err != nil {
+		if errors.Is(err, services.ErrMCPProxyNotDeployedToEnvironment) {
+			utils.WriteErrorResponse(w, http.StatusBadRequest,
+				fmt.Sprintf("MCP proxy %q is not deployed to environment %q; deploy it there before granting its scopes", g.handle, envName))
+			return "", false
+		}
+		logger.GetLogger(ctx).Error("agent-identity: derive RS identifier failed", "proxy", g.handle, "env", envName, "error", err)
+		utils.WriteErrorResponse(w, http.StatusBadGateway, "Failed to resolve the MCP proxy's gateway address")
+		return "", false
+	}
+	rsID, err := client.EnsureProxyResourceServer(ctx, g.handle, displayName(g), identifier, g.actions)
+	if err != nil {
+		logger.GetLogger(ctx).Error("agent-identity: ensure proxy resource server failed", "proxy", g.handle, "error", err)
+		utils.WriteErrorResponse(w, http.StatusBadGateway, "Failed to register scopes with the environment identity provider")
+		return "", false
+	}
+	return rsID, true
 }
 
 // envClient resolves the env-Thunder identity client for the request's org+env,
@@ -458,15 +518,19 @@ func (c *agentIdentityController) CreateRole(w http.ResponseWriter, r *http.Requ
 	// before the role write, so no permission add below references an unknown
 	// resource server. rsIDByHandle keeps the ensured RS ID per proxy handle.
 	rsIDByHandle := make(map[string]string, len(groups))
-	for _, handle := range sortedKeys(groups) {
-		g := groups[handle]
-		rsID, err := client.EnsureProxyResourceServer(ctx, g.handle, displayName(g), g.actions)
-		if err != nil {
-			log.Error("agent-identity CreateRole: ensure proxy resource server failed", "proxy", g.handle, "error", err)
-			utils.WriteErrorResponse(w, http.StatusBadGateway, "Failed to register scopes with the environment identity provider")
+	if len(groups) > 0 {
+		envID, ok := c.resolveScopeEnvironment(w, r)
+		if !ok {
 			return
 		}
-		rsIDByHandle[handle] = rsID
+		for _, handle := range sortedKeys(groups) {
+			g := groups[handle]
+			rsID, ok := c.ensureGroupResourceServer(w, r, client, envID, g)
+			if !ok {
+				return
+			}
+			rsIDByHandle[handle] = rsID
+		}
 	}
 
 	role, err := client.CreateRole(ctx, thundersvc.CreateRoleRequest{
@@ -499,15 +563,17 @@ func (c *agentIdentityController) CreateRole(w http.ResponseWriter, r *http.Requ
 	utils.WriteSuccessResponse(w, http.StatusCreated, role)
 }
 
-// managedRole fetches the role and treats Thunder's native Administrator role
-// as nonexistent (404, matching its exclusion from ListRoles): it carries the
-// built-in "system" scope, and exposing it through this API is how agent
+// managedRole fetches the role and treats Thunder's native Administrator role and
+// env-Thunder's own bootstrap-seeded AMP System Client Thunder Admin role as
+// nonexistent (404, matching their exclusion from ListRoles): both carry the
+// built-in "system" scope, and exposing either through this API is how agent
 // identities were acquiring env-Thunder admin — see
-// thundersvc.NativeAdministratorRoleName. Writes the error response itself when
-// ok=false. RemoveRoleAssignees deliberately skips this guard so an existing
-// mis-assignment can still be cleaned up through the same API, and the
-// read-only GetRoleAssignments/GetGroupRoles stay unguarded for the same
-// reason — finding which agents and groups to clean up requires seeing them.
+// thundersvc.NativeAdministratorRoleName and thundersvc.AMPSystemClientRoleName.
+// Writes the error response itself when ok=false. RemoveRoleAssignees deliberately
+// skips this guard so an existing mis-assignment can still be cleaned up through
+// the same API, and the read-only GetRoleAssignments/GetGroupRoles stay unguarded
+// for the same reason — finding which agents and groups to clean up requires
+// seeing them.
 func (c *agentIdentityController) managedRole(w http.ResponseWriter, r *http.Request, client thundersvc.EnvIdentityClient, roleID string) (*thundersvc.ThunderRole, bool) {
 	ctx := r.Context()
 	role, err := client.GetRole(ctx, roleID)
@@ -520,7 +586,7 @@ func (c *agentIdentityController) managedRole(w http.ResponseWriter, r *http.Req
 		utils.WriteErrorResponse(w, http.StatusInternalServerError, "Failed to get role")
 		return nil, false
 	}
-	if role.Name == thundersvc.NativeAdministratorRoleName {
+	if role.Name == thundersvc.NativeAdministratorRoleName || role.Name == thundersvc.AMPSystemClientRoleName {
 		utils.WriteErrorResponse(w, http.StatusNotFound, "Role not found")
 		return nil, false
 	}
@@ -608,15 +674,19 @@ func (c *agentIdentityController) UpdateRole(w http.ResponseWriter, r *http.Requ
 	// desired[rsID] is the requested scope set for that proxy's resource server,
 	// ensured to exist before any reconcile write.
 	desired := make(map[string][]string, len(groups))
-	for _, handle := range sortedKeys(groups) {
-		g := groups[handle]
-		rsID, err := client.EnsureProxyResourceServer(ctx, g.handle, displayName(g), g.actions)
-		if err != nil {
-			log.Error("agent-identity UpdateRole: ensure proxy resource server failed", "roleID", roleID, "proxy", g.handle, "error", err)
-			utils.WriteErrorResponse(w, http.StatusBadGateway, "Failed to register scopes with the environment identity provider")
+	if len(groups) > 0 {
+		envID, ok := c.resolveScopeEnvironment(w, r)
+		if !ok {
 			return
 		}
-		desired[rsID] = g.scopes
+		for _, handle := range sortedKeys(groups) {
+			g := groups[handle]
+			rsID, ok := c.ensureGroupResourceServer(w, r, client, envID, g)
+			if !ok {
+				return
+			}
+			desired[rsID] = g.scopes
+		}
 	}
 
 	// currentByRS is the role's existing permission set per resource server.
@@ -625,8 +695,9 @@ func (c *agentIdentityController) UpdateRole(w http.ResponseWriter, r *http.Requ
 		currentByRS[p.ResourceServerID] = p.Permissions
 	}
 
-	// Reconcile every resource server the role touches — those newly desired and
-	// those it already carried (a proxy dropped from the role has have\desired = have).
+	// Reconcile every resource server the role touches — newly desired ones and
+	// ones it already had. A proxy dropped from the role has no entry in desired
+	// but still has one in currentByRS, so it must be visited to clear it.
 	rsIDs := make(map[string]struct{}, len(desired)+len(currentByRS))
 	for rsID := range desired {
 		rsIDs[rsID] = struct{}{}

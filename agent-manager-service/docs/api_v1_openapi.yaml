@@ -580,6 +580,41 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /orgs/{orgName}/agents:
+    get:
+      summary: List all agents in an organization
+      description: >-
+        Returns a lightweight, unpaginated list of every agent in the
+        organization across all projects, containing each agent's name,
+        display name, and the name and display name of the project it
+        belongs to.
+      operationId: listOrgAgents
+      parameters:
+        - name: orgName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of agents in the organization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentSummaryListResponse"
+        "404":
+          description: Organization not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /orgs/{orgName}/projects/{projName}/agents/{agentName}:
     get:
       summary: Get agent details
@@ -1950,6 +1985,249 @@ paths:
       responses:
         "204":
           description: Credential deleted (or already absent)
+        "401":
+          description: Unauthorized - invalid or missing authentication
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden - insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /orgs/{orgName}/environments/{envID}/thunder-url:
+    parameters:
+      - name: orgName
+        in: path
+        required: true
+        description: Organization name/handle
+        schema:
+          type: string
+          pattern: "^[a-z0-9-]+$"
+          minLength: 1
+          maxLength: 64
+      - name: envID
+        in: path
+        required: true
+        description: Environment name
+        schema:
+          type: string
+
+    get:
+      tags:
+        - Environments
+      summary: Get an environment's env-Thunder URL handle
+      description: |
+        Returns the handle currently registered for this environment. Used by
+        add-environment.sh, after Thunder provisioning succeeds, to learn the
+        ACTUAL handle a chained add-environment-thunder.sh run assigned
+        (auto-generated ones aren't known to the caller upfront) — so the
+        gateway's ThunderKeyManager can be wired to trust the real issuer.
+      operationId: getEnvironmentThunderUrl
+      responses:
+        "200":
+          description: The registered handle
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ThunderUrlResponse"
+        "401":
+          description: Unauthorized - invalid or missing authentication
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden - insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: No handle has been registered for this environment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    put:
+      tags:
+        - Environments
+      summary: Register an environment's env-Thunder URL handle
+      description: |
+        Bootstrap-only endpoint used by add-environment-thunder.sh before it
+        provisions an environment's dedicated Thunder instance. Registers an
+        unguessable handle that replaces the predictable "<org>-<env>" segment
+        of that environment's externally-reachable env-Thunder hostname
+        (issuer/token/JWKS URLs) — without this, every such URL is 100%
+        derivable from (org, env) alone. org/env is NEVER used as a fallback:
+        every environment gets a handle, one way or another.
+
+        The request body's handle is OPTIONAL. Omit it (or send an empty
+        string) to have the server generate one automatically — a 10-character
+        random value. The response always reports the handle that ended up
+        stored, since a caller that left it blank needs to learn what was
+        actually assigned.
+
+        The handle is globally unique across ALL orgs/environments (every
+        env-Thunder instance's HTTPRoute attaches to the same shared Gateway,
+        so hostname routing is cluster-wide, not per-org). If a caller-supplied
+        handle collides with a different environment's, this returns 409. A
+        collision on a GENERATED handle is retried internally with a fresh
+        value and never surfaces as a 409.
+
+        Idempotent for the SAME environment, but never changes an
+        already-registered handle: a blank or matching re-registration is a
+        no-op that reports the existing handle; an explicit DIFFERENT handle
+        is rejected with 409 (Thunder's issuer is immutable once minted — call
+        DELETE first to free the handle before registering a new one). Keyed
+        by OU ID, always taken from the caller's own token (never
+        client-supplied), not orgName — same rationale as thunder-system-client.
+      operationId: setEnvironmentThunderUrl
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ThunderUrlRequest"
+      responses:
+        "200":
+          description: Handle stored successfully — response reports the handle that ended up stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ThunderUrlResponse"
+        "400":
+          description: Bad request - invalid handle format
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized - invalid or missing authentication
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden - insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: >-
+            Conflict - handle is already registered to a different
+            environment, or this environment already has a different handle
+            registered (call DELETE first to change it)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    delete:
+      tags:
+        - Environments
+      summary: Remove an environment's env-Thunder URL handle
+      description: |
+        Removes the registered handle for an environment, freeing it for
+        reuse. Called by remove-environment-thunder.sh when an environment's
+        Thunder instance is torn down. Deleting a non-existent handle
+        succeeds (idempotent). Looked up by OU ID, always taken from the
+        caller's own token (never client-supplied), not orgName.
+      operationId: deleteEnvironmentThunderUrl
+      responses:
+        "204":
+          description: Handle deleted (or already absent)
+        "401":
+          description: Unauthorized - invalid or missing authentication
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden - insufficient permissions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /orgs/{orgName}/thunder-url-availability:
+    parameters:
+      - name: orgName
+        in: path
+        required: true
+        description: Organization name/handle
+        schema:
+          type: string
+          pattern: "^[a-z0-9-]+$"
+          minLength: 1
+          maxLength: 64
+      - name: handle
+        in: query
+        required: true
+        description: The candidate env-Thunder URL handle to check.
+        schema:
+          type: string
+
+    get:
+      tags:
+        - Environments
+      summary: Check whether an env-Thunder URL handle is available
+      description: |
+        Advisory pre-flight check used by the console's Create Environment
+        drawer to reject an obviously-taken or invalid handle before the user
+        ever runs the generated add-environment.sh command — this is NOT
+        authoritative. The handle is globally unique across every
+        org/environment (see setEnvironmentThunderUrl), so this check is not
+        scoped to any single environment; a handle can be taken by a
+        completely different org. The real enforcement remains
+        setEnvironmentThunderUrl's atomic insert: a handle reported available
+        here could still be claimed by someone else before this caller
+        actually registers it.
+      operationId: checkThunderUrlAvailability
+      responses:
+        "200":
+          description: >-
+            Whether the handle passes format validation and is not already
+            registered to any environment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ThunderUrlAvailabilityResponse"
+        "400":
+          description: Bad request - invalid handle format
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "401":
           description: Unauthorized - invalid or missing authentication
           content:
@@ -3530,6 +3808,85 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /orgs/{orgName}/projects/{projName}/agents/{agentName}/identities/retry:
+    post:
+      tags:
+        - Agent Identity
+      summary: Retry a failed AgentID provisioning attempt
+      description: |
+        Resets a binding stuck in `failed` status back to `pending` — clearing
+        its attempt budget and last error — and re-attempts provisioning in
+        the background, for both platform-hosted and externally hosted
+        agents.
+
+        Only a binding whose current status is `failed` can be retried this
+        way: `completed`, `pending`, and `in_progress` bindings already have
+        their own path forward (nothing to reset, or already retrying) and
+        are rejected with `409`.
+      operationId: retryAgentIdentityProvisioning
+      parameters:
+        - name: orgName
+          in: path
+          required: true
+          description: Organization name
+          schema:
+            type: string
+        - name: projName
+          in: path
+          required: true
+          description: Project name
+          schema:
+            type: string
+        - name: agentName
+          in: path
+          required: true
+          description: Agent name
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentIdentityActionRequest"
+      responses:
+        "202":
+          description: The binding was reset and provisioning was scheduled again
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentIdentityEnvironmentView"
+        "400":
+          description: Missing or invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Agent identity not yet provisioned for this environment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: The binding exists but is not currently in `failed` status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /orgs/{orgName}/projects/{projName}/agents/{agentName}/roles:
     parameters:
       - name: orgName
@@ -4813,7 +5170,18 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /repositories/branches:
+  /orgs/{orgName}/repositories/branches:
+    parameters:
+      - name: orgName
+        in: path
+        required: true
+        description: Organization name/handle
+        schema:
+          type: string
+          pattern: "^[a-z0-9-]+$"
+          minLength: 1
+          maxLength: 64
+
     post:
       summary: List branches for a repository
       description: |
@@ -4876,7 +5244,18 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /repositories/commits:
+  /orgs/{orgName}/repositories/commits:
+    parameters:
+      - name: orgName
+        in: path
+        required: true
+        description: Organization name/handle
+        schema:
+          type: string
+          pattern: "^[a-z0-9-]+$"
+          minLength: 1
+          maxLength: 64
+
     post:
       summary: List commits for a repository
       description: |
@@ -5196,8 +5575,16 @@ paths:
       tags:
         - LLM Providers
       summary: List available LLM guardrail policies
-      description: Returns full guardrail policy definitions (including parameter schemas) reported by active gateways in the organization.
+      description: Returns full guardrail policy definitions (including parameter schemas) reported by active gateways in the organization. When providerId is given, the result is scoped to the gateways that provider is currently deployed to; otherwise it covers every active gateway in the organization.
       operationId: listAvailableLLMPolicies
+      parameters:
+        - name: providerId
+          in: query
+          required: false
+          description: When set, scope the result to the gateways this LLM provider is deployed to, instead of every active gateway in the organization.
+          schema:
+            type: string
+            format: uuid
       responses:
         "200":
           description: Available LLM guardrail policies
@@ -5207,6 +5594,12 @@ paths:
                 $ref: "#/components/schemas/LLMPolicyAvailabilityResponse"
         "401":
           description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Provider not found
           content:
             application/json:
               schema:
@@ -11478,6 +11871,9 @@ components:
         kindName:
           type: string
           description: Name of the Agent Kind this agent was instantiated from (absent for source-built agents)
+        kindVersion:
+          type: string
+          description: Version tag of the Agent Kind this agent was instantiated from (absent for source-built agents, and for kind-sourced agents created before the version was recorded)
         labels:
           $ref: "#/components/schemas/Labels"
         createdBy:
@@ -11561,6 +11957,31 @@ components:
         - total
         - limit
         - offset
+    AgentSummary:
+      type: object
+      properties:
+        name:
+          type: string
+        displayName:
+          type: string
+        projectName:
+          type: string
+        projectDisplayName:
+          type: string
+      required:
+        - name
+        - displayName
+        - projectName
+        - projectDisplayName
+    AgentSummaryListResponse:
+      type: object
+      properties:
+        agents:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentSummary"
+      required:
+        - agents
     BuildsListResponse:
       type: object
       properties:
@@ -12015,6 +12436,13 @@ components:
         imageId:
           type: string
           description: Container image ID
+        kindVersion:
+          type: string
+          description: >-
+            Agent Kind version this deployment runs, resolved from the deployed
+            image. Per-environment, so it reflects what is actually deployed
+            rather than the version the agent was created from. Absent for
+            source-built agents and when the image matches no published version.
         status:
           type: string
           description: Deployment status
@@ -13709,9 +14137,6 @@ components:
         secretRef:
           type: string
           description: Secret reference name for private repository Git credentials
-        orgName:
-          type: string
-          description: Organization name for resolving the secret reference
 
     ListBranchesResponse:
       type: object
@@ -13797,9 +14222,6 @@ components:
         secretRef:
           type: string
           description: Secret reference name for private repository Git credentials
-        orgName:
-          type: string
-          description: Organization name for resolving the secret reference
         projectName:
           type: string
           description: Optional project name used to resolve a deployment-specific repository binding
@@ -14043,6 +14465,57 @@ components:
           type: string
           description: OAuth2 client secret (stored encrypted at rest).
           minLength: 1
+
+    ThunderUrlRequest:
+      type: object
+      description: |
+        An unguessable handle to register for an environment's env-Thunder
+        URL, replacing the predictable "<org>-<env>" pattern. Optional — omit
+        it (or send an empty string) to have the server generate one.
+      properties:
+        handle:
+          type: string
+          description: |
+            DNS-label-safe handle (lowercase alphanumeric with hyphens, no
+            leading/trailing hyphen) that replaces "<org>-<env>" in
+            "<handle>.<baseDomain>". Must be globally unique across
+            all orgs/environments, and at least 10 characters (matching what
+            the server itself generates — anything shorter is trivially
+            guessable). Omit to auto-generate a 10-character handle.
+          pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+          minLength: 10
+          maxLength: 63
+          example: x7f2q9kzab
+
+    ThunderUrlResponse:
+      type: object
+      description: |
+        The env-Thunder URL handle registered for an environment — either the
+        caller-supplied value or the value the server generated when the
+        caller left it blank.
+      required:
+        - handle
+      properties:
+        handle:
+          type: string
+          pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+          minLength: 10
+          maxLength: 63
+          example: x7f2q9kzab
+
+    ThunderUrlAvailabilityResponse:
+      type: object
+      description: |
+        Whether a candidate env-Thunder URL handle passes format validation
+        and is not already registered to any environment. Advisory only — see
+        checkThunderUrlAvailability.
+      required:
+        - available
+      properties:
+        available:
+          type: boolean
+          description: True if the handle is well-formed and not currently taken.
+          example: true
 
     GatewaySpec:
       type: object
@@ -14884,6 +15357,8 @@ components:
           example: openai
         upstream:
           $ref: "#/components/schemas/UpstreamConfig"
+        resilience:
+          $ref: "#/components/schemas/Resilience"
         accessControl:
           $ref: "#/components/schemas/LLMAccessControl"
         policies:
@@ -14932,6 +15407,8 @@ components:
           description: Updated template identifier
         upstream:
           $ref: "#/components/schemas/UpstreamConfig"
+        resilience:
+          $ref: "#/components/schemas/Resilience"
         accessControl:
           $ref: "#/components/schemas/LLMAccessControl"
         policies:
@@ -15056,6 +15533,8 @@ components:
           description: Template identifier
         upstream:
           $ref: "#/components/schemas/UpstreamConfig"
+        resilience:
+          $ref: "#/components/schemas/Resilience"
         accessControl:
           $ref: "#/components/schemas/LLMAccessControl"
         policies:
@@ -15240,6 +15719,8 @@ components:
         provider:
           type: string
           description: Provider reference
+        resilience:
+          $ref: "#/components/schemas/Resilience"
         policies:
           type: array
           items:
@@ -15450,6 +15931,8 @@ components:
           description: Human-readable endpoint name
         upstream:
           $ref: "#/components/schemas/UpstreamConfig"
+        resilience:
+          $ref: "#/components/schemas/Resilience"
         policies:
           type: array
           items:
@@ -15685,7 +16168,7 @@ components:
         type:
           type: string
           description: Authentication type
-          example: bearer
+          example: api-key
         header:
           type: string
           description: Header name for authentication
@@ -15716,6 +16199,27 @@ components:
         auth:
           $ref: "#/components/schemas/UpstreamAuth"
 
+    Resilience:
+      type: object
+      description: >-
+        Route-level request/idle timeouts applied at the API level (no
+        per-operation override for LLM providers, LLM proxies, or MCP proxies).
+      properties:
+        timeout:
+          type: string
+          pattern: '^\d+(ms|s|m|h)$'
+          description: >-
+            Max duration for the whole request→upstream-response. "0s"
+            disables it; omit to use the gateway's default.
+          example: 15s
+        idleTimeout:
+          type: string
+          pattern: '^\d+(ms|s|m|h)$'
+          description: >-
+            Per-route stream idle timeout. "0s" disables it; omit to use the
+            gateway's default.
+          example: 20s
+
     UpstreamAuth:
       type: object
       required:
@@ -15726,10 +16230,8 @@ components:
           description: Authentication type
           enum:
             - api-key
-            - bearer
-            - basic
             - none
-          example: bearer
+          example: api-key
         header:
           type: string
           description: Authentication header name
@@ -16655,6 +17157,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/LLMPolicy"
+        resilience:
+          $ref: "#/components/schemas/Resilience"
 
     UpdateAgentModelConfigRequest:
       type: object
@@ -16675,7 +17179,11 @@ components:
             $ref: "#/components/schemas/EnvModelConfigRequest"
           example:
             development:
-              providerUuid: "550e8400-e29b-41d4-a716-446655440000"
+              providerName: "openai-gpt4"
+              configuration:
+                policies:
+                  - name: "retry"
+                    enabled: true
         environmentVariables:
           type: array
           description: >
@@ -16789,6 +17297,11 @@ components:
           type: string
           format: uuid
           description: UUID of the proxy created
+        providerUuid:
+          type: string
+          format: uuid
+          readOnly: true
+          description: UUID of the org-level LLM provider this config is based on
         proxyName:
           type: string
           description: Name/handle of the MCP proxy
@@ -16815,6 +17328,14 @@ components:
           description: Provider-specific policy configurations
           items:
             $ref: "#/components/schemas/LLMPolicy"
+        providerPolicies:
+          type: array
+          readOnly: true
+          description: Guardrails configured on the org-level LLM provider this config is based on; applied in addition to the config's own policies
+          items:
+            $ref: "#/components/schemas/LLMPolicy"
+        resilience:
+          $ref: "#/components/schemas/Resilience"
         status:
           type: string
           description: Status of the proxy
@@ -17482,7 +18003,13 @@ components:
       properties:
         version:
           type: string
-          description: Version tag for this release
+          description: >-
+            Version tag for this release. Stored as a Kubernetes label on every
+            agent created from this version, so it must be at most 63 characters
+            of letters, digits, '.', '_' or '-', starting and ending with a
+            letter or digit.
+          maxLength: 63
+          pattern: "^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$"
           example: "v1.0.0"
         buildName:
           type: string
@@ -17530,7 +18057,13 @@ components:
           $ref: "#/components/schemas/Labels"
         version:
           type: string
-          description: Version tag for this release
+          description: >-
+            Version tag for this release. Stored as a Kubernetes label on every
+            agent created from this version, so it must be at most 63 characters
+            of letters, digits, '.', '_' or '-', starting and ending with a
+            letter or digit.
+          maxLength: 63
+          pattern: "^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$"
           example: "v1.0.0"
         buildName:
           type: string
@@ -17654,10 +18187,6 @@ components:
         - attributes
         - type
       properties:
-        ouId:
-          type: string
-          description: Organization unit ID (optional; resolved from org context when omitted)
-          example: "ou-456"
         type:
           type: string
           description: User type
@@ -17739,10 +18268,6 @@ components:
           description: Group name
           minLength: 1
           example: "developers"
-        ouId:
-          type: string
-          description: Organization unit ID
-          example: "ou-456"
         description:
           type: string
           description: Group description
@@ -17833,10 +18358,6 @@ components:
           description: Role name
           minLength: 1
           example: "developer"
-        ouId:
-          type: string
-          description: Organization unit ID
-          example: "ou-456"
         description:
           type: string
           description: Role description

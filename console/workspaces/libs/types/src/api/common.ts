@@ -137,7 +137,8 @@ export interface EndpointSpec {
 
 export interface ErrorResponse {
   message: string;
-  description?: string;
+  reason?: string;
+  code: string;
   additionalData?: Record<string, unknown>;
 }
 

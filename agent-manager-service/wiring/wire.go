@@ -27,6 +27,7 @@ import (
 	"github.com/google/wire"
 	"gorm.io/gorm"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	observersvc "github.com/wso2/agent-manager/agent-manager-service/clients/observersvc"
 	occlient "github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/secretmanagersvc"
@@ -61,6 +62,7 @@ var clientProviderSet = wire.NewSet(
 	// endpoints. AgentID provisioning itself is injected via
 	// app.Options.AgentThunderProvisioning, built with its own reader — see app.Run.
 	ProvideEnvThunderSecretReader,
+	ProvideEnvThunderURLReader,
 	ProvideEnvThunderResolver,
 )
 
@@ -95,6 +97,8 @@ var serviceProviderSet = wire.NewSet(
 	// MCPProxyScopeService only needs the narrow redeploy surface; bind it to
 	// the concrete service so scope mutations can re-emit gateway policies.
 	wire.Bind(new(services.MCPProxyRedeployer), new(*services.MCPProxyService)),
+	// The agent-identity controller needs only the identifier-derivation surface.
+	wire.Bind(new(controllers.MCPResourceServerIdentifierResolver), new(*services.MCPProxyService)),
 	services.NewGatewayInternalAPIService,
 	services.NewMonitorScoresService,
 	services.NewCatalogService,
@@ -150,6 +154,7 @@ var testClientProviderSet = wire.NewSet(
 	ProvideOrgResolver,
 	thundersvc.NewProber,
 	ProvideEnvThunderSecretReader,
+	ProvideEnvThunderURLReader,
 	ProvideEnvThunderResolver,
 )
 
@@ -162,6 +167,24 @@ var thunderProvisioningTestSet = wire.NewSet(
 // ProvideLogger provides the configured slog.Logger instance
 func ProvideLogger() *slog.Logger {
 	return slog.Default()
+}
+
+// ProvideAuditRecorder builds the audit recorder.
+//
+// Records go to stdout as structured JSON, where the platform's log pipeline
+// already collects them. That also gives the trail a copy this service cannot
+// rewrite, since there is no write path from here back into the log store.
+func ProvideAuditRecorder(cfg config.Config, logger *slog.Logger) audit.Recorder {
+	if !cfg.Audit.Enabled {
+		logger.Warn("audit logging is disabled; no record of privileged operations will be kept",
+			"setting", "AUDIT_ENABLED")
+		return audit.NewNoopRecorder()
+	}
+	return audit.NewRecorder(audit.NewStdoutSink(), logger, audit.Config{
+		BufferSize:    cfg.Audit.BufferSize,
+		BatchSize:     cfg.Audit.BatchSize,
+		FlushInterval: time.Duration(cfg.Audit.FlushIntervalMs) * time.Millisecond,
+	})
 }
 
 // ProvideInstrumentationCatalog loads the instrumentation catalog and
@@ -294,6 +317,27 @@ func ProvideSecretManagementClient(cfg config.Config, secretProvider secretmanag
 	})
 }
 
+// ProvideGatewayManifestCacheBackend builds the gateway-manifest cache backend
+// selected by config.GatewayManifestCache.Backend. Not part of the wire provider
+// sets: nothing constructs a dependency on it (the cache is a services-package-level
+// var, not a constructor param — see services.SetGatewayManifestCacheBackend's doc
+// comment for why). Called directly from app.Run at startup, before the rest of the
+// dependency graph is built, so every reader/writer in the services package picks up
+// the configured backend from their first call.
+func ProvideGatewayManifestCacheBackend(cfg config.Config) (services.GatewayManifestCacheBackend, error) {
+	switch cfg.GatewayManifestCache.Backend {
+	case "redis":
+		return services.NewRedisGatewayManifestCache(cfg.GatewayManifestCache.Redis), nil
+	case "memory", "":
+		return services.NewInMemoryGatewayManifestCache(), nil
+	default:
+		// Config validation (validateGatewayManifestCacheConfig) already rejects an
+		// unrecognized backend at load time; this is an extra guard against a Config
+		// built directly (e.g. in tests) bypassing that validation.
+		return nil, fmt.Errorf("unknown gateway manifest cache backend %q", cfg.GatewayManifestCache.Backend)
+	}
+}
+
 // ProvideGitCredentialsService creates the git credentials service for fetching
 // git credentials from workflow plane OpenBao
 func ProvideGitCredentialsService(ocClient occlient.OpenChoreoClient, cfg config.Config) (services.GitCredentialsService, error) {
@@ -315,6 +359,7 @@ func ProvidePublisherProvisioner(cfg config.Config, encryptionKey []byte, logger
 
 var loggerProviderSet = wire.NewSet(
 	ProvideLogger,
+	ProvideAuditRecorder,
 )
 
 var repositoryProviderSet = wire.NewSet(
@@ -343,6 +388,7 @@ var repositoryProviderSet = wire.NewSet(
 	ProvideAIApplicationRepository,
 	ProvideAgentThunderClientRepository,
 	ProvideEnvThunderSystemClientRepository,
+	ProvideEnvThunderURLRepository,
 	repositories.NewMCPProxyScopeRepository,
 )
 
@@ -492,16 +538,30 @@ func ProvideEnvThunderSystemClientRepository(db *gorm.DB) repositories.EnvThunde
 	return repositories.NewEnvThunderSystemClientRepo(db)
 }
 
+// ProvideEnvThunderURLRepository provides the repository for per-environment
+// env-Thunder URL handles.
+func ProvideEnvThunderURLRepository(db *gorm.DB) repositories.EnvThunderURLRepository {
+	return repositories.NewEnvThunderURLRepo(db)
+}
+
 // ProvideEnvThunderSecretReader decrypts the env-Thunder system-client
 // credential from AMS's own Postgres — no key-vault read-back.
 func ProvideEnvThunderSecretReader(repo repositories.EnvThunderSystemClientRepository, encryptionKey []byte) thundersvc.ReadSystemClientFunc {
 	return services.NewEnvThunderSecretReader(repo, encryptionKey)
 }
 
+// ProvideEnvThunderURLReader looks up an env-Thunder's registered URL handle
+// from AMS's own Postgres. A missing row means not provisioned — there is no
+// fallback to a value computed from (org, env).
+func ProvideEnvThunderURLReader(repo repositories.EnvThunderURLRepository) thundersvc.ReadThunderHandleFunc {
+	return services.NewEnvThunderURLReader(repo)
+}
+
 // ProvideEnvThunderResolver maps (org, environment) to an authenticated
-// ThunderClient, reading the system-client credential via the injected reader.
-func ProvideEnvThunderResolver(readSystemClient thundersvc.ReadSystemClientFunc) thundersvc.EnvThunderResolver {
-	return thundersvc.NewEnvThunderResolver(readSystemClient)
+// ThunderClient, reading the system-client credential and URL handle via the
+// injected readers.
+func ProvideEnvThunderResolver(readSystemClient thundersvc.ReadSystemClientFunc, readThunderHandle thundersvc.ReadThunderHandleFunc) thundersvc.EnvThunderResolver {
+	return thundersvc.NewEnvThunderResolver(readSystemClient, readThunderHandle)
 }
 
 // ProvideAgentIdentityInjectionService creates the Gateway Binding service that
@@ -525,6 +585,9 @@ func ProvideThunderConfig(cfg config.Config) config.ThunderConfig {
 
 // ProvideIdentityClient creates a Thunder identity client using the Thunder system app credentials.
 func ProvideIdentityClient(cfg config.ThunderConfig) thundersvc.IdentityClient {
+	if cfg.ResolveToHost != "" {
+		return thundersvc.NewIdentityClientWithDialOverride(cfg.BaseURL, cfg.ClientID, cfg.ClientSecret, cfg.ResolveToHost)
+	}
 	return thundersvc.NewIdentityClient(cfg.BaseURL, cfg.ClientID, cfg.ClientSecret)
 }
 

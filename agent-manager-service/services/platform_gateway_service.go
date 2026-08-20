@@ -378,7 +378,7 @@ func (s *PlatformGatewayService) GetGateway(gatewayID, ouID string) (*GatewayRes
 // it to the jsonb column cost a large row update per push for data that is regenerated
 // on the next push anyway. Every gateway runs the same policy bundle, so the cache keeps
 // a single newest copy shared by all of them.
-func (s *PlatformGatewayService) SaveGatewayPolicyManifest(gatewayID string, manifest map[string]interface{}) error {
+func (s *PlatformGatewayService) SaveGatewayPolicyManifest(ctx context.Context, gatewayID string, manifest map[string]interface{}) error {
 	gateway, err := s.gatewayRepo.GetByUUID(gatewayID)
 	if err != nil {
 		return err
@@ -386,10 +386,9 @@ func (s *PlatformGatewayService) SaveGatewayPolicyManifest(gatewayID string, man
 	if gateway == nil {
 		return utils.ErrGatewayNotFound
 	}
+	slog.Info("Saving gateway policy manifest for gateway", "gatewayID", gatewayID)
 
-	gatewayManifestCache.Set(manifest)
-
-	return nil
+	return gatewayManifestCache.Set(ctx, manifest)
 }
 
 // UpdateGateway updates gateway details

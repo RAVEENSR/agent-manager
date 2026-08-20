@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/rbac"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
@@ -32,37 +33,97 @@ const orgNamePlaceholder = "{" + utils.PathParamOrgName + "}"
 // RouteRegistrar wraps an http.ServeMux and an OrgResolver to provide route
 // registration helpers that automatically apply org validation + resolution on
 // any pattern containing {orgName}.
+//
+// It is also the audit trail's coverage guarantee. Every route in the public
+// API is registered here, and registration already carries the two things an
+// audit record needs — the route pattern and the permission that gates it — so
+// wrapping here audits the whole API without touching a single route file.
 type RouteRegistrar struct {
 	mux         *http.ServeMux
 	orgResolver OrgResolver
+	auditor     audit.Recorder
+	// surface distinguishes the internal gateway server from the public API so
+	// its records are not mistaken for user-driven traffic.
+	surface audit.Surface
+	// routes is a registration ledger. It exists for the coverage test, which
+	// walks it to assert that no mutating route shipped unaudited; it is never
+	// consulted at request time.
+	routes []audit.RouteMeta
 }
 
 // NewRouteRegistrar creates a RouteRegistrar backed by the given mux and resolver.
-func NewRouteRegistrar(mux *http.ServeMux, resolver OrgResolver) *RouteRegistrar {
-	return &RouteRegistrar{mux: mux, orgResolver: resolver}
+// A nil auditor disables audit recording for routes registered through it.
+func NewRouteRegistrar(mux *http.ServeMux, resolver OrgResolver, auditor audit.Recorder) *RouteRegistrar {
+	return newRouteRegistrar(mux, resolver, auditor, audit.SurfaceAPI)
+}
+
+// NewInternalRouteRegistrar creates a registrar for the gateway-facing internal
+// server.
+//
+// That server has no JWT middleware — gateways authenticate with an api-key
+// header checked inside each handler — so its routes carry no permission and
+// no org placeholder, and the registrar applies neither. What it does apply is
+// the audit wrapper and the route ledger, which is the point: registering here
+// rather than on a bare mux is what puts these routes under the same coverage
+// test as the public API.
+func NewInternalRouteRegistrar(mux *http.ServeMux, auditor audit.Recorder) *RouteRegistrar {
+	return newRouteRegistrar(mux, nil, auditor, audit.SurfaceInternal)
+}
+
+func newRouteRegistrar(
+	mux *http.ServeMux, resolver OrgResolver, auditor audit.Recorder, surface audit.Surface,
+) *RouteRegistrar {
+	if auditor == nil {
+		auditor = audit.NewNoopRecorder()
+	}
+	return &RouteRegistrar{mux: mux, orgResolver: resolver, auditor: auditor, surface: surface}
+}
+
+// Routes returns the audit metadata for every registered route. Used by the
+// coverage test to detect a new mutating endpoint that is not audited.
+func (rr *RouteRegistrar) Routes() []audit.RouteMeta {
+	out := make([]audit.RouteMeta, len(rr.routes))
+	copy(out, rr.routes)
+	return out
+}
+
+// register applies the common wrapper chain and installs the route.
+//
+// authz is applied by the caller-supplied function so that the differences
+// between the permission variants stay visible at each call site rather than
+// hiding behind a flag. Order, innermost first: path-param validation, authz,
+// org resolution, audit. Audit is outermost so it observes the 400 from
+// validation and the 403 from authz as well as the handler's own response.
+func (rr *RouteRegistrar) register(
+	pattern string,
+	perms []rbac.Permission,
+	authz func(http.HandlerFunc) http.HandlerFunc,
+	handler http.HandlerFunc,
+) {
+	params := extractPathParams(pattern)
+	if len(params) > 0 {
+		handler = WithPathParamValidation(handler, params...)
+	}
+	if authz != nil {
+		handler = authz(handler)
+	}
+	if strings.Contains(pattern, orgNamePlaceholder) {
+		handler = RequireOrgMatch(rr.orgResolver)(handler)
+	}
+
+	meta := audit.NewRouteMetaForSurface(pattern, params, perms, rr.surface)
+	rr.routes = append(rr.routes, meta)
+	handler = WithAudit(rr.auditor, meta)(handler)
+
+	rr.mux.HandleFunc(pattern, handler)
 }
 
 func (rr *RouteRegistrar) HandleFuncWithValidation(pattern string, handler http.HandlerFunc) {
-	params := extractPathParams(pattern)
-	if len(params) > 0 {
-		handler = WithPathParamValidation(handler, params...)
-	}
-	if strings.Contains(pattern, orgNamePlaceholder) {
-		handler = RequireOrgMatch(rr.orgResolver)(handler)
-	}
-	rr.mux.HandleFunc(pattern, handler)
+	rr.register(pattern, nil, nil, handler)
 }
 
 func (rr *RouteRegistrar) HandleFuncWithValidationAndAuthz(pattern string, perm rbac.Permission, handler http.HandlerFunc) {
-	params := extractPathParams(pattern)
-	if len(params) > 0 {
-		handler = WithPathParamValidation(handler, params...)
-	}
-	handler = RequirePermission(perm)(handler)
-	if strings.Contains(pattern, orgNamePlaceholder) {
-		handler = RequireOrgMatch(rr.orgResolver)(handler)
-	}
-	rr.mux.HandleFunc(pattern, handler)
+	rr.register(pattern, []rbac.Permission{perm}, RequirePermission(perm), handler)
 }
 
 // HandleFuncWithValidationAndAuthzAllowRootOU is identical to
@@ -73,38 +134,43 @@ func (rr *RouteRegistrar) HandleFuncWithValidationAndAuthz(pattern string, perm 
 // act on a different org named in the path — see RequireOrgMatchAllowRootOU /
 // RequirePermissionAllowRootOU. Use only for system-client bootstrap endpoints.
 func (rr *RouteRegistrar) HandleFuncWithValidationAndAuthzAllowRootOU(pattern string, perm rbac.Permission, handler http.HandlerFunc) {
-	params := extractPathParams(pattern)
-	if len(params) > 0 {
-		handler = WithPathParamValidation(handler, params...)
-	}
-	handler = RequirePermissionAllowRootOU(perm)(handler)
-	if strings.Contains(pattern, orgNamePlaceholder) {
-		handler = RequireOrgMatchAllowRootOU(rr.orgResolver)(handler)
-	}
-	rr.mux.HandleFunc(pattern, handler)
+	// The root-OU bypass admits a token regardless of its scopes, so the audit
+	// record for these routes needs to show that the normal check did not decide
+	// the outcome. RequirePermissionAllowRootOU marks the request when it takes
+	// that path; see auditRootOUBypass in authorization.go.
+	rr.registerRootOU(pattern, []rbac.Permission{perm}, RequirePermissionAllowRootOU(perm), handler)
 }
 
 func (rr *RouteRegistrar) HandleFuncWithValidationAndAnyAuthz(pattern string, handler http.HandlerFunc, perms ...rbac.Permission) {
-	params := extractPathParams(pattern)
-	if len(params) > 0 {
-		handler = WithPathParamValidation(handler, params...)
-	}
-	handler = RequireAnyPermission(perms...)(handler)
-	if strings.Contains(pattern, orgNamePlaceholder) {
-		handler = RequireOrgMatch(rr.orgResolver)(handler)
-	}
-	rr.mux.HandleFunc(pattern, handler)
+	rr.register(pattern, perms, RequireAnyPermission(perms...), handler)
 }
 
 func (rr *RouteRegistrar) HandleFuncWithValidationAndDynamicAuthz(pattern string, resolver PermissionResolver, handler http.HandlerFunc) {
+	// The permission is resolved per request, so none is known at registration
+	// time. The resolved one is recorded on the event by RequireDynamicPermission.
+	rr.register(pattern, nil, RequireDynamicPermission(resolver), handler)
+}
+
+// registerRootOU mirrors register but uses the root-OU org resolution variant.
+func (rr *RouteRegistrar) registerRootOU(
+	pattern string,
+	perms []rbac.Permission,
+	authz func(http.HandlerFunc) http.HandlerFunc,
+	handler http.HandlerFunc,
+) {
 	params := extractPathParams(pattern)
 	if len(params) > 0 {
 		handler = WithPathParamValidation(handler, params...)
 	}
-	handler = RequireDynamicPermission(resolver)(handler)
+	handler = authz(handler)
 	if strings.Contains(pattern, orgNamePlaceholder) {
-		handler = RequireOrgMatch(rr.orgResolver)(handler)
+		handler = RequireOrgMatchAllowRootOU(rr.orgResolver)(handler)
 	}
+
+	meta := audit.NewRouteMetaForSurface(pattern, params, perms, rr.surface)
+	rr.routes = append(rr.routes, meta)
+	handler = WithAudit(rr.auditor, meta)(handler)
+
 	rr.mux.HandleFunc(pattern, handler)
 }
 

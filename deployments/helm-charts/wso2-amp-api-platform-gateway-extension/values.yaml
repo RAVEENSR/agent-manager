@@ -172,6 +172,9 @@ apiGateway:
         validateissuer: true
 
       # --- MCP Authentication (additional to jwtauth_v1) ---
+      # gatewayhost defaults to the bare hostname of gateway.vhost (else the
+      # routed kgateway hostname), so mcp-auth OAuth challenges advertise the
+      # public serving host. Set it here only to override that derivation.
       # mcpauth_v1:
       #   gatewayhost: "localhost"
 

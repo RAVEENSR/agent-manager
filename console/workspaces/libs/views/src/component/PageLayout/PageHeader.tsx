@@ -46,6 +46,13 @@ const CARD_SECONDARY_ACTIONS_SX = {
   mt: 1,
 } as const;
 const TITLE_SX = { display: 'inline-flex', alignItems: 'center', width: '100%' } as const;
+const TITLE_TEXT_SX = {
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  minWidth: 0,
+  maxWidth: '70%',
+} as const;
 const TITLE_TAIL_SX = {
   display: 'inline-flex',
   alignItems: 'center',
@@ -159,7 +166,9 @@ export function PageHeader({
           <Skeleton variant="text" width={200} height={32} />
         ) : (
           <Box component="span" sx={TITLE_SX}>
-            {title}
+            <Box component="span" sx={TITLE_TEXT_SX}>
+              {title}
+            </Box>
             {titleTail && (
               <Box component="span" sx={TITLE_TAIL_SX}>
                 {titleTail}

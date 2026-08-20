@@ -17,10 +17,17 @@
 package services
 
 import (
+	"errors"
 	"fmt"
+	"maps"
 	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+
+	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 )
 
@@ -38,8 +45,9 @@ type llmPolicyManifestItem struct {
 }
 
 // intersectActiveGatewayLLMPolicies returns, keyed by "name\x00version", the full policy
-// definitions reported by EVERY active gateway in the org — a policy is "available" only
-// if all active gateways advertise it.
+// definitions available across every active gateway in the org. Used when the caller has
+// no specific provider/deployment to scope to (e.g. a provider-agnostic listing).
+// See intersectLLMPolicies for the availability semantics.
 func intersectActiveGatewayLLMPolicies(gatewayRepo repositories.GatewayRepository, orgUUID string) (map[string]llmPolicyManifestItem, error) {
 	if gatewayRepo == nil {
 		return map[string]llmPolicyManifestItem{}, nil
@@ -54,23 +62,91 @@ func intersectActiveGatewayLLMPolicies(gatewayRepo repositories.GatewayRepositor
 		return nil, fmt.Errorf("failed to list active gateways: %w", err)
 	}
 
-	var available map[string]llmPolicyManifestItem
-	seenGateway := false
+	return intersectLLMPolicies(gateways), nil
+}
+
+// intersectDeployedGatewayLLMPolicies returns, keyed by "name\x00version", the full policy
+// definitions available across the gateways a specific LLM provider is deployed to. Used
+// to scope the guardrail catalog to what that provider's actual gateways support, instead
+// of every active gateway in the org. See intersectLLMPolicies for the availability
+// semantics.
+func intersectDeployedGatewayLLMPolicies(gatewayRepo repositories.GatewayRepository, deploymentRepo repositories.DeploymentRepository, providerUUID uuid.UUID, orgUUID string) (map[string]llmPolicyManifestItem, error) {
+	if gatewayRepo == nil || deploymentRepo == nil {
+		return map[string]llmPolicyManifestItem{}, nil
+	}
+
+	gatewayUUIDs, err := deploymentRepo.GetDeployedGatewaysByProvider(providerUUID, orgUUID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list deployed gateways for provider: %w", err)
+	}
+
+	gateways := make([]*models.Gateway, 0, len(gatewayUUIDs))
+	for _, gatewayUUID := range gatewayUUIDs {
+		gateway, err := gatewayRepo.GetByUUID(gatewayUUID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				// A deployment row can outlive the gateway it points to (e.g. the
+				// gateway was since deleted); skip it rather than failing the whole
+				// listing over one stale reference.
+				continue
+			}
+			return nil, fmt.Errorf("failed to get deployed gateway %s: %w", gatewayUUID, err)
+		}
+		// Defense in depth: GetByUUID isn't org-scoped, so verify the gateway we
+		// fetched actually belongs to the caller's org before including its
+		// policies, even though gatewayUUIDs itself was already org-filtered.
+		if gateway != nil && gateway.OUID == orgUUID {
+			gateways = append(gateways, gateway)
+		}
+	}
+
+	return intersectLLMPolicies(gateways), nil
+}
+
+// intersectLLMPolicies returns, keyed by "name\x00version", the full policy definitions
+// available across the given gateways. A policy name+version is "available" if every given
+// gateway advertises that exact version (strict intersection). For a policy name where the
+// given gateways disagree on version — e.g. a rolling gateway upgrade where some gateways
+// still report the old version — policies are assumed backward-compatible: the name falls
+// back to the LOWEST version reported by any of the given gateways, using that gateway's
+// own metadata, so a previously-applied policy doesn't disappear from the catalog mid-rollout.
+func intersectLLMPolicies(gateways []*models.Gateway) map[string]llmPolicyManifestItem {
+	var perGatewayPolicies []map[string]llmPolicyManifestItem
+	// byName collects every (gateway, version) sighting per policy name, used for the
+	// backward-compatible fallback when strict intersection yields nothing for that name.
+	byName := map[string][]llmPolicyManifestItem{}
+	// gatewayCountByName counts, per policy name, how many distinct gateways reported it
+	// (at any version) — the fallback only applies when EVERY gateway has the name, just
+	// disagreeing on version. A name genuinely missing from some gateway stays excluded.
+	gatewayCountByName := map[string]int{}
+	gatewayCount := 0
+
 	for _, gateway := range gateways {
 		if gateway == nil {
 			continue
 		}
+		gatewayCount++
 		gatewayPolicies := map[string]llmPolicyManifestItem{}
+		namesOnThisGateway := map[string]struct{}{}
 		for _, policy := range extractLLMPolicyManifestItems(gatewayManifest(gateway)) {
 			if policy.Name == "" || policy.Version == "" {
 				continue
 			}
 			key := policy.Name + "\x00" + policy.Version
 			gatewayPolicies[key] = policy
+			byName[policy.Name] = append(byName[policy.Name], policy)
+			namesOnThisGateway[policy.Name] = struct{}{}
 		}
-		if !seenGateway {
-			available = gatewayPolicies
-			seenGateway = true
+		for name := range namesOnThisGateway {
+			gatewayCountByName[name]++
+		}
+		perGatewayPolicies = append(perGatewayPolicies, gatewayPolicies)
+	}
+
+	available := map[string]llmPolicyManifestItem{}
+	for i, gatewayPolicies := range perGatewayPolicies {
+		if i == 0 {
+			maps.Copy(available, gatewayPolicies)
 			continue
 		}
 		for key := range available {
@@ -80,10 +156,61 @@ func intersectActiveGatewayLLMPolicies(gatewayRepo repositories.GatewayRepositor
 		}
 	}
 
-	if available == nil {
-		available = map[string]llmPolicyManifestItem{}
+	namesInIntersection := map[string]struct{}{}
+	for _, policy := range available {
+		namesInIntersection[policy.Name] = struct{}{}
 	}
-	return available, nil
+
+	for name, sightings := range byName {
+		if _, ok := namesInIntersection[name]; ok {
+			continue
+		}
+		if gatewayCountByName[name] != gatewayCount {
+			// Not on every gateway — genuinely unavailable, not a version mismatch.
+			continue
+		}
+		lowest := lowestVersionLLMPolicy(sightings)
+		key := lowest.Name + "\x00" + lowest.Version
+		available[key] = lowest
+	}
+
+	return available
+}
+
+// lowestVersionLLMPolicy returns the sighting with the lowest Version among policies that
+// share the same Name, using semver-aware numeric comparison per dot-separated segment and
+// falling back to a plain string comparison for any version that doesn't parse as numeric
+// segments. sightings must be non-empty.
+func lowestVersionLLMPolicy(sightings []llmPolicyManifestItem) llmPolicyManifestItem {
+	lowest := sightings[0]
+	for _, candidate := range sightings[1:] {
+		if compareVersions(candidate.Version, lowest.Version) < 0 {
+			lowest = candidate
+		}
+	}
+	return lowest
+}
+
+// compareVersions compares two dot-separated version strings segment by segment,
+// numerically where possible (so "1.10.0" > "1.9.0", unlike a plain string compare).
+// A single optional leading "v"/"V" is stripped from each side first, so "v10" and
+// "v2" also compare numerically. If either version has a non-numeric segment, it
+// falls back to a plain string compare of the full (original, unstripped) version.
+func compareVersions(a, b string) int {
+	segmentsA := strings.Split(strings.TrimPrefix(strings.TrimPrefix(a, "v"), "V"), ".")
+	segmentsB := strings.Split(strings.TrimPrefix(strings.TrimPrefix(b, "v"), "V"), ".")
+
+	for i := 0; i < len(segmentsA) && i < len(segmentsB); i++ {
+		numA, errA := strconv.Atoi(segmentsA[i])
+		numB, errB := strconv.Atoi(segmentsB[i])
+		if errA != nil || errB != nil {
+			return strings.Compare(a, b)
+		}
+		if numA != numB {
+			return numA - numB
+		}
+	}
+	return len(segmentsA) - len(segmentsB)
 }
 
 // sortedLLMPolicyManifestItems returns the map's values sorted by Name then Version,

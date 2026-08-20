@@ -125,6 +125,98 @@ func TestGenerateLLMProxyDeploymentYAML_Basic(t *testing.T) {
 	}
 }
 
+// TestGenerateLLMProxyDeploymentYAML_WithResilience verifies the proxy's own resilience
+// config is passed straight through to the deployment YAML, unmodified.
+func TestGenerateLLMProxyDeploymentYAML_WithResilience(t *testing.T) {
+	providerUUID := uuid.New().String()
+
+	mockProvider := &models.LLMProvider{
+		UUID: uuid.MustParse(providerUUID),
+		Artifact: &models.Artifact{
+			Handle: "openai-provider",
+		},
+	}
+
+	service := &LLMProxyDeploymentService{
+		providerRepo: &mockLLMProviderRepository{provider: mockProvider},
+	}
+
+	timeout := "15s"
+	idleTimeout := "20s"
+	proxy := &models.LLMProxy{
+		Handle: "test-proxy",
+		Configuration: models.LLMProxyConfig{
+			Name:     "Test Proxy",
+			Version:  "1.0.0",
+			Provider: providerUUID,
+			Resilience: &models.Resilience{
+				Timeout:     &timeout,
+				IdleTimeout: &idleTimeout,
+			},
+		},
+	}
+
+	yamlStr, err := service.generateLLMProxyDeploymentYAML(proxy, "test-org")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	var deployment LLMProxyDeploymentYAML
+	if err := yaml.Unmarshal([]byte(yamlStr), &deployment); err != nil {
+		t.Fatalf("failed to unmarshal YAML: %v", err)
+	}
+
+	if deployment.Spec.Resilience == nil {
+		t.Fatal("expected resilience to be set")
+	}
+	if deployment.Spec.Resilience.Timeout == nil || *deployment.Spec.Resilience.Timeout != "15s" {
+		t.Errorf("expected resilience.timeout 15s, got: %+v", deployment.Spec.Resilience.Timeout)
+	}
+	if deployment.Spec.Resilience.IdleTimeout == nil || *deployment.Spec.Resilience.IdleTimeout != "20s" {
+		t.Errorf("expected resilience.idleTimeout 20s, got: %+v", deployment.Spec.Resilience.IdleTimeout)
+	}
+}
+
+// TestGenerateLLMProxyDeploymentYAML_NoResilienceOmitsField verifies that when the proxy has
+// no explicit resilience config, the field is omitted so the gateway applies its own defaults.
+func TestGenerateLLMProxyDeploymentYAML_NoResilienceOmitsField(t *testing.T) {
+	providerUUID := uuid.New().String()
+
+	mockProvider := &models.LLMProvider{
+		UUID: uuid.MustParse(providerUUID),
+		Artifact: &models.Artifact{
+			Handle: "openai-provider",
+		},
+	}
+
+	service := &LLMProxyDeploymentService{
+		providerRepo: &mockLLMProviderRepository{provider: mockProvider},
+	}
+
+	proxy := &models.LLMProxy{
+		Handle: "test-proxy",
+		Configuration: models.LLMProxyConfig{
+			Name:     "Test Proxy",
+			Version:  "1.0.0",
+			Provider: providerUUID,
+		},
+	}
+
+	yamlStr, err := service.generateLLMProxyDeploymentYAML(proxy, "test-org")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	var deployment LLMProxyDeploymentYAML
+	if err := yaml.Unmarshal([]byte(yamlStr), &deployment); err != nil {
+		t.Fatalf("failed to unmarshal YAML: %v", err)
+	}
+
+	if deployment.Spec.Resilience != nil {
+		t.Errorf("expected resilience to be nil (gateway default applies), got: %+v", deployment.Spec.Resilience)
+	}
+}
+
 // TestGenerateLLMProxyDeploymentYAML_WithContext tests YAML generation with custom context
 func TestGenerateLLMProxyDeploymentYAML_WithContext(t *testing.T) {
 	providerUUID := uuid.New().String()

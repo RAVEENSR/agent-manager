@@ -23,7 +23,7 @@ When you deploy a Python agent through WSO2 Agent Manager with auto-instrumentat
 
 When you create a Python agent in the Console with auto-instrumentation on, you select an **AMP instrumentation version**. Each version pins a specific Traceloop SDK version, so a deployment is reproducible and existing agents don't move when the platform default changes. The selector is pre-filled with the platform default; most users never change it.
 
-You also pick the agent's **Python version** from a fixed dropdown (currently `3.10`, `3.11`, `3.12`, `3.13`) — the init container's Python must match the agent's runtime, so the dropdown is constrained to the set AMP has built images for. See the [AMP instrumentation version mapping](../components/amp-instrumentation.mdx#amp-instrumentation-version-mapping) for the current matrix.
+You also pick the agent's **Python version** from a fixed dropdown (currently `3.10`, `3.11`, `3.12`, `3.13`) — the init container's Python must match the agent's runtime, so the dropdown is constrained to the set AMP has built images for. See the [AMP instrumentation version mapping](../guides/amp-instrumentation.mdx#amp-instrumentation-version-mapping) for the current matrix.
 
 ### What Gets Instrumented
 
@@ -94,7 +94,13 @@ This works for both deployment models:
 - **Platform-hosted agents** with auto-instrumentation disabled: AMP's env-injection trait still sets `AMP_OTEL_ENDPOINT` and `AMP_AGENT_API_KEY` for you. You're responsible for emitting the spans.
 - **Externally-hosted agents:** install `amp-instrumentation` for the `init_otel()` helper, set the two environment variables yourself, and emit spans from your own code.
 
-The contract is layered on the OpenTelemetry GenAI semantic conventions (`gen_ai.*` + `db.*`), with a few `traceloop.*` extension keys for the gaps OTel hasn't standardized yet. See the [manual instrumentation reference](../components/amp-instrumentation.mdx#manual-instrumentation) on the `amp-instrumentation` page for the full attribute table, transport details, and a worked `init_otel()` example.
+The contract is layered on the OpenTelemetry GenAI semantic conventions (`gen_ai.*` + `db.*`), with a few `traceloop.*` extension keys for the gaps OTel hasn't standardized yet. See the [manual instrumentation reference](../guides/amp-instrumentation.mdx#manual-instrumentation) on the `amp-instrumentation` page for the full attribute table, transport details, and a worked `init_otel()` example.
+
+---
+
+## Trace Sampling
+
+By default every trace an agent produces is exported. At high request rates that becomes expensive, so the OpenTelemetry SDK can be told to keep only a fraction of traces. Sampling is a head-based decision made inside the agent process, configured with the standard `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG` environment variables — see [Configure Trace Sampling](../guides/configure-trace-sampling.mdx).
 
 ---
 

@@ -43,6 +43,9 @@ import (
 //			GetFunc: func(ctx context.Context, ouID string, projectName string, agentName string, environmentName string) (*models.AgentThunderClient, error) {
 //				panic("mock out the Get method")
 //			},
+//			ResetFailedForRetryFunc: func(ctx context.Context, id uuid.UUID) (bool, error) {
+//				panic("mock out the ResetFailedForRetry method")
+//			},
 //			UpdateAfterAttemptFunc: func(ctx context.Context, id uuid.UUID, fields repositories.AgentThunderAttemptUpdate) error {
 //				panic("mock out the UpdateAfterAttempt method")
 //			},
@@ -82,6 +85,9 @@ type AgentThunderClientRepositoryMock struct {
 
 	// GetFunc mocks the Get method.
 	GetFunc func(ctx context.Context, ouID string, projectName string, agentName string, environmentName string) (*models.AgentThunderClient, error)
+
+	// ResetFailedForRetryFunc mocks the ResetFailedForRetry method.
+	ResetFailedForRetryFunc func(ctx context.Context, id uuid.UUID) (bool, error)
 
 	// UpdateAfterAttemptFunc mocks the UpdateAfterAttempt method.
 	UpdateAfterAttemptFunc func(ctx context.Context, id uuid.UUID, fields repositories.AgentThunderAttemptUpdate) error
@@ -172,6 +178,13 @@ type AgentThunderClientRepositoryMock struct {
 			// EnvironmentName is the environmentName argument value.
 			EnvironmentName string
 		}
+		// ResetFailedForRetry holds details about calls to the ResetFailedForRetry method.
+		ResetFailedForRetry []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// ID is the id argument value.
+			ID uuid.UUID
+		}
 		// UpdateAfterAttempt holds details about calls to the UpdateAfterAttempt method.
 		UpdateAfterAttempt []struct {
 			// Ctx is the ctx argument value.
@@ -206,6 +219,7 @@ type AgentThunderClientRepositoryMock struct {
 	lockFindDue                       sync.RWMutex
 	lockFindRecentlyCompletedInternal sync.RWMutex
 	lockGet                           sync.RWMutex
+	lockResetFailedForRetry           sync.RWMutex
 	lockUpdateAfterAttempt            sync.RWMutex
 	lockUpdateSecretRef               sync.RWMutex
 	lockUpsert                        sync.RWMutex
@@ -540,6 +554,42 @@ func (mock *AgentThunderClientRepositoryMock) GetCalls() []struct {
 	mock.lockGet.RLock()
 	calls = mock.calls.Get
 	mock.lockGet.RUnlock()
+	return calls
+}
+
+// ResetFailedForRetry calls ResetFailedForRetryFunc.
+func (mock *AgentThunderClientRepositoryMock) ResetFailedForRetry(ctx context.Context, id uuid.UUID) (bool, error) {
+	if mock.ResetFailedForRetryFunc == nil {
+		panic("AgentThunderClientRepositoryMock.ResetFailedForRetryFunc: method is nil but AgentThunderClientRepository.ResetFailedForRetry was just called")
+	}
+	callInfo := struct {
+		Ctx context.Context
+		ID  uuid.UUID
+	}{
+		Ctx: ctx,
+		ID:  id,
+	}
+	mock.lockResetFailedForRetry.Lock()
+	mock.calls.ResetFailedForRetry = append(mock.calls.ResetFailedForRetry, callInfo)
+	mock.lockResetFailedForRetry.Unlock()
+	return mock.ResetFailedForRetryFunc(ctx, id)
+}
+
+// ResetFailedForRetryCalls gets all the calls that were made to ResetFailedForRetry.
+// Check the length with:
+//
+//	len(mockedAgentThunderClientRepository.ResetFailedForRetryCalls())
+func (mock *AgentThunderClientRepositoryMock) ResetFailedForRetryCalls() []struct {
+	Ctx context.Context
+	ID  uuid.UUID
+} {
+	var calls []struct {
+		Ctx context.Context
+		ID  uuid.UUID
+	}
+	mock.lockResetFailedForRetry.RLock()
+	calls = mock.calls.ResetFailedForRetry
+	mock.lockResetFailedForRetry.RUnlock()
 	return calls
 }
 

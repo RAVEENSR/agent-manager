@@ -24,6 +24,7 @@ import (
 	"strconv"
 
 	"github.com/wso2/agent-manager/agent-manager-service/clients/gitprovider"
+	"github.com/wso2/agent-manager/agent-manager-service/middleware"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/logger"
 	"github.com/wso2/agent-manager/agent-manager-service/services"
 	"github.com/wso2/agent-manager/agent-manager-service/spec"
@@ -81,8 +82,10 @@ func (c *repositoryController) ListBranches(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	ouID := middleware.OUIDFromRequest(r)
+
 	// Call service
-	response, err := c.repositoryService.ListBranches(ctx, reqBody, gitprovider.ProviderGitHub, limit, offset)
+	response, err := c.repositoryService.ListBranches(ctx, reqBody, ouID, gitprovider.ProviderGitHub, limit, offset)
 	if err != nil {
 		log.Error("ListBranches: failed to list branches", "owner", reqBody.Owner, "repository", reqBody.Repository, "error", err)
 		handleGitProviderError(w, err)
@@ -121,8 +124,10 @@ func (c *repositoryController) ListCommits(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	ouID := middleware.OUIDFromRequest(r)
+
 	// Call service
-	response, err := c.repositoryService.ListCommits(ctx, reqBody, gitprovider.ProviderGitHub, limit, offset)
+	response, err := c.repositoryService.ListCommits(ctx, reqBody, ouID, gitprovider.ProviderGitHub, limit, offset)
 	if err != nil {
 		log.Error("ListCommits: failed to list commits", "owner", reqBody.Owner, "repo", reqBody.Repo, "error", err)
 		handleGitProviderError(w, err)

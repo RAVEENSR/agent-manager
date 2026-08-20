@@ -68,20 +68,21 @@ networkPolicy:
         key: "k8s-app"
         value: "kube-dns"
 
+    # -- Ports are matched post-DNAT, so each is the target's containerPort, not its Service port.
     observer:
       namespace: "openchoreo-observability-plane"
-      port: 9098
+      ports: [9098]
 
     publisher:
       namespace: "wso2-amp"
-      port: 9000
+      ports: [8080] # amp-api's containerPort; its Service port 9000 never survives DNAT
 
     idp:
       namespace: "amp-thunder"
-      port: 8090
+      ports: [8090]
 
     llmGateway:
-      port: 22893
+      ports: [22893]
       # -- Namespace holding the API Platform Gateway, allowed in addition to any
       # namespace labelled amp.wso2.com/api-platform-gateway=true. That label is
       # only applied by setup-gateway.sh and add-environment.sh, so an install
@@ -91,12 +92,20 @@ networkPolicy:
       # the label alone.
       namespace: ""
 
-    # -- Local-dev only: ipBlock exception for agent-manager-service running outside the
-    # cluster (docker-compose). Empty (no-op) elsewhere; setup-amp-extensions.sh sets it.
+    # -- Local-dev only: ipBlock exception for the node network, covering agent-manager-service
+    # outside the cluster (8080) and the gateway's node port (19080). Empty (no-op) elsewhere;
+    # setup-amp-extensions.sh sets both.
     devEgress:
       cidr: ""
-      port: 8080
+      ports: [8080, 19080]
 
-    # -- kube-apiserver CIDR for the wait sidecar; empty falls back to a live lookup (RBAC + install/upgrade only, so set explicitly otherwise).
+    # -- Node network of the kube-apiserver. Permissive default spans the pod and service CIDRs so any
+    # cluster works unconfigured; narrow to the control-plane subnet in production.
     apiServer:
-      cidr: ""
+      cidrs:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+      ports:
+        - 443 # managed control planes (EKS/GKE/AKS)
+        - 6443 # k3s, kubeadm

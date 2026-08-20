@@ -35,6 +35,8 @@ type AgentResponse struct {
 	Build          *Build          `json:"build,omitempty"`
 	// Name of the Agent Kind this agent was instantiated from (absent for source-built agents)
 	KindName *string `json:"kindName,omitempty"`
+	// Version tag of the Agent Kind this agent was instantiated from (absent for source-built agents, and for kind-sourced agents created before the version was recorded)
+	KindVersion *string `json:"kindVersion,omitempty"`
 	// User-defined key/value labels. Keys are 1-63 characters of [a-zA-Z0-9._-] starting and ending alphanumeric (not enforceable here as an OpenAPI 3.0 property-name pattern — validated server-side); values follow the same rules but may be empty. At most 10 labels per resource.
 	Labels    *map[string]string `json:"labels,omitempty"`
 	CreatedBy *AgentCreatedBy    `json:"createdBy,omitempty"`
@@ -417,6 +419,38 @@ func (o *AgentResponse) SetKindName(v string) {
 	o.KindName = &v
 }
 
+// GetKindVersion returns the KindVersion field value if set, zero value otherwise.
+func (o *AgentResponse) GetKindVersion() string {
+	if o == nil || IsNil(o.KindVersion) {
+		var ret string
+		return ret
+	}
+	return *o.KindVersion
+}
+
+// GetKindVersionOk returns a tuple with the KindVersion field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *AgentResponse) GetKindVersionOk() (*string, bool) {
+	if o == nil || IsNil(o.KindVersion) {
+		return nil, false
+	}
+	return o.KindVersion, true
+}
+
+// HasKindVersion returns a boolean if a field has been set.
+func (o *AgentResponse) HasKindVersion() bool {
+	if o != nil && !IsNil(o.KindVersion) {
+		return true
+	}
+
+	return false
+}
+
+// SetKindVersion gets a reference to the given string and assigns it to the KindVersion field.
+func (o *AgentResponse) SetKindVersion(v string) {
+	o.KindVersion = &v
+}
+
 // GetLabels returns the Labels field value if set, zero value otherwise.
 func (o *AgentResponse) GetLabels() map[string]string {
 	if o == nil || IsNil(o.Labels) {
@@ -513,6 +547,9 @@ func (o AgentResponse) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.KindName) {
 		toSerialize["kindName"] = o.KindName
+	}
+	if !IsNil(o.KindVersion) {
+		toSerialize["kindVersion"] = o.KindVersion
 	}
 	if !IsNil(o.Labels) {
 		toSerialize["labels"] = o.Labels

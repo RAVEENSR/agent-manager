@@ -88,7 +88,12 @@ export const LLMProviderConfigCard: React.FC<LLMProviderConfigCardProps> = ({
     );
 
     const guardrailNames = useMemo(() => {
-        const policies = envMapping?.configuration?.policies ?? [];
+        // Org-level guardrails (configured on the provider itself) apply in
+        // addition to whatever this agent's config overrides on top of them.
+        const policies = [
+            ...(envMapping?.configuration?.providerPolicies ?? []),
+            ...(envMapping?.configuration?.policies ?? []),
+        ];
         const seen = new Set<string>();
         const names: string[] = [];
         for (const policy of policies) {

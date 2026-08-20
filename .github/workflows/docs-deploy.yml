@@ -31,7 +31,7 @@ jobs:
 
       - name: Security Audit
         working-directory: ./documentation
-        run: npm audit --audit-level=high --omit=dev
+        run: npm run audit
         
       - name: Build documentation
         working-directory: ./documentation

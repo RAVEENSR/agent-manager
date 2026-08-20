@@ -28,6 +28,7 @@ import  {
 } from "@agent-management-platform/types";
 
 export async function listBranches(
+  orgName: string,
   body: ListBranchesRequest,
   query?: ListBranchesQuery,
   getToken?: () => Promise<string>,
@@ -51,7 +52,7 @@ export async function listBranches(
   }
 
   const response = await fetch(
-    `${baseUrl}${SERVICE_BASE}/repositories/branches?${new URLSearchParams(search).toString()}`,
+    `${baseUrl}${SERVICE_BASE}/orgs/${orgName}/repositories/branches?${new URLSearchParams(search).toString()}`,
     {
       method: "POST",
       headers: requestHeaders,
@@ -72,6 +73,7 @@ export async function listBranches(
 }
 
 export async function listCommits(
+  orgName: string,
   body: ListCommitsRequest,
   query?: ListCommitsQuery,
   getToken?: () => Promise<string>,
@@ -95,7 +97,7 @@ export async function listCommits(
   }
 
   const response = await fetch(
-    `${baseUrl}${SERVICE_BASE}/repositories/commits?${new URLSearchParams(search).toString()}`,
+    `${baseUrl}${SERVICE_BASE}/orgs/${orgName}/repositories/commits?${new URLSearchParams(search).toString()}`,
     {
       method: "POST",
       headers: requestHeaders,

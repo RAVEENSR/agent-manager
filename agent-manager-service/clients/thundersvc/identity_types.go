@@ -80,6 +80,13 @@ type UpdateUserRequest struct {
 	IsReadOnly bool              `json:"isReadOnly,omitempty"`
 }
 
+// UpdateUserCredentialsRequest is the payload for POST /users/{id}/update-credentials,
+// Thunder's dedicated credential-change endpoint (separate from UpdateUserRequest; a
+// password field inside a regular update is rejected with USR-1028).
+type UpdateUserCredentialsRequest struct {
+	Credentials map[string]string `json:"credentials"`
+}
+
 func (r UpdateUserRequest) MarshalJSON() ([]byte, error) {
 	type wire struct {
 		OuID       string            `json:"ouId,omitempty"`
@@ -109,6 +116,7 @@ type CreateGroupRequest struct {
 
 // UpdateGroupRequest is the payload for PUT /groups/{id}.
 type UpdateGroupRequest struct {
+	OuID        string `json:"ouId"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 }
@@ -197,6 +205,7 @@ type RoleAssignmentsRequest struct {
 type ThunderResourceServer struct {
 	ID         string            `json:"id"`
 	Name       string            `json:"name"`
+	Handle     string            `json:"handle"`
 	Identifier string            `json:"identifier"`
 	Resources  []ThunderResource `json:"resources,omitempty"`
 }
@@ -258,7 +267,7 @@ type thunderRoleList struct {
 // thunderResourceServerList is used to decode paginated resource server list responses.
 type thunderResourceServerList struct {
 	ResourceServers []ThunderResourceServer `json:"resourceServers"`
-	Total           int                     `json:"total"`
+	TotalResults    int                     `json:"totalResults"`
 }
 
 // thunderResourceList is used to decode paginated resource list responses.

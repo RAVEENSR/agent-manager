@@ -111,6 +111,11 @@ func CreateMockOpenChoreoClient() *clientmocks.OpenChoreoClientMock {
 				},
 			}, nil
 		},
+		// Project creation, deploy and promote all provision the cell namespace
+		// for the environment they touch before anything is released into it.
+		EnsureProjectReleaseBindingFunc: func(ctx context.Context, namespaceName, projectName, environmentName string) error {
+			return nil
+		},
 		GetComponentFunc: func(ctx context.Context, namespaceName, projectName, componentName string) (*models.AgentResponse, error) {
 			if strings.Contains(componentName, "nonexistent-agent") {
 				return nil, utils.ErrAgentNotFound
@@ -202,7 +207,8 @@ func CreateMockOpenChoreoClient() *clientmocks.OpenChoreoClientMock {
 		},
 		// nil means OpenChoreo can reconcile the component; deploy aborts early otherwise.
 		GetComponentReconcileBlockFunc: func(ctx context.Context, namespaceName string, componentName string) (*client.ComponentReconcileBlock, error) {
-			return nil, nil //nolint:nilnil // nil block is the "not blocked" signal this API defines
+			// A nil block is the "not blocked" signal this API defines.
+			return nil, nil
 		},
 		RemoveWorkloadEnvVarsFunc: func(ctx context.Context, namespaceName string, componentName string, envVarKeys []string) error {
 			return nil

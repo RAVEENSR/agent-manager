@@ -23,12 +23,13 @@ import {
   NoDataFound,
   PageLayout,
 } from "@agent-management-platform/views";
-import { Box, Skeleton } from "@wso2/oxygen-ui";
+import { Alert, Box, Skeleton } from "@wso2/oxygen-ui";
 import { Rocket } from "@wso2/oxygen-ui-icons-react";
 import { useParams } from "react-router-dom";
 import { Swagger } from "./AgentTest/Swagger";
 import {
   useGetAgent,
+  useGetAgentConfigurations,
   useListAgentDeployments,
 } from "@agent-management-platform/api-client";
 
@@ -74,9 +75,23 @@ export const TestComponent: React.FC = () => {
     });
   const currentDeployment = deployments?.[envId ?? ""];
 
-  const isLoading = isDeploymentsLoading || isAgentLoading;
+  // Children must not render as testable before this environment's auth mode is known.
+  const { isLoading: isEnvConfigLoading, isError: isEnvConfigError } =
+    useGetAgentConfigurations(
+      {
+        orgName: orgId,
+        projName: projectId,
+        agentName: agentId,
+      },
+      {
+        environment: envId ?? "",
+      },
+    );
 
-  if (!isLoading && currentDeployment?.status !== "active") {
+  const isDeploymentLoading = isDeploymentsLoading || isAgentLoading;
+  const isLoading = isDeploymentLoading || isEnvConfigLoading;
+
+  if (!isDeploymentLoading && currentDeployment?.status !== "active") {
     return (
       <PageLayout title="Try your agent" disableIcon actions={<EnvironmentSelector />}>
         <Box
@@ -100,8 +115,19 @@ export const TestComponent: React.FC = () => {
     <PageLayout title={"Try your agent"} disableIcon isLoading={isLoading} actions={<EnvironmentSelector />}>
       {isLoading ? (
         <SkeletonTestPageLayout />
+      ) : isEnvConfigError ? (
+        <Alert severity="error">
+          Could not load this environment&apos;s security settings, so testing is
+          unavailable. Retry in a moment or reload the page.
+        </Alert>
       ) : (
-        <>{isChatAgent ? <AgentChat key={agentId} /> : <Swagger key={agentId} />}</>
+        <>
+          {isChatAgent ? (
+            <AgentChat key={`${agentId}-${envId}`} />
+          ) : (
+            <Swagger key={`${agentId}-${envId}`} />
+          )}
+        </>
       )}
     </PageLayout>
   );

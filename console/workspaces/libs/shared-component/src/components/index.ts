@@ -40,6 +40,7 @@ export * from "./BackButton";
 export * from "./EntityHeader";
 export * from "./EditFormSkeleton";
 export * from "./ListingSkeletonRows";
+export * from "./ResilienceTimeoutFields";
 export {
   PolicyListSection,
   type PolicyListSectionProps,
@@ -91,3 +92,12 @@ export {
   type PermissionTreeItem,
   type PermissionTreeProps,
 } from "./PermissionTree/PermissionTree";
+export {
+  EnvironmentGatewaySelector,
+  EnvironmentGatewaySelectorView,
+  type EnvironmentGatewaySelectorProps,
+  type EnvironmentGatewaySelectorViewProps,
+} from "./EnvironmentGatewaySelector/EnvironmentGatewaySelector";
+// EnvVarReferenceRow is intentionally not re-exported here — it originates in
+// utils/mcpEnvVarSpec, which the package index already re-exports.
+export { EnvironmentVariablesReference } from "./EnvironmentVariablesReference/EnvironmentVariablesReference";

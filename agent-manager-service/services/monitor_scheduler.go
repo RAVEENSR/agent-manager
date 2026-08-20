@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
 	"github.com/wso2/agent-manager/agent-manager-service/db"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
@@ -194,6 +195,19 @@ func (s *monitorSchedulerService) triggerMonitor(ctx context.Context, monitor *m
 		Evaluators: monitor.Evaluators,
 	})
 	if err != nil {
+		// A scheduled run that never started. Recorded with a system actor
+		// because no user asked for this one — successful runs are not
+		// recorded, since their scores are the record.
+		audit.Record(
+			ctx, audit.ActionMonitorRunFail,
+			audit.Org(monitor.OUID),
+			audit.ResourceNamed("monitor", monitor.ID.String(), monitor.Name),
+			audit.Actor(audit.ActorSystem, systemActorMonitorScheduler, ""),
+			audit.SurfaceOpt(audit.SurfaceSystem),
+			audit.Detail("monitorName", monitor.Name),
+			audit.Detail("reason", "execute-failed"),
+			audit.Result(err),
+		)
 		s.logger.Error("Failed to execute monitor run", "error", err)
 		return err
 	}
@@ -301,3 +315,7 @@ func (s *monitorSchedulerService) orgOCClient(ctx context.Context, ouID string) 
 	}
 	return s.provisioner.GetOCClientForOrg(ctx, ouID)
 }
+
+// systemActorMonitorScheduler identifies the monitor scheduler in audit records
+// it produces on its own initiative.
+const systemActorMonitorScheduler = "system:monitor-scheduler"

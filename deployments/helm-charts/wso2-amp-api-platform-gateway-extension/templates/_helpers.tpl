@@ -74,6 +74,23 @@ Defaults to "<environment>-<orgName>.gateway.localhost" when not explicitly set.
 {{- end }}
 
 {{/*
+Bare hostname MCP proxies are publicly served on — the mcp-auth policy's
+gatewayhost system parameter (the policy adds scheme and request port itself).
+Derived from gateway.vhost so OAuth challenge URLs agree with the Thunder
+resource-server identifiers AMS registers from the same vhost; falls back to
+the routed kgateway hostname.
+*/}}
+{{- define "wso2-amp-gateway-extension.mcpGatewayHost" -}}
+{{- $vhost := .Values.gateway.vhost | default "" | trim -}}
+{{- if $vhost -}}
+{{- if not (contains "://" $vhost) -}}{{- $vhost = printf "https://%s" $vhost -}}{{- end -}}
+{{- regexReplaceAll ":[0-9]+$" (urlParse $vhost).host "" -}}
+{{- else -}}
+{{- include "wso2-amp-gateway-extension.gatewayHostname" . -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Label value used to bind a RestApi to its APIGateway via the
 `gateway.api-platform.wso2.com/restapi-target` label/selector. The APIGateway
 name is already unique per environment (see apiGatewayName), so we reuse it

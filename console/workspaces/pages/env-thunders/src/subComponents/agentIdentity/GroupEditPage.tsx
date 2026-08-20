@@ -44,6 +44,7 @@ import {
   useRemoveAgentIdentityGroupMembers,
   useAddAgentIdentityRoleAssignees,
   useRemoveAgentIdentityRoleAssignees,
+  useOrgAgentDisplayNames,
 } from "@agent-management-platform/api-client";
 import {
   absoluteRouteMap,
@@ -52,6 +53,7 @@ import {
 } from "@agent-management-platform/types";
 import { EditFormSkeleton } from "@agent-management-platform/shared-component";
 import { PageLayout } from "@agent-management-platform/views";
+import { AgentNameWithProject } from "./AgentNameWithProject";
 import { useAgentLookup } from "./useAgentLookup";
 import { useAssignmentDelta } from "./useAssignmentDelta";
 import { withSearchParams } from "../../utils/withSearchParams";
@@ -105,7 +107,14 @@ export const GroupEditPage: React.FC = () => {
   const { mutateAsync: addRoleAssignees } = useAddAgentIdentityRoleAssignees();
   const { mutateAsync: removeRoleAssignees } = useRemoveAgentIdentityRoleAssignees();
 
-  const { agents, displayName } = useAgentLookup(agentsData?.agents ?? []);
+  const agentDisplayResolver = useOrgAgentDisplayNames({ orgName: orgId });
+  const {
+    agents,
+    displayName,
+    displayNameForAgent,
+    projectDisplayName,
+    projectDisplayNameForAgent,
+  } = useAgentLookup(agentsData?.agents ?? [], agentDisplayResolver);
 
   const initialMemberIds: string[] = useMemo(
     () => (membersData?.members ?? []).map((m) => m.id),
@@ -310,8 +319,22 @@ export const GroupEditPage: React.FC = () => {
                     id="addAgent"
                     options={availableAgents}
                     getOptionLabel={(option) =>
-                      (option as AgentIdentityAgentResponse).agentName
+                      displayNameForAgent(option as AgentIdentityAgentResponse)
                     }
+                    renderOption={(optionProps, option) => {
+                      const { key, ...liProps } = optionProps;
+                      const agent = option as AgentIdentityAgentResponse;
+                      return (
+                        <li key={key} {...liProps}>
+                          <Box>
+                            <AgentNameWithProject
+                              name={displayNameForAgent(agent)}
+                              projectName={projectDisplayNameForAgent(agent)}
+                            />
+                          </Box>
+                        </li>
+                      );
+                    }}
                     onChange={handleAddAgent}
                     value={null}
                     renderInput={(autocompleteParams) => (
@@ -343,7 +366,12 @@ export const GroupEditPage: React.FC = () => {
                     <ListingTable.Body>
                       {displayedMemberIds.map((id) => (
                         <ListingTable.Row key={id}>
-                          <ListingTable.Cell>{displayName(id)}</ListingTable.Cell>
+                          <ListingTable.Cell>
+                            <AgentNameWithProject
+                              name={displayName(id)}
+                              projectName={projectDisplayName(id)}
+                            />
+                          </ListingTable.Cell>
                           <ListingTable.Cell>{id}</ListingTable.Cell>
                           <ListingTable.Cell align="right">
                             <Tooltip title="Remove from group">

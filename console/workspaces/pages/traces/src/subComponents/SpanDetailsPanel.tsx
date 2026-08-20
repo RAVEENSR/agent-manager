@@ -33,6 +33,7 @@ import { ToolsSection } from "./spanDetails/ToolsSection";
 import { FadeIn } from "@agent-management-platform/views";
 import { Overview } from "./spanDetails/Overview";
 import { ScoresSection } from "./spanDetails/ScoresSection";
+import { StatusSection } from "./spanDetails/StatusSection";
 
 interface SpanDetailsPanelProps {
   span: Span | null;
@@ -93,6 +94,9 @@ export function SpanDetailsPanel({ span, evaluatorScores }: SpanDetailsPanelProp
   const hasTools = !!tools;
   const hasAttributes = !!span?.attributes;
   const hasScores = !!(evaluatorScores && evaluatorScores.length > 0);
+  const spanStatus = span?.ampAttributes?.status;
+  // Only failed spans get a Status tab (mirrors the "Failed" chip in BasicInfoSection).
+  const hasStatus = !!spanStatus?.error;
 
   useEffect(() => {
     if (!span) return;
@@ -102,6 +106,8 @@ export function SpanDetailsPanel({ span, evaluatorScores }: SpanDetailsPanelProp
     } else if (selectedTab === "tools" && hasTools) {
       return;
     } else if (selectedTab === "attributes" && hasAttributes) {
+      return;
+    } else if (selectedTab === "status" && hasStatus) {
       return;
     } else if (selectedTab === "scores" && hasScores) {
       return;
@@ -118,11 +124,15 @@ export function SpanDetailsPanel({ span, evaluatorScores }: SpanDetailsPanelProp
     else if (hasAttributes) {
       setSelectedTab("attributes");
     }
+    // for status message
+    else if (hasStatus) {
+      setSelectedTab("status");
+    }
     // for scores
     else if (hasScores) {
       setSelectedTab("scores");
     }
-  }, [span, span?.spanId, hasOverview, hasTools, hasAttributes, hasScores, selectedTab]);
+  }, [span, span?.spanId, hasOverview, hasTools, hasAttributes, hasStatus, hasScores, selectedTab]);
 
   if (!span) {
     return null;
@@ -160,6 +170,7 @@ export function SpanDetailsPanel({ span, evaluatorScores }: SpanDetailsPanelProp
           <Tab label="Overview" value="overview" disabled={!hasOverview} />
           {hasTools && <Tab label="Tools" value="tools" />}
           {span?.attributes && <Tab label="Attributes" value="attributes" />}
+          {hasStatus && <Tab label="Status" value="status" />}
           {hasScores && <Tab label="Scores" value="scores" />}
         </Tabs>
       </Stack>
@@ -185,6 +196,11 @@ export function SpanDetailsPanel({ span, evaluatorScores }: SpanDetailsPanelProp
         {selectedTab === "overview" && (
           <FadeIn>
             <Overview ampAttributes={span.ampAttributes} />
+          </FadeIn>
+        )}
+        {selectedTab === "status" && spanStatus && (
+          <FadeIn>
+            <StatusSection status={spanStatus} />
           </FadeIn>
         )}
         {selectedTab === "scores" && hasScores && (

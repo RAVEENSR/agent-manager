@@ -67,7 +67,7 @@ services:
       - KEY_MANAGER_ISSUER=Agent Management Platform Local,http://thunder.amp.localhost:8080
       # Last entry is SERVER_PUBLIC_URL above plus a trailing slash — an MCP
       # token's `aud`. The Helm charts derive this; here it moves by hand.
-      - KEY_MANAGER_AUDIENCE=amp,localhost,amp-publisher-*,amp-api-client,amp-console-client,amctl,am-mcp,http://localhost:9000/
+      - KEY_MANAGER_AUDIENCE=urn:wso2:amp,localhost,amp-publisher-*,amp-api-client,amp-console-client,amctl,am-mcp,http://localhost:9000/
       - AMP_VERSION=v0.8.0
       - OPEN_CHOREO_BASE_URL=http://api.openchoreo.localhost:8195
       # OpenBao/Vault Secret Management Configuration
@@ -149,9 +149,16 @@ services:
       # (which runs in k3d) reaches it via host.docker.internal.
       - AGENT_MANAGER_INTERNAL_BASE_URL=http://host.docker.internal:9000
       - AGENT_MANAGER_INTERNAL_CP_HOST=host.docker.internal:9243
+      # Base domain env-Thunder instances are hosted under, and whether this
+      # deployment serves them over TLS — piped into the Create Environment
+      # drawer's rendered add-environment.sh command. Matches
+      # agent-manager-service's own THUNDER_HOST_BASE_DOMAIN/TLS_ENABLED
+      # defaults for local dev.
+      - THUNDER_HOST_BASE_DOMAIN=amp.localhost
+      - TLS_ENABLED=false
       - GUARDRAILS_CATALOG_URL=https://db720294-98fd-40f4-85a1-cc6a3b65bc9a-prod.e1-us-east-azure.choreoapis.dev/api-platform/policy-hub-api/policy-hub-public/v1.0/policies?categories=Guardrails,AI&limit=100
       - GUARDRAILS_DEFINITION_BASE_URL=https://db720294-98fd-40f4-85a1-cc6a3b65bc9a-prod.e1-us-east-azure.choreoapis.dev/api-platform/policy-hub-api/policy-hub-public/v1.0/policies
-      - DOCS_URL=https://wso2.github.io/agent-manager/docs/next
+      - DOCS_URL=https://wso2.github.io/agent-manager/docs/latest
       - FEATURE_FLAG_ENABLE_PRIVATE_REPO_SUPPORT=true
       - FEATURE_FLAG_ENABLE_PROFILE_MANAGEMENT=true
       - FEATURE_FLAG_ENABLE_USER_MANAGEMENT=true

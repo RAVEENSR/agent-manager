@@ -53,6 +53,11 @@ export interface PolicyListSectionProps {
   catalogData?: GuardrailsCatalogResponse;
   isLoadingCatalog?: boolean;
   catalogError?: unknown;
+  /**
+   * Scopes the default catalog fetch to this LLM provider's deployed
+   * gateways. Ignored when catalogData is supplied.
+   */
+  providerId?: string;
   filterPolicies?: (policies: GuardrailDefinition[]) => GuardrailDefinition[];
   getPolicyDefinitionVersion?: (policy: GuardrailDefinition) => string;
   title?: string;
@@ -81,6 +86,7 @@ export const PolicyListSection: React.FC<PolicyListSectionProps> = ({
   catalogData,
   isLoadingCatalog,
   catalogError,
+  providerId,
   filterPolicies,
   getPolicyDefinitionVersion,
   title = "Policies",
@@ -331,6 +337,7 @@ export const PolicyListSection: React.FC<PolicyListSectionProps> = ({
         catalogData={catalogData}
         isLoadingCatalog={isLoadingCatalog}
         catalogError={catalogError}
+        providerId={providerId}
         filterPolicies={filterPolicies}
         getPolicyDefinitionVersion={getPolicyDefinitionVersion}
         disabledPolicyKeys={

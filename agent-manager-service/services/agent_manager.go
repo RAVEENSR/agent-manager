@@ -26,6 +26,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
+
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/gen"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/secretmanagersvc"
@@ -42,6 +45,7 @@ import (
 
 type AgentManagerService interface {
 	ListAgents(ctx context.Context, ouID string, projName string, labelFilter map[string]string, limit int32, offset int32) ([]*models.AgentResponse, int32, error)
+	ListOrgAgents(ctx context.Context, ouID string) ([]*models.AgentSummary, error)
 	CreateAgent(ctx context.Context, ouID string, projectName string, req *spec.CreateAgentRequest) error
 	UpdateAgentBasicInfo(ctx context.Context, ouID string, projectName string, agentName string, req *spec.UpdateAgentBasicInfoRequest) (*models.AgentResponse, error)
 	UpdateAgentBuildParameters(ctx context.Context, ouID string, projectName string, agentName string, req *spec.UpdateAgentBuildParametersRequest) (*models.AgentResponse, error)
@@ -68,6 +72,7 @@ type AgentManagerService interface {
 	RegenerateAgentIdentitySecret(ctx context.Context, ouID string, projectName string, agentName string, environmentName string) (*models.AgentRegenerateSecretResponse, error)
 	RevokeAgentIdentitySecret(ctx context.Context, ouID string, projectName string, agentName string, environmentName string) (models.AgentRevokeSecretResponse, error)
 	ProvisionAgentIdentity(ctx context.Context, ouID string, projectName string, agentName string, environmentName string) (view models.AgentIdentityEnvironmentView, alreadyExisted bool, err error)
+	RetryAgentIdentityProvisioning(ctx context.Context, ouID string, projectName string, agentName string, environmentName string) (models.AgentIdentityEnvironmentView, error)
 	GetAgentRoles(ctx context.Context, ouID string, projectName string, agentName string, environmentName string) ([]thundersvc.ThunderRole, error)
 	GetAgentGroups(ctx context.Context, ouID string, projectName string, agentName string, environmentName string) ([]thundersvc.ThunderGroup, error)
 }
@@ -339,6 +344,7 @@ func mapInputInterface(specInterface *spec.InputInterface) *client.InputInterfac
 	}
 	if specInterface.Schema != nil {
 		config.SchemaPath = utils.StrPointerAsStr(specInterface.Schema.Path, "")
+		config.SchemaContent = utils.StrPointerAsStr(specInterface.Schema.Content, "")
 	}
 
 	return config
@@ -511,6 +517,117 @@ func (s *agentManagerService) buildCreateTraitRequests(ctx context.Context, ouID
 	}
 
 	return traits, nil
+}
+
+// effectiveUpstreamInterface returns the port and base path the API gateway must
+// dial to reach this agent's container, for the api-configuration trait.
+//
+// A source-built agent carries them on its component's workflow parameters, so
+// they read straight off the component. A kind-sourced agent has no workflow —
+// its endpoint lives only on the Workload — so convertComponentFromTyped leaves
+// InputInterface nil, and falling through to the chat-API defaults would point the
+// gateway at a port nothing listens on (a 503 on every request to a custom-api
+// agent). Resolve those from the build its kind version was published from.
+//
+// deployedImageID is the image this call is deploying. A deploy can select a kind
+// version other than the one the agent was created from, and the component's
+// kind-version label does not move when it does — so the image, not the label,
+// says which version's interface the gateway must be pointed at. Empty (or an
+// image matching no published version) falls back to the label.
+//
+// The chat-API defaults remain the last resort: a chat agent genuinely serves on
+// them, and they are the only sane guess when nothing else resolves
+func (s *agentManagerService) effectiveUpstreamInterface(ctx context.Context, ouID string, agent *models.AgentResponse, deployedImageID string) (int32, string) {
+	port := config.GetConfig().DefaultChatAPI.DefaultHTTPPort
+	basePath := config.GetConfig().DefaultChatAPI.DefaultBasePath
+
+	iface := agent.InputInterface
+	if agent.KindName != "" {
+		versionTag := agent.KindVersion
+		if deployed := s.kindVersionForImage(ctx, ouID, agent.KindName, deployedImageID); deployed != "" {
+			versionTag = deployed
+		}
+		if resolved := s.kindVersionInputInterface(ctx, ouID, agent.KindName, versionTag); resolved != nil {
+			iface = resolved
+		}
+	}
+	if iface != nil {
+		if iface.Port > 0 {
+			port = iface.Port
+		}
+		if iface.BasePath != "" {
+			basePath = iface.BasePath
+		}
+	}
+	return port, basePath
+}
+
+// kindVersionForImage returns the kind version published as the given image, or ""
+// when the image is empty, matches no published version, or the kind can't be read.
+// Published images are unique per version, so the mapping is unambiguous.
+func (s *agentManagerService) kindVersionForImage(ctx context.Context, ouID, kindName, imageID string) string {
+	if imageID == "" {
+		return ""
+	}
+	kind, err := s.agentKindService.GetKind(ctx, ouID, kindName)
+	if err != nil {
+		s.logger.Warn("Failed to read agent kind while resolving the deployed version",
+			"kindName", kindName, "error", err)
+		return ""
+	}
+	for _, v := range kind.Versions {
+		if v.ImageId == imageID {
+			return v.Version
+		}
+	}
+	return ""
+}
+
+// kindVersionInputInterface reads the input interface a kind version was published
+// with, off the build (workflow run) that produced its image.
+//
+// The build is read rather than the kind's source agent because a source agent goes
+// on living: change its port or base path after publishing, and reading the
+// component would describe an interface the published image never served. A
+// WorkflowRun is a finished record of one build, so its parameters still describe
+// the image this agent actually runs — the same reason the agent catalogue reads a
+// version's API spec from there.
+//
+// Returns nil on any failure so callers fall back to their defaults rather than
+// failing a deploy over it.
+func (s *agentManagerService) kindVersionInputInterface(ctx context.Context, ouID, kindName, versionTag string) *models.InputInterface {
+	if versionTag == "" {
+		s.logger.Warn("Agent has no recorded kind version; cannot resolve its published upstream interface",
+			"kindName", kindName)
+		return nil
+	}
+	kindVersion, err := s.agentKindService.GetKindVersion(ctx, ouID, kindName, versionTag)
+	if err != nil {
+		s.logger.Warn("Failed to read kind version while resolving upstream interface",
+			"kindName", kindName, "kindVersion", versionTag, "error", err)
+		return nil
+	}
+	return s.kindBuildInputInterface(ctx, ouID, kindVersion)
+}
+
+// kindBuildInputInterface reads the input interface off the build that produced a
+// kind version's image. Returns nil when the version has no build, or the build can
+// no longer be read, so callers fall back rather than failing over it.
+func (s *agentManagerService) kindBuildInputInterface(ctx context.Context, ouID string, kindVersion *models.AgentKindVersion) *models.InputInterface {
+	if kindVersion == nil || kindVersion.Kind == nil || kindVersion.BuildName == "" {
+		return nil
+	}
+	build, err := s.ocClient.GetBuild(ctx, ouID, kindVersion.Kind.ProjectName, kindVersion.Kind.AgentName, kindVersion.BuildName)
+	if err != nil {
+		s.logger.Warn("Failed to read a kind version's build while resolving its input interface",
+			"kindName", kindVersion.Kind.Name, "kindVersion", kindVersion.Version,
+			"buildName", kindVersion.BuildName, "error", err)
+		return nil
+	}
+	if build == nil {
+		return nil
+	}
+	return build.InputInterface
 }
 
 // ErrInstrumentationVersionNotPinned indicates an agent has no pinned AMP
@@ -1126,6 +1243,94 @@ func (s *agentManagerService) ListAgents(ctx context.Context, ouID string, projN
 	return paginatedAgents, total, nil
 }
 
+// ListOrgAgents returns every agent across all projects in the organization, unpaginated,
+// with each agent's project name and display name attached.
+func (s *agentManagerService) ListOrgAgents(ctx context.Context, ouID string) ([]*models.AgentSummary, error) {
+	s.logger.Info("Listing all agents in organization", "ouID", ouID)
+
+	// Validate organization exists
+	if _, err := s.ocClient.GetOrganization(ctx, ouID); err != nil {
+		s.logger.Error("Failed to find organization", "ouID", ouID, "error", err)
+		return nil, translateOrgError(err)
+	}
+
+	projects, err := listOrgProjects(ctx, s.ocClient, ouID)
+	if err != nil {
+		s.logger.Error("Failed to list projects", "ouID", ouID, "error", err)
+		return nil, err
+	}
+
+	agents, err := fetchAcrossOrgProjects(ctx, projects, ouID, s.ocClient.ListComponents)
+	if err != nil {
+		s.logger.Error("Failed to list agents across projects", "ouID", ouID, "error", err)
+		return nil, err
+	}
+
+	// The project list is already in hand from the fan-out above, so attaching each
+	// agent's project display name costs an in-memory lookup, not another round trip.
+	projectDisplayNames := make(map[string]string, len(projects))
+	for _, p := range projects {
+		projectDisplayNames[p.Name] = p.DisplayName
+	}
+	summaries := make([]*models.AgentSummary, len(agents))
+	for i, a := range agents {
+		summaries[i] = &models.AgentSummary{
+			Name:               a.Name,
+			DisplayName:        a.DisplayName,
+			ProjectName:        a.ProjectName,
+			ProjectDisplayName: projectDisplayNames[a.ProjectName],
+		}
+	}
+
+	s.logger.Info("Listed org agents successfully", "ouID", ouID, "totalAgents", len(summaries))
+	return summaries, nil
+}
+
+// listOrgProjects fetches every project in the org, wrapping the error consistently for
+// the two org-wide listings that need the project list itself (not just the fan-out
+// over it): ListOrgAgents (for project display names) and ListKindAgents (as the
+// fan-out target list).
+func listOrgProjects(ctx context.Context, ocClient client.OpenChoreoClient, ouID string) ([]*models.ProjectResponse, error) {
+	projects, err := ocClient.ListProjects(ctx, ouID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list projects: %w", err)
+	}
+	return projects, nil
+}
+
+// fetchAcrossOrgProjects concurrently invokes fetch for each of the given projects and
+// aggregates the results. Shared by any org-wide listing that fans out per-project (see
+// also AgentKindService.ListKindAgents).
+func fetchAcrossOrgProjects(
+	ctx context.Context,
+	projects []*models.ProjectResponse,
+	ouID string,
+	fetch func(ctx context.Context, ouID, projectName string) ([]*models.AgentResponse, error),
+) ([]*models.AgentResponse, error) {
+	results := make([][]*models.AgentResponse, len(projects))
+	g, gctx := errgroup.WithContext(ctx)
+	for i, p := range projects {
+		i, projectName := i, p.Name
+		g.Go(func() error {
+			agents, err := fetch(gctx, ouID, projectName)
+			if err != nil {
+				return err
+			}
+			results[i] = agents
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, fmt.Errorf("failed to list agents: %w", err)
+	}
+
+	all := make([]*models.AgentResponse, 0, len(projects))
+	for _, agents := range results {
+		all = append(all, agents...)
+	}
+	return all, nil
+}
+
 // paginateSlice returns items[offset:offset+limit], clamping both bounds defensively so
 // negative values or out-of-range offsets never panic the slice expression.
 func paginateSlice[T any](items []T, offset, limit int32) []T {
@@ -1252,16 +1457,27 @@ func (s *agentManagerService) CreateAgent(ctx context.Context, ouID string, proj
 			SubType: &subType,
 		}
 		req.Build = modelBuildToSpecBuild(sourceComponent.Build)
-		if sourceComponent.InputInterface != nil {
-			port := sourceComponent.InputInterface.Port
-			basePath := sourceComponent.InputInterface.BasePath
+		// Prefer the interface recorded on the build this version was published
+		// from: the source agent keeps living, so its component may describe a port
+		// or base path the published image never served. The component is the
+		// fallback for versions whose build is gone. This is what the created
+		// agent's api-configuration trait — and so the gateway's upstream URL — is
+		// built from, which is why a wrong value here is a 503 rather than a
+		// cosmetic slip.
+		iface := s.kindBuildInputInterface(ctx, ouID, kindVersion)
+		if iface == nil {
+			iface = sourceComponent.InputInterface
+		}
+		if iface != nil {
+			port := iface.Port
+			basePath := iface.BasePath
 			req.InputInterface = &spec.InputInterface{
-				Type:     sourceComponent.InputInterface.Type,
+				Type:     iface.Type,
 				Port:     &port,
 				BasePath: &basePath,
 			}
-			if sourceComponent.InputInterface.Schema != nil && sourceComponent.InputInterface.Schema.Path != "" {
-				req.InputInterface.Schema = &spec.InputInterfaceSchema{Path: &sourceComponent.InputInterface.Schema.Path}
+			if iface.Schema != nil && iface.Schema.Path != "" {
+				req.InputInterface.Schema = &spec.InputInterfaceSchema{Path: &iface.Schema.Path}
 			}
 		}
 		imageID = kindVersion.ImageId
@@ -1740,7 +1956,10 @@ func convertConfiguration(cfg spec.EnvProviderConfiguration) models.EnvProviderC
 			Paths:   paths,
 		})
 	}
-	return models.EnvProviderConfiguration{Policies: policies}
+	return models.EnvProviderConfiguration{
+		Policies:   policies,
+		Resilience: utils.ConvertSpecToModelResilience(cfg.Resilience),
+	}
 }
 
 func convertEnvVars(specVars []spec.EnvironmentVariableConfig) []models.EnvironmentVariableConfig {
@@ -2495,7 +2714,24 @@ func (s *agentManagerService) DeleteAgent(ctx context.Context, ouID string, proj
 	// LLM config cleanup happens after a confirmed DeleteComponent so a transient OC
 	// failure leaves the system fully intact and the delete can be retried cleanly.
 	s.logger.Debug("Deleting oc agent", "agentName", agentName, "ouID", ouID, "projectName", projectName)
+
+	// Deletion is irreversible and cascades into configs, identities and
+	// monitors, so it is refused when it cannot be recorded.
+	deleteAttempt, auditErr := audit.Begin(
+		ctx, audit.ActionAgentDelete,
+		audit.Org(ouID),
+		audit.ResourceNamed(audit.ResourceAgent, agentName, agentName),
+		audit.Project(projectName),
+		audit.Detail("agentName", agentName),
+	)
+	if auditErr != nil {
+		s.logger.Error("Refusing to delete agent: audit record could not be written",
+			"agentName", agentName, "error", auditErr)
+		return auditErr
+	}
+
 	err = s.ocClient.DeleteComponent(ctx, ouID, projectName, agentName)
+	deleteAttempt.Complete(ctx, err)
 	if err != nil {
 		translatedErr := translateAgentError(err)
 		if errors.Is(translatedErr, utils.ErrAgentNotFound) {
@@ -2675,7 +2911,19 @@ func (s *agentManagerService) BuildAgent(ctx context.Context, ouID string, proje
 	}
 	// Trigger build only after any deployment-specific per-run secret exists.
 	s.logger.Debug("Triggering build in OpenChoreo", "agentName", agentName, "ouID", ouID, "projectName", projectName, "commitId", commitId)
+	// Builds are frequent and produce no credential, so this is recorded after
+	// the fact rather than refusing the build when the trail is unavailable.
 	build, err := s.ocClient.TriggerBuild(ctx, ouID, projectName, agentName, commitId, workflowRunName)
+	audit.Record(
+		ctx, audit.ActionAgentBuild,
+		audit.Org(ouID),
+		audit.ResourceNamed(audit.ResourceAgent, agent.UUID, agentName),
+		audit.Project(projectName),
+		audit.Detail("agentName", agentName),
+		audit.Detail("commitId", commitId),
+		audit.Detail("buildName", buildNameOf(build)),
+		audit.Result(err),
+	)
 	if err != nil {
 		s.logger.Error("Failed to trigger build in OpenChoreo", "agentName", agentName, "ouID", ouID, "projectName", projectName, "error", err)
 		return nil, translateBuildError(err)
@@ -2723,6 +2971,17 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 	if lowestEnv == "" {
 		s.logger.Error("No environment found in deployment pipeline", "projectName", projectName)
 		return "", fmt.Errorf("no environment found in deployment pipeline")
+	}
+
+	// The cell namespace for (project, environment) is owned by a
+	// ProjectReleaseBinding. Without one the release binding this deploy creates
+	// fails to apply with `namespaces "dp-..." not found`. Ensure it here rather
+	// than only at project creation, so projects created before this existed and
+	// environments added after the project was created are both covered.
+	if err := s.ocClient.EnsureProjectReleaseBinding(ctx, ouID, projectName, lowestEnv); err != nil {
+		s.logger.Error("Failed to ensure project release binding before deploy",
+			"ouID", ouID, "projectName", projectName, "environment", lowestEnv, "error", err)
+		return "", fmt.Errorf("failed to prepare environment %q for deployment: %w", lowestEnv, err)
 	}
 
 	// Image only. Env vars and file mounts go to the environment's ReleaseBinding
@@ -2962,18 +3221,11 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 		}
 		artifactID := apiArtifact.UUID.String()
 
+		upstreamPort, upstreamBasePath := s.effectiveUpstreamInterface(ctx, ouID, agent, req.ImageId)
 		traitOpts := []client.TraitOption{
 			client.WithArtifactID(artifactID),
-		}
-		if agent.InputInterface != nil && agent.InputInterface.Port > 0 {
-			traitOpts = append(traitOpts, client.WithUpstreamPort(agent.InputInterface.Port))
-		} else {
-			traitOpts = append(traitOpts, client.WithUpstreamPort(config.GetConfig().DefaultChatAPI.DefaultHTTPPort))
-		}
-		if agent.InputInterface != nil && agent.InputInterface.BasePath != "" {
-			traitOpts = append(traitOpts, client.WithUpstreamBasePath(agent.InputInterface.BasePath))
-		} else {
-			traitOpts = append(traitOpts, client.WithUpstreamBasePath(config.GetConfig().DefaultChatAPI.DefaultBasePath))
+			client.WithUpstreamPort(upstreamPort),
+			client.WithUpstreamBasePath(upstreamBasePath),
 		}
 		if resilienceTimeoutSeconds > 0 {
 			traitOpts = append(traitOpts, client.WithResilienceTimeout(resilienceTimeoutSeconds))
@@ -3009,10 +3261,33 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 	// This updates the Workload image only; env vars and file mounts are applied per-environment
 	// via the release binding below.
 	s.logger.Debug("Deploying agent component in OpenChoreo", "agentName", agentName, "ouID", ouID, "projectName", projectName, "imageId", req.ImageId)
+	// The permission gating this route is agent:deploy-non-production whatever
+	// the pipeline's lowest environment actually is, so the record has to carry
+	// the real target and whether it is production. Without that the trail
+	// cannot distinguish a sandbox push from a production one.
+	deployAttempt, auditErr := audit.Begin(
+		ctx, audit.ActionAgentDeploy,
+		audit.Org(ouID),
+		audit.ResourceNamed(audit.ResourceAgent, agent.UUID, agentName),
+		audit.Project(projectName),
+		audit.Environment(lowestEnv),
+		audit.Detail("agentName", agentName),
+		audit.Detail("environment", lowestEnv),
+		audit.Detail("isProduction", targetEnv != nil && targetEnv.IsProduction),
+		audit.Detail("imageId", req.ImageId),
+	)
+	if auditErr != nil {
+		s.logger.Error("Refusing to deploy: audit record could not be written",
+			"agentName", agentName, "error", auditErr)
+		return "", auditErr
+	}
+
 	if err := s.ocClient.Deploy(ctx, ouID, projectName, agentName, deployReq); err != nil {
+		deployAttempt.Complete(ctx, err)
 		s.logger.Error("Failed to deploy agent component in OpenChoreo", "agentName", agentName, "ouID", ouID, "projectName", projectName, "error", err)
 		return "", err
 	}
+	deployAttempt.Complete(ctx, nil)
 
 	// Write this environment's env vars and file mounts to its release binding, so this deploy's
 	// config reaches this environment only. The component-wide base is left as agent creation
@@ -3720,6 +3995,15 @@ func (s *agentManagerService) ProvisionAgentIdentity(ctx context.Context, ouID s
 	return models.AgentIdentityEnvironmentView{}, alreadyExisted, fmt.Errorf("agent thunder binding for %s/%s vanished immediately after being provisioned", agentName, environmentName)
 }
 
+// RetryAgentIdentityProvisioning resets a failed AgentID binding and
+// re-attempts provisioning, for both Internal and External agents.
+func (s *agentManagerService) RetryAgentIdentityProvisioning(ctx context.Context, ouID string, projectName string, agentName string, environmentName string) (models.AgentIdentityEnvironmentView, error) {
+	if s.agentThunderProvisioning == nil {
+		return models.AgentIdentityEnvironmentView{}, utils.ErrAgentIdentityNotProvisioned
+	}
+	return s.agentThunderProvisioning.RetryProvisioning(ctx, ouID, projectName, agentName, environmentName)
+}
+
 // PromoteAgent promotes an agent from one environment to another.
 func (s *agentManagerService) PromoteAgent(ctx context.Context, ouID string, projectName string, agentName string, req *spec.PromoteAgentRequest) error {
 	s.logger.Info("Promoting agent", "agentName", agentName, "ouID", ouID, "projectName", projectName,
@@ -3774,6 +4058,27 @@ func (s *agentManagerService) PromoteAgent(ctx context.Context, ouID string, pro
 		s.logger.Warn("Failed to check deployment status in target environment", "agentName", agentName, "environment", req.TargetEnvironment, "error", err)
 	} else if inProgress {
 		return fmt.Errorf("%w for agent %s in environment %s", utils.ErrDeploymentInProgress, agentName, req.TargetEnvironment)
+	}
+
+	// The target environment's cell namespace is owned by a ProjectReleaseBinding.
+	// A project promoted into an environment for the first time — or into one
+	// added after the project was created — has no binding there yet, and the
+	// promoted release binding would fail to apply with `namespaces "dp-..." not
+	// found`.
+	//
+	// This runs before the first write to the target environment (AgentID
+	// provisioning, the API key, the persisted agent config), so a promotion
+	// that cannot get a namespace leaves no half-provisioned target behind. It
+	// runs after the request-shape guards above so a promotion they already
+	// reject does not create a binding for an environment nothing was promoted
+	// into. The configuration guards below still run after it, so a promotion
+	// they reject can leave an unused binding behind — a binding is an empty,
+	// reusable namespace claim, and the next promotion into that environment
+	// adopts it.
+	if err := s.ocClient.EnsureProjectReleaseBinding(ctx, ouID, projectName, req.TargetEnvironment); err != nil {
+		s.logger.Error("Failed to ensure project release binding before promote",
+			"ouID", ouID, "projectName", projectName, "environment", req.TargetEnvironment, "error", err)
+		return fmt.Errorf("failed to prepare environment %q for promotion: %w", req.TargetEnvironment, err)
 	}
 
 	// System-managed env vars (LLM provider URL/key, MCP, etc.) live per-environment in
@@ -4093,10 +4398,37 @@ func (s *agentManagerService) PromoteAgent(ctx context.Context, ouID string, pro
 	// guaranteed to exist and be COMPLETED at this point — the pre-promote
 	// hard block above returns before reaching here otherwise — so there is
 	// nothing left to provision for it after a successful promote.
+	// A promotion is how an agent reaches production, so the record names both
+	// ends of the move rather than just the resource.
+	//
+	// isProduction is deliberately not recorded here: the target environment is
+	// only fetched inside a conditional branch above, and adding a round-trip
+	// to OpenChoreo just to enrich a record would put a network call on the
+	// promotion path. The environment name identifies the target, and the org's
+	// environment list resolves whether it is production.
+	promoteAttempt, auditErr := audit.Begin(
+		ctx, audit.ActionAgentPromote,
+		audit.Org(ouID),
+		audit.ResourceNamed(audit.ResourceAgent, agent.UUID, agentName),
+		audit.Project(projectName),
+		audit.Environment(req.TargetEnvironment),
+		audit.Detail("agentName", agentName),
+		audit.Detail("sourceEnv", req.SourceEnvironment),
+		audit.Detail("targetEnv", req.TargetEnvironment),
+		audit.Detail("environment", req.TargetEnvironment),
+	)
+	if auditErr != nil {
+		s.logger.Error("Refusing to promote: audit record could not be written",
+			"agentName", agentName, "error", auditErr)
+		return auditErr
+	}
+
 	if err := s.ocClient.PromoteComponent(ctx, ouID, projectName, agentName, req.SourceEnvironment, req.TargetEnvironment, envOverrides, fileOverrides, traitEnvConfigs, promoteCTConfigs); err != nil {
+		promoteAttempt.Complete(ctx, err)
 		s.logger.Error("Failed to promote agent", "agentName", agentName, "sourceEnvironment", req.SourceEnvironment, "targetEnvironment", req.TargetEnvironment, "error", err)
 		return fmt.Errorf("failed to promote agent: %w", err)
 	}
+	promoteAttempt.Complete(ctx, nil)
 
 	s.logger.Info("Agent promoted successfully", "agentName", agentName, "sourceEnvironment", req.SourceEnvironment, "targetEnvironment", req.TargetEnvironment)
 	return nil
@@ -5014,11 +5346,50 @@ func (s *agentManagerService) GetAgentDeployments(ctx context.Context, ouID stri
 	// for all-runc setups, and converges in a single write per binding.
 	if agent, err := s.ocClient.GetComponent(ctx, ouID, projectName, agentName); err != nil {
 		s.logger.Warn("isolation reconcile: failed to fetch agent for type gate", "agentName", agentName, "error", err)
-	} else if agent.Type.Type == string(utils.AgentTypeAPI) {
-		s.reconcileIsolationRuntimeClass(ctx, ouID, agentName, deployments)
+	} else {
+		if agent.Type.Type == string(utils.AgentTypeAPI) {
+			s.reconcileIsolationRuntimeClass(ctx, ouID, agentName, deployments)
+		}
+		s.resolveDeployedKindVersions(ctx, ouID, agent.KindName, deployments)
 	}
 
 	return deployments, nil
+}
+
+// resolveDeployedKindVersions stamps each deployment with the Agent Kind version
+// its image was published as, mutating deployments in place.
+//
+// The version an agent runs is a property of the deployment, not of the agent:
+// redeploying on a newer kind version — or promoting one environment and not
+// another — changes it per environment, while the component's kind-version label
+// records only what the agent was created from. The image is the link between the
+// two, since a published version's image is unique.
+//
+// Best-effort: a kind that can't be read leaves the versions empty rather than
+// failing the deployments read, which must keep working for the rest of its data.
+func (s *agentManagerService) resolveDeployedKindVersions(ctx context.Context, ouID, kindName string, deployments []*models.DeploymentResponse) {
+	if kindName == "" || len(deployments) == 0 {
+		return
+	}
+	kind, err := s.agentKindService.GetKind(ctx, ouID, kindName)
+	if err != nil {
+		s.logger.Warn("Failed to resolve deployed kind versions", "kindName", kindName, "error", err)
+		return
+	}
+	versionByImage := make(map[string]string, len(kind.Versions))
+	for _, v := range kind.Versions {
+		if v.ImageId != "" {
+			versionByImage[v.ImageId] = v.Version
+		}
+	}
+	for _, deployment := range deployments {
+		if deployment == nil {
+			continue
+		}
+		// No entry means the image predates the kind or its version was deleted;
+		// leaving it empty is the honest answer, and callers render nothing.
+		deployment.KindVersion = versionByImage[deployment.ImageId]
+	}
 }
 
 // reconcileIsolationRuntimeClass ensures every deployment whose environment has an isolation tier
@@ -5247,9 +5618,9 @@ func modelBuildToSpecBuild(b *models.Build) *spec.Build {
 }
 
 // inputInterfaceToEndpoints converts an InputInterfaceConfig to the slice expected by CreateInternalAgentFromKindWorkload.
-// Note: Workload CRs require inline schema content, not a file path. Since the schema path originates
-// from the git repository of the source agent, schema is intentionally omitted here — it is already
-// configured at the Component level via CreateComponent.
+// Note: Workload CRs require inline schema content, not a file path. Kind-sourced agents have no git
+// checkout/build step to resolve a schema path into content themselves, so CreateAgent must resolve
+// the source agent's schema content up front and pass it in via cfg.SchemaContent.
 func inputInterfaceToEndpoints(cfg *client.InputInterfaceConfig, componentName string) []client.InputInterfaceEndpoint {
 	if cfg == nil {
 		return nil
@@ -5261,5 +5632,17 @@ func inputInterfaceToEndpoints(cfg *client.InputInterfaceConfig, componentName s
 		BasePath:   cfg.BasePath,
 		Visibility: []string{"external"},
 	}
+	if cfg.SchemaContent != "" {
+		ep.Schema = &client.EndpointSchema{Content: cfg.SchemaContent, Type: client.SchemaTypeOpenAPI}
+	}
 	return []client.InputInterfaceEndpoint{ep}
+}
+
+// buildNameOf returns a triggered build's name for an audit record, tolerating
+// a nil response so the audit path cannot panic on a failed build.
+func buildNameOf(build *models.BuildResponse) string {
+	if build == nil {
+		return ""
+	}
+	return build.Name
 }

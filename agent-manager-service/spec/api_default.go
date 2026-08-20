@@ -6849,6 +6849,131 @@ func (a *DefaultAPIService) ListMonitorsExecute(r ApiListMonitorsRequest) (*Moni
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
+type ApiListOrgAgentsRequest struct {
+	ctx        context.Context
+	ApiService *DefaultAPIService
+	orgName    string
+}
+
+func (r ApiListOrgAgentsRequest) Execute() (*AgentSummaryListResponse, *http.Response, error) {
+	return r.ApiService.ListOrgAgentsExecute(r)
+}
+
+/*
+ListOrgAgents List all agents in an organization
+
+Returns a lightweight, unpaginated list of every agent in the organization across all projects, containing each agent's name, display name, and the name and display name of the project it belongs to.
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param orgName
+	@return ApiListOrgAgentsRequest
+*/
+func (a *DefaultAPIService) ListOrgAgents(ctx context.Context, orgName string) ApiListOrgAgentsRequest {
+	return ApiListOrgAgentsRequest{
+		ApiService: a,
+		ctx:        ctx,
+		orgName:    orgName,
+	}
+}
+
+// Execute executes the request
+//
+//	@return AgentSummaryListResponse
+func (a *DefaultAPIService) ListOrgAgentsExecute(r ApiListOrgAgentsRequest) (*AgentSummaryListResponse, *http.Response, error) {
+	var (
+		localVarHTTPMethod  = http.MethodGet
+		localVarPostBody    interface{}
+		formFiles           []formFile
+		localVarReturnValue *AgentSummaryListResponse
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "DefaultAPIService.ListOrgAgents")
+	if err != nil {
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/orgs/{orgName}/agents"
+	localVarPath = strings.Replace(localVarPath, "{"+"orgName"+"}", url.PathEscape(parameterValueToString(r.orgName, "orgName")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return localVarReturnValue, nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		if localVarHTTPResponse.StatusCode == 404 {
+			var v ErrorResponse
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+			newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 500 {
+			var v ErrorResponse
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+			newErr.model = v
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
+}
+
 type ApiListOrganizationsRequest struct {
 	ctx        context.Context
 	ApiService *DefaultAPIService
@@ -7145,6 +7270,7 @@ func (a *DefaultAPIService) ListProjectsExecute(r ApiListProjectsRequest) (*Proj
 type ApiListRepositoryBranchesRequest struct {
 	ctx                 context.Context
 	ApiService          *DefaultAPIService
+	orgName             string
 	listBranchesRequest *ListBranchesRequest
 	limit               *int32
 	offset              *int32
@@ -7178,12 +7304,14 @@ Returns a list of branches for the specified public repository.
 Currently supports GitHub repositories only.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param orgName Organization name/handle
 	@return ApiListRepositoryBranchesRequest
 */
-func (a *DefaultAPIService) ListRepositoryBranches(ctx context.Context) ApiListRepositoryBranchesRequest {
+func (a *DefaultAPIService) ListRepositoryBranches(ctx context.Context, orgName string) ApiListRepositoryBranchesRequest {
 	return ApiListRepositoryBranchesRequest{
 		ApiService: a,
 		ctx:        ctx,
+		orgName:    orgName,
 	}
 }
 
@@ -7203,11 +7331,18 @@ func (a *DefaultAPIService) ListRepositoryBranchesExecute(r ApiListRepositoryBra
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/repositories/branches"
+	localVarPath := localBasePath + "/orgs/{orgName}/repositories/branches"
+	localVarPath = strings.Replace(localVarPath, "{"+"orgName"+"}", url.PathEscape(parameterValueToString(r.orgName, "orgName")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
 	localVarFormParams := url.Values{}
+	if strlen(r.orgName) < 1 {
+		return localVarReturnValue, nil, reportError("orgName must have at least 1 elements")
+	}
+	if strlen(r.orgName) > 64 {
+		return localVarReturnValue, nil, reportError("orgName must have less than 64 elements")
+	}
 	if r.listBranchesRequest == nil {
 		return localVarReturnValue, nil, reportError("listBranchesRequest is required and must be specified")
 	}
@@ -7320,6 +7455,7 @@ func (a *DefaultAPIService) ListRepositoryBranchesExecute(r ApiListRepositoryBra
 type ApiListRepositoryCommitsRequest struct {
 	ctx                context.Context
 	ApiService         *DefaultAPIService
+	orgName            string
 	listCommitsRequest *ListCommitsRequest
 	limit              *int32
 	offset             *int32
@@ -7355,12 +7491,14 @@ deployment-specific repository binding. When no binding exists, the
 request uses the standard public or secretRef-backed GitHub flow.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param orgName Organization name/handle
 	@return ApiListRepositoryCommitsRequest
 */
-func (a *DefaultAPIService) ListRepositoryCommits(ctx context.Context) ApiListRepositoryCommitsRequest {
+func (a *DefaultAPIService) ListRepositoryCommits(ctx context.Context, orgName string) ApiListRepositoryCommitsRequest {
 	return ApiListRepositoryCommitsRequest{
 		ApiService: a,
 		ctx:        ctx,
+		orgName:    orgName,
 	}
 }
 
@@ -7380,11 +7518,18 @@ func (a *DefaultAPIService) ListRepositoryCommitsExecute(r ApiListRepositoryComm
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/repositories/commits"
+	localVarPath := localBasePath + "/orgs/{orgName}/repositories/commits"
+	localVarPath = strings.Replace(localVarPath, "{"+"orgName"+"}", url.PathEscape(parameterValueToString(r.orgName, "orgName")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
 	localVarFormParams := url.Values{}
+	if strlen(r.orgName) < 1 {
+		return localVarReturnValue, nil, reportError("orgName must have at least 1 elements")
+	}
+	if strlen(r.orgName) > 64 {
+		return localVarReturnValue, nil, reportError("orgName must have less than 64 elements")
+	}
 	if r.listCommitsRequest == nil {
 		return localVarReturnValue, nil, reportError("listCommitsRequest is required and must be specified")
 	}

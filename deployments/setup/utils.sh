@@ -1,10 +1,34 @@
 # Util: Check if a port is in use
+#
+# On Linux a published container port is held by a root-owned docker-proxy,
+# which lsof hides from an unprivileged caller — the port reads as free and the
+# cluster only fails much later, at bind time. ss reads /proc/net/tcp and sees
+# every listener regardless of owner. macOS ships no ss, but there the listener
+# belongs to the invoking user, so lsof is accurate.
 is_port_in_use() {
     local port="$1"
-    if lsof -i :"$port" -sTCP:LISTEN &>/dev/null; then
-        return 0
+    if command -v ss &> /dev/null; then
+        [ -n "$(ss -ltnH "sport = :$port" 2>/dev/null)" ]
+        return
     fi
-    return 1
+    lsof -i :"$port" -sTCP:LISTEN &> /dev/null
+}
+
+# Util: Name the Docker containers publishing a port, so a conflict report says
+# what to stop instead of only which port is taken.
+containers_publishing_port() {
+    docker ps --filter "publish=$1" --format '{{.Names}}' 2>/dev/null \
+        | tr '\n' ' ' \
+        | sed 's/ *$//'
+}
+
+# Util: The command that shows which process owns a listening port, per platform.
+port_owner_command() {
+    if command -v ss &> /dev/null; then
+        echo "ss -ltnp 'sport = :<port>'"
+    else
+        echo "lsof -i :<port>"
+    fi
 }
 
 # Util: Check all required ports for k3d cluster are available
@@ -30,7 +54,13 @@ check_required_ports() {
         local port="${port_info%%:*}"
         local desc="${port_info#*:}"
         if is_port_in_use "$port"; then
-            blocked_ports+=("$port ($desc)")
+            local holders
+            holders=$(containers_publishing_port "$port")
+            if [ -n "$holders" ]; then
+                blocked_ports+=("$port ($desc) — held by container(s): $holders")
+            else
+                blocked_ports+=("$port ($desc)")
+            fi
         fi
     done
 
@@ -41,7 +71,7 @@ check_required_ports() {
         done
         echo ""
         echo "Please free these ports before creating the cluster."
-        echo "You can find processes using a port with: lsof -i :<port>"
+        echo "You can find processes using a port with: $(port_owner_command)"
         return 1
     fi
 
@@ -56,6 +86,7 @@ get_min_version() {
         k3d)     echo "5.8" ;;
         kubectl) echo "1.32" ;;
         helm)    echo "3.12" ;;
+        go)      echo "1.25" ;;
         *)       echo "" ;;
     esac
 }
@@ -73,12 +104,21 @@ get_version() {
     "$1" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1
 }
 
+# Util: Suggest how to install a missing command on the current platform.
+install_hint() {
+    if [ "$(uname -s)" = "Darwin" ]; then
+        echo "brew install $1"
+    else
+        echo "install '$1' with your distribution's package manager"
+    fi
+}
+
 # Util: Check if a command is installed and version is compatible
 check_command() {
     local cmd="$1"
     if ! command -v "$cmd" &> /dev/null; then
         echo "❌ $cmd is not installed. Please install it first:"
-        echo "   brew install $cmd"
+        echo "   $(install_hint "$cmd")"
         exit 1
     fi
 

@@ -12,6 +12,46 @@ if [ -z "$TARGET_VERSION" ]; then
   exit 1
 fi
 
+# Work out which versioned documentation this release should point at.
+#
+# Docs versions are cut per minor line (vX.Y.x) for final releases, and pinned
+# exactly for pre-releases such as v1.0.0-alpha1. No docs version is cut for a
+# release candidate (X.Y.Z-rcN or X.Y.Z-<pre>.rcN) or for a nightly, so those
+# keep whatever the chart defaults to and follow /docs/latest instead.
+if [[ "$TARGET_VERSION" =~ (-|\.)rc[0-9]+$ ]]; then
+  DOCS_VERSION=""
+elif [[ "$TARGET_VERSION" == *-dev* ]]; then
+  DOCS_VERSION=""
+elif [[ "$TARGET_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  DOCS_VERSION="v${TARGET_VERSION%.*}.x"
+else
+  DOCS_VERSION="v$TARGET_VERSION"
+fi
+
+# A release must not ship a console pinned to documentation that was never
+# published, so fail early rather than emitting links that 404. The manifest is
+# tracked and this script runs from the repository root, so its absence means
+# something is wrong with the checkout and must not silently skip the check.
+# Candidates and nightlies never reach here, since DOCS_VERSION is empty.
+VERSIONS_FILE="./documentation/versions.json"
+if [ -n "$DOCS_VERSION" ]; then
+  if [ ! -f "$VERSIONS_FILE" ]; then
+    echo "Error: documentation manifest $VERSIONS_FILE is missing, so $DOCS_VERSION cannot be verified."
+    exit 1
+  fi
+  if ! grep -q "\"$DOCS_VERSION\"" "$VERSIONS_FILE"; then
+    echo "Error: documentation version $DOCS_VERSION is not present in $VERSIONS_FILE."
+    echo "Run the Documentation Release workflow for $DOCS_VERSION before releasing $TARGET_VERSION."
+    exit 1
+  fi
+fi
+
+if [ -n "$DOCS_VERSION" ]; then
+  echo "Documentation version for this release: $DOCS_VERSION"
+else
+  echo "No documentation version for $TARGET_VERSION; the console will follow /docs/latest"
+fi
+
 # Find all Chart.yaml files and replace 0.0.0-dev
 find ./deployments/helm-charts -name "Chart.yaml" -type f | while read -r chart_file; do
   # Replace version: 0.0.0-dev with vTARGET_VERSION (using | as delimiter to avoid conflicts with / in version)
@@ -29,6 +69,11 @@ find ./deployments/helm-charts -name "values.yaml" -type f | while read -r value
   # Replace ampVersion: "0.0.0-dev" with vTARGET_VERSION — pins the console's
   # deployment-script git ref (amp/vX.Y.Z) to this release
   sed -i.bak "s|ampVersion: \"0\.0\.0-dev\"|ampVersion: \"v$TARGET_VERSION\"|g" "$values_file"
+  # Pin the console's in-product doc links to this release's documentation.
+  # Left untouched when there is no docs version, so the chart keeps "latest".
+  if [ -n "$DOCS_VERSION" ]; then
+    sed -i.bak "s|docsVersion: \"latest\"|docsVersion: \"$DOCS_VERSION\"|g" "$values_file"
+  fi
   # Remove backup files
   rm -f "${values_file}.bak"
 done

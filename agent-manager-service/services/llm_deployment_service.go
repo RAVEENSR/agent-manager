@@ -91,6 +91,7 @@ type LLMProviderDeploymentSpec struct {
 	VHost         string                        `yaml:"vhost,omitempty" json:"vhost,omitempty"`
 	Template      string                        `yaml:"template" json:"template"`
 	Upstream      GatewayUpstream               `yaml:"upstream" json:"upstream"`
+	Resilience    *models.Resilience            `yaml:"resilience,omitempty" json:"resilience,omitempty"`
 	AccessControl *models.LLMAccessControl      `yaml:"accessControl,omitempty" json:"accessControl,omitempty"`
 	RateLimiting  *models.LLMRateLimitingConfig `yaml:"rateLimiting,omitempty" json:"rateLimiting,omitempty"`
 	Policies      []models.LLMPolicy            `yaml:"policies,omitempty" json:"policies,omitempty"`
@@ -523,7 +524,7 @@ func (s *LLMProviderDeploymentService) generateLLMProviderDeploymentYAML(provide
 		vhostValue = *provider.Configuration.VHost
 	}
 
-	// Transform upstream from nested (main/sandbox) to flat structure expected by gateway
+	// Transform upstream from nested (main/sandbox) to flat structure expected by gateway.
 	gatewayUpstream := GatewayUpstream{
 		URL:  main.URL,
 		Ref:  main.Ref,
@@ -965,6 +966,7 @@ func (s *LLMProviderDeploymentService) generateLLMProviderDeploymentYAML(provide
 			VHost:         vhostValue,
 			Template:      templateHandle,
 			Upstream:      gatewayUpstream,
+			Resilience:    provider.Configuration.Resilience,
 			AccessControl: accessControl,
 			Policies:      policies,
 		},

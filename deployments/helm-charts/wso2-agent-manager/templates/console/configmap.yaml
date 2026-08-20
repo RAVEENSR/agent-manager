@@ -26,6 +26,9 @@ data:
   GATEWAY_VERSION: {{ .Values.console.config.gatewayVersion | default "v1.0.0" | quote }}
   # Agent Manager release version — pins the deployment-script git tag (amp/vX.Y.Z)
   AMP_VERSION: {{ .Values.console.config.ampVersion | default "v1.0.0" | quote }}
+  # Documentation base URL for the console's in-product doc links. Built from
+  # the docs version so only the version segment varies per release.
+  DOCS_URL: {{ printf "https://wso2.github.io/agent-manager/docs/%s" (.Values.console.config.docsVersion | default "latest") | quote }}
   # Agent Instrumentation URL
   INSTRUMENTATION_URL: {{ .Values.console.config.instrumentationUrl | quote }}
   # Cluster-internal URLs the gateway uses to reach Agent Manager — surfaced to
@@ -33,6 +36,12 @@ data:
   # carries values that match the deployment mode (docker-compose vs in-cluster).
   AGENT_MANAGER_INTERNAL_BASE_URL: {{ .Values.console.config.agentManagerInternalBaseUrl | default "" | quote }}
   AGENT_MANAGER_INTERNAL_CP_HOST: {{ .Values.console.config.agentManagerInternalCpHost | default "" | quote }}
+  # Base domain env-Thunder instances are hosted under, and whether this
+  # deployment serves them over TLS — piped into the Create Environment
+  # drawer's rendered add-environment.sh command so THUNDER_HOST_BASE_DOMAIN
+  # and TLS_ENABLED match this deployment instead of being omitted.
+  THUNDER_HOST_BASE_DOMAIN: {{ .Values.console.config.thunderHostBaseDomain | default "amp.localhost" | quote }}
+  TLS_ENABLED: {{ .Values.console.config.tlsEnabled | default "false" | quote }}
   # Guardrails configuration
   GUARDRAILS_CATALOG_URL: {{ .Values.console.config.guardrailsCatalogUrl | default "" | quote }}
   GUARDRAILS_DEFINITION_BASE_URL: {{ .Values.console.config.guardrailsDefinitionBaseUrl | default "" | quote }}

@@ -16,7 +16,15 @@
 
 package models
 
-import "fmt"
+import (
+	"fmt"
+	"regexp"
+)
+
+// durationPattern matches the gateway's accepted duration strings (e.g. "15s", "500ms"),
+// mirroring the pattern enforced by the api-platform gateway-controller's Resilience schema.
+// Whole numbers only — fractional durations (e.g. "1.5s") are not accepted.
+var durationPattern = regexp.MustCompile(`^\d+(ms|s|m|h)$`)
 
 // UpstreamConfig represents the upstream configuration.
 //
@@ -49,6 +57,31 @@ type UpstreamAuth struct {
 func (a *UpstreamAuth) Validate() error {
 	if a.Value != nil && a.SecretRef != nil {
 		return fmt.Errorf("UpstreamAuth.Value and SecretRef are mutually exclusive; provide only one")
+	}
+	return nil
+}
+
+// Resilience carries the gateway's route-level request/idle timeouts. It maps
+// directly onto the CRD spec's own top-level "resilience" field with no
+// indirection. Both fields are duration strings (e.g. "15s", "500ms"); "0s"
+// explicitly disables the timeout, while a nil field is omitted so the
+// gateway falls back to its global default.
+type Resilience struct {
+	Timeout     *string `json:"timeout,omitempty" yaml:"timeout,omitempty"`
+	IdleTimeout *string `json:"idleTimeout,omitempty" yaml:"idleTimeout,omitempty"`
+}
+
+// Validate enforces that Timeout and IdleTimeout, when set, are duration strings the
+// gateway accepts (e.g. "15s", "500ms", "0s" to disable).
+func (r *Resilience) Validate() error {
+	if r == nil {
+		return nil
+	}
+	if r.Timeout != nil && !durationPattern.MatchString(*r.Timeout) {
+		return fmt.Errorf("resilience.timeout %q is not a valid duration (expected e.g. \"15s\", \"500ms\")", *r.Timeout)
+	}
+	if r.IdleTimeout != nil && !durationPattern.MatchString(*r.IdleTimeout) {
+		return fmt.Errorf("resilience.idleTimeout %q is not a valid duration (expected e.g. \"15s\", \"500ms\")", *r.IdleTimeout)
 	}
 	return nil
 }

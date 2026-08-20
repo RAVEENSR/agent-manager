@@ -138,7 +138,11 @@ export function LLMProviderGuardrailsTab({
   isUpdating,
 }: LLMProviderGuardrailsTabProps) {
   const { orgId } = useParams<{ orgId: string }>();
-  const { data: catalogData } = useLLMPoliciesCatalog(orgId);
+  const { data: catalogData } = useLLMPoliciesCatalog(
+    orgId,
+    true,
+    providerData?.uuid,
+  );
 
   const availableGuardrails = useMemo(
     () => catalogData?.data ?? [],
@@ -684,6 +688,7 @@ export function LLMProviderGuardrailsTab({
         open={drawerOpen}
         onClose={handleCloseDrawer}
         onSubmit={handleDrawerSubmit}
+        providerId={providerData?.uuid}
         policyNoun="guardrail"
         loadingLabel="Loading guardrails..."
         searchPlaceholder="Search guardrails..."

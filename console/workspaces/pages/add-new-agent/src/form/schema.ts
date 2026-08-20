@@ -18,6 +18,7 @@
 
 import { z } from 'zod';
 import type { InputInterfaceType } from '@agent-management-platform/types';
+import type { AuthenticationType } from '@agent-management-platform/shared-component';
 
 export type InterfaceType = InputInterfaceType;
 
@@ -37,6 +38,14 @@ export interface MCPProxyFormEntry {
   selectedProxyByEnv: Record<string, { id: string; name: string } | null>;
   urlVarName?: string;
   apikeyVarName?: string;
+  /**
+   * How the selected proxy's endpoint for the target environment is secured,
+   * resolved from the proxy once it loads (undefined until then). Only an
+   * "apiKey" endpoint has a user-named API key; for "identity" and "" (none),
+   * submitting one creates an env var the platform injects permanently empty
+   * (issue #1597).
+   */
+  authenticationType?: AuthenticationType;
 }
 
 // Base fields shared by both flows

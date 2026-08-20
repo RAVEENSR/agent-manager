@@ -18,6 +18,7 @@
 import { z } from "zod";
 
 const VERSION_PATTERN = /^v\d+\.\d+$/;
+const DURATION_PATTERN = /^\d+(\.\d+)?(ms|s|m|h)$/;
 
 export const addLLMProviderSchema = z.object({
   templateId: z
@@ -61,6 +62,18 @@ export const addLLMProviderSchema = z.object({
   apiKey: z
     .string()
     .trim()
+    .optional()
+    .or(z.literal("")),
+  resilienceTimeout: z
+    .string()
+    .trim()
+    .refine((v) => !v || DURATION_PATTERN.test(v), "Enter a duration like 5s, 500ms, or 1m")
+    .optional()
+    .or(z.literal("")),
+  resilienceIdleTimeout: z
+    .string()
+    .trim()
+    .refine((v) => !v || DURATION_PATTERN.test(v), "Enter a duration like 5s, 500ms, or 1m")
     .optional()
     .or(z.literal("")),
   gatewayIds: z.array(z.string()).optional(),

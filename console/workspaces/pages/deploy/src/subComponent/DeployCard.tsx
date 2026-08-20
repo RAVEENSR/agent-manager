@@ -23,7 +23,6 @@ import {
   useGetAgentResourceConfigs,
   useGetDeploymentPipeline,
   useListAgentDeployments,
-  useListAgentKindVersions,
   useUpdateDeploymentState,
 } from "@agent-management-platform/api-client";
 import { NoDataFound, TextInput } from "@agent-management-platform/views";
@@ -81,7 +80,6 @@ import {
   AgentResourceConfigsResponse,
   MetricsResponse,
   Environment,
-  AgentKindVersionResponse,
   TraceListTimeRange,
 } from "@agent-management-platform/types";
 import { extractBuildIdFromImageId } from "../utils/extractBuildIdFromImageId";
@@ -413,21 +411,13 @@ export function DeployCard(props: DeployCardProps) {
     ? corsOrigins.includes("*") ? "All origins" : `${corsOrigins.length} origin${corsOrigins.length !== 1 ? "s" : ""}`
     : "Disabled";
 
-  const resilienceTimeoutSeconds = envConfig?.resilienceTimeoutSeconds ?? 30;
-  const isWholeMinutes = resilienceTimeoutSeconds >= 60 && resilienceTimeoutSeconds % 60 === 0;
-  const resilienceTimeoutLabel = isWholeMinutes
-    ? `${resilienceTimeoutSeconds / 60}m`
-    : `${resilienceTimeoutSeconds}s`;
-
   const kindName = agent?.kindName;
 
-  const { data: kindVersions } = useListAgentKindVersions(
-    { orgName: orgId ?? "", kindName: kindName ?? "" },
-  );
-
-  const matchedKindVersion: AgentKindVersionResponse | undefined = kindVersions?.find(
-    (v) => v.imageId === currentDeployment?.imageId,
-  );
+  // The version running in THIS environment, resolved server-side from the image
+  // this environment's release is pinned to. Environments diverge between a deploy
+  // and its promotion, so this is per-deployment and not the agent's creation-time
+  // kind version. Absent when the image matches no published version.
+  const deployedKindVersion = currentDeployment?.kindVersion;
 
   const selectedBuildId = extractBuildIdFromImageId(currentDeployment?.imageId);
   const lastDeployedText = currentDeployment?.lastDeployed
@@ -549,13 +539,13 @@ export function DeployCard(props: DeployCardProps) {
                         absoluteRouteMap.children.org.children.catalog.children.kindDetails.path,
                         { orgId, kindId: kindName },
                       ) +
-                      (matchedKindVersion ? `?version=${matchedKindVersion.version}` : "")
+                      (deployedKindVersion ? `?version=${deployedKindVersion}` : "")
                     }
                   >
                     <ExternalLink size={16} />
                   </IconButton>
                 }
-                value={matchedKindVersion ? `v${matchedKindVersion.version}` : ""}
+                value={deployedKindVersion ? `v${deployedKindVersion}` : ""}
                 slotProps={{ input: { readOnly: true } }}
               />
             ) : (
@@ -601,6 +591,7 @@ export function DeployCard(props: DeployCardProps) {
 
           <Collapse in={[
             DeploymentStatus.ACTIVE, DeploymentStatus.ERROR, DeploymentStatus.FAILED,
+            DeploymentStatus.DEPLOYING,
           ].includes(currentDeployment?.status as DeploymentStatus)}>
             <Stack gap={2}>
               <Card variant="outlined" sx={{ padding: 1.4, pt: 0.5 }}>
@@ -688,22 +679,6 @@ export function DeployCard(props: DeployCardProps) {
                       </Tooltip>
                     </Box>
                   )}
-                  {isApiAgent && (
-                    <Box display="flex" alignItems="center" gap={1}>
-                      <Clock size={14} style={{ opacity: 0.6 }} />
-                      <Typography variant="body2">Gateway Timeout</Typography>
-                      <Tooltip title="Max duration the gateway keeps a response open between this agent and the client before cutting it off">
-                        <Chip
-                          size="small"
-                          label={resilienceTimeoutLabel}
-                          color="default"
-                          variant="outlined"
-                          sx={{ height: 18, fontSize: "0.65rem", cursor: "default" }}
-                        />
-                      </Tooltip>
-                    </Box>
-                  )}
-
                   {/* Tracing - Instrumentation overview */}
                   {isPythonBuildpack && (
                     <Box display="flex" alignItems="center" gap={1}>

@@ -30,6 +30,7 @@ type UpdateLLMProviderRequest struct {
 	// Updated template identifier
 	Template      *string           `json:"template,omitempty"`
 	Upstream      *UpstreamConfig   `json:"upstream,omitempty"`
+	Resilience    *Resilience       `json:"resilience,omitempty"`
 	AccessControl *LLMAccessControl `json:"accessControl,omitempty"`
 	// Updated list of policies
 	Policies []LLMPolicy `json:"policies,omitempty"`
@@ -249,6 +250,38 @@ func (o *UpdateLLMProviderRequest) HasUpstream() bool {
 // SetUpstream gets a reference to the given UpstreamConfig and assigns it to the Upstream field.
 func (o *UpdateLLMProviderRequest) SetUpstream(v UpstreamConfig) {
 	o.Upstream = &v
+}
+
+// GetResilience returns the Resilience field value if set, zero value otherwise.
+func (o *UpdateLLMProviderRequest) GetResilience() Resilience {
+	if o == nil || IsNil(o.Resilience) {
+		var ret Resilience
+		return ret
+	}
+	return *o.Resilience
+}
+
+// GetResilienceOk returns a tuple with the Resilience field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *UpdateLLMProviderRequest) GetResilienceOk() (*Resilience, bool) {
+	if o == nil || IsNil(o.Resilience) {
+		return nil, false
+	}
+	return o.Resilience, true
+}
+
+// HasResilience returns a boolean if a field has been set.
+func (o *UpdateLLMProviderRequest) HasResilience() bool {
+	if o != nil && !IsNil(o.Resilience) {
+		return true
+	}
+
+	return false
+}
+
+// SetResilience gets a reference to the given Resilience and assigns it to the Resilience field.
+func (o *UpdateLLMProviderRequest) SetResilience(v Resilience) {
+	o.Resilience = &v
 }
 
 // GetAccessControl returns the AccessControl field value if set, zero value otherwise.
@@ -502,6 +535,9 @@ func (o UpdateLLMProviderRequest) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.Upstream) {
 		toSerialize["upstream"] = o.Upstream
+	}
+	if !IsNil(o.Resilience) {
+		toSerialize["resilience"] = o.Resilience
 	}
 	if !IsNil(o.AccessControl) {
 		toSerialize["accessControl"] = o.AccessControl

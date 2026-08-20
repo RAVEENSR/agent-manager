@@ -17,38 +17,42 @@
 package api
 
 import (
-	"net/http"
-
 	"github.com/wso2/agent-manager/agent-manager-service/controllers"
+	"github.com/wso2/agent-manager/agent-manager-service/middleware"
 )
 
-// RegisterGatewayInternalRoutes registers all gateway internal API routes
-// These routes use API key authentication instead of JWT
-func RegisterGatewayInternalRoutes(mux *http.ServeMux, ctrl controllers.GatewayInternalController) {
+// RegisterGatewayInternalRoutes registers all gateway internal API routes.
+//
+// These use api-key authentication (checked inside each handler) rather than
+// JWT, so the registrar applies no authz here. It is still the registrar and
+// not a bare mux, because that is what puts these routes in the audit ledger
+// and under the same coverage test as the public API — the bulk-sync endpoints
+// below hand real key material to a gateway.
+func RegisterGatewayInternalRoutes(rr *middleware.RouteRegistrar, ctrl controllers.GatewayInternalController) {
 	// API key bulk-sync endpoints (must be registered before {id} catch-all routes)
-	mux.HandleFunc("GET /llm-providers/api-keys", ctrl.GetLLMProviderAPIKeys)
-	mux.HandleFunc("GET /llm-proxies/api-keys", ctrl.GetLLMProxyAPIKeys)
-	mux.HandleFunc("GET /apis/api-keys", ctrl.GetAPIKeys)
+	rr.HandleFuncWithValidation("GET /llm-providers/api-keys", ctrl.GetLLMProviderAPIKeys)
+	rr.HandleFuncWithValidation("GET /llm-proxies/api-keys", ctrl.GetLLMProxyAPIKeys)
+	rr.HandleFuncWithValidation("GET /apis/api-keys", ctrl.GetAPIKeys)
 
 	// Subscription plans endpoint
-	mux.HandleFunc("GET /subscription-plans", ctrl.GetSubscriptionPlans)
+	rr.HandleFuncWithValidation("GET /subscription-plans", ctrl.GetSubscriptionPlans)
 
 	// Deployment sync endpoint (gateway-controller reconciles its local cache
 	// against this on connect and periodically).
-	mux.HandleFunc("GET /deployments", ctrl.GetDeployments)
+	rr.HandleFuncWithValidation("GET /deployments", ctrl.GetDeployments)
 
 	// AI applications endpoint (bulk-sync for per-consumer rate limiting)
-	mux.HandleFunc("GET /applications", ctrl.GetApplications)
+	rr.HandleFuncWithValidation("GET /applications", ctrl.GetApplications)
 
 	// Gateway manifest endpoint
-	mux.HandleFunc("POST /gateways/{gatewayId}/manifest", ctrl.PushGatewayManifest)
+	rr.HandleFuncWithValidation("POST /gateways/{gatewayId}/manifest", ctrl.PushGatewayManifest)
 
 	// LLM Provider endpoints
-	mux.HandleFunc("GET /llm-providers/{providerId}", ctrl.GetLLMProvider)
+	rr.HandleFuncWithValidation("GET /llm-providers/{providerId}", ctrl.GetLLMProvider)
 
 	// LLM Proxy endpoints
-	mux.HandleFunc("GET /llm-proxies/{proxyId}", ctrl.GetLLMProxy)
+	rr.HandleFuncWithValidation("GET /llm-proxies/{proxyId}", ctrl.GetLLMProxy)
 
 	// MCP Proxy endpoints
-	mux.HandleFunc("GET /mcp-proxies/{proxyId}", ctrl.GetMCPProxy)
+	rr.HandleFuncWithValidation("GET /mcp-proxies/{proxyId}", ctrl.GetMCPProxy)
 }

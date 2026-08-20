@@ -21,6 +21,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -28,6 +29,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -35,6 +37,35 @@ import (
 
 	"github.com/wso2/agent-manager/agent-manager-service/config"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
+)
+
+// Sentinels for the token rejections this package decides itself. They exist so
+// the audit trail's reason label is derived from the failure, not from message
+// text: several of these messages interpolate claim values taken straight from
+// the token, so classifying by substring let the token's own contents choose
+// how the rejection was labelled.
+var (
+	// ErrTokenExpired is a token past its exp claim.
+	ErrTokenExpired = errors.New("token has expired")
+	// ErrBadIssuer is a token whose iss claim is not configured as trusted.
+	ErrBadIssuer = errors.New("token issuer is not allowed")
+	// ErrBadAudience is a token whose aud claim matches no configured audience.
+	ErrBadAudience = errors.New("token audience is not allowed")
+	// ErrUnknownKid is a token whose kid names no key in the JWKS.
+	ErrUnknownKid = errors.New("no signing key matches the token kid")
+	// ErrBadSignature is a token signed with an unexpected method.
+	ErrBadSignature = errors.New("token signature is invalid")
+	// ErrMalformedToken is a token that cannot be parsed into claims.
+	ErrMalformedToken = errors.New("token is malformed")
+	// ErrTokenInvalid is a token the library rejected without a more specific
+	// reason.
+	ErrTokenInvalid = errors.New("token is not valid")
+	// ErrAuthNotConfigured is a rejection caused by this service's own
+	// configuration rather than by anything about the token.
+	ErrAuthNotConfigured = errors.New("authentication is not configured")
+	// ErrKeySetUnavailable is a failure to obtain the JWKS. Also this service's
+	// fault, and separated from ErrAuthNotConfigured because it is transient.
+	ErrKeySetUnavailable = errors.New("signing key set is unavailable")
 )
 
 type TokenClaims struct {
@@ -116,6 +147,79 @@ func hasValidPublisherAudience(audiences jwt.ClaimStrings) bool {
 	return false
 }
 
+// AuthFailureHook is notified when a request is rejected at the edge. The
+// reason is a classified label (see classifyAuthFailure), never the token or
+// any fragment of it.
+//
+// This exists as a hook rather than a direct call because the audit package
+// imports this one to read token claims; calling audit from here would be an
+// import cycle. The hook is installed once at startup from api/app.go.
+type AuthFailureHook func(r *http.Request, reason string)
+
+var authFailureHook atomic.Pointer[AuthFailureHook]
+
+// SetAuthFailureHook installs the handler notified on authentication failure.
+// Passing nil removes it.
+func SetAuthFailureHook(h AuthFailureHook) {
+	if h == nil {
+		authFailureHook.Store(nil)
+		return
+	}
+	authFailureHook.Store(&h)
+}
+
+// notifyAuthFailure invokes the installed hook, if any.
+func notifyAuthFailure(r *http.Request, reason string) {
+	if h := authFailureHook.Load(); h != nil {
+		(*h)(r, reason)
+	}
+}
+
+// classifyAuthFailure reduces a validation error to a stable label.
+//
+// The label is deliberately coarse. It has to distinguish an expired token
+// (routine) from a bad signature or unknown issuer (an attack signal) without
+// echoing attacker-controlled error text into the audit trail.
+//
+// Matching is on sentinels, never on message text. Several rejection messages
+// interpolate the token's own iss or aud claim, so a substring match let the
+// token decide its own label: an issuer containing "expired" was reported as a
+// routine expiry rather than as a rejected issuer.
+//
+// Order matters where one failure wraps another. jwt reports an expired token
+// inside ErrTokenInvalidClaims, and reports anything the keyfunc returned
+// inside ErrTokenUnverifiable, so the specific causes are tested before the
+// general wrappers they arrive in.
+func classifyAuthFailure(err error) string {
+	switch {
+	case err == nil:
+		return "unknown"
+	case errors.Is(err, ErrTokenExpired), errors.Is(err, jwt.ErrTokenExpired):
+		return "expired"
+	case errors.Is(err, ErrBadIssuer), errors.Is(err, jwt.ErrTokenInvalidIssuer):
+		return "bad-issuer"
+	case errors.Is(err, ErrBadAudience), errors.Is(err, jwt.ErrTokenInvalidAudience):
+		return "bad-audience"
+	case errors.Is(err, ErrUnknownKid):
+		return "unknown-kid"
+	// This service's own fault, not the caller's. Kept ahead of bad-signature
+	// because both arrive wrapped in ErrTokenUnverifiable, and a broken JWKS
+	// fetch reported as a bad signature points an investigation at the caller.
+	case errors.Is(err, ErrAuthNotConfigured), errors.Is(err, ErrKeySetUnavailable):
+		return "server-error"
+	case errors.Is(err, ErrBadSignature), errors.Is(err, jwt.ErrTokenSignatureInvalid),
+		errors.Is(err, jwt.ErrTokenUnverifiable):
+		return "bad-signature"
+	case errors.Is(err, ErrMalformedToken), errors.Is(err, jwt.ErrTokenMalformed):
+		return "malformed"
+	case errors.Is(err, ErrTokenInvalid), errors.Is(err, jwt.ErrTokenNotValidYet),
+		errors.Is(err, jwt.ErrTokenInvalidClaims):
+		return "invalid"
+	default:
+		return "unknown"
+	}
+}
+
 func buildBearerChallenge(resourceMetadataURL, errorCode string) string {
 	parts := []string{`realm="agent-manager"`}
 	if errorCode != "" {
@@ -132,6 +236,7 @@ func JWTAuthMiddleware(header, resourceMetadataURL string) func(http.Handler) ht
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			tokenString := r.Header.Get(header)
 			if tokenString == "" {
+				notifyAuthFailure(r, "missing-header")
 				w.Header().Set("WWW-Authenticate", buildBearerChallenge(resourceMetadataURL, ""))
 				utils.WriteErrorResponse(w, http.StatusUnauthorized, fmt.Sprintf("missing header: %s", header))
 				return
@@ -142,7 +247,15 @@ func JWTAuthMiddleware(header, resourceMetadataURL string) func(http.Handler) ht
 			// Validate the token using JWKS
 			claims, err := validateJWTWithJWKS(tokenString)
 			if err != nil {
-				slog.Error("JWT validation failed", "error", err)
+				// The path and client IP make this actionable: the previous form
+				// logged only the error, which left credential stuffing against
+				// the API undetectable.
+				slog.Error("JWT validation failed",
+					"error", err,
+					"reason", classifyAuthFailure(err),
+					"path", utils.SanitizeForLog(r.URL.Path),
+					"clientIp", utils.ClientIP(r))
+				notifyAuthFailure(r, classifyAuthFailure(err))
 				w.Header().Set("WWW-Authenticate", buildBearerChallenge(resourceMetadataURL, "invalid_token"))
 				utils.WriteErrorResponse(w, http.StatusUnauthorized, "invalid jwt")
 				return
@@ -203,7 +316,7 @@ func HasAllScopes(ctx context.Context, requiredScopes []string) bool {
 func validateJWTWithJWKS(tokenString string) (*TokenClaims, error) {
 	cfg := config.GetConfig()
 	if cfg == nil {
-		return nil, fmt.Errorf("configuration not loaded")
+		return nil, fmt.Errorf("%w: configuration not loaded", ErrAuthNotConfigured)
 	}
 
 	var claims *TokenClaims
@@ -214,19 +327,19 @@ func validateJWTWithJWKS(tokenString string) (*TokenClaims, error) {
 		token, err := jwt.ParseWithClaims(tokenString, &TokenClaims{}, func(token *jwt.Token) (interface{}, error) {
 			// Verify signing method is RSA
 			if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+				return nil, fmt.Errorf("%w: unexpected signing method: %v", ErrBadSignature, token.Header["alg"])
 			}
 
 			// Get the key ID from the token header
 			kid, ok := token.Header["kid"].(string)
 			if !ok {
-				return nil, fmt.Errorf("kid not found in token header")
+				return nil, fmt.Errorf("%w: kid not found in token header", ErrUnknownKid)
 			}
 
 			// Fetch JWKS and get the public key
 			jwks, err := fetchJWKS(cfg.KeyManagerConfigurations.JWKSUrl)
 			if err != nil {
-				return nil, fmt.Errorf("failed to fetch JWKS: %w", err)
+				return nil, fmt.Errorf("%w: failed to fetch JWKS: %w", ErrKeySetUnavailable, err)
 			}
 
 			// Find the key with matching kid
@@ -240,13 +353,13 @@ func validateJWTWithJWKS(tokenString string) (*TokenClaims, error) {
 			// depending on TTL. Only attempt a forced refresh if the kid looks
 			// plausible (to avoid network calls for garbage values).
 			if !validKidPattern.MatchString(kid) {
-				return nil, fmt.Errorf("unable to find key with kid (invalid format)")
+				return nil, fmt.Errorf("%w: kid has an invalid format", ErrUnknownKid)
 			}
 
 			slog.Warn("kid not found in JWKS, attempting refresh", slog.String("kid", kid))
 			refreshed, err := refreshJWKS(cfg.KeyManagerConfigurations.JWKSUrl)
 			if err != nil {
-				return nil, fmt.Errorf("failed to refresh JWKS: %w", err)
+				return nil, fmt.Errorf("%w: failed to refresh JWKS: %w", ErrKeySetUnavailable, err)
 			}
 			for _, key := range refreshed.Keys {
 				if key.Kid == kid {
@@ -254,19 +367,19 @@ func validateJWTWithJWKS(tokenString string) (*TokenClaims, error) {
 				}
 			}
 
-			return nil, fmt.Errorf("unable to find key with kid after JWKS refresh")
+			return nil, fmt.Errorf("%w: kid absent after JWKS refresh", ErrUnknownKid)
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse token: %w", err)
 		}
 
 		if !token.Valid {
-			return nil, fmt.Errorf("token is not valid")
+			return nil, fmt.Errorf("%w", ErrTokenInvalid)
 		}
 
 		validatedClaims, ok := token.Claims.(*TokenClaims)
 		if !ok {
-			return nil, fmt.Errorf("failed to extract claims")
+			return nil, fmt.Errorf("%w: failed to extract claims", ErrMalformedToken)
 		}
 		claims = validatedClaims
 	} else if cfg.IsLocalDevEnv {
@@ -274,15 +387,15 @@ func validateJWTWithJWKS(tokenString string) (*TokenClaims, error) {
 		// Only reachable when IS_LOCAL_DEV_ENV=true; fail closed in all other environments.
 		extractedClaims, err := extractClaimsFromJWT(tokenString)
 		if err != nil {
-			return nil, fmt.Errorf("failed to extract claims: %w", err)
+			return nil, fmt.Errorf("%w: failed to extract claims: %w", ErrMalformedToken, err)
 		}
 		claims = extractedClaims
 
 		if claims.ExpiresAt != nil && !claims.ExpiresAt.After(time.Now()) {
-			return nil, fmt.Errorf("token has expired")
+			return nil, fmt.Errorf("%w", ErrTokenExpired)
 		}
 	} else {
-		return nil, fmt.Errorf("KEY_MANAGER_JWKS_URL must be configured for JWT validation")
+		return nil, fmt.Errorf("%w: KEY_MANAGER_JWKS_URL must be configured for JWT validation", ErrAuthNotConfigured)
 	}
 
 	if err := validateIssuer(claims.Issuer, cfg.KeyManagerConfigurations.Issuer); err != nil {
@@ -299,7 +412,7 @@ func validateJWTWithJWKS(tokenString string) (*TokenClaims, error) {
 // validateIssuer validates the issuer claim against allowed issuers
 func validateIssuer(issuer string, allowedIssuers []string) error {
 	if len(allowedIssuers) == 0 {
-		return fmt.Errorf("no allowed issuers configured")
+		return fmt.Errorf("%w: no allowed issuers configured", ErrAuthNotConfigured)
 	}
 
 	trimmedIssuer := strings.TrimSpace(issuer)
@@ -308,14 +421,14 @@ func validateIssuer(issuer string, allowedIssuers []string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("invalid issuer: got %s", issuer)
+	return fmt.Errorf("%w: got %s", ErrBadIssuer, issuer)
 }
 
 // validateAudience validates the audience claim against allowed audiences.
 // Supports exact matches and prefix matches (entries ending with "*").
 func validateAudience(audiences jwt.ClaimStrings, allowedAudiences []string) error {
 	if len(allowedAudiences) == 0 {
-		return fmt.Errorf("no allowed audiences configured")
+		return fmt.Errorf("%w: no allowed audiences configured", ErrAuthNotConfigured)
 	}
 
 	exactAllowed := make(map[string]struct{})
@@ -323,12 +436,12 @@ func validateAudience(audiences jwt.ClaimStrings, allowedAudiences []string) err
 	for _, allowed := range allowedAudiences {
 		a := strings.TrimSpace(allowed)
 		if a == "*" {
-			return fmt.Errorf("bare wildcard \"*\" is not allowed in audience configuration")
+			return fmt.Errorf("%w: bare wildcard \"*\" is not allowed in audience configuration", ErrAuthNotConfigured)
 		}
 		if strings.HasSuffix(a, "*") {
 			prefix := strings.TrimSuffix(a, "*")
 			if prefix == "" {
-				return fmt.Errorf("bare wildcard \"*\" is not allowed in audience configuration")
+				return fmt.Errorf("%w: bare wildcard \"*\" is not allowed in audience configuration", ErrAuthNotConfigured)
 			}
 			prefixAllowed = append(prefixAllowed, prefix)
 		} else {
@@ -349,7 +462,7 @@ func validateAudience(audiences jwt.ClaimStrings, allowedAudiences []string) err
 		}
 	}
 
-	return fmt.Errorf("invalid audience: got %v", audiences)
+	return fmt.Errorf("%w: got %v", ErrBadAudience, audiences)
 }
 
 // fetchJWKS fetches the JWKS from the provided URL with caching

@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/logger"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
@@ -180,11 +181,39 @@ func (s *AgentAPIKeyService) CreateAPIKey(
 		return nil, err
 	}
 	artifactUUID := artifact.UUID.String()
+
+	// The key is minted and broadcast to gateways outside this service, so the
+	// change cannot commit with its record. Write the intent first and refuse
+	// if it fails: a live credential nobody can attribute is worse than a
+	// failed request. The key value itself is never passed to the recorder.
+	attempt, err := beginAPIKeyAudit(ctx, audit.ActionAPIKeyCreate, apiKeyAuditTarget{
+		OUID:        ouID,
+		OwnerType:   audit.APIKeyOwnerAgent,
+		OwnerID:     artifactUUID,
+		OwnerName:   agentName,
+		KeyName:     keyNameOf(req),
+		Project:     projectName,
+		Environment: envID,
+	}, audit.Detail("gatewayCount", len(gateways)))
+	if err != nil {
+		return nil, err
+	}
+
 	resp, err := s.broadcaster.broadcastCreateToGateways(gateways, ouID, artifactUUID, artifactUUID, req)
 	if resp != nil {
 		resp.GatewayConnected = s.gatewaysConnected(gateways)
 	}
+	attempt.Complete(ctx, err, audit.Detail("gatewayConnected", s.gatewaysConnected(gateways) != nil))
 	return resp, err
+}
+
+// keyNameOf returns the requested key name, tolerating a nil request so the
+// audit path cannot panic on input the caller has not validated yet.
+func keyNameOf(req *models.CreateAPIKeyRequest) string {
+	if req == nil {
+		return ""
+	}
+	return req.Name
 }
 
 // RevokeAPIKey broadcasts an API key revocation event to the environment's gateways.
@@ -201,7 +230,23 @@ func (s *AgentAPIKeyService) RevokeAPIKey(
 		return err
 	}
 	artifactUUID := artifact.UUID.String()
-	return s.broadcaster.broadcastRevokeToGateways(ctx, gateways, artifactUUID, artifactUUID, keyName)
+
+	attempt, err := beginAPIKeyAudit(ctx, audit.ActionAPIKeyRevoke, apiKeyAuditTarget{
+		OUID:        ouID,
+		OwnerType:   audit.APIKeyOwnerAgent,
+		OwnerID:     artifactUUID,
+		OwnerName:   agentName,
+		KeyName:     keyName,
+		Project:     projectName,
+		Environment: envID,
+	}, audit.Detail("gatewayCount", len(gateways)))
+	if err != nil {
+		return err
+	}
+
+	err = s.broadcaster.broadcastRevokeToGateways(ctx, gateways, artifactUUID, artifactUUID, keyName)
+	attempt.Complete(ctx, err)
+	return err
 }
 
 // RotateAPIKey generates a new API key value and broadcasts the update to the environment's gateways.
@@ -220,10 +265,25 @@ func (s *AgentAPIKeyService) RotateAPIKey(
 		return nil, err
 	}
 	artifactUUID := artifact.UUID.String()
+
+	attempt, err := beginAPIKeyAudit(ctx, audit.ActionAPIKeyRotate, apiKeyAuditTarget{
+		OUID:        ouID,
+		OwnerType:   audit.APIKeyOwnerAgent,
+		OwnerID:     artifactUUID,
+		OwnerName:   agentName,
+		KeyName:     keyName,
+		Project:     projectName,
+		Environment: envID,
+	}, audit.Detail("gatewayCount", len(gateways)))
+	if err != nil {
+		return nil, err
+	}
+
 	resp, err := s.broadcaster.broadcastRotateToGateways(gateways, ouID, artifactUUID, artifactUUID, keyName, req)
 	if resp != nil {
 		resp.GatewayConnected = s.gatewaysConnected(gateways)
 	}
+	attempt.Complete(ctx, err, audit.Detail("gatewayConnected", s.gatewaysConnected(gateways) != nil))
 	return resp, err
 }
 
@@ -299,6 +359,23 @@ func (s *AgentAPIKeyService) IssueTestAPIKey(
 			log.Info("IssueTestAPIKey: created", "keyName", keyName, "org", ouID, "agent", agentName, "env", envID, "expiresAt", expiresAt)
 		}
 	}
+	// Recorded after the fact rather than fail-closed: a console test key is
+	// short-lived and scoped to the requesting user, so refusing the Try-It
+	// flow when the trail is unavailable would cost more than it protects.
+	audit.Record(
+		ctx, audit.ActionAPIKeyIssueTest,
+		audit.Org(ouID),
+		audit.ResourceNamed(audit.ResourceAPIKey, artifactUUID, keyName),
+		audit.Project(projectName),
+		audit.Environment(envID),
+		audit.Detail("ownerType", audit.APIKeyOwnerAgent),
+		audit.Detail("ownerName", agentName),
+		audit.Detail("keyName", keyName),
+		audit.Detail("expiresAt", expiresAt),
+		audit.Detail("rotated", existing != nil),
+		audit.Result(err),
+	)
+
 	if err != nil {
 		return nil, err
 	}

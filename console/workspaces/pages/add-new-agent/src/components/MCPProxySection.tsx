@@ -16,7 +16,7 @@
  * under the License.
  */
 
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DrawerContent,
   DrawerHeader,
@@ -26,6 +26,7 @@ import {
   Accordion,
   AccordionDetails,
   AccordionSummary,
+  Alert,
   Avatar,
   Box,
   Button,
@@ -36,6 +37,7 @@ import {
   IconButton,
   ListingTable,
   SearchBar,
+  Skeleton,
   Stack,
   Tab,
   Tabs,
@@ -59,7 +61,16 @@ import {
   useListMCPProxies,
 } from "@agent-management-platform/api-client";
 import { absoluteRouteMap } from "@agent-management-platform/types";
+import {
+  EnvironmentVariablesReference,
+  useMCPProxySecurity,
+} from "@agent-management-platform/shared-component";
 import type { MCPProxyFormEntry } from "../form/schema";
+import {
+  defaultMCPApiKeyVarName,
+  defaultMCPUrlVarName,
+  mcpEntryVarNames,
+} from "../utils/mcpEnvVarNames";
 
 interface ProxyInfo {
   id: string;
@@ -119,8 +130,9 @@ interface EntryCardProps {
   entry: MCPProxyFormEntry;
   index: number;
   proxies: ProxyInfo[];
-  environments: { name: string; displayName?: string }[];
+  environments: { name: string; displayName?: string; id?: string }[];
   agentNameUpper: string;
+  orgId?: string;
   usedVarNames: Set<string>;
   onOpenDrawer: (index: number, envName: string) => void;
   onRemove: (index: number) => void;
@@ -133,6 +145,7 @@ const EntryCard: React.FC<EntryCardProps> = ({
   proxies,
   environments,
   agentNameUpper,
+  orgId,
   usedVarNames,
   onOpenDrawer,
   onRemove,
@@ -142,12 +155,66 @@ const EntryCard: React.FC<EntryCardProps> = ({
 
   const selectedEnvName = environments[selectedEnvIndex]?.name ?? "";
   const selectedEnvLabel = environments[selectedEnvIndex]?.displayName ?? selectedEnvName;
+  const selectedEnvUuid = environments[selectedEnvIndex]?.id;
   const currentEnvProxyId = entry.selectedProxyByEnv[selectedEnvName]?.id ?? null;
+
+  // Which runtime variables this binding actually needs. Scoped to the selected
+  // environment's endpoint, matching how the server resolves MCP security; falls
+  // back to the every-endpoint rule when the environment carries no uuid.
+  const {
+    authenticationType,
+    spec,
+    isLoading: isSecurityLoading,
+    isResolved: isSecurityResolved,
+  } = useMCPProxySecurity({
+    orgName: orgId,
+    proxyId: currentEnvProxyId,
+    environmentUuid: selectedEnvUuid,
+  });
+  const showApiKeyField = spec.editableKeys.includes("apikey");
+  // A failed fetch reports "" (unsecured) just like a genuinely open endpoint.
+  // Acting on that would hide the API key field for a proxy that needs one, so
+  // treat unresolved as unknown and say so.
+  const isSecurityUnknown = !isSecurityLoading && !isSecurityResolved;
+
+  // The resolved security owns apikeyVarName: only an API-key endpoint gets a
+  // default name, and any other kind has it cleared. Keeping the name absent
+  // until the proxy resolves means a submit that races the fetch omits the
+  // variable rather than sending one the platform would inject empty.
+  useEffect(() => {
+    if (isSecurityLoading || !isSecurityResolved) return;
+    const nextApikeyVarName = showApiKeyField
+      ? (entry.apikeyVarName ?? defaultMCPApiKeyVarName(agentNameUpper, index))
+      : undefined;
+    if (
+      entry.authenticationType === authenticationType &&
+      entry.apikeyVarName === nextApikeyVarName
+    ) {
+      return;
+    }
+    onUpdateEntry(index, {
+      ...entry,
+      authenticationType,
+      apikeyVarName: nextApikeyVarName,
+    });
+  }, [
+    isSecurityLoading,
+    isSecurityResolved,
+    authenticationType,
+    showApiKeyField,
+    agentNameUpper,
+    entry,
+    index,
+    onUpdateEntry,
+  ]);
 
   // Flag when the URL and API key variable names within this same card are identical.
   // usedVarNames excludes the active entry, so this same-entry clash is checked separately.
+  // Only meaningful while both fields exist.
   const sameEntryNameCollision =
-    entry.urlVarName !== undefined && entry.urlVarName === entry.apikeyVarName;
+    showApiKeyField &&
+    entry.urlVarName !== undefined &&
+    entry.urlVarName === entry.apikeyVarName;
 
   const firstProxyEntry = Object.values(entry.selectedProxyByEnv).find(
     (e): e is { id: string; name: string } => e !== null && e !== undefined,
@@ -264,6 +331,15 @@ const EntryCard: React.FC<EntryCardProps> = ({
                   }
                 />
               </Form.ElementWrapper>
+              {/*
+                * Whether this slot is an API key input at all depends on the
+                * proxy's security — only an API-key endpoint has one — so hold it
+                * until that resolves rather than render a field we are about to
+                * remove. The URL variable is needed either way and never waits.
+                */}
+              {isSecurityLoading ? (
+                <Skeleton variant="rounded" height={40} sx={{ flex: 1 }} />
+              ) : isSecurityUnknown || !showApiKeyField ? null : (
               <Form.ElementWrapper label="API key variable name" name="apikeyVarName">
                 <TextField
                   size="small"
@@ -288,7 +364,23 @@ const EntryCard: React.FC<EntryCardProps> = ({
                   }
                 />
               </Form.ElementWrapper>
+              )}
             </Stack>
+            {isSecurityUnknown && (
+              <Alert severity="error" sx={{ mt: 2 }}>
+                Couldn&apos;t load this MCP server&apos;s security settings, so the
+                runtime variables it needs are unknown. Reselect the server or
+                retry once it is reachable — saving now could leave the agent
+                without a credential it needs.
+              </Alert>
+            )}
+            {!isSecurityLoading && !isSecurityUnknown && spec.referenceRows.length > 0 && (
+              <EnvironmentVariablesReference
+                title="Injected at runtime"
+                description="This MCP server uses OAuth (AgentID) security, so there is no API key to name. These values are injected into the agent's pod at runtime alongside the URL above; their names are fixed, only their values change per environment."
+                rows={spec.referenceRows}
+              />
+            )}
           </Box>
         </Stack>
       </AccordionDetails>
@@ -404,8 +496,9 @@ export const MCPProxySection: React.FC<MCPProxySectionProps> = ({
             ...prev,
             {
               selectedProxyByEnv,
-              urlVarName: `${agentNameUpper}_MCP_${newIndex + 1}_URL`,
-              apikeyVarName: `${agentNameUpper}_MCP_${newIndex + 1}_API_KEY`,
+              urlVarName: defaultMCPUrlVarName(agentNameUpper, newIndex),
+              // apikeyVarName is filled in by EntryCard once the proxy's security
+              // resolves, and only when the endpoint actually uses an API key.
             },
           ];
         } else {
@@ -419,6 +512,15 @@ export const MCPProxySection: React.FC<MCPProxySectionProps> = ({
               ...entry.selectedProxyByEnv,
               [drawerEnvName]: { id: proxyId, name: proxyName },
             },
+            // The new proxy's security hasn't resolved yet. Carrying over the
+            // previous proxy's authenticationType/apikeyVarName would let
+            // hasUnresolvedMCPSecurity — which keys off authenticationType
+            // being undefined — miss this resolve window, and a submit during
+            // it could carry the old proxy's api key name onto a proxy that
+            // may not use one (issue #1597). EntryCard's effect repopulates
+            // both once the newly selected proxy's security resolves.
+            authenticationType: undefined,
+            apikeyVarName: undefined,
           };
           return updated;
         }
@@ -467,10 +569,7 @@ export const MCPProxySection: React.FC<MCPProxySectionProps> = ({
         {mcpProxies.map((entry, index) => {
           const usedVarNames = new Set([
             ...mcpProxies.flatMap((e, i) =>
-              i === index ? [] : [
-                e.urlVarName ?? `${agentNameUpper}_MCP_${i + 1}_URL`,
-                e.apikeyVarName ?? `${agentNameUpper}_MCP_${i + 1}_API_KEY`,
-              ],
+              i === index ? [] : mcpEntryVarNames(e, i, agentNameUpper),
             ),
             ...Array.from(externalEnvKeys),
           ]);
@@ -482,6 +581,7 @@ export const MCPProxySection: React.FC<MCPProxySectionProps> = ({
               proxies={proxies}
               environments={targetEnvironments}
               agentNameUpper={agentNameUpper}
+              orgId={orgId}
               usedVarNames={usedVarNames}
               onOpenDrawer={handleOpenDrawer}
               onRemove={handleRemoveEntry}

@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/thundersvc"
 	"github.com/wso2/agent-manager/agent-manager-service/config"
 	"github.com/wso2/agent-manager/agent-manager-service/constants"
@@ -180,25 +181,42 @@ func (c *identityController) CreateUser(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	ouID := resolvedOrg.OUID
-	if body.OuId != nil && *body.OuId != "" {
-		ouID = *body.OuId
-	}
-
-	// Convert spec.CreateUserRequest to thundersvc.CreateUserRequest
+	// Convert spec.CreateUserRequest to thundersvc.CreateUserRequest. The OU comes
+	// from the token-resolved org only; a body-supplied one would let a caller
+	// create users in another tenant's OU.
 	req := thundersvc.CreateUserRequest{
-		OuID:       ouID,
+		OuID:       resolvedOrg.OUID,
 		Type:       body.Type,
 		Attributes: body.Attributes,
 		Password:   password,
 	}
 
+	// The attributes map is free-form and is known to carry a password, so only
+	// its key names and shape are recorded — never a value. See
+	// audit.AttributeKeySummary.
+	attrKeys, attrCount, hasSensitive := audit.AttributeKeySummary(body.Attributes)
+	attempt, ok := beginAuditOrFail(
+		w, r, "CreateUser", "Failed to create user", audit.ActionUserCreate,
+		audit.Org(resolvedOrg.OUID), audit.OrgHandle(resolvedOrg.OuHandle),
+		audit.ResourceNamed(audit.ResourceUser, body.Attributes["username"], body.Attributes["username"]),
+		audit.Detail("username", body.Attributes["username"]),
+		audit.Detail("userType", body.Type),
+		audit.Detail("attributeKeys", attrKeys),
+		audit.Detail("attributeCount", attrCount),
+		audit.Detail("containsSensitiveKey", hasSensitive),
+	)
+	if !ok {
+		return
+	}
+
 	user, err := c.client.CreateUser(ctx, req)
 	if err != nil {
+		attempt.Complete(ctx, err)
 		log.Error("CreateUser failed", "username", body.Attributes["username"], "error", err)
 		utils.WriteErrorResponse(w, http.StatusInternalServerError, "Failed to create user")
 		return
 	}
+	attempt.Complete(ctx, nil)
 	utils.WriteSuccessResponse(w, http.StatusCreated, user)
 }
 
@@ -238,8 +256,14 @@ func (c *identityController) UpdateUser(w http.ResponseWriter, r *http.Request) 
 	if body.Attributes != nil {
 		attrs = *body.Attributes
 	}
+	// This endpoint only updates attributes (spec.UpdateUserRequest has no type/ouId field), so
+	// Type and OuID are carried over from the existing user record fetched above. Thunder's PUT
+	// /users/{id} is a full-replace operation that requires a valid type on every call; leaving
+	// it empty here fails with "user type not found" rather than preserving the existing type.
 	req := thundersvc.UpdateUserRequest{
 		Attributes: attrs,
+		Type:       user.Type,
+		OuID:       user.OuID,
 	}
 
 	updatedUser, err := c.client.UpdateUser(ctx, userID, req)
@@ -281,7 +305,18 @@ func (c *identityController) DeleteUser(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	attempt, ok := beginAuditOrFail(
+		w, r, "DeleteUser", "Failed to delete user", audit.ActionUserDelete,
+		audit.Org(resolvedOrg.OUID), audit.OrgHandle(resolvedOrg.OuHandle),
+		audit.ResourceNamed(audit.ResourceUser, userID, userIdentifier(user)),
+		audit.Detail("username", userIdentifier(user)),
+	)
+	if !ok {
+		return
+	}
+
 	if err := c.client.DeleteUser(ctx, userID); err != nil {
+		attempt.Complete(ctx, err)
 		if thundersvc.IsNotFound(err) {
 			utils.WriteErrorResponse(w, http.StatusNotFound, "User not found")
 			return
@@ -290,6 +325,7 @@ func (c *identityController) DeleteUser(w http.ResponseWriter, r *http.Request) 
 		utils.WriteErrorResponse(w, http.StatusInternalServerError, "Failed to delete user")
 		return
 	}
+	attempt.Complete(ctx, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -394,12 +430,27 @@ func (c *identityController) InviteUser(w http.ResponseWriter, r *http.Request) 
 	if !config.GetConfig().IsOnPremDeployment {
 		ouIDForInvite = resolvedOrg.OUID
 	}
+	// The invite link grants org access to whoever holds it, so an invite is a
+	// membership change and is refused when it cannot be recorded. The link
+	// itself is never recorded.
+	attempt, ok := beginAuditOrFail(
+		w, r, "InviteUser", "Failed to invite user", audit.ActionUserInvite,
+		audit.Org(resolvedOrg.OUID), audit.OrgHandle(resolvedOrg.OuHandle),
+		audit.ResourceNamed(audit.ResourceUser, body.Email, body.Email),
+		audit.Detail("email", body.Email),
+	)
+	if !ok {
+		return
+	}
+
 	inviteLink, err := c.client.InviteUser(ctx, body.Email, ouIDForInvite)
 	if err != nil {
+		attempt.Complete(ctx, err)
 		log.Error("InviteUser failed", "ouID", resolvedOrg.OUID, "error", err)
 		utils.WriteErrorResponse(w, http.StatusInternalServerError, "Failed to invite user")
 		return
 	}
+	attempt.Complete(ctx, nil)
 	utils.WriteSuccessResponse(w, http.StatusOK, map[string]string{"inviteLink": inviteLink})
 }
 
@@ -500,19 +551,16 @@ func (c *identityController) CreateGroup(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	ouID := resolvedOrg.OUID
-	if body.OuId != nil && *body.OuId != "" {
-		ouID = *body.OuId
-	}
-
 	description := ""
 	if body.Description != nil {
 		description = *body.Description
 	}
 
+	// The OU comes from the token-resolved org only; a body-supplied one would let
+	// a caller create groups in another tenant's OU.
 	req := thundersvc.CreateGroupRequest{
 		Name:        body.Name,
-		OuID:        ouID,
+		OuID:        resolvedOrg.OUID,
 		Description: description,
 	}
 
@@ -665,11 +713,25 @@ func (c *identityController) AddGroupMembers(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	attempt, ok := beginAuditOrFail(
+		w, r, "AddGroupMembers", "Failed to add group members", audit.ActionGroupAddMember,
+		audit.Org(resolvedOrg.OUID), audit.OrgHandle(resolvedOrg.OuHandle),
+		audit.ResourceNamed(audit.ResourceGroup, groupID, group.Name),
+		audit.Detail("groupName", group.Name),
+		audit.Detail("members", req.UserIDs),
+		audit.Detail("memberCount", len(req.UserIDs)),
+	)
+	if !ok {
+		return
+	}
+
 	if err := c.client.AddGroupMembers(ctx, groupID, req.UserIDs); err != nil {
+		attempt.Complete(ctx, err)
 		log.Error("AddGroupMembers failed", "groupID", groupID, "error", err)
 		utils.WriteErrorResponse(w, http.StatusInternalServerError, "Failed to add group members")
 		return
 	}
+	attempt.Complete(ctx, nil)
 	utils.WriteSuccessResponse(w, http.StatusOK, struct{}{})
 }
 
@@ -715,11 +777,25 @@ func (c *identityController) RemoveGroupMembers(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	attempt, ok := beginAuditOrFail(
+		w, r, "RemoveGroupMembers", "Failed to remove group members", audit.ActionGroupRemoveMember,
+		audit.Org(resolvedOrg.OUID), audit.OrgHandle(resolvedOrg.OuHandle),
+		audit.ResourceNamed(audit.ResourceGroup, groupID, group.Name),
+		audit.Detail("groupName", group.Name),
+		audit.Detail("members", req.UserIDs),
+		audit.Detail("memberCount", len(req.UserIDs)),
+	)
+	if !ok {
+		return
+	}
+
 	if err := c.client.RemoveGroupMembers(ctx, groupID, req.UserIDs); err != nil {
+		attempt.Complete(ctx, err)
 		log.Error("RemoveGroupMembers failed", "groupID", groupID, "error", err)
 		utils.WriteErrorResponse(w, http.StatusInternalServerError, "Failed to remove group members")
 		return
 	}
+	attempt.Complete(ctx, nil)
 	utils.WriteSuccessResponse(w, http.StatusOK, struct{}{})
 }
 
@@ -836,9 +912,10 @@ func (c *identityController) ListRoles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The OU-scoped ListRoles already restricts to the caller's OU and hides
-	// Thunder's native Administrator role (thundersvc.NativeAdministratorRoleName),
-	// so its total is the true post-filter count; only the display-only
-	// IsReadOnly flag is computed here.
+	// Thunder's native Administrator role and the AMP system-client role
+	// (thundersvc.NativeAdministratorRoleName, AMPSystemClientRoleName), so its
+	// total is the true post-filter count; only the display-only IsReadOnly
+	// flag is computed here.
 	for i := range roles {
 		roles[i].IsReadOnly = constants.IsPredefinedRole(roles[i].Name)
 	}
@@ -899,19 +976,16 @@ func (c *identityController) CreateRole(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	ouID := resolvedOrg.OUID
-	if body.OuId != nil && *body.OuId != "" {
-		ouID = *body.OuId
-	}
-
 	description := ""
 	if body.Description != nil {
 		description = *body.Description
 	}
 
+	// The OU comes from the token-resolved org only; a body-supplied one would let
+	// a caller create roles in another tenant's OU.
 	req := thundersvc.CreateRoleRequest{
 		Name:        body.Name,
-		OuID:        ouID,
+		OuID:        resolvedOrg.OUID,
 		Description: description,
 	}
 
@@ -1086,17 +1160,39 @@ func (c *identityController) AddRolePermissions(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	if !validatePredefinedRole(w, role.Name) {
+		return
+	}
+
 	var req thundersvc.RolePermissionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.WriteErrorResponse(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
+	// The granted scopes are recorded in full. This is the privilege-escalation
+	// path, and a record naming only the role cannot answer "who granted what
+	// to whom" — which is the question this event exists for.
+	attempt, ok := beginAuditOrFail(
+		w, r, "AddRolePermissions", "Failed to add role permissions", audit.ActionRoleGrantPermission,
+		audit.Org(resolvedOrg.OUID), audit.OrgHandle(resolvedOrg.OuHandle),
+		audit.ResourceNamed(audit.ResourceRole, roleID, role.Name),
+		audit.Detail("roleName", role.Name),
+		audit.Detail("permissions", req.Permissions),
+		audit.Detail("permissionCount", len(req.Permissions)),
+		audit.Detail("resourceServerId", req.ResourceServerID),
+	)
+	if !ok {
+		return
+	}
+
 	if err := c.client.AddRolePermissions(ctx, roleID, req); err != nil {
+		attempt.Complete(ctx, err)
 		log.Error("AddRolePermissions failed", "roleID", roleID, "error", err)
 		utils.WriteErrorResponse(w, http.StatusInternalServerError, "Failed to add role permissions")
 		return
 	}
+	attempt.Complete(ctx, nil)
 	utils.WriteSuccessResponse(w, http.StatusOK, struct{}{})
 }
 
@@ -1126,17 +1222,36 @@ func (c *identityController) RemoveRolePermissions(w http.ResponseWriter, r *htt
 		return
 	}
 
+	if !validatePredefinedRole(w, role.Name) {
+		return
+	}
+
 	var req thundersvc.RolePermissionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.WriteErrorResponse(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
+	attempt, ok := beginAuditOrFail(
+		w, r, "RemoveRolePermissions", "Failed to remove role permissions", audit.ActionRoleRevokePermission,
+		audit.Org(resolvedOrg.OUID), audit.OrgHandle(resolvedOrg.OuHandle),
+		audit.ResourceNamed(audit.ResourceRole, roleID, role.Name),
+		audit.Detail("roleName", role.Name),
+		audit.Detail("permissions", req.Permissions),
+		audit.Detail("permissionCount", len(req.Permissions)),
+		audit.Detail("resourceServerId", req.ResourceServerID),
+	)
+	if !ok {
+		return
+	}
+
 	if err := c.client.RemoveRolePermissions(ctx, roleID, req); err != nil {
+		attempt.Complete(ctx, err)
 		log.Error("RemoveRolePermissions failed", "roleID", roleID, "error", err)
 		utils.WriteErrorResponse(w, http.StatusInternalServerError, "Failed to remove role permissions")
 		return
 	}
+	attempt.Complete(ctx, nil)
 	utils.WriteSuccessResponse(w, http.StatusOK, struct{}{})
 }
 
@@ -1172,11 +1287,27 @@ func (c *identityController) AddRoleAssignees(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	assigneeIDs, assigneeTypes := assignmentSummary(req.Assignments)
+	attempt, ok := beginAuditOrFail(
+		w, r, "AddRoleAssignees", "Failed to add role assignees", audit.ActionRoleAssign,
+		audit.Org(resolvedOrg.OUID), audit.OrgHandle(resolvedOrg.OuHandle),
+		audit.ResourceNamed(audit.ResourceRole, roleID, role.Name),
+		audit.Detail("roleName", role.Name),
+		audit.Detail("assignees", assigneeIDs),
+		audit.Detail("assigneeTypes", assigneeTypes),
+		audit.Detail("assigneeCount", len(req.Assignments)),
+	)
+	if !ok {
+		return
+	}
+
 	if err := c.client.AddRoleAssignees(ctx, roleID, req); err != nil {
+		attempt.Complete(ctx, err)
 		log.Error("AddRoleAssignees failed", "roleID", roleID, "error", err)
 		utils.WriteErrorResponse(w, http.StatusInternalServerError, "Failed to add role assignees")
 		return
 	}
+	attempt.Complete(ctx, nil)
 	utils.WriteSuccessResponse(w, http.StatusOK, struct{}{})
 }
 
@@ -1212,11 +1343,27 @@ func (c *identityController) RemoveRoleAssignees(w http.ResponseWriter, r *http.
 		return
 	}
 
+	assigneeIDs, assigneeTypes := assignmentSummary(req.Assignments)
+	attempt, ok := beginAuditOrFail(
+		w, r, "RemoveRoleAssignees", "Failed to remove role assignees", audit.ActionRoleUnassign,
+		audit.Org(resolvedOrg.OUID), audit.OrgHandle(resolvedOrg.OuHandle),
+		audit.ResourceNamed(audit.ResourceRole, roleID, role.Name),
+		audit.Detail("roleName", role.Name),
+		audit.Detail("assignees", assigneeIDs),
+		audit.Detail("assigneeTypes", assigneeTypes),
+		audit.Detail("assigneeCount", len(req.Assignments)),
+	)
+	if !ok {
+		return
+	}
+
 	if err := c.client.RemoveRoleAssignees(ctx, roleID, req); err != nil {
+		attempt.Complete(ctx, err)
 		log.Error("RemoveRoleAssignees failed", "roleID", roleID, "error", err)
 		utils.WriteErrorResponse(w, http.StatusInternalServerError, "Failed to remove role assignees")
 		return
 	}
+	attempt.Complete(ctx, nil)
 	utils.WriteSuccessResponse(w, http.StatusOK, struct{}{})
 }
 
@@ -1346,8 +1493,11 @@ func (c *identityController) UpdateCurrentUserProfile(w http.ResponseWriter, r *
 		return
 	}
 
-	// Only include known schema fields
-	knownFields := map[string]bool{"username": true, "given_name": true, "family_name": true, "email": true, "password": true}
+	// password is deliberately excluded from knownFields here: Thunder's regular update
+	// endpoint rejects a password field with USR-1028 "Credential update not allowed" —
+	// credential changes are only accepted through the dedicated update-credentials
+	// endpoint (see the newPassword handling below).
+	knownFields := map[string]bool{"username": true, "given_name": true, "family_name": true, "email": true}
 
 	// Start with existing attributes from current user
 	attrs := make(map[string]string)
@@ -1361,11 +1511,13 @@ func (c *identityController) UpdateCurrentUserProfile(w http.ResponseWriter, r *
 		}
 	}
 
-	// Override with new attributes from request
+	var newPassword string
 	if body.Attributes != nil {
 		for k, v := range *body.Attributes {
 			if knownFields[k] {
 				attrs[k] = v
+			} else if k == "password" {
+				newPassword = v
 			}
 		}
 	}
@@ -1387,6 +1539,14 @@ func (c *identityController) UpdateCurrentUserProfile(w http.ResponseWriter, r *
 		log.Error("UpdateCurrentUserProfile failed", "userID", userID, "error", err)
 		utils.WriteErrorResponse(w, http.StatusInternalServerError, "Failed to update user profile")
 		return
+	}
+
+	if newPassword != "" {
+		if err := c.client.UpdateUserCredentials(ctx, userID, newPassword); err != nil {
+			log.Error("UpdateCurrentUserProfile: password update failed", "userID", userID, "ouID", resolvedOrg.OUID, "error", err)
+			utils.WriteErrorResponse(w, http.StatusInternalServerError, "Profile updated, but password change failed")
+			return
+		}
 	}
 
 	sanitizedResponse := sanitizeAttributesForLogging(updatedUser.Attributes)
@@ -1473,29 +1633,61 @@ func validateSystemGroup(w http.ResponseWriter, groupName string) bool {
 	return true
 }
 
-// validateReservedName rejects a request that would claim a name Thunder
-// reserves for one of its seeded principals, which would shadow the hidden
-// system resource and confuse an operator about which one grants admin.
+// validateReservedName rejects a request that would claim a name Thunder or our
+// own bootstrap reserves for one of its seeded principals, which would shadow the
+// hidden system resource and confuse an operator about which one grants admin.
 //
 // Callers pass the *requested* name, never the resource's current one — that is
 // validateSystemGroup/validatePredefinedRole's job. An absent name means the
 // caller is not renaming, and passes.
-func validateReservedName(w http.ResponseWriter, requested, reserved, kind string) bool {
-	if requested == reserved {
-		utils.WriteErrorResponse(w, http.StatusBadRequest,
-			fmt.Sprintf("%q is a reserved %s name", reserved, kind))
-		return false
+func validateReservedName(w http.ResponseWriter, requested string, reserved []string, kind string) bool {
+	for _, r := range reserved {
+		if requested == r {
+			utils.WriteErrorResponse(w, http.StatusBadRequest,
+				fmt.Sprintf("%q is a reserved %s name", r, kind))
+			return false
+		}
 	}
 	return true
 }
 
 func validateReservedGroupName(w http.ResponseWriter, groupName string) bool {
-	return validateReservedName(w, groupName, thundersvc.NativeAdministratorsGroupName, "group")
+	return validateReservedName(w, groupName, []string{thundersvc.NativeAdministratorsGroupName}, "group")
 }
 
 // validateReservedRoleName complements validatePredefinedRole, which only
 // inspects a role's current name — without this an ordinary role could be
-// renamed to Administrator.
+// renamed to Administrator or AMP System Client Thunder Admin.
 func validateReservedRoleName(w http.ResponseWriter, roleName string) bool {
-	return validateReservedName(w, roleName, thundersvc.NativeAdministratorRoleName, "role")
+	return validateReservedName(w, roleName,
+		[]string{thundersvc.NativeAdministratorRoleName, thundersvc.AMPSystemClientRoleName}, "role")
+}
+
+// assignmentSummary flattens role assignments into parallel id and type lists
+// for an audit record. Principal ids and types are identifiers, not secrets,
+// and "which principals were assigned" is the point of the event.
+func assignmentSummary(assignments []thundersvc.AssignmentEntry) (ids, types []string) {
+	ids = make([]string, 0, len(assignments))
+	types = make([]string, 0, len(assignments))
+	for _, a := range assignments {
+		ids = append(ids, a.ID)
+		types = append(types, a.Type)
+	}
+	return ids, types
+}
+
+// userIdentifier returns the most useful human-readable handle for a user in an
+// audit record, falling back through the attributes Thunder populates.
+func userIdentifier(user *thundersvc.ThunderUser) string {
+	if user == nil {
+		return ""
+	}
+	for _, key := range []string{"username", "email", "userName"} {
+		// Attributes is a free-form map, so a non-string value is possible and
+		// must not panic on the audit path.
+		if v, ok := user.Attributes[key].(string); ok && v != "" {
+			return v
+		}
+	}
+	return user.ID
 }

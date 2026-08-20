@@ -47,14 +47,15 @@ import {
   useUpsertIdentityProvider,
 } from "@agent-management-platform/api-client";
 import {
-  getAmpVersionHelm,
-  getRawScriptUrl,
-} from "@agent-management-platform/shared-component";
-import {
   globalConfig,
   type GatewayEnvironmentResponse,
   type IdentityProvider,
 } from "@agent-management-platform/types";
+import {
+  getAgentManagerUrl,
+  getAmpVersionHelm,
+  getRawScriptUrl,
+} from "@agent-management-platform/shared-component";
 
 const SCRIPT_NAME = "manage-identity-provider.sh";
 const TOKEN_MASK = "•••••••••••••••";
@@ -80,7 +81,7 @@ interface ManageIdentityProviderDialogProps {
   } | null;
 }
 
-interface ScriptInputs {
+export interface ScriptInputs {
   orgId: string;
   envName: string;
   gatewayId: string;
@@ -92,7 +93,12 @@ interface ScriptInputs {
   token: string;
 }
 
-function buildScript(i: ScriptInputs): string {
+/** Quote a value as one POSIX shell word without evaluating metacharacters. */
+export function quoteShellWord(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+export function buildScript(i: ScriptInputs): string {
   // The dev-container quickstart and a real cluster both install the gateway
   // extension from the same OCI chart, so one command works for both: curl the
   // release-pinned script and upgrade the OCI chart at the deployed version.
@@ -100,18 +106,19 @@ function buildScript(i: ScriptInputs): string {
     i.mode === "delete"
       ? ["    ACTION=delete \\"]
       : [
-          `    IDP_ISSUER=${i.issuer || "<issuer>"} \\`,
-          `    IDP_JWKS_URI=${i.jwksUri || "<jwks-uri>"} \\`,
+          `    IDP_ISSUER=${quoteShellWord(i.issuer || "<issuer>")} \\`,
+          `    IDP_JWKS_URI=${quoteShellWord(i.jwksUri || "<jwks-uri>")} \\`,
           ...(i.skipTlsVerify ? ["    IDP_SKIP_TLS_VERIFY=true \\"] : []),
         ];
   const lines = [
-    `curl -fsSL ${getRawScriptUrl(SCRIPT_NAME)} \\`,
-    `  | ORG_NAME=${i.orgId || "<org>"} \\`,
-    `    ENV_NAME=${i.envName || "<env-name>"} \\`,
-    `    GATEWAY_ID=${i.gatewayId || "<gateway-id>"} \\`,
-    `    AGENT_MANAGER_TOKEN=${i.token} \\`,
-    `    CHART_VERSION=${getAmpVersionHelm()} \\`,
-    `    IDP_NAME=${i.name || "<identity-provider-name>"} \\`,
+    `curl -fsSL ${quoteShellWord(getRawScriptUrl(SCRIPT_NAME))} \\`,
+    `  | ORG_NAME=${quoteShellWord(i.orgId || "<org>")} \\`,
+    `    ENV_NAME=${quoteShellWord(i.envName || "<env-name>")} \\`,
+    `    GATEWAY_ID=${quoteShellWord(i.gatewayId || "<gateway-id>")} \\`,
+    `    AGENT_MANAGER_TOKEN=${quoteShellWord(i.token)} \\`,
+    `    AGENT_MANAGER_URL=${quoteShellWord(getAgentManagerUrl())} \\`,
+    `    CHART_VERSION=${quoteShellWord(getAmpVersionHelm())} \\`,
+    `    IDP_NAME=${quoteShellWord(i.name || "<identity-provider-name>")} \\`,
     ...actionEnvLines,
     "    bash",
   ];

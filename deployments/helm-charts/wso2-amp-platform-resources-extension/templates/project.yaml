@@ -9,5 +9,9 @@ metadata:
   labels:
     openchoreo.dev/name: {{ .Values.project.name }}
 spec:
+  # OpenChoreo 1.2.0+ requires spec.type — a reference to a (Cluster)ProjectType.
+  type:
+    kind: ClusterProjectType
+    name: {{ .Values.projectType.name }}
   deploymentPipelineRef:
     name: {{ .Values.deploymentPipeline.name }}

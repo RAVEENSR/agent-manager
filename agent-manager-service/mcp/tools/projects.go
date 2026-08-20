@@ -24,6 +24,7 @@ import (
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/rbac"
 	"github.com/wso2/agent-manager/agent-manager-service/spec"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
@@ -58,7 +59,7 @@ func (t *Toolsets) registerProjectTools(server *gomcp.Server, reg *toolRegistry)
 			"limit":  intProperty(fmt.Sprintf("Optional. Max projects to return (default %d, min %d, max %d).", utils.DefaultLimit, utils.MinLimit, utils.MaxLimit)),
 			"offset": intProperty(fmt.Sprintf("Optional. Pagination offset (default %d, min %d).", utils.DefaultOffset, utils.MinOffset)),
 		}, nil),
-	}, listProjects(t.ProjectToolset), rbac.ProjectRead)
+	}, audit.ActionProjectRead, listProjects(t.ProjectToolset), rbac.ProjectRead)
 
 	addTool(reg, server, &gomcp.Tool{
 		Name: "create_project",
@@ -69,7 +70,7 @@ func (t *Toolsets) registerProjectTools(server *gomcp.Server, reg *toolRegistry)
 			"display_name": stringProperty("Required. Project display name."),
 			"description":  stringProperty("Optional. Project description."),
 		}, []string{"project_name", "display_name"}),
-	}, createProject(t.ProjectToolset), rbac.ProjectCreate)
+	}, audit.ActionProjectCreate, createProject(t.ProjectToolset), rbac.ProjectCreate)
 }
 
 func listProjects(handler ProjectToolsetHandler) func(context.Context, *gomcp.CallToolRequest, listProjectsInput) (*gomcp.CallToolResult, any, error) {

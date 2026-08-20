@@ -62,6 +62,9 @@ import type {
   CreateEnvironmentRequest,
   CreateEnvironmentPathParams,
   DeleteEnvironmentPathParams,
+  CheckThunderUrlAvailabilityPathParams,
+  CheckThunderUrlAvailabilityQuery,
+  ThunderUrlAvailabilityResponse,
 } from '@agent-management-platform/types';
 
 
@@ -231,6 +234,21 @@ export async function listDataPlanes(params: ListDataPlanesPathParams, getToken?
     const res = await httpGET(
         `${SERVICE_BASE}/orgs/${encodeURIComponent(orgName)}/data-planes`,
         { token },
+    );
+    if (!res.ok) throw await res.json();
+    return res.json();
+}
+
+// Advisory-only pre-flight check for the Create Environment drawer's Thunder
+// URL handle field — see ThunderUrlAvailabilityResponse's doc comment.
+// eslint-disable-next-line max-len
+export async function checkThunderUrlAvailability(params: CheckThunderUrlAvailabilityPathParams, query: CheckThunderUrlAvailabilityQuery, getToken?: () => Promise<string>)
+: Promise<ThunderUrlAvailabilityResponse> {
+    const { orgName = "default" } = params;
+    const token = getToken ? await getToken() : undefined;
+    const res = await httpGET(
+        `${SERVICE_BASE}/orgs/${encodeURIComponent(orgName)}/thunder-url-availability`,
+        { searchParams: { handle: query.handle }, token },
     );
     if (!res.ok) throw await res.json();
     return res.json();

@@ -39,6 +39,7 @@ import {
   TextField,
 } from "@wso2/oxygen-ui";
 import { Eye, EyeOff } from "@wso2/oxygen-ui-icons-react";
+import { ResilienceTimeoutFields } from "@agent-management-platform/shared-component";
 
 const MASKED_CREDENTIAL_VALUE = "••••••••••••";
 
@@ -47,12 +48,19 @@ const providerEndpointSchema = z
   .min(1, "Provider Endpoint is required")
   .url("Please enter a valid URL");
 
+const DURATION_PATTERN = /^\d+(ms|s|m|h)$/;
+
+const resilienceTimeoutSchema = z
+  .string()
+  .refine((value) => value.trim() === "" || DURATION_PATTERN.test(value.trim()), {
+    message: "Enter a duration like 5s, 500ms, or 1m",
+  });
+
 const AUTH_TYPE_API_KEY = "api-key";
 
+// "bearer" and "basic" are absent from the gateway's upstream auth enum, so they never deploy.
 const AUTH_TYPE_OPTIONS: { value: UpstreamAuthType; label: string }[] = [
   { value: "api-key", label: "API Key" },
-  { value: "bearer", label: "Bearer" },
-  { value: "basic", label: "Basic" },
   { value: "none", label: "None" },
 ];
 
@@ -81,11 +89,17 @@ export function LLMProviderConnectionTab({
   const [credentialValue, setCredentialValue] = useState("");
   const [isCredentialMasked, setIsCredentialMasked] = useState(false);
   const [showCredential, setShowCredential] = useState(false);
+  const [resilienceTimeout, setResilienceTimeout] = useState("");
+  const [resilienceIdleTimeout, setResilienceIdleTimeout] = useState("");
   const [status, setStatus] = useState<{
     message: string;
     severity: "success" | "error";
   } | null>(null);
   const [endpointError, setEndpointError] = useState<string | null>(null);
+  const [resilienceTimeoutError, setResilienceTimeoutError] = useState<string | null>(null);
+  const [resilienceIdleTimeoutError, setResilienceIdleTimeoutError] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
     if (!providerData) return;
@@ -99,7 +113,11 @@ export function LLMProviderConnectionTab({
     setAuthenticationHeader(providerData.upstream?.main?.auth?.header ?? "");
     setCredentialValue(MASKED_CREDENTIAL_VALUE);
     setIsCredentialMasked(true);
+    setResilienceTimeout(providerData.resilience?.timeout ?? "");
+    setResilienceIdleTimeout(providerData.resilience?.idleTimeout ?? "");
     setEndpointError(null);
+    setResilienceTimeoutError(null);
+    setResilienceIdleTimeoutError(null);
   }, [providerData]);
 
   const isDirty = useMemo(() => {
@@ -108,10 +126,14 @@ export function LLMProviderConnectionTab({
     const savedUrl = (main?.url ?? "").trim();
     const savedAuthType = (main?.auth?.type as UpstreamAuthType) ?? AUTH_TYPE_API_KEY;
     const savedAuthHeader = (main?.auth?.header ?? "").trim();
+    const savedResilienceTimeout = (providerData.resilience?.timeout ?? "").trim();
+    const savedResilienceIdleTimeout = (providerData.resilience?.idleTimeout ?? "").trim();
 
     if (providerEndpoint.trim() !== savedUrl) return true;
     if ((authenticationType || AUTH_TYPE_API_KEY) !== savedAuthType) return true;
     if (authenticationHeader.trim() !== savedAuthHeader) return true;
+    if (resilienceTimeout.trim() !== savedResilienceTimeout) return true;
+    if (resilienceIdleTimeout.trim() !== savedResilienceIdleTimeout) return true;
 
     if (
       !isCredentialMasked &&
@@ -125,6 +147,8 @@ export function LLMProviderConnectionTab({
     providerEndpoint,
     authenticationType,
     authenticationHeader,
+    resilienceTimeout,
+    resilienceIdleTimeout,
     credentialValue,
     isCredentialMasked,
   ]);
@@ -140,6 +164,28 @@ export function LLMProviderConnectionTab({
     return err;
   }, []);
 
+  const validateResilienceTimeout = useCallback((value: string): string | null => {
+    const result = resilienceTimeoutSchema.safeParse(value);
+    if (result.success) {
+      setResilienceTimeoutError(null);
+      return null;
+    }
+    const err = result.error.flatten().formErrors[0] ?? "Invalid duration";
+    setResilienceTimeoutError(err);
+    return err;
+  }, []);
+
+  const validateResilienceIdleTimeout = useCallback((value: string): string | null => {
+    const result = resilienceTimeoutSchema.safeParse(value);
+    if (result.success) {
+      setResilienceIdleTimeoutError(null);
+      return null;
+    }
+    const err = result.error.flatten().formErrors[0] ?? "Invalid duration";
+    setResilienceIdleTimeoutError(err);
+    return err;
+  }, []);
+
   const handleDiscard = useCallback(() => {
     if (!providerData) return;
     setProviderEndpoint(providerData.upstream?.main?.url ?? "");
@@ -149,7 +195,11 @@ export function LLMProviderConnectionTab({
     setAuthenticationHeader(providerData.upstream?.main?.auth?.header ?? "");
     setCredentialValue(MASKED_CREDENTIAL_VALUE);
     setIsCredentialMasked(true);
+    setResilienceTimeout(providerData.resilience?.timeout ?? "");
+    setResilienceIdleTimeout(providerData.resilience?.idleTimeout ?? "");
     setEndpointError(null);
+    setResilienceTimeoutError(null);
+    setResilienceIdleTimeoutError(null);
     setStatus(null);
   }, [providerData]);
 
@@ -160,6 +210,19 @@ export function LLMProviderConnectionTab({
     const endpointValidationError = validateEndpoint(providerEndpoint);
     if (endpointValidationError) {
       setStatus({ message: endpointValidationError, severity: "error" });
+      return;
+    }
+
+    const resilienceTimeoutValidationError = validateResilienceTimeout(resilienceTimeout);
+    if (resilienceTimeoutValidationError) {
+      setStatus({ message: resilienceTimeoutValidationError, severity: "error" });
+      return;
+    }
+
+    const resilienceIdleTimeoutValidationError =
+      validateResilienceIdleTimeout(resilienceIdleTimeout);
+    if (resilienceIdleTimeoutValidationError) {
+      setStatus({ message: resilienceIdleTimeoutValidationError, severity: "error" });
       return;
     }
 
@@ -192,6 +255,9 @@ export function LLMProviderConnectionTab({
             value: authValue,
           };
 
+    const trimmedResilienceTimeout = resilienceTimeout.trim();
+    const trimmedResilienceIdleTimeout = resilienceIdleTimeout.trim();
+
     try {
       await onUpdate({
         upstream: {
@@ -200,6 +266,21 @@ export function LLMProviderConnectionTab({
             auth: authPayload,
           },
         },
+        resilience:
+          trimmedResilienceTimeout || trimmedResilienceIdleTimeout
+            ? {
+                timeout: trimmedResilienceTimeout || undefined,
+                idleTimeout: trimmedResilienceIdleTimeout || undefined,
+              }
+            : undefined,
+        // Passing the provider's currently-deployed gateways (even unchanged) makes the
+        // backend take the UpdateAndSync path, which regenerates and re-pushes the
+        // deployment YAML to those gateways. Without this, a Connection tab save only
+        // updates the stored config — already-deployed gateways never see the new values.
+        gateways:
+          providerData.gateways && providerData.gateways.length > 0
+            ? providerData.gateways
+            : undefined,
       });
       setStatus({
         message: "Connection updated successfully.",
@@ -220,11 +301,15 @@ export function LLMProviderConnectionTab({
     providerEndpoint,
     authenticationType,
     authenticationHeader,
+    resilienceTimeout,
+    resilienceIdleTimeout,
     credentialValue,
     valuePrefix,
     isCredentialMasked,
     onUpdate,
     validateEndpoint,
+    validateResilienceTimeout,
+    validateResilienceIdleTimeout,
   ]);
 
   if (isLoading) {
@@ -350,6 +435,24 @@ export function LLMProviderConnectionTab({
             </FormControl>
           </Grid>
           <Grid size={{ xs: 12 }}>
+            <ResilienceTimeoutFields
+              requestTimeout={resilienceTimeout}
+              onRequestTimeoutChange={(value) => {
+                setResilienceTimeout(value);
+                if (resilienceTimeoutError) validateResilienceTimeout(value);
+              }}
+              onRequestTimeoutBlur={() => validateResilienceTimeout(resilienceTimeout)}
+              requestTimeoutError={resilienceTimeoutError}
+              idleTimeout={resilienceIdleTimeout}
+              onIdleTimeoutChange={(value) => {
+                setResilienceIdleTimeout(value);
+                if (resilienceIdleTimeoutError) validateResilienceIdleTimeout(value);
+              }}
+              onIdleTimeoutBlur={() => validateResilienceIdleTimeout(resilienceIdleTimeout)}
+              idleTimeoutError={resilienceIdleTimeoutError}
+            />
+          </Grid>
+          <Grid size={{ xs: 12 }}>
             <Stack spacing={1.5} width="100%" >
               <Collapse in={!!status} timeout={300}>
                 {status && (
@@ -373,7 +476,13 @@ export function LLMProviderConnectionTab({
                 <Button
                   variant="contained"
                   onClick={() => void handleSave()}
-                  disabled={isUpdating || !isDirty || !!endpointError}
+                  disabled={
+                    isUpdating ||
+                    !isDirty ||
+                    !!endpointError ||
+                    !!resilienceTimeoutError ||
+                    !!resilienceIdleTimeoutError
+                  }
                 >
                   {isUpdating ? "Saving..." : "Save"}
                 </Button>

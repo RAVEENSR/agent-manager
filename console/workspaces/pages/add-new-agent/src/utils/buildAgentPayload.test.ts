@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { buildModelConfig, findLowestEnvironmentName, buildCatalogAgentPayload, deriveCatalogEnvSeed } from "./buildAgentPayload";
-import type { CreateAgentFormValues, LLMProviderFormEntry } from "../form/schema";
+import { buildModelConfig, buildMCPConfig, findLowestEnvironmentName, buildCatalogAgentPayload, deriveCatalogEnvSeed } from "./buildAgentPayload";
+import { mcpEntryVarNames } from "./mcpEnvVarNames";
+import type { CreateAgentFormValues, LLMProviderFormEntry, MCPProxyFormEntry } from "../form/schema";
 import type { AgentKindConfigSchemaItem, OrgProjPathParams } from "@agent-management-platform/types";
 
 function entry(over: Partial<LLMProviderFormEntry> = {}): LLMProviderFormEntry {
@@ -204,5 +205,113 @@ describe("deriveCatalogEnvSeed", () => {
     expect(seed.env).toEqual([]);
     expect(seed.lockedEnvKeys.size).toBe(0);
     expect(seed.kindSecretKeysWithDefault.size).toBe(0);
+  });
+});
+
+function mcpEntry(over: Partial<MCPProxyFormEntry> = {}): MCPProxyFormEntry {
+  return {
+    selectedProxyByEnv: { Development: { id: "proxy-1", name: "weather" } },
+    urlVarName: "AGENT_MCP_1_URL",
+    apikeyVarName: "AGENT_MCP_1_API_KEY",
+    authenticationType: "apiKey",
+    ...over,
+  };
+}
+
+// Issue #1597: only an API-key endpoint has a key the user names. For OAuth and
+// for "None", submitting one makes ensureMCPEnvVarRows persist it with an empty
+// secret reference, which mcpProxyAPIKeySecurityEnabled then never fills — the
+// agent gets a variable that is empty forever, with no error at create or deploy.
+describe("buildMCPConfig", () => {
+  it("submits both url and apikey for an API-key-secured proxy", () => {
+    expect(buildMCPConfig([mcpEntry()], "Development")).toEqual([
+      {
+        proxyName: "proxy-1",
+        environmentVariables: [
+          { key: "url", name: "AGENT_MCP_1_URL" },
+          { key: "apikey", name: "AGENT_MCP_1_API_KEY" },
+        ],
+      },
+    ]);
+  });
+
+  it("omits apikey for an OAuth proxy even when a stale name is still in form state", () => {
+    expect(
+      buildMCPConfig([mcpEntry({ authenticationType: "identity" })], "Development"),
+    ).toEqual([
+      {
+        proxyName: "proxy-1",
+        environmentVariables: [{ key: "url", name: "AGENT_MCP_1_URL" }],
+      },
+    ]);
+  });
+
+  it("omits apikey for an unsecured proxy even when a stale name is still in form state", () => {
+    expect(
+      buildMCPConfig([mcpEntry({ authenticationType: "" })], "Development"),
+    ).toEqual([
+      {
+        proxyName: "proxy-1",
+        environmentVariables: [{ key: "url", name: "AGENT_MCP_1_URL" }],
+      },
+    ]);
+  });
+
+  // A submit that races the proxy fetch must fail safe: no resolved security
+  // means no API key variable, rather than one the platform injects empty.
+  it("omits apikey when the proxy's security has not resolved yet", () => {
+    expect(
+      buildMCPConfig([mcpEntry({ authenticationType: undefined })], "Development"),
+    ).toEqual([
+      {
+        proxyName: "proxy-1",
+        environmentVariables: [{ key: "url", name: "AGENT_MCP_1_URL" }],
+      },
+    ]);
+  });
+
+  it("still sends the url for every security kind, since the agent always needs it", () => {
+    for (const authenticationType of ["apiKey", "identity", ""] as const) {
+      const out = buildMCPConfig([mcpEntry({ authenticationType })], "Development");
+      expect(out?.[0]?.environmentVariables).toContainEqual({
+        key: "url",
+        name: "AGENT_MCP_1_URL",
+      });
+    }
+  });
+
+  it("builds nothing when the initial environment has no proxy selected", () => {
+    expect(buildMCPConfig([mcpEntry()], "Production")).toBeUndefined();
+  });
+});
+
+describe("mcpEntryVarNames", () => {
+  it("reserves both names for an API-key entry", () => {
+    expect(mcpEntryVarNames(mcpEntry(), 0, "AGENT")).toEqual([
+      "AGENT_MCP_1_URL",
+      "AGENT_MCP_1_API_KEY",
+    ]);
+  });
+
+  it("reserves only the url for an OAuth entry, freeing the api key name", () => {
+    expect(
+      mcpEntryVarNames(mcpEntry({ authenticationType: "identity" }), 0, "AGENT"),
+    ).toEqual(["AGENT_MCP_1_URL"]);
+  });
+
+  it("reserves only the url for an unsecured entry", () => {
+    expect(
+      mcpEntryVarNames(mcpEntry({ authenticationType: "" }), 0, "AGENT"),
+    ).toEqual(["AGENT_MCP_1_URL"]);
+  });
+
+  it("falls back to index-derived defaults when names are unset", () => {
+    expect(
+      mcpEntryVarNames(
+        mcpEntry({ urlVarName: undefined, apikeyVarName: undefined }),
+        1,
+        "MYAGENT",
+      ),
+    ).toEqual(["MYAGENT_MCP_2_URL", "MYAGENT_MCP_2_API_KEY"]);
   });
 });

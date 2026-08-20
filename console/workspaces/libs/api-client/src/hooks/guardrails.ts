@@ -58,10 +58,11 @@ const NON_GUARDRAIL_POLICY_EXCLUDELIST = new Set([
   "mcp-auth",
   "mcp-authz",
   "mcp-rewrite",
+  "mcp-ratelimit",
   "respond",
+  "redirect",
   "semantic-tool-filtering",
   // Not available in gateway v1.0.0
-  "prompt-compressor",
   // Infra/mediation policies that only become visible once the picker reads the
   // full, unfiltered gateway manifest instead of the hub's categories=Guardrails,AI
   // filter (useLLMPoliciesCatalog) — none of these are LLM guardrails.
@@ -69,7 +70,6 @@ const NON_GUARDRAIL_POLICY_EXCLUDELIST = new Set([
   "backend-jwt",
   "dynamic-endpoint",
   "host-rewrite",
-  "interceptor-service",
   "json-xml-mediator",
   "log-message",
   // Found live against a real gateway manifest (2026-07-17): more mediation
@@ -267,13 +267,18 @@ async function fetchHubPolicyDisplayNames(
  * working (they fall through to their own name) without depending on the hub for
  * availability.
  */
-export function useLLMPoliciesCatalog(orgName?: string, enabled = true) {
+export function useLLMPoliciesCatalog(
+  orgName?: string,
+  enabled = true,
+  providerId?: string,
+) {
   const { getToken } = useAuthHooks();
 
   return useApiQuery<GuardrailsCatalogResponse>({
     queryKey: [
       "LLM gateway policies catalog",
       orgName,
+      providerId,
       globalConfig.guardrailsCatalogUrl,
     ],
     enabled: enabled && Boolean(orgName),
@@ -286,7 +291,7 @@ export function useLLMPoliciesCatalog(orgName?: string, enabled = true) {
       // Run both in parallel: the hub lookup adds no latency beyond the slower call,
       // and a hub failure never blocks the (authoritative) gateway list.
       const [available, hubDisplayNames] = await Promise.all([
-        listAvailableLLMPolicies({ orgName }, async () => token),
+        listAvailableLLMPolicies({ orgName }, { providerId }, async () => token),
         fetchHubPolicyDisplayNames(token),
       ]);
       const data: GuardrailDefinition[] = (available.list ?? []).map((p) => ({
