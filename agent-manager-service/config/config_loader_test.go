@@ -397,6 +397,9 @@ func TestLoadEnvs_ObserverConfig(t *testing.T) {
 
 	t.Run("defaults: URL set, PublicURL empty", func(t *testing.T) {
 		setEnv(t, requiredEnv)
+		// Pinned rather than left ambient: .env.test sets IS_LOCAL_DEV_ENV=true, which would
+		// otherwise supply the localhost PublicURL default this case exists to rule out.
+		t.Setenv("IS_LOCAL_DEV_ENV", "false")
 		loadEnvs()
 
 		if got := config.Observer.URL; got != "http://localhost:9098" {

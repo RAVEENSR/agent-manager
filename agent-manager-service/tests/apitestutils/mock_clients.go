@@ -195,6 +195,15 @@ func CreateMockOpenChoreoClient() *clientmocks.OpenChoreoClientMock {
 		ReplaceComponentFileMountsFunc: func(ctx context.Context, namespaceName string, projectName string, componentName string, files []client.FileVar) error {
 			return nil
 		},
+		// Where deploy writes an environment's env vars and file mounts. Deploy sends only the
+		// image through DeployRequest, so assertions on deploy-time config read this call.
+		ReplaceReleaseBindingWorkloadOverridesFunc: func(ctx context.Context, namespaceName string, componentName string, environment string, envOverrides []client.EnvVar, fileOverrides []client.FileVar) error {
+			return nil
+		},
+		// nil means OpenChoreo can reconcile the component; deploy aborts early otherwise.
+		GetComponentReconcileBlockFunc: func(ctx context.Context, namespaceName string, componentName string) (*client.ComponentReconcileBlock, error) {
+			return nil, nil //nolint:nilnil // nil block is the "not blocked" signal this API defines
+		},
 		RemoveWorkloadEnvVarsFunc: func(ctx context.Context, namespaceName string, componentName string, envVarKeys []string) error {
 			return nil
 		},

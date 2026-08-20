@@ -2949,8 +2949,8 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 	deployTraitEnvConfigs := buildTraitEnvConfigs(agentName, policies, "", resilienceTimeoutSeconds, isPythonBuildpack, isBallerinaBuildpack, enableAutoInstrumentation, deployInstrumentationImage)
 
 	// Env vars and file mounts are NOT written to the Component's build workflow parameters here.
-	// Those are seeded once at agent creation and cleared below, once this deploy has copied the
-	// effective set onto the environment's ReleaseBinding — see ClearComponentBaseWorkloadConfig.
+	// Those are seeded once at agent creation and then left alone; this deploy's config goes to the
+	// environment's ReleaseBinding instead — see applyEnvScopedWorkloadConfig.
 
 	if isAPIAgent {
 		if targetEnv == nil {
@@ -3014,9 +3014,9 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 		return "", err
 	}
 
-	// Write this environment's env vars and file mounts to its release binding, then drop the
-	// component-wide copies. Both steps must succeed: the overrides are the only place the config
-	// now lives, and a base left populated leaks into every other environment.
+	// Write this environment's env vars and file mounts to its release binding, so this deploy's
+	// config reaches this environment only. The component-wide base is left as agent creation
+	// seeded it — see applyEnvScopedWorkloadConfig for why it is not cleared here.
 	if err := s.applyEnvScopedWorkloadConfig(ctx, ouID, projectName, agentName, lowestEnv, overrideEnvVars, overrideFileVars); err != nil {
 		return "", err
 	}
@@ -3085,16 +3085,20 @@ const (
 )
 
 // applyEnvScopedWorkloadConfig writes the environment's full env var and file mount set to its
-// ReleaseBinding workloadOverrides, then clears the component-wide base (build workflow parameters
-// + Workload container spec).
+// ReleaseBinding workloadOverrides. Deploy no longer writes to the component-wide base (the
+// Workload container spec and the Component's build workflow parameters), so config applied here
+// reaches only this environment.
 //
-// The base is shared by every environment — each one renders base merged with its own overrides —
-// so config left there leaks into environments it was never meant for, and can never be removed,
-// since an override cannot unset a base key. Clearing it after the override write is what keeps
-// deploy scoped to a single environment.
-//
-// Ordering matters: the override write must land before the base is cleared, or a failure between
-// the two would leave the environment with no config at all.
+// The base is deliberately left untouched. It is seeded once at agent creation and every
+// environment renders base merged with its own overrides, which has a known consequence: a var set
+// at creation is inherited everywhere and cannot be removed, since an override cannot unset a base
+// key. Clearing the base would fix that, but it changes what EVERY environment renders — an
+// environment promoted before its binding carried the full set (create → auto-build → promote,
+// with no deploy in between) is silently relying on the base, and would lose those vars and roll
+// into a broken config the moment an unrelated environment was deployed. Removing the base
+// therefore requires first materializing it into every existing binding; until that exists,
+// leaving it in place trades un-removable create-time config for never breaking a live
+// environment out from under itself.
 func (s *agentManagerService) applyEnvScopedWorkloadConfig(
 	ctx context.Context,
 	ouID, projectName, agentName, environment string,
@@ -3125,12 +3129,6 @@ func (s *agentManagerService) applyEnvScopedWorkloadConfig(
 		s.logger.Error("Release binding never became available for workload overrides",
 			"agentName", agentName, "environment", environment, "error", lastErr)
 		return fmt.Errorf("failed to apply environment configuration: %w", lastErr)
-	}
-
-	if err := s.ocClient.ClearComponentBaseWorkloadConfig(ctx, ouID, projectName, agentName); err != nil {
-		s.logger.Error("Failed to clear component-wide workload config after deploy",
-			"agentName", agentName, "environment", environment, "error", err)
-		return fmt.Errorf("failed to clear component-wide configuration: %w", err)
 	}
 
 	s.logger.Debug("Applied environment-scoped workload config", "agentName", agentName,

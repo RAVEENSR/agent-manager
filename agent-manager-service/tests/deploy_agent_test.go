@@ -101,7 +101,13 @@ func TestDeployAgent(t *testing.T) {
 		require.Equal(t, deployTestProjName, deployCall.ProjectName)
 		require.Equal(t, deployTestAgentName, deployCall.ComponentName)
 		require.Equal(t, "registry.example.com/myapp:v1.0.0", deployCall.Req.ImageID)
-		require.Empty(t, deployCall.Req.Env) // No env vars provided
+
+		// Env vars go to the environment's release binding, not to DeployRequest, so the
+		// component-wide base cannot leak this deploy's config into other environments.
+		require.Len(t, openChoreoClient.ReplaceReleaseBindingWorkloadOverridesCalls(), 1)
+		overrideCall := openChoreoClient.ReplaceReleaseBindingWorkloadOverridesCalls()[0]
+		require.Equal(t, deployTestAgentName, overrideCall.ComponentName)
+		require.Empty(t, overrideCall.EnvOverrides) // No env vars provided
 	})
 
 	t.Run("Deploying agent with imageId and environment variables should return 202", func(t *testing.T) {
@@ -171,14 +177,18 @@ func TestDeployAgent(t *testing.T) {
 		require.Equal(t, deployTestAgentName, deployCall.ComponentName)
 		require.Equal(t, "registry.example.com/myapp:v1.2.0", deployCall.Req.ImageID)
 
-		// Validate environment variables
-		require.Len(t, deployCall.Req.Env, 3)
-		require.Equal(t, "DATABASE_URL", deployCall.Req.Env[0].Key)
-		require.Equal(t, "postgresql://localhost:5432/mydb", deployCall.Req.Env[0].Value)
-		require.Equal(t, "API_KEY", deployCall.Req.Env[1].Key)
-		require.Equal(t, "secret-api-key", deployCall.Req.Env[1].Value)
-		require.Equal(t, "LOG_LEVEL", deployCall.Req.Env[2].Key)
-		require.Equal(t, "INFO", deployCall.Req.Env[2].Value)
+		// Validate environment variables. They are written to the environment's release binding
+		// rather than carried on DeployRequest, which only updates the image.
+		require.Len(t, openChoreoClient.ReplaceReleaseBindingWorkloadOverridesCalls(), 1)
+		overrideCall := openChoreoClient.ReplaceReleaseBindingWorkloadOverridesCalls()[0]
+		require.Equal(t, deployTestAgentName, overrideCall.ComponentName)
+		require.Len(t, overrideCall.EnvOverrides, 3)
+		require.Equal(t, "DATABASE_URL", overrideCall.EnvOverrides[0].Key)
+		require.Equal(t, "postgresql://localhost:5432/mydb", overrideCall.EnvOverrides[0].Value)
+		require.Equal(t, "API_KEY", overrideCall.EnvOverrides[1].Key)
+		require.Equal(t, "secret-api-key", overrideCall.EnvOverrides[1].Value)
+		require.Equal(t, "LOG_LEVEL", overrideCall.EnvOverrides[2].Key)
+		require.Equal(t, "INFO", overrideCall.EnvOverrides[2].Value)
 	})
 
 	validationTests := []struct {
