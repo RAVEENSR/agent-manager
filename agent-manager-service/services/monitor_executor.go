@@ -268,7 +268,44 @@ func (e *monitorExecutor) resolveProxyURL(ctx context.Context, ouID, environment
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve gateway for environment %s: %w", environmentID, err)
 	}
-	return buildProxyURL(gateway, proxy.Configuration.Context), nil
+	return e.buildJudgeProxyURL(gateway, proxy.Configuration.Context), nil
+}
+
+// buildJudgeProxyURL returns the base URL the evaluation job should reach the LLM
+// proxy on: the gateway's in-cluster runtime address rather than its public vhost.
+//
+// This deliberately differs from buildProxyURL, which every other caller wants.
+// Agents and the console are given the public URL so the address matches the
+// identity resource identifier; the evaluation job is the one consumer that runs
+// inside the cluster, under the egress NetworkPolicy the evaluation extension
+// ships (amp-evaluation-job-egress). That policy permits the API Platform Gateway
+// at its in-cluster address and nothing else, while the public vhost resolves to
+// whatever fronts the platform — a VM's host-network Caddy container, a cloud
+// LoadBalancer — which is not a pod and so cannot be matched by any selector the
+// policy can express. Sending judges to the vhost therefore has them refused at
+// the policy, and every llm_judge evaluation skips with a bare "Connection error"
+// while no request ever reaches the gateway. The runtime address is also simply
+// the shorter path: no DNS out of the cluster, no hairpin back in, and untrusted
+// evaluator code needs no public egress at all.
+//
+// runtimeUrl is validated on write (validateGatewayRuntimeURL) as a cluster-local
+// base URL carrying a scheme, an explicit port and no path, so it concatenates
+// with the proxy context exactly as the vhost does. It is empty for a gateway with
+// no in-cluster address to offer — one hosted outside the cluster, or a record
+// written before the bootstrap job began syncing it — and those can only be
+// reached at their public address, so fall back to it and say so.
+func (e *monitorExecutor) buildJudgeProxyURL(gateway *models.Gateway, contextPath *string) string {
+	runtimeURL := strings.TrimSpace(gateway.RuntimeURL)
+	if !strings.Contains(runtimeURL, "://") {
+		e.logger.Warn("Gateway has no in-cluster runtimeUrl; routing evaluation judge calls to the "+
+			"public vhost, which the evaluation job's egress policy may refuse",
+			"gateway", gateway.Name, "vhost", gateway.Vhost)
+		return buildProxyURL(gateway, contextPath)
+	}
+	if contextPath != nil {
+		return runtimeURL + *contextPath
+	}
+	return runtimeURL
 }
 
 // buildWorkflowRunRequest constructs the workflow run request for a monitor.

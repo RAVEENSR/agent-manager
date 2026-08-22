@@ -183,13 +183,42 @@ func TestAnchoring_MonitorRunAgainstDeployedProxy(t *testing.T) {
 					return []string{both.UUID.String()}, nil
 				},
 			},
+			logger: discardLogger(),
 		}
 		url, err := exec.resolveProxyURL(context.Background(), "org", env.String(), proxy)
 		require.NoError(t, err)
-		// Vhosts are per-gateway in the fixture, so asserting this one rules out the
-		// other gateway; every proxy URL is the public address now, and the bare
-		// fixture vhost gets the default https scheme.
-		require.Equal(t, "https://"+both.Vhost, url)
+		// Runtime URLs are per-gateway in the fixture, so asserting this one rules out
+		// the other gateway. The judge gets the in-cluster address, not the vhost: it
+		// runs under an egress policy that only permits the gateway in-cluster.
+		require.Equal(t, both.RuntimeURL, url)
+	})
+
+	t.Run("judge URL is the in-cluster address, not the public vhost", func(t *testing.T) {
+		exec := &monitorExecutor{logger: discardLogger()}
+		contextPath := "/llm/proxy"
+
+		require.Equal(t, both.RuntimeURL+contextPath, exec.buildJudgeProxyURL(both, &contextPath))
+		require.Equal(t, both.RuntimeURL, exec.buildJudgeProxyURL(both, nil))
+		// The public URL is what the eval job's NetworkPolicy refuses, so it must not
+		// leak into the judge's base URL while an in-cluster address exists.
+		require.NotContains(t, exec.buildJudgeProxyURL(both, &contextPath), both.Vhost)
+	})
+
+	t.Run("falls back to the vhost when the gateway has no in-cluster address", func(t *testing.T) {
+		exec := &monitorExecutor{logger: discardLogger()}
+		contextPath := "/llm/proxy"
+
+		// An externally-hosted gateway has no in-cluster address to offer; its public
+		// vhost is the only one that can work, so the judge has to be sent there.
+		external := newGateway(t, models.GatewayRoleEgress, true)
+		external.RuntimeURL = ""
+		require.Equal(t, "https://"+external.Vhost+contextPath, exec.buildJudgeProxyURL(external, &contextPath))
+
+		// Same for a value too malformed to concatenate (a legacy row predating
+		// validateGatewayRuntimeURL) — fall back rather than build a broken URL.
+		legacy := newGateway(t, models.GatewayRoleEgress, true)
+		legacy.RuntimeURL = "gateway-runtime.acme-dev:22893"
+		require.Equal(t, "https://"+legacy.Vhost+contextPath, exec.buildJudgeProxyURL(legacy, &contextPath))
 	})
 
 	t.Run("ambiguity fires only with no deployment", func(t *testing.T) {
