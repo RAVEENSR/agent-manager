@@ -85,8 +85,9 @@ spec:
 
     {{- with .Values.networkPolicy.evaluationJob.devEgress }}
     {{- if and .cidr .ports }}
-    # Local-dev only: agent-manager-service and the gateway are reached over the node network,
-    # so namespaceSelector can't match them.
+    # Reached off-cluster, so namespaceSelector can't match: agent-manager-service and the
+    # gateway over the node network in local dev; the VM installer's Caddy front door, which
+    # serves the public LLM-proxy URL llm_judge evaluators call.
     - to:
         - ipBlock:
             cidr: {{ .cidr }}

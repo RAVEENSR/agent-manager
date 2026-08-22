@@ -92,9 +92,11 @@ networkPolicy:
       # the label alone.
       namespace: ""
 
-    # -- Local-dev only: ipBlock exception for the node network, covering agent-manager-service
-    # outside the cluster (8080) and the gateway's node port (19080). Empty (no-op) elsewhere;
-    # setup-amp-extensions.sh sets both.
+    # -- ipBlock exception for targets reached off-cluster, where no pod backs the address and
+    # namespaceSelector therefore cannot match: in local dev, agent-manager-service outside the
+    # cluster (8080) and the gateway's node port (19080); on a VM install, the Caddy front door
+    # (443) that serves the public LLM-proxy URL the judge calls. Empty (no-op) elsewhere;
+    # setup-amp-extensions.sh and deployments/vm/install-vm.sh each set both keys.
     devEgress:
       cidr: ""
       ports: [8080, 19080]

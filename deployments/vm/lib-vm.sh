@@ -182,6 +182,31 @@ build_observability_helm_args() {
   observability_helm_args
 }
 
+# build_evaluation_helm_args <ip>
+# Prints EVALUATION_HELM_ARGS tokens, opening one egress hole in the evaluation
+# job's NetworkPolicy: the VM's own public address on :443.
+#
+# The chart already lets the eval job reach the API Platform Gateway in-cluster
+# (:22893), which is what a normal cluster install ends up using — there the
+# gateway's public host lands on an in-cluster ingress, so the policy, matched
+# post-DNAT, still sees a gateway pod. On the VM it does not. amp-api mints the
+# LLM-proxy URL from the public vhost (https://gateway.amp.<ip>.sslip.io/<proxy>,
+# see gateway_helm_args), which resolves to this VM's public IP, where Caddy — a
+# host-network container OUTSIDE the cluster — terminates TLS. No pod backs that
+# destination and no namespaceSelector can match it, so every llm_judge
+# completion is refused at the policy and the run reports "LLM judge failed after
+# 3 attempts: Connection error" with no request ever reaching the gateway.
+#
+# devEgress is the chart's ipBlock hatch for exactly this shape (the local-dev
+# setup path uses it for the node network for the same reason). :443 is the only
+# port Caddy serves, and a /32 keeps the hole to this host.
+build_evaluation_helm_args() {
+  local ip="$1"
+  printf '%s\n' \
+    "--set" "networkPolicy.evaluationJob.devEgress.cidr=${ip}/32" \
+    "--set" "networkPolicy.evaluationJob.devEgress.ports={443}"
+}
+
 # build_cp_helm_args <ip>
 # Prints CP_HELM_ARGS tokens for the OpenChoreo control-plane install. Thunder's
 # issuer is moved to the public sslip.io URL, so the OpenChoreo CP OIDC config

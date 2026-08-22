@@ -109,6 +109,10 @@ run_install() {
   mapfile -t PLATFORM_RESOURCES_HELM_ARGS < <(build_platform_resources_helm_args)
   # shellcheck disable=SC2034
   mapfile -t OBSERVABILITY_HELM_ARGS < <(build_observability_helm_args "$VM_IP")
+  # Lets llm_judge evaluators reach the public LLM-proxy URL amp-api mints; without
+  # it the evaluation job's NetworkPolicy refuses every judge completion.
+  # shellcheck disable=SC2034
+  mapfile -t EVALUATION_HELM_ARGS < <(build_evaluation_helm_args "$VM_IP")
   # Advertise deployed-agent endpoints under a public sslip.io host (Caddy fronts
   # the wildcard *.agents.<ip>.sslip.io with on-demand TLS), not the local default.
   DP_EXTERNAL_INGRESS="$(render_dataplane_external_ingress "$VM_IP")"

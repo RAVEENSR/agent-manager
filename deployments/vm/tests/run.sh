@@ -179,6 +179,15 @@ assert_eq "dp external has http entry"  "yes" "$(printf '%s\n' "$dpe" | grep -qE
 assert_eq "dp external has https entry" "yes" "$(printf '%s\n' "$dpe" | grep -qE '^        https:' && echo yes || echo no)"
 assert_eq "dp external not local default (19080)" "no" "$(has "$dpe" 'port: 1908')"
 
+# --- build_evaluation_helm_args opens the eval job's egress to Caddy on :443 ---
+ev="$(build_evaluation_helm_args 203.0.113.10)"
+assert_eq "eval devEgress is this VM's /32" \
+  "networkPolicy.evaluationJob.devEgress.cidr=203.0.113.10/32" \
+  "$(grep -F 'devEgress.cidr' <<<"$ev")"
+assert_eq "eval devEgress opens 443 only" \
+  "networkPolicy.evaluationJob.devEgress.ports={443}" \
+  "$(grep -F 'devEgress.ports' <<<"$ev")"
+
 # --- build_cp_helm_args points OpenChoreo CP OIDC issuer at the public Thunder URL ---
 cp_args="$(build_cp_helm_args 203.0.113.10)"
 assert_eq "cp oidc issuer" \
