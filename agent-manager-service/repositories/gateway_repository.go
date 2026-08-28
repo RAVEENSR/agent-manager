@@ -87,7 +87,7 @@ type GatewayRepository interface {
 	CreateToken(token *models.GatewayToken) error
 	GetActiveTokensByGatewayUUID(gatewayId string) ([]*models.GatewayToken, error)
 	GetTokenByUUID(tokenId string) (*models.GatewayToken, error)
-	GetActiveTokenByPrefix(tokenPrefix string) (*models.GatewayToken, error)
+	GetActiveTokenByPrefix(ctx context.Context, tokenPrefix string) (*models.GatewayToken, error)
 	RevokeToken(tokenId string) error
 	CountActiveTokens(gatewayId string) (int, error)
 
@@ -330,10 +330,12 @@ func (r *GatewayRepo) GetTokenByUUID(tokenId string) (*models.GatewayToken, erro
 }
 
 // GetActiveTokenByPrefix retrieves an active token by its unique prefix (UUID)
-// This enables O(1) indexed lookup instead of O(N) full table scan
-func (r *GatewayRepo) GetActiveTokenByPrefix(tokenPrefix string) (*models.GatewayToken, error) {
+// This enables O(1) indexed lookup instead of O(N) full table scan.
+// Takes ctx so a cancelled/timed-out request actually stops the query instead
+// of continuing to hold a DB connection after the caller has given up.
+func (r *GatewayRepo) GetActiveTokenByPrefix(ctx context.Context, tokenPrefix string) (*models.GatewayToken, error) {
 	var token models.GatewayToken
-	err := r.db.Where("token_prefix = ? AND status = ?", tokenPrefix, "active").
+	err := r.db.WithContext(ctx).Where("token_prefix = ? AND status = ?", tokenPrefix, "active").
 		First(&token).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {

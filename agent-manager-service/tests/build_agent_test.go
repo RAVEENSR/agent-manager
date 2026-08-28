@@ -33,6 +33,7 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/clients/clientmocks"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/jwtassertion"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/wso2/agent-manager/agent-manager-service/spec"
 	"github.com/wso2/agent-manager/agent-manager-service/tests/apitestutils"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 	"github.com/wso2/agent-manager/agent-manager-service/wiring"
@@ -75,16 +76,20 @@ func TestBuildAgent(t *testing.T) {
 		require.NoError(t, err)
 		t.Logf("response body: %s", string(b))
 
-		var build models.BuildResponse
+		// Decode into the spec type, not the internal model: the 202 body is a
+		// wire contract, and decoding into models.BuildResponse is what let the
+		// buildName/buildId omission ship unnoticed.
+		var build spec.BuildResponse
 		require.NoError(t, json.Unmarshal(b, &build))
 
 		// Validate response fields
 		require.Equal(t, buildTestAgentName, build.AgentName)
 		require.Equal(t, buildTestProjName, build.ProjectName)
-		require.Equal(t, commitId, build.BuildParameters.CommitID)
-		require.Equal(t, "BuildInitiated", build.Status)
-		require.NotEmpty(t, build.Name)
-		require.NotEmpty(t, build.UUID)
+		require.Equal(t, commitId, build.BuildParameters.CommitId)
+		require.Equal(t, "BuildInitiated", *build.Status)
+		require.NotEmpty(t, build.BuildName)
+		require.NotNil(t, build.BuildId)
+		require.NotEmpty(t, *build.BuildId)
 		require.NotZero(t, build.StartedAt)
 
 		// Validate service calls
@@ -124,15 +129,16 @@ func TestBuildAgent(t *testing.T) {
 		require.NoError(t, err)
 		t.Logf("response body: %s", string(b))
 
-		var build models.BuildResponse
+		var build spec.BuildResponse
 		require.NoError(t, json.Unmarshal(b, &build))
 
 		// Validate response fields
 		require.Equal(t, buildTestAgentName, build.AgentName)
 		require.Equal(t, buildTestProjName, build.ProjectName)
-		require.Equal(t, "BuildInitiated", build.Status)
-		require.NotEmpty(t, build.Name)
-		require.NotEmpty(t, build.UUID)
+		require.Equal(t, "BuildInitiated", *build.Status)
+		require.NotEmpty(t, build.BuildName)
+		require.NotNil(t, build.BuildId)
+		require.NotEmpty(t, *build.BuildId)
 		require.NotZero(t, build.StartedAt)
 
 		// Validate service calls

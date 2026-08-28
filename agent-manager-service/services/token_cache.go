@@ -18,6 +18,7 @@ package services
 
 import (
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -40,15 +41,93 @@ type TokenCacheEntry struct {
 type TokenCache struct {
 	mu          sync.RWMutex
 	tokens      map[string]*TokenCacheEntry // tokenPrefix (UUID) -> entry
+	misses      map[string]time.Time        // tokenPrefix (UUID) -> time of last confirmed miss
 	lastRefresh time.Time
 	ttl         time.Duration
+	missTTL     time.Duration
 }
+
+// negativeCacheTTL is deliberately much shorter than the positive-entry ttl:
+// a real token can appear later (rotation, delayed provisioning), so a stale
+// negative entry must not outlive that window for long. Its only job is to
+// stop a burst of repeated fake-but-valid-shaped keys from each triggering a
+// real DB query.
+const negativeCacheTTL = 30 * time.Second
+
+// maxMissEntries bounds the miss cache. Any caller can submit an arbitrary
+// UUID-shaped prefix with no authentication, so without a cap a sustained
+// stream of unique fake prefixes would grow c.misses without bound. Once the
+// cap is hit, RecordMiss evicts the oldest entries first.
+const maxMissEntries = 10000
 
 // NewTokenCache creates a new token cache with specified TTL
 func NewTokenCache(ttl time.Duration) *TokenCache {
 	return &TokenCache{
-		tokens: make(map[string]*TokenCacheEntry),
-		ttl:    ttl,
+		tokens:  make(map[string]*TokenCacheEntry),
+		misses:  make(map[string]time.Time),
+		ttl:     ttl,
+		missTTL: negativeCacheTTL,
+	}
+}
+
+// IsKnownMiss reports whether tokenPrefix was confirmed absent from the DB
+// recently enough that a repeat lookup can be skipped.
+func (c *TokenCache) IsKnownMiss(tokenPrefix string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	missedAt, exists := c.misses[tokenPrefix]
+	if !exists {
+		return false
+	}
+	return time.Since(missedAt) <= c.missTTL
+}
+
+// RecordMiss remembers that tokenPrefix had no active token in the DB, so
+// repeated lookups for the same (usually fake) prefix within missTTL are
+// served from memory instead of hitting the database every time.
+func (c *TokenCache) RecordMiss(tokenPrefix string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.purgeExpiredMissesLocked()
+	if len(c.misses) >= maxMissEntries {
+		c.evictOldestMissesLocked(len(c.misses) - maxMissEntries + 1)
+	}
+	c.misses[tokenPrefix] = time.Now()
+}
+
+// purgeExpiredMissesLocked removes miss entries older than missTTL. Callers
+// must hold c.mu for writing.
+func (c *TokenCache) purgeExpiredMissesLocked() {
+	now := time.Now()
+	for prefix, missedAt := range c.misses {
+		if now.Sub(missedAt) > c.missTTL {
+			delete(c.misses, prefix)
+		}
+	}
+}
+
+// evictOldestMissesLocked removes the n oldest miss entries. Callers must
+// hold c.mu for writing.
+func (c *TokenCache) evictOldestMissesLocked(n int) {
+	if n <= 0 {
+		return
+	}
+	type prefixAge struct {
+		prefix   string
+		missedAt time.Time
+	}
+	entries := make([]prefixAge, 0, len(c.misses))
+	for prefix, missedAt := range c.misses {
+		entries = append(entries, prefixAge{prefix, missedAt})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].missedAt.Before(entries[j].missedAt) })
+	if n > len(entries) {
+		n = len(entries)
+	}
+	for i := 0; i < n; i++ {
+		delete(c.misses, entries[i].prefix)
 	}
 }
 
@@ -82,6 +161,7 @@ func (c *TokenCache) Set(tokenPrefix string, gatewayUUID uuid.UUID, gateway *mod
 		Salt:        salt,
 		CachedAt:    time.Now(),
 	}
+	delete(c.misses, tokenPrefix)
 }
 
 // Invalidate removes a specific token from cache by prefix (used on revocation)
@@ -117,6 +197,7 @@ func (c *TokenCache) Clear() {
 	defer c.mu.Unlock()
 
 	c.tokens = make(map[string]*TokenCacheEntry)
+	c.misses = make(map[string]time.Time)
 	c.lastRefresh = time.Time{}
 	slog.Info("token cache cleared")
 }

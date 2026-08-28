@@ -6,7 +6,6 @@ import {
 import { absoluteRouteMap } from "@agent-management-platform/types";
 import {
   ButtonBase,
-  Chip,
   ComplexSelect,
   Header,
   MenuItem,
@@ -217,9 +216,6 @@ export function TopNavigation() {
                     <Typography variant="body1" noWrap sx={{ minWidth: 0 }}>
                       {selectedAgent.displayName}
                     </Typography>
-                    {selectedAgent.provisioning.type === "external" && (
-                      <Chip label={"External"} size="small" variant="outlined" />
-                    )}
                   </Stack>
                 ),
               }
@@ -253,9 +249,6 @@ export function TopNavigation() {
               >
                 <Stack direction="row" gap={1} alignItems="center">
                   {agent.displayName}
-                  {agent.provisioning.type === "external" && (
-                    <Chip label={"External"} size="small" variant="outlined" />
-                  )}
                 </Stack>
               </MenuItem>
             ))}

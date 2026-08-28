@@ -52,6 +52,10 @@ export interface AgentKindResponse {
   displayName: string;
   description?: string;
   organizationName: string;
+  /** Project and agent the kind was published from. The source agent cannot be deleted
+   *  while the kind exists, so these always resolve to a live agent. */
+  projectName?: string;
+  agentName?: string;
   kind: 'AgentKind';
   latestVersion?: string;
   labels?: Record<string, string>;

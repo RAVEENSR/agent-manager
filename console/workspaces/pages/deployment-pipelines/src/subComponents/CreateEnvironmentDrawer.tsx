@@ -123,6 +123,17 @@ function deriveNameFromDisplayName(displayName: string): string {
     .replace(/^-|-$/g, "");
 }
 
+// Suggests "<name>-idp" as a starting point for the Thunder handle — truncated
+// so the result never exceeds the backend's 63-char limit. Purely a default;
+// the field stays fully editable and diverges from this suggestion the moment
+// the user types into it directly (see the "in sync" checks below).
+const THUNDER_HANDLE_SUFFIX = "-idp";
+function deriveThunderHandleFromName(name: string): string {
+  if (!name) return "";
+  const maxNameLen = 63 - THUNDER_HANDLE_SUFFIX.length;
+  return `${name.slice(0, maxNameLen)}${THUNDER_HANDLE_SUFFIX}`;
+}
+
 function buildScript(
   name: string,
   displayName: string,
@@ -270,14 +281,25 @@ export function CreateEnvironmentDrawer({
           prev.name === "" ||
           prev.name === deriveNameFromDisplayName(prev.displayName);
         const newName = nameInSync ? derivedName : prev.name;
+        const handleInSync =
+          prev.thunderHandle === "" ||
+          prev.thunderHandle === deriveThunderHandleFromName(prev.name);
+        const newThunderHandle = handleInSync
+          ? deriveThunderHandleFromName(newName)
+          : prev.thunderHandle;
         const next = {
           ...prev,
           displayName: value,
           name: newName,
           dnsPrefix: newName,
+          thunderHandle: newThunderHandle,
         };
         setFieldError("displayName", validateField("displayName", value, next));
         setFieldError("name", validateField("name", newName, next));
+        setFieldError(
+          "thunderHandle",
+          validateField("thunderHandle", newThunderHandle, next),
+        );
         return next;
       });
     },
@@ -287,18 +309,32 @@ export function CreateEnvironmentDrawer({
   const handleNameChange = useCallback(
     (value: string) => {
       setFormData((prev) => {
-        const next = { ...prev, name: value, dnsPrefix: value };
+        const handleInSync =
+          prev.thunderHandle === "" ||
+          prev.thunderHandle === deriveThunderHandleFromName(prev.name);
+        const newThunderHandle = handleInSync
+          ? deriveThunderHandleFromName(value)
+          : prev.thunderHandle;
+        const next = {
+          ...prev,
+          name: value,
+          dnsPrefix: value,
+          thunderHandle: newThunderHandle,
+        };
         setFieldError("name", validateField("name", value, next));
+        setFieldError(
+          "thunderHandle",
+          validateField("thunderHandle", newThunderHandle, next),
+        );
         return next;
       });
     },
     [validateField, setFieldError],
   );
 
-  // Deliberately NOT auto-derived from displayName/name (unlike handleNameChange
-  // above) — the whole point of thunderHandle is to be an unguessable value the
-  // user chooses themselves, not something predictable from the environment's
-  // own name. Lowercased as typed, matching the format the backend requires.
+  // Editable: once the user types into this field directly, it diverges from
+  // the name-derived suggestion above and is never overwritten again.
+  // Lowercased as typed, matching the format the backend requires.
   const handleThunderHandleChange = useCallback(
     (value: string) => {
       const lowered = value.toLowerCase();

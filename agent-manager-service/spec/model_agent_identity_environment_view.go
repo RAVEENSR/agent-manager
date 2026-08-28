@@ -28,7 +28,7 @@ type AgentIdentityEnvironmentView struct {
 	AgentId *string `json:"agentId,omitempty"`
 	// OAuth2 client ID for this AgentID
 	ClientId *string `json:"clientId,omitempty"`
-	// Most recent provisioning error, if the last attempt failed
+	// Short, user-safe reason the last provisioning attempt failed (never raw upstream/database error text)
 	LastError *string `json:"lastError,omitempty"`
 	// Who requested this binding, kept for audit purposes only
 	RequestedBy *string `json:"requestedBy,omitempty"`

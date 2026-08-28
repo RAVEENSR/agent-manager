@@ -13,6 +13,13 @@ const constantsFile = fs.readFileSync('./docs/_constants.md', 'utf-8');
 const dockerTagMatch = constantsFile.match(/quickStartDockerTag:\s*['"]([^'"]+)['"]/);
 const quickStartDockerTag = dockerTagMatch ? dockerTagMatch[1] : latestVersion;
 
+// Where the announcement bar's link points. A version like "v1.0.0-rc1" is a real
+// release tag; a train like "v0.18.x" never is (that release was tagged v0.18.0), so
+// anything not shaped like an exact version links to the release list instead of a 404.
+const releaseUrl = /^v\d+\.\d+\.\d+/.test(latestVersion)
+  ? `https://github.com/wso2/agent-manager/releases/tag/amp%2F${latestVersion}`
+  : 'https://github.com/wso2/agent-manager/releases';
+
 // The snapshot whose pages carry `slug:` overrides for the reorganised paths.
 // Pinned to a literal rather than derived from latestVersion: the pre-reorg URLs
 // belong to this specific version, so its redirects must survive future version
@@ -159,9 +166,14 @@ const config: Config = {
     // Replace with your project's social card
     // image: 'img/amp-social-card.png',
     announcementBar: {
-      id: `release_${quickStartDockerTag.replace(/\./g, '_')}`,
+      // Announce latestVersion (versions.json), NOT quickStartDockerTag. The latter is the
+      // container image tag the quick-start guide pins, and it moves for reasons that have
+      // nothing to do with a release: 271d85aaa retagged it to a ThunderID version, which
+      // silently changed this banner to announce a "1.0.0" release of Agent Manager that
+      // did not exist — and pointed "Explore what's new" at a tag that 404s.
+      id: `release_${latestVersion.replace(/\./g, '_')}`,
       content:
-        `🎉 WSO2 Agent Manager <a target="_blank" rel="noopener noreferrer" href="https://github.com/wso2/agent-manager/releases/tag/amp%2F${quickStartDockerTag}">${quickStartDockerTag}</a> has been released! Explore what's new. 🎉`,
+        `🎉 WSO2 Agent Manager <a target="_blank" rel="noopener noreferrer" href="${releaseUrl}">${latestVersion}</a> has been released! Explore what's new. 🎉`,
       isCloseable: true,
     },
 

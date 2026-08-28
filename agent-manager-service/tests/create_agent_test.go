@@ -1088,6 +1088,9 @@ func TestCreateAgentFromKind_SecretConfigDefaults(t *testing.T) {
 
 		require.Equal(t, http.StatusAccepted, rr.Code, rr.Body.String())
 
+		require.NotContains(t, rr.Body.String(), "sk-kind-default-secret",
+			"the 202 body must not echo the kind's stored secret default, which the caller never supplied and is not entitled to")
+
 		require.Len(t, secretMgmtClient.CreateSecretCalls(), 1)
 		require.Equal(t, "sk-kind-default-secret", secretMgmtClient.CreateSecretCalls()[0].Data["OPENAI_API_KEY"])
 
@@ -1144,6 +1147,9 @@ func TestCreateAgentFromKind_SecretConfigDefaults(t *testing.T) {
 		app.ServeHTTP(rr, req)
 
 		require.Equal(t, http.StatusAccepted, rr.Code, rr.Body.String())
+
+		require.NotContains(t, rr.Body.String(), "my-own-api-key",
+			"the 202 body must not echo a submitted secret value back to the caller")
 
 		require.Len(t, secretMgmtClient.CreateSecretCalls(), 1)
 		require.Equal(t, "my-own-api-key", secretMgmtClient.CreateSecretCalls()[0].Data["OPENAI_API_KEY"])

@@ -65,11 +65,15 @@ Store the key with the rest of your platform secrets. It encrypts credentials th
 ```bash
 helm install gateway-operator \
   oci://ghcr.io/wso2/api-platform/helm-charts/gateway-operator \
-  --version 0.10.1 \
+  --version 0.11.0 \
   --namespace ${DATA_PLANE_NS} \
   --set logging.level=debug \
   --set gatewayApi.installStandardCRDs=false \
-  --set gateway.helm.chartVersion=1.2.0-beta \
+  --set gateway.helm.chartVersion=1.2.2 \
+  --set gateway.values.gateway.controller.image.repository=ghcr.io/wso2/api-platform/gateway-controller \
+  --set gateway.values.gateway.controller.image.tag=1.2.1 \
+  --set gateway.values.gateway.gatewayRuntime.image.repository=ghcr.io/wso2/api-platform/gateway-runtime \
+  --set gateway.values.gateway.gatewayRuntime.image.tag=1.2.1 \
   --set gateway.values.gateway.controller.encryptionKeys.enabled=true \
   --set gateway.values.gateway.controller.encryptionKeys.secretName=gateway-encryption-keys \
   --timeout 600s
@@ -82,11 +86,15 @@ helm install gateway-operator \
 ```bash
 helm install gateway-operator \
   oci://ghcr.io/wso2/api-platform/helm-charts/gateway-operator \
-  --version 0.10.1 \
+  --version 0.11.0 \
   --namespace ${DATA_PLANE_NS} \
   --set logging.level=info \
   --set gatewayApi.installStandardCRDs=false \
-  --set gateway.helm.chartVersion=1.2.0-beta \
+  --set gateway.helm.chartVersion=1.2.2 \
+  --set gateway.values.gateway.controller.image.repository=ghcr.io/wso2/api-platform/gateway-controller \
+  --set gateway.values.gateway.controller.image.tag=1.2.1 \
+  --set gateway.values.gateway.gatewayRuntime.image.repository=ghcr.io/wso2/api-platform/gateway-runtime \
+  --set gateway.values.gateway.gatewayRuntime.image.tag=1.2.1 \
   --set gateway.values.gateway.controller.encryptionKeys.enabled=true \
   --set gateway.values.gateway.controller.encryptionKeys.secretName=gateway-encryption-keys \
   --timeout 600s
@@ -95,7 +103,9 @@ helm install gateway-operator \
 </Prod>
 
 :::note Pin the gateway chart, do not inherit it
-`gateway.helm.chartVersion` decides which gateway chart the operator deploys, and it is the only thing that decides it — the `APIGateway` resource carries no chart version. Operator `0.10.1` defaults to `1.2.0-alpha`, whose templates predate the controller reading its control-plane address from configuration while still shipping `1.2.0-beta` images. The result is a gateway that installs, programs, and serves traffic while never registering with Agent Manager, so it never appears in the gateway list. Pin `1.2.0-beta` as above so the chart and the images match.
+`gateway.helm.chartVersion` decides which gateway chart the operator deploys, and it is the only thing that decides it — the `APIGateway` resource carries no chart version. Inheriting the operator's default has historically produced a chart whose templates do not render the controller's control-plane address, giving a gateway that installs, programs, and serves traffic while never registering with Agent Manager — so it never appears in the gateway list. Pin the chart explicitly, as above.
+
+Pin the container images too. The chart version and the image tags move independently: `1.2.2` is the newest published gateway chart and its defaults point at `1.2.0` images, while `1.2.1` controller and runtime images are published without a matching chart. Setting `chartVersion` alone would therefore leave you on `1.2.0` images, so the four `image.repository`/`image.tag` values above carry the runtime to `1.2.1`. Check the pod images after installing rather than trusting the chart version alone.
 
 `gateway.values` is the operator's passthrough into that chart: anything set under it is merged into the values the gateway is deployed with, which is how the encryption keys above are wired.
 :::
@@ -258,6 +268,8 @@ kubectl wait --for=condition=Available \
 ```
 
 `agentManagerService.config.thunder.clientSecret` can instead be supplied through `agentManagerService.config.thunder.existingSecret` (key `thunder-client-secret`) if you prefer to keep it out of Helm release history.
+
+`agentManagerService.config.apiKey` (the `X-API-Key` header value some internal callers use) is left unset above deliberately: the chart generates a random 32-character value itself when empty, the same way `encryptionKey` already does. Set `agentManagerService.config.apiKey.value` or `.existingSecret` explicitly only if something outside the platform needs to know this value in advance.
 
 :::warning `tlsEnabled` decides which agent invoke URL the console publishes
 `agentManagerService.config.tlsEnabled` defaults to `false`, and it is what selects between an Environment's `http` and `https` endpoint variants when the API builds an agent's invoke URL. Left at the default on an HTTPS platform, the console publishes an `http://` URL — which the browser then refuses to call from an HTTPS page, showing the request as `blocked:mixed-content` with no error anywhere in the platform. The agent itself is healthy and reachable; only the published URL is wrong.
@@ -488,7 +500,7 @@ kubectl wait --for=condition=Available \
 
 <Prod production={props.production}>
 
-`amObserver.observer.idpClientSecret` is the observer's own outbound identity for calls to the OpenChoreo observer, and must match the `am-observer-client` secret seeded into Thunder:
+`amObserver.observer.idpClientSecret` is the observer's own outbound identity for calls to the OpenChoreo observer, and must match the `am-observer-client` secret seeded into Thunder. It can instead be supplied through `amObserver.observer.existingSecret` (keys `existingSecretClientIdKey`/`existingSecretClientSecretKey`, default `idpClientId`/`idpClientSecret`) if you prefer to keep it out of Helm release history, the same option `thunder.clientSecret` has above:
 
 ```bash
 helm install amp-observability-traces \

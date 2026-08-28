@@ -27,7 +27,8 @@ export DEBUG='${DEBUG}'
 EOF
 chown wso2-amp:wso2-amp /home/wso2-amp/.env_from_docker
 
-# Switch to wso2-amp user and start interactive bash
+# Hand off to an interactive login shell. install.sh is not run automatically;
+# run it yourself once inside the container.
 # The '-' flag starts a login shell, which sources ~/.bash_profile
 # which in turn sources ~/.bashrc.
 # Note: kubeconfig setup happens in .bashrc automatically

@@ -17,6 +17,7 @@
 package framework
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -42,8 +43,8 @@ type tokenResponse struct {
 // client app is actually allowed, so requesting the superset is safe.
 const ampScopes = "amp:agent-identity:create amp:agent-identity:delete amp:agent-identity:read amp:agent-identity:update " +
 	"amp:agent-kind:create amp:agent-kind:delete amp:agent-kind:read amp:agent-kind:update " +
-	"amp:agent:api-key-manage amp:agent:build amp:agent:create amp:agent:delete amp:agent:deploy-non-production " +
-	"amp:agent:deploy-production amp:agent:promote amp:agent:read amp:agent:rollback amp:agent:suspend " +
+	"amp:agent:api-key-manage amp:agent:build amp:agent:create amp:agent:delete " +
+	"amp:agent:env-non-production amp:agent:env-production amp:agent:read amp:agent:rollback amp:agent:suspend " +
 	"amp:agent:token-manage amp:agent:update amp:catalog:read amp:data-plane:read " +
 	"amp:deployment-pipeline:create amp:deployment-pipeline:delete amp:deployment-pipeline:read amp:deployment-pipeline:update " +
 	"amp:environment:create amp:environment:delete amp:environment:read amp:environment:update " +
@@ -65,21 +66,39 @@ const ampScopes = "amp:agent-identity:create amp:agent-identity:delete amp:agent
 	"amp:profile:read amp:profile:update-attributes"
 
 // FetchToken obtains an OAuth2 access token from the Thunder IDP using the
-// client_credentials grant type. It retries on transient errors.
+// client_credentials grant type, carrying the full ampScopes superset. It
+// retries on transient errors.
 func FetchToken(cfg *Config) (string, error) {
+	return FetchTokenWithContext(context.Background(), cfg)
+}
+
+// FetchTokenWithContext obtains a full-privilege OAuth2 access token and
+// propagates cancellation through token requests and retry delays.
+func FetchTokenWithContext(ctx context.Context, cfg *Config) (string, error) {
+	return fetchTokenWithRetry(ctx, cfg, ampScopes)
+}
+
+// fetchTokenWithRetry fetches a token for the given space-delimited scope
+// string, retrying on transient errors. An empty scope string requests no
+// scopes at all, which yields an unscoped token.
+func fetchTokenWithRetry(ctx context.Context, cfg *Config, scope string) (string, error) {
 	var lastErr error
 	backoff := 2 * time.Second
 
 	for attempt := 0; attempt < 5; attempt++ {
 		if attempt > 0 {
 			fmt.Printf("token fetch failed: %v, retrying in %v...\n", lastErr, backoff)
-			time.Sleep(backoff)
+			select {
+			case <-ctx.Done():
+				return "", fmt.Errorf("wait to retry token request: %w", ctx.Err())
+			case <-time.After(backoff):
+			}
 			if backoff < 15*time.Second {
 				backoff = backoff * 3 / 2
 			}
 		}
 
-		token, err := fetchTokenOnce(cfg)
+		token, err := fetchTokenOnce(ctx, cfg, scope)
 		if err == nil {
 			return token, nil
 		}
@@ -89,16 +108,20 @@ func FetchToken(cfg *Config) (string, error) {
 	return "", lastErr
 }
 
-func fetchTokenOnce(cfg *Config) (string, error) {
+func fetchTokenOnce(ctx context.Context, cfg *Config, scope string) (string, error) {
 	form := url.Values{
 		"grant_type": {"client_credentials"},
-		// Request the scopes explicitly — Thunder only embeds requested scopes in
-		// a client_credentials token (returns requested ∩ allowed). Without this
-		// the token is unscoped and RBAC-guarded routes return 403.
-		"scope": {ampScopes},
+	}
+	// Request the scopes explicitly — Thunder only embeds requested scopes in
+	// a client_credentials token (returns requested ∩ allowed). Without this
+	// the token is unscoped and RBAC-guarded routes return 403. An empty scope
+	// is deliberate for the security suite's unscoped-token probe, and the
+	// parameter is omitted entirely so Thunder does not see "scope=".
+	if scope != "" {
+		form.Set("scope", scope)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, cfg.IDPTokenURL, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.IDPTokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", fmt.Errorf("create token request: %w", err)
 	}

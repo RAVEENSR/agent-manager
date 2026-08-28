@@ -326,6 +326,13 @@ export function useProvisionAgentIdentity() {
   >({
     action: { verb: 'create', target: 'agent identity' },
     mutationFn: ({ params, query }) => provisionAgentIdentity(params, query, getToken),
+    // A fixed, humanized message rather than the raw backend error: the
+    // realistic failure here is the environment's ThunderID instance being
+    // briefly unreachable, not something the exact backend wording helps a
+    // user act on. The Retry button on a failed attempt uses the backend's
+    // stored lastError instead, which is a persisted, already-user-facing
+    // diagnostic rather than a raw transport error.
+    errorMessage: "Couldn't create the Agent ID for this environment. Check that the environment is reachable, then try again.",
     onSuccess: (_data, { params }) => {
       queryClient.invalidateQueries({ queryKey: ['agent-identity', params] });
     },

@@ -62,7 +62,7 @@ export const AGENTID_ENV_VAR_ROWS: readonly EnvVarReferenceRow[] = [
   Object.freeze({
     key: "tokenEndpoint",
     name: "AMP_AGENTID_TOKEN_ENDPOINT",
-    description: "Token endpoint to call with a client_credentials grant",
+    description: "Token endpoint to call with a client_credentials grant, passing this tool's URL as the resource parameter",
   }),
   Object.freeze({
     key: "scopes",

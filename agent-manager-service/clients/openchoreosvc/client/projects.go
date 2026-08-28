@@ -27,6 +27,10 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
 
+// projectTypeKind is the kind agent-manager references in Project.spec.type.
+// Declared as a package var because the generated field is a pointer.
+var projectTypeKind = ocapi.ProjectTypeRefKindProjectType
+
 func (c *openChoreoClient) CreateProject(ctx context.Context, ouID string, req CreateProjectRequest) error {
 	namespaceName := c.NamespaceFor(ouID)
 	annotations := map[string]string{
@@ -40,6 +44,13 @@ func (c *openChoreoClient) CreateProject(ctx context.Context, ouID string, req C
 			Annotations: &annotations,
 		},
 		Spec: &ocapi.ProjectSpec{
+			// Required from OpenChoreo 1.2.0, and immutable once set, so it has
+			// to be correct on create. See DefaultProjectTypeName for why this
+			// is the namespaced kind.
+			Type: &ocapi.ProjectTypeRef{
+				Kind: &projectTypeKind,
+				Name: DefaultProjectTypeName,
+			},
 			DeploymentPipelineRef: &struct {
 				Kind *ocapi.ProjectSpecDeploymentPipelineRefKind `json:"kind,omitempty"`
 				Name string                                      `json:"name"`

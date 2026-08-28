@@ -19,7 +19,7 @@ var _ MappedNullable = &ThunderUrlRequest{}
 
 // ThunderUrlRequest An unguessable handle to register for an environment's env-Thunder URL, replacing the predictable \"<org>-<env>\" pattern. Optional — omit it (or send an empty string) to have the server generate one.
 type ThunderUrlRequest struct {
-	// DNS-label-safe handle (lowercase alphanumeric with hyphens, no leading/trailing hyphen) that replaces \"<org>-<env>\" in \"<handle>.<baseDomain>\". Must be globally unique across all orgs/environments, and at least 10 characters (matching what the server itself generates — anything shorter is trivially guessable). Omit to auto-generate a 10-character handle.
+	// DNS-label-safe handle (lowercase alphanumeric with hyphens, no leading/trailing hyphen) that replaces \"<org>-<env>\" in \"<handle>.<baseDomain>\". Must be globally unique across all orgs/environments, and at least 3 characters. Omit to auto-generate a 10-character handle.
 	Handle *string `json:"handle,omitempty"`
 }
 

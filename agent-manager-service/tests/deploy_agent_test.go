@@ -102,8 +102,8 @@ func TestDeployAgent(t *testing.T) {
 		require.Equal(t, deployTestAgentName, deployCall.ComponentName)
 		require.Equal(t, "registry.example.com/myapp:v1.0.0", deployCall.Req.ImageID)
 
-		// Env vars go to the environment's release binding, not to DeployRequest, so the
-		// component-wide base cannot leak this deploy's config into other environments.
+		// Env vars are no longer part of DeployRequest: they are written to the
+		// environment's ReleaseBinding so they apply to that environment only.
 		require.Len(t, openChoreoClient.ReplaceReleaseBindingWorkloadOverridesCalls(), 1)
 		overrideCall := openChoreoClient.ReplaceReleaseBindingWorkloadOverridesCalls()[0]
 		require.Equal(t, deployTestAgentName, overrideCall.ComponentName)
@@ -177,8 +177,9 @@ func TestDeployAgent(t *testing.T) {
 		require.Equal(t, deployTestAgentName, deployCall.ComponentName)
 		require.Equal(t, "registry.example.com/myapp:v1.2.0", deployCall.Req.ImageID)
 
-		// Validate environment variables. They are written to the environment's release binding
-		// rather than carried on DeployRequest, which only updates the image.
+		// Validate environment variables. They ride on the environment's
+		// ReleaseBinding overrides now, not on the deploy request, so that adding
+		// a var in one environment cannot leak into the others.
 		require.Len(t, openChoreoClient.ReplaceReleaseBindingWorkloadOverridesCalls(), 1)
 		overrideCall := openChoreoClient.ReplaceReleaseBindingWorkloadOverridesCalls()[0]
 		require.Equal(t, deployTestAgentName, overrideCall.ComponentName)

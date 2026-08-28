@@ -27,7 +27,6 @@ import {
   Alert,
   Tooltip,
   Skeleton,
-  Chip,
   IconButton,
   ListingTable,
   TablePagination,
@@ -45,7 +44,6 @@ const { DataGrid: DataGridComponent } = DataGrid;
 import {
   PageLayout,
   FadeIn,
-  displayProvisionTypes,
   DescriptionCard,
   CreatedMetadata,
   EntityAvatar,
@@ -54,7 +52,6 @@ import { generatePath, useNavigate, useParams } from "react-router-dom";
 import {
   absoluteRouteMap,
   AgentResponse,
-  Provisioning,
 } from "@agent-management-platform/types";
 import {
   useListAgents,
@@ -65,9 +62,9 @@ import {
 import { AgentTypeSummery } from "./subComponents/AgentTypeSummery";
 import { DeploymentPipelineCard } from "./subComponents/DeploymentPipelineCard";
 import {
+  AgentTypeChips,
   formatRelativeTime,
   getErrorMessage,
-  LabelChips,
   useConfirmationDialog,
 } from "@agent-management-platform/shared-component";
 import { EditProjectDrawer } from "../ProjectList/EditProjectDrawer";
@@ -429,26 +426,14 @@ export const AgentsList: React.FC = () => {
                                 <Typography variant="body1" sx={{ flexShrink: 0 }}>
                                   {agent.displayName}
                                 </Typography>
-                                {agent.provisioning.type !== "internal" && (
-                                  <Chip
-                                    label={displayProvisionTypes(
-                                      (agent.provisioning as Provisioning).type
-                                    )}
-                                    size="small"
-                                    variant="outlined"
-                                    sx={{ flexShrink: 0 }}
-                                  />
-                                )}
-                                {agent.kindName &&
-                                  <Chip size="small"
-                                    label={
-                                      kindDisplayNameMap[agent.kindName]
-                                      ?? agent.kindName
-                                    }
-                                    sx={{ flexShrink: 0 }}
-                                  />
-                                }
-                                <LabelChips labels={agent.labels} />
+                                <AgentTypeChips
+                                  provisioning={agent.provisioning}
+                                  agentType={agent.agentType}
+                                  kindName={agent.kindName}
+                                  kindDisplayName={
+                                    agent.kindName ? kindDisplayNameMap[agent.kindName] : undefined
+                                  }
+                                />
                               </Stack>
                             </Stack>
                           </ListingTable.Cell>

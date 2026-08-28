@@ -370,7 +370,8 @@ func TestAttemptProvision_TransientFailure_SchedulesRetryWithBackoff(t *testing.
 
 			assert.Equal(t, models.AgentThunderStatusPending, recorded.Status,
 				"a transient failure must stay PENDING for the reconciler to retry, not FAILED")
-			assert.Contains(t, recorded.LastError, "connection refused")
+			assert.Equal(t, userFacingProvisioningError(boom), recorded.LastError,
+				"LastError must be the sanitized user-facing message, never the raw cause text")
 			require.NotNil(t, recorded.NextRetryAt)
 			assert.WithinDuration(t, before.Add(tt.expectedDelay), *recorded.NextRetryAt, 2*time.Second)
 		})
@@ -407,7 +408,8 @@ func TestAttemptProvision_FifthFailure_MarksFailedNoMoreRetries(t *testing.T) {
 
 	assert.Equal(t, models.AgentThunderStatusFailed, recorded.Status)
 	assert.Nil(t, recorded.NextRetryAt)
-	assert.Contains(t, recorded.LastError, "thunder unreachable")
+	assert.Equal(t, userFacingProvisioningError(boom), recorded.LastError,
+		"LastError must be the sanitized user-facing message, never the raw cause text")
 }
 
 // TestProvisionBackoffSchedule_TotalRetryWindowWithinSLA guards the actual
@@ -460,6 +462,75 @@ func TestAttemptProvision_ThunderNotProvisioned_RetriesLikeAnyOtherFailure(t *te
 
 	assert.Equal(t, models.AgentThunderStatusFailed, recorded.Status)
 	assert.Nil(t, recorded.NextRetryAt)
+	assert.Equal(t, userFacingProvisioningError(thundersvc.ErrThunderNotProvisioned), recorded.LastError,
+		"once exhausted, the Overview UI reads LastError directly — it must be the sanitized message, not the sentinel's raw text")
+}
+
+// TestUserFacingProvisioningError_ClassifiesKnownCauses guards against
+// leaking raw cause text (e.g. a SQLSTATE) into the UI-facing message.
+func TestUserFacingProvisioningError_ClassifiesKnownCauses(t *testing.T) {
+	tests := []struct {
+		name  string
+		cause error
+	}{
+		{"not provisioned", thundersvc.ErrThunderNotProvisioned},
+		{"not provisioned, wrapped", fmt.Errorf("failed to read env-thunder url handle for acme/default: %w", thundersvc.ErrThunderNotProvisioned)},
+		{"unreachable", thundersvc.ErrThunderUnreachable},
+		{"unreachable, wrapped", fmt.Errorf("%w: default/staging", thundersvc.ErrThunderUnreachable)},
+		{"opaque database error", fmt.Errorf(`failed to read env-thunder url handle for acme/default: ERROR: relation "env_thunder_urls" does not exist (SQLSTATE 42P01)`)},
+		{"opaque thunder API error", errors.New("create agent identity: 500 Internal Server Error")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := userFacingProvisioningError(tt.cause)
+			assert.NotEmpty(t, msg)
+			assert.NotContains(t, msg, "SQLSTATE", "must never leak raw database detail")
+			assert.NotContains(t, msg, "env_thunder_urls", "must never leak internal table/field names")
+		})
+	}
+
+	assert.Equal(t,
+		userFacingProvisioningError(thundersvc.ErrThunderNotProvisioned),
+		userFacingProvisioningError(fmt.Errorf("wrapped: %w", thundersvc.ErrThunderNotProvisioned)),
+		"wrapping must not change the classification")
+	assert.NotEqual(t,
+		userFacingProvisioningError(thundersvc.ErrThunderNotProvisioned),
+		userFacingProvisioningError(thundersvc.ErrThunderUnreachable),
+		"not-provisioned and unreachable point at different remediation and must read differently")
+	assert.NotEqual(t,
+		userFacingProvisioningError(thundersvc.ErrThunderUnreachable),
+		userFacingProvisioningError(errors.New("some other opaque failure")),
+		"an actual sentinel must not collapse to the same message as the generic fallback")
+}
+
+// TestAttemptProvision_Failure_LogsRawCauseButSanitizesLastError guards that
+// sanitizing LastError doesn't also drop the raw cause from the logs.
+func TestAttemptProvision_Failure_LogsRawCauseButSanitizesLastError(t *testing.T) {
+	boom := errors.New(`ERROR: relation "env_thunder_urls" does not exist (SQLSTATE 42P01)`)
+	resolver := &clientmocks.EnvThunderResolverMock{
+		ResolveFunc: func(_ context.Context, _, _, _ string) (thundersvc.ThunderClient, error) { return nil, boom },
+	}
+	store := &clientmocks.SecretManagementClientMock{}
+	var recorded repositories.AgentThunderAttemptUpdate
+	repo := &repomocks.AgentThunderClientRepositoryMock{
+		ClaimForAttemptFunc: func(_ context.Context, _ uuid.UUID) (bool, error) { return true, nil },
+		UpdateAfterAttemptFunc: func(_ context.Context, _ uuid.UUID, fields repositories.AgentThunderAttemptUpdate) error {
+			recorded = fields
+			return nil
+		},
+	}
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	svc := NewAgentThunderProvisioningService(repo, resolver, store, testOCClientResolvingSecretRefs(), nil, logger)
+
+	svc.AttemptProvision(context.Background(), models.AgentThunderClient{
+		ID: uuid.New(), OUID: "acme", ProjectName: "proj1", AgentName: "my-agent", EnvironmentName: "default",
+	})
+
+	assert.Equal(t, userFacingProvisioningError(boom), recorded.LastError)
+	assert.Contains(t, buf.String(), "SQLSTATE", "the raw cause must still reach the log for operators to diagnose")
+	assert.Contains(t, buf.String(), "env_thunder_urls")
 }
 
 // TestAttemptProvision_ClaimFails_SkipsWithoutTouchingThunder guards the fix
@@ -530,7 +601,9 @@ func TestAttemptProvision_PanicIsRecovered_MarksBindingRetryable(t *testing.T) {
 
 	assert.Equal(t, models.AgentThunderStatusPending, recorded.Status, "must be scheduled for retry, not left stuck in-progress")
 	assert.NotNil(t, recorded.NextRetryAt)
-	assert.Contains(t, recorded.LastError, "panic during provisioning attempt")
+	// Opaque, non-sentinel cause — always the generic branch, any text works.
+	assert.Equal(t, userFacingProvisioningError(errors.New("anything")), recorded.LastError,
+		"LastError must be the sanitized user-facing message, never the raw panic text")
 }
 
 func TestProvisionForAgent_WritesAheadPendingForEveryEnvironment(t *testing.T) {

@@ -23,6 +23,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -100,6 +102,127 @@ func NewLLMProviderService(
 	}
 }
 
+// providerVersionPattern mirrors the spec's `version` pattern. The endpoint used to
+// accept anything, so a client sending "v1" persisted a version its own generated
+// types declare as invalid.
+var providerVersionPattern = regexp.MustCompile(`^v\d+\.\d+$`)
+
+func validateProviderVersion(version string) error {
+	if !providerVersionPattern.MatchString(version) {
+		return fmt.Errorf("%w: version must match %s, e.g. v1.0", utils.ErrInvalidInput, providerVersionPattern)
+	}
+	return nil
+}
+
+// rollbackCreatedProvider removes a provider whose every gateway deployment failed,
+// so a failed CreateAndDeploy leaves nothing behind. The rollback error is returned
+// as well as logged: it is not the error the caller reports — the deployment failure
+// explains what went wrong — but a rollback that failed means the provider survived,
+// and a caller told only "deployments failed" would retry the same handle and be
+// rejected with ErrLLMProviderExists by a provider it does not know exists.
+func (s *LLMProviderService) rollbackCreatedProvider(
+	ctx context.Context, created *models.LLMProvider, ouID string,
+	deploymentService *LLMProviderDeploymentService,
+) error {
+	if err := s.Delete(ctx, created.UUID.String(), ouID, deploymentService); err != nil {
+		slog.Error("LLMProviderService.CreateAndDeploy: failed to roll back provider after deployment failure",
+			"ouID", ouID, "providerUUID", created.UUID, "error", err)
+		return fmt.Errorf("failed to roll back provider %s: %w", created.UUID, err)
+	}
+	slog.Info("LLMProviderService.CreateAndDeploy: rolled back provider after deployment failure",
+		"ouID", ouID, "providerUUID", created.UUID)
+	return nil
+}
+
+// summarizeDeploymentFailures joins the per-gateway errors so the caller learns why
+// the deployments failed instead of only that they did.
+func summarizeDeploymentFailures(results []DeploymentResult) string {
+	reasons := make([]string, 0, len(results))
+	for _, result := range results {
+		if !result.Success {
+			reasons = append(reasons, fmt.Sprintf("%s: %s", result.GatewayID, result.Error))
+		}
+	}
+	return strings.Join(reasons, "; ")
+}
+
+// resolveTemplate returns the built-in or org-owned template behind handle.
+func (s *LLMProviderService) resolveTemplate(handle, ouID string) (*models.LLMProviderTemplate, error) {
+	if builtin := s.templateStore.Get(handle); builtin != nil {
+		return builtin, nil
+	}
+
+	userTemplate, err := s.templateRepo.GetByHandle(handle, ouID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, utils.ErrLLMProviderTemplateNotFound
+		}
+		return nil, fmt.Errorf("failed to validate template: %w", err)
+	}
+	if userTemplate == nil {
+		return nil, utils.ErrLLMProviderTemplateNotFound
+	}
+	return userTemplate, nil
+}
+
+// applyTemplateUpstreamDefaults fills the upstream URL and auth scheme from the
+// template's metadata wherever the caller left them unset. Every client documents
+// these as inherited from the template, but no layer applied them: a provider
+// created without an explicit --upstream-url deployed a proxy whose upstream URL was
+// empty and was silently dropped from the gateway config.
+//
+// Caller-supplied values always win, and this must run before the credential is
+// encrypted so the template's value prefix lands inside the ciphertext.
+func applyTemplateUpstreamDefaults(provider *models.LLMProvider, template *models.LLMProviderTemplate) {
+	meta := template.Metadata
+	hasInheritableDefaults := meta != nil && (meta.EndpointURL != "" || meta.Auth != nil)
+	if !hasInheritableDefaults {
+		return
+	}
+
+	if provider.Configuration.Upstream == nil {
+		provider.Configuration.Upstream = &models.UpstreamConfig{}
+	}
+	if provider.Configuration.Upstream.Main == nil {
+		provider.Configuration.Upstream.Main = &models.UpstreamEndpoint{}
+	}
+	main := provider.Configuration.Upstream.Main
+
+	if main.URL == "" {
+		main.URL = meta.EndpointURL
+	}
+	if meta.Auth != nil {
+		main.Auth = applyTemplateAuthDefaults(main.Auth, meta.Auth)
+	}
+}
+
+// applyTemplateAuthDefaults fills in the auth type, header and value prefix the
+// template declares. An endpoint that has a URL but no auth block still gets the
+// template's scheme, so `--upstream-url` without a credential no longer produces a
+// provider that cannot authenticate.
+func applyTemplateAuthDefaults(auth *models.UpstreamAuth, templateAuth *models.LLMProviderTemplateAuth) *models.UpstreamAuth {
+	if auth == nil {
+		auth = &models.UpstreamAuth{}
+	}
+	// Copied rather than aliased: for a built-in handle templateAuth points into the
+	// process-wide template store, so handing out &templateAuth.Type would let a write
+	// through the provider corrupt the template for every organization.
+	if utils.StrPointerAsStr(auth.Type, "") == "" && templateAuth.Type != "" {
+		authType := templateAuth.Type
+		auth.Type = &authType
+	}
+	if utils.StrPointerAsStr(auth.Header, "") == "" && templateAuth.Header != "" {
+		header := templateAuth.Header
+		auth.Header = &header
+	}
+	if templateAuth.ValuePrefix != "" && auth.Value != nil &&
+		!strings.HasPrefix(*auth.Value, templateAuth.ValuePrefix) {
+		prefixed := templateAuth.ValuePrefix + *auth.Value
+		auth.Value = &prefixed
+	}
+	return auth
+}
+
 // resolveProvider looks up a provider by UUID or handle.
 func (s *LLMProviderService) resolveProvider(identifier, ouID string) (*models.LLMProvider, error) {
 	if _, err := uuid.Parse(identifier); err == nil {
@@ -165,24 +288,25 @@ func (s *LLMProviderService) Create(ctx context.Context, ouID, createdBy string,
 		provider.ModelList = string(modelListBytes)
 	}
 
-	// Validate template exists (check both built-in and user templates)
-	slog.Info("LLMProviderService.Create: validating template", "ouID", ouID, "handle", handle, "template", template)
-	templateExists := s.templateStore.Exists(template)
-	if !templateExists {
-		// Check user templates in database
-		userTemplateExists, err := s.templateRepo.Exists(template, ouID)
-		if err != nil {
-			slog.Error("LLMProviderService.Create: failed to validate user template", "ouID", ouID, "handle", handle, "template", template, "error", err)
-			return nil, fmt.Errorf("failed to validate template: %w", err)
-		}
-		if !userTemplateExists {
-			slog.Warn("LLMProviderService.Create: template not found", "ouID", ouID, "handle", handle, "template", template)
-			return nil, utils.ErrLLMProviderTemplateNotFound
-		}
+	// Resolve the template (built-in or org-owned) rather than merely checking that
+	// it exists: the upstream endpoint and auth scheme every client documents as
+	// "inherited from the template" live in its metadata.
+	slog.Info("LLMProviderService.Create: resolving template", "ouID", ouID, "handle", handle, "template", template)
+	resolvedTemplate, err := s.resolveTemplate(template, ouID)
+	if err != nil {
+		slog.Warn("LLMProviderService.Create: template unusable", "ouID", ouID, "handle", handle, "template", template, "error", err)
+		return nil, err
 	}
 
 	// Set template handle in provider
 	provider.TemplateHandle = template
+
+	applyTemplateUpstreamDefaults(provider, resolvedTemplate)
+
+	if err := validateProviderVersion(version); err != nil {
+		slog.Warn("LLMProviderService.Create: invalid version", "ouID", ouID, "handle", handle, "version", version)
+		return nil, err
+	}
 
 	// Validate mutual exclusivity of Auth.Value and Auth.SecretRef
 	if provider.Configuration.Upstream != nil &&
@@ -221,7 +345,7 @@ func (s *LLMProviderService) Create(ctx context.Context, ouID, createdBy string,
 
 	// Create provider in transaction with validation
 	slog.Info("LLMProviderService.Create: creating provider in database", "ouID", ouID, "handle", handle, "name", name, "version", version)
-	err := s.db.Transaction(func(tx *gorm.DB) error {
+	err = s.db.Transaction(func(tx *gorm.DB) error {
 		// Create provider - uniqueness enforced by DB constraint
 		return s.providerRepo.Create(tx, provider, handle, name, version, ouID)
 	})
@@ -542,6 +666,48 @@ func (s *LLMProviderService) Delete(ctx context.Context, providerID, ouID string
 	// use the UUID resolved above rather than re-parsing the raw identifier.
 	providerUUID := provider.UUID
 
+	// Atomically claim the provider for deletion before any gateway I/O or the
+	// associated-proxies check. This single UPDATE is the sole source of truth for
+	// "a delete is in flight": LLMProxyService.Create locks and rechecks this same
+	// status inside its own insert transaction, so a proxy created concurrently
+	// either lands before this claim (caught by HasAssociatedProxies just below) or
+	// is rejected by Create once the claim is visible — there is no gap where a
+	// proxy can slip in unseen by both sides.
+	marked, err := s.providerRepo.MarkDeleting(providerUUID)
+	if err != nil {
+		slog.Error("LLMProviderService.Delete: failed to mark provider deleting", "ouID", ouID, "providerID", providerID, "error", err)
+		return fmt.Errorf("failed to mark provider deleting: %w", err)
+	}
+	if !marked {
+		slog.Warn("LLMProviderService.Delete: provider already has a delete in progress", "ouID", ouID, "providerID", providerID)
+		return utils.ErrLLMProviderDeleteInProgress
+	}
+	// Cleared on any early return so a failed/aborted delete leaves the provider
+	// usable again; deleteCommitted suppresses this once providerRepo.Delete below
+	// removes the row (clearing a nonexistent row is a harmless no-op, but skipping
+	// it avoids a pointless query on the common success path).
+	deleteCommitted := false
+	defer func() {
+		if !deleteCommitted {
+			if clearErr := s.providerRepo.ClearDeleting(providerUUID); clearErr != nil {
+				slog.Error("LLMProviderService.Delete: failed to clear deleting flag after aborted delete", "ouID", ouID, "providerID", providerID, "error", clearErr)
+			}
+		}
+	}()
+
+	// Reject before touching any gateway: undeploying is not transactional with the
+	// DB delete, so a rejected delete must not leave the provider undeployed. Runs
+	// after the claim above so a proxy inserted just before the claim is still seen.
+	hasProxies, err := s.providerRepo.HasAssociatedProxies(ctx, providerUUID)
+	if err != nil {
+		slog.Error("LLMProviderService.Delete: failed to check associated proxies", "ouID", ouID, "providerID", providerID, "error", err)
+		return fmt.Errorf("failed to check associated proxies: %w", err)
+	}
+	if hasProxies {
+		slog.Warn("LLMProviderService.Delete: provider has associated proxies", "ouID", ouID, "providerID", providerID)
+		return utils.ErrLLMProviderHasProxies
+	}
+
 	gatewayIDs, err := deploymentService.deploymentRepo.GetDeployedGatewaysByProvider(providerUUID, ouID)
 	if err != nil {
 		slog.Error("LLMProviderService.Delete: failed to get deployed gateways", "ouID", ouID, "providerID", providerID, "error", err)
@@ -588,10 +754,13 @@ func (s *LLMProviderService) Delete(ctx context.Context, providerID, ouID string
 
 		slog.Info("LLMProviderService.Delete: undeployment results", "ouID", ouID, "providerID", providerID, "successfulUndeployments", successfulUndeployments, "totalGateways", len(gatewayIDs), "errorCount", len(undeploymentErrors))
 
-		// If all undeployments failed, return error
+		// If all undeployments failed, return error. Wrapped in a sentinel so the
+		// controller can report an actionable 409 instead of flattening a
+		// caller-fixable condition into an opaque 500.
 		if len(undeploymentErrors) > 0 && successfulUndeployments == 0 {
 			slog.Error("LLMProviderService.Delete: all undeployments failed", "ouID", ouID, "providerID", providerID, "errors", undeploymentErrors)
-			return fmt.Errorf("failed to undeploy from all %d gateways: %v", len(gatewayIDs), undeploymentErrors)
+			return fmt.Errorf("%w: %d of %d gateways: %s", utils.ErrLLMProviderUndeployFailed,
+				len(undeploymentErrors), len(gatewayIDs), strings.Join(undeploymentErrors, "; "))
 		}
 
 		// If some undeployments failed, log warning but continue with deletion
@@ -610,6 +779,7 @@ func (s *LLMProviderService) Delete(ctx context.Context, providerID, ouID string
 		slog.Error("LLMProviderService.Delete: failed to delete provider", "ouID", ouID, "providerID", providerID, "error", err)
 		return fmt.Errorf("failed to delete provider: %w", err)
 	}
+	deleteCommitted = true
 
 	// No KV cleanup needed — encrypted value is stored in the DB and deleted with the provider record
 
@@ -1018,10 +1188,22 @@ func (s *LLMProviderService) CreateAndDeploy(ctx context.Context, ouID, createdB
 		})
 	}
 
-	// Fail if ALL deployments failed (but only if we had valid gateways to deploy to)
+	// Fail if ALL deployments failed (but only if we had valid gateways to deploy to).
+	// The provider row is rolled back first: leaving it behind meant the caller saw a
+	// failure and got an undeployed provider anyway, invisible until the next list.
 	if len(validGatewayIDs) > 0 && successfulDeployments == 0 {
 		slog.Error("LLMProviderService.CreateAndDeploy: all deployments failed", "ouID", ouID, "providerUUID", created.UUID, "attempted", len(validGatewayIDs))
-		return nil, fmt.Errorf("all %d gateway deployments failed", len(validGatewayIDs))
+		failure := fmt.Sprintf("all %d gateway deployments failed: %s",
+			len(validGatewayIDs), summarizeDeploymentFailures(deploymentResults))
+
+		// The rollback error is carried as text rather than wrapped: the caller maps
+		// the HTTP status off this error, and a Delete sentinel in the chain would let
+		// an unrelated rollback sub-failure choose the status for a failed create.
+		if rollbackErr := s.rollbackCreatedProvider(ctx, created, ouID, deploymentService); rollbackErr != nil {
+			return nil, fmt.Errorf("%s (provider %q was created and could not be rolled back, delete it manually: %s)",
+				failure, created.Configuration.Handle, rollbackErr.Error())
+		}
+		return nil, errors.New(failure)
 	}
 
 	slog.Info("LLMProviderService.CreateAndDeploy: completed", "ouID", ouID, "providerUUID", created.UUID, "successfulDeployments", successfulDeployments, "totalAttempted", len(validGatewayIDs))

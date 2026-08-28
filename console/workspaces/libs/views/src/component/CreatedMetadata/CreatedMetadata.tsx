@@ -16,7 +16,7 @@
  * under the License.
  */
 
-import { Clock, History, UserPen } from '@wso2/oxygen-ui-icons-react';
+import { Clock, UserPen } from '@wso2/oxygen-ui-icons-react';
 import { formatDistanceToNow } from 'date-fns';
 import { PageMetaItem } from '../PageMeta';
 
@@ -36,21 +36,6 @@ export function CreatedMetadata({ createdAt }: CreatedMetadataProps) {
   return (
     <PageMetaItem icon={<Clock size={12} />} label="Created">
       {relativeTime(createdAt)}
-    </PageMetaItem>
-  );
-}
-
-export interface UpdatedMetadataProps {
-  updatedAt?: string;
-}
-
-/** Renders "Last updated ... ago", beside the other page metadata. */
-export function UpdatedMetadata({ updatedAt }: UpdatedMetadataProps) {
-  if (!updatedAt) return null;
-
-  return (
-    <PageMetaItem icon={<History size={12} />} label="Last updated">
-      {relativeTime(updatedAt)}
     </PageMetaItem>
   );
 }

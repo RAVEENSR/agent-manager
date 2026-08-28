@@ -24,7 +24,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/audit"
@@ -86,23 +85,19 @@ func NewGatewayController(
 	}
 }
 
-// resolveEnvironmentUUID resolves environment name or UUID to UUID
+// resolveEnvironmentUUID resolves an environment name or UUID to the UUID of an
+// environment in ouID. A UUID is looked up like any other identifier rather than
+// trusted on shape: a well-formed UUID belonging to another organization is as
+// unknown to this caller as a typo, and returning it unchecked let a cross-org
+// value through as a list filter and as the target of an environment assignment.
 func (c *gatewayController) resolveEnvironmentUUID(ctx context.Context, ouID, envIdentifier string) (string, error) {
-	// First try to parse as UUID
-	if _, err := uuid.Parse(envIdentifier); err == nil {
-		// It's a valid UUID, return it
-		return envIdentifier, nil
-	}
-
-	// Not a UUID, try to resolve by name using OpenChoreo client
 	environments, err := c.ocClient.ListEnvironments(ctx, ouID)
 	if err != nil {
 		return "", fmt.Errorf("failed to list environments: %w", err)
 	}
 
-	// Find environment by name
 	for _, env := range environments {
-		if env.Name == envIdentifier {
+		if env.Name == envIdentifier || strings.EqualFold(env.UUID, envIdentifier) {
 			return env.UUID, nil
 		}
 	}
@@ -243,8 +238,9 @@ func (c *gatewayController) GetGateway(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get environments from DB
-	environments := c.getGatewayEnvironmentsFromDB(ctx, ouID, gatewayID)
+	// Key the mapping lookup off the resolved UUID: gatewayID may be a name, and
+	// environment mappings are indexed by UUID only.
+	environments := c.getGatewayEnvironmentsFromDB(ctx, ouID, gateway.ID)
 
 	response := convertGatewayToSpecResponse(gateway, ouID, environments)
 	utils.WriteSuccessResponse(w, http.StatusOK, response)
@@ -285,16 +281,25 @@ func (c *gatewayController) ListGateways(w http.ResponseWriter, r *http.Request)
 		filters.Status = &isActive
 	}
 
-	// Filter by environment
+	// Filter by environment. envParam may be a UUID or a name; an unresolvable one
+	// is a client error, not a reason to drop the filter — silently returning the
+	// unfiltered list makes a typo look like "every gateway matches".
 	if envParam := r.URL.Query().Get("environment"); envParam != "" {
-		// envParam could be UUID or name, we need to resolve it to UUID
 		envUUID, err := c.resolveEnvironmentUUID(ctx, ouID, envParam)
-		if err != nil {
-			log.Warn("ListGateways: failed to resolve environment", "environment", envParam, "error", err)
-			// Continue without environment filter if resolution fails
-		} else {
-			filters.EnvironmentID = &envUUID
+		switch {
+		case errors.Is(err, utils.ErrEnvironmentNotFound):
+			// A 400 rather than a 404: the collection exists, the filter value does
+			// not. listGateways declares 400 but no 404.
+			log.Error("ListGateways: unknown environment filter", "environment", envParam)
+			utils.WriteErrorResponse(w, http.StatusBadRequest,
+				fmt.Sprintf("Unknown environment %q in 'environment' filter", envParam))
+			return
+		case err != nil:
+			log.Error("ListGateways: failed to resolve environment", "environment", envParam, "error", err)
+			handleGatewayErrors(w, err, "Failed to resolve environment filter")
+			return
 		}
+		filters.EnvironmentID = &envUUID
 	}
 
 	// Get gateways from local service with filters and DB-level pagination
@@ -366,8 +371,8 @@ func (c *gatewayController) UpdateGateway(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Get environments from DB
-	environments := c.getGatewayEnvironmentsFromDB(ctx, ouID, gatewayID)
+	// Key the mapping lookup off the resolved UUID rather than the raw path value.
+	environments := c.getGatewayEnvironmentsFromDB(ctx, ouID, gateway.ID)
 
 	response := convertGatewayToSpecResponse(gateway, ouID, environments)
 	utils.WriteSuccessResponse(w, http.StatusOK, response)

@@ -28,12 +28,46 @@ spec:
             valueFrom:
               path: /mnt/vol/workload-cr.yaml
       container:
+        # Workflow parameters arrive as environment variables and are never
+        # interpolated into the script body: Argo escapes a substituted parameter
+        # for JSON but not for the shell, so a spliced parameter would be parsed
+        # as shell by the interpreter below (#1639). The JSON-valued ones
+        # (endpoints, env vars, file mounts) carry arbitrary user text, which is
+        # why they are handed to jq rather than to the shell.
         env:
           - name: OAUTH_CLIENT_SECRET
             valueFrom:
               secretKeyRef:
                 name: '{{ "{{" }}inputs.parameters.workload-publisher-secret-name{{ "}}" }}'
                 key: workload-publisher-oauth
+          - name: IMAGE
+            value: '{{ "{{" }}inputs.parameters.image{{ "}}" }}'
+          - name: PROJECT_NAME
+            value: '{{ "{{" }}workflow.parameters.project-name{{ "}}" }}'
+          - name: COMPONENT_NAME
+            value: '{{ "{{" }}workflow.parameters.component-name{{ "}}" }}'
+          - name: NAMESPACE
+            value: '{{ "{{" }}workflow.parameters.namespace-name{{ "}}" }}'
+          - name: APP_PATH
+            value: '{{ "{{" }}workflow.parameters.app-path{{ "}}" }}'
+          - name: ENDPOINTS
+            value: '{{ "{{" }}workflow.parameters.endpoints{{ "}}" }}'
+          - name: ENV_VARS
+            value: '{{ "{{" }}workflow.parameters.environment-variables{{ "}}" }}'
+          - name: FILE_MOUNTS
+            value: '{{ "{{" }}workflow.parameters.file-mounts{{ "}}" }}'
+          - name: RUN_NAME
+            value: '{{ "{{" }}inputs.parameters.run-name{{ "}}" }}'
+          - name: OAUTH_URL
+            value: '{{ "{{" }}inputs.parameters.oauth-token-url{{ "}}" }}'
+          - name: OAUTH_HOST
+            value: '{{ "{{" }}inputs.parameters.oauth-host-header{{ "}}" }}'
+          - name: CLIENT_ID
+            value: '{{ "{{" }}inputs.parameters.oauth-client-id{{ "}}" }}'
+          - name: API_URL
+            value: '{{ "{{" }}inputs.parameters.api-server-url{{ "}}" }}'
+          - name: API_HOST
+            value: '{{ "{{" }}inputs.parameters.api-server-host-header{{ "}}" }}'
         image: ghcr.io/openchoreo/podman-runner:v1.0
         command:
           - sh
@@ -45,130 +79,127 @@ spec:
             # Install jq
             apk add --no-cache jq
 
-            # Variables
-            IMAGE={{ "{{" }}inputs.parameters.image{{ "}}" }}
-            PROJECT_NAME={{ "{{" }}workflow.parameters.project-name{{ "}}" }}
-            COMPONENT_NAME={{ "{{" }}workflow.parameters.component-name{{ "}}" }}
-            NAMESPACE={{ "{{" }}workflow.parameters.namespace-name{{ "}}" }}
+            SOURCE_PATH="/mnt/vol/source/${APP_PATH}"
+            OUT_JSON="/mnt/vol/workload-cr.json"
+            OUT_FULL_JSON="/mnt/vol/workload-cr-full.json"
+            OUT_YAML="/mnt/vol/workload-cr.yaml"
 
-            ENDPOINTS='{{ "{{" }}workflow.parameters.endpoints{{ "}}" }}'
-            ENV_VARS='{{ "{{" }}workflow.parameters.environment-variables{{ "}}" }}'
-            FILE_MOUNTS='{{ "{{" }}workflow.parameters.file-mounts{{ "}}" }}'
-            SOURCE_PATH="/mnt/vol/source/{{ "{{" }}workflow.parameters.app-path{{ "}}" }}"
-            OUT="/mnt/vol/workload-cr.yaml"
+            # Argo leaves an unset parameter as the empty string.
+            if [ -z "$ENV_VARS" ] || [ "$ENV_VARS" = "null" ]; then ENV_VARS='[]'; fi
+            if [ -z "$FILE_MOUNTS" ] || [ "$FILE_MOUNTS" = "null" ]; then FILE_MOUNTS='[]'; fi
+            if [ -z "$ENDPOINTS" ] || [ "$ENDPOINTS" = "null" ]; then ENDPOINTS='[]'; fi
 
-            # Base workload
-            echo "apiVersion: openchoreo.dev/v1alpha1" > "$OUT"
-            echo "kind: Workload" >> "$OUT"
-            echo "metadata:" >> "$OUT"
-            echo "  name: ${COMPONENT_NAME}-workload" >> "$OUT"
-            echo "  namespace: ${NAMESPACE}" >> "$OUT"
-            echo "spec:" >> "$OUT"
-            echo "  owner:" >> "$OUT"
-            echo "    projectName: ${PROJECT_NAME}" >> "$OUT"
-            echo "    componentName: ${COMPONENT_NAME}" >> "$OUT"
-            echo "  container:" >> "$OUT"
-            echo "    image: ${IMAGE}" >> "$OUT"
-
-            # Environment variables
-            if [ -n "$ENV_VARS" ] && [ "$ENV_VARS" != "null" ] && [ "$ENV_VARS" != "[]" ]; then
-              echo "    env:" >> "$OUT"
-              echo "$ENV_VARS" | jq -c '.[]' | while read -r env_var; do
-                NAME=$(echo "$env_var" | jq -r '.name')
-                VALUE=$(echo "$env_var" | jq -r '.value // empty')
-                SECRET_NAME=$(echo "$env_var" | jq -r '.valueFrom.secretKeyRef.name // empty')
-                SECRET_KEY=$(echo "$env_var" | jq -r '.valueFrom.secretKeyRef.key // empty')
-
-                echo "      - key: ${NAME}" >> "$OUT"
-                if [ -n "$SECRET_NAME" ] && [ -n "$SECRET_KEY" ]; then
-                  echo "        valueFrom:" >> "$OUT"
-                  echo "          secretKeyRef:" >> "$OUT"
-                  echo "            name: ${SECRET_NAME}" >> "$OUT"
-                  echo "            key: ${SECRET_KEY}" >> "$OUT"
-                else
-                  echo "        value: $(printf '%s' "$VALUE" | jq -R .)" >> "$OUT"
-                fi
-              done
+            # An endpoint name becomes a key in the Workload CR, so a repeated name
+            # would drop every earlier endpoint that shares it. Fail instead.
+            DUPLICATE_ENDPOINTS=$(printf '%s' "$ENDPOINTS" \
+              | jq -r '[.[].name] | group_by(.) | map(select(length > 1) | .[0]) | join(", ")')
+            if [ -n "$DUPLICATE_ENDPOINTS" ]; then
+              echo "Error: duplicate endpoint names: ${DUPLICATE_ENDPOINTS}"
+              exit 1
             fi
 
-            # File mounts
-            if [ -n "$FILE_MOUNTS" ] && [ "$FILE_MOUNTS" != "null" ] && [ "$FILE_MOUNTS" != "[]" ]; then
-              echo "    files:" >> "$OUT"
-              echo "$FILE_MOUNTS" | jq -c '.[]' | while read -r file_var; do
-                KEY=$(echo "$file_var" | jq -r '.key')
-                MOUNT_PATH=$(echo "$file_var" | jq -r '.mountPath')
-                VALUE=$(echo "$file_var" | jq -r '.value // empty')
-                SECRET_NAME=$(echo "$file_var" | jq -r '.valueFrom.secretKeyRef.name // empty')
-                SECRET_KEY=$(echo "$file_var" | jq -r '.valueFrom.secretKeyRef.key // empty')
+            # --- Step 1: Resolve endpoint schemas that point at a file in the source tree ---
+            # The file is read with jq --rawfile so its contents are JSON-encoded by
+            # jq and never pass through the shell or through YAML text assembly.
+            #
+            # The path is validated by the API before it gets here, which stops "..",
+            # but not a symlink committed in the repository: this container mounts its
+            # service account token, and whatever is read lands in the Workload CR the
+            # caller can read back. So the target is canonicalised and required to stay
+            # inside the checkout.
+            SOURCE_ROOT=$(realpath "$SOURCE_PATH" 2>/dev/null || true)
+            ENDPOINT_COUNT=$(printf '%s' "$ENDPOINTS" | jq 'length')
+            i=0
+            while [ "$i" -lt "$ENDPOINT_COUNT" ]; do
+              schema_content=$(printf '%s' "$ENDPOINTS" | jq -r --argjson i "$i" '.[$i].schemaContent // ""')
+              schema_file=$(printf '%s' "$ENDPOINTS" | jq -r --argjson i "$i" '.[$i].schemaFilePath // ""')
+              if [ -n "$schema_content" ] || [ -z "$schema_file" ]; then
+                i=$((i + 1))
+                continue
+              fi
 
-                echo "      - key: ${KEY}" >> "$OUT"
-                echo "        mountPath: ${MOUNT_PATH}" >> "$OUT"
-                if [ -n "$SECRET_NAME" ] && [ -n "$SECRET_KEY" ]; then
-                  echo "        valueFrom:" >> "$OUT"
-                  echo "          secretKeyRef:" >> "$OUT"
-                  echo "            name: ${SECRET_NAME}" >> "$OUT"
-                  echo "            key: ${SECRET_KEY}" >> "$OUT"
-                else
-                  echo "        value: $(printf '%s' "$VALUE" | jq -R .)" >> "$OUT"
-                fi
-              done
-            fi
+              resolved=$(realpath "${SOURCE_PATH}${schema_file}" 2>/dev/null || true)
+              if [ -z "$resolved" ] || [ ! -f "$resolved" ]; then
+                # Pre-existing behaviour is to carry on without a schema; say so
+                # rather than leaving the endpoint silently schema-less.
+                echo "Warning: schema file '${schema_file}' not found; endpoint will have no schema"
+                i=$((i + 1))
+                continue
+              fi
+              case "$resolved" in
+                "$SOURCE_ROOT"/*) ;;
+                *)
+                  echo "Error: schema file '${schema_file}' resolves outside the repository checkout"
+                  exit 1
+                  ;;
+              esac
 
-            # Endpoints
-            if [ -n "$ENDPOINTS" ] && [ "$ENDPOINTS" != "null" ] && [ "$ENDPOINTS" != "[]" ]; then
-              echo "  endpoints:" >> "$OUT"
-              while read -r ep; do
-                NAME=$(echo "$ep" | jq -r '.name')
-                TYPE=$(echo "$ep" | jq -r '.type // "HTTP"')
-                PORT=$(echo "$ep" | jq -r '.port')
-                BASE_PATH=$(echo "$ep" | jq -r '.basePath')
-                VISIBILITY=$(echo "$ep" | jq -c '.visibility')
-                SCHEMA_TYPE=$(echo "$ep" | jq -r '.schemaType // "REST"')
-                SCHEMA_FILE_PATH=$(echo "$ep" | jq -r '.schemaFilePath // empty')
-                SCHEMA_CONTENT=$(echo "$ep" | jq -r '.schemaContent // empty')
+              ENDPOINTS=$(printf '%s' "$ENDPOINTS" | jq --argjson i "$i" \
+                --rawfile content "$resolved" '.[$i].schemaContent = $content')
+              i=$((i + 1))
+            done
 
-                echo "    ${NAME}:" >> "$OUT"
-                echo "      type: ${TYPE}" >> "$OUT"
-                echo "      port: ${PORT}" >> "$OUT"
-                echo "      basePath: ${BASE_PATH}" >> "$OUT"
-                echo "      visibility:" >> "$OUT"
-                echo "$VISIBILITY" | jq -r '.[]' | while read -r vis; do
-                  echo "        - ${vis}" >> "$OUT"
-                done
+            # --- Step 2: Build the Workload CR ---
+            # Assembled by jq rather than by echoing YAML lines: every value is
+            # encoded as JSON by jq, so no field can inject document structure.
+            jq -n -c \
+              --arg name "${COMPONENT_NAME}-workload" \
+              --arg namespace "$NAMESPACE" \
+              --arg projectName "$PROJECT_NAME" \
+              --arg componentName "$COMPONENT_NAME" \
+              --arg image "$IMAGE" \
+              --argjson envVars "$ENV_VARS" \
+              --argjson fileMounts "$FILE_MOUNTS" \
+              --argjson endpoints "$ENDPOINTS" '
+                def secret_ref:
+                  (.valueFrom.secretKeyRef.name // "") as $n
+                  | (.valueFrom.secretKeyRef.key // "") as $k
+                  | if $n != "" and $k != ""
+                    then { valueFrom: { secretKeyRef: { name: $n, key: $k } } }
+                    else { value: (.value // "") }
+                    end;
 
-                if [ -n "$SCHEMA_CONTENT" ]; then
-                  echo "      schema:" >> "$OUT"
-                  echo "        type: ${SCHEMA_TYPE}" >> "$OUT"
-                  echo "        content: |" >> "$OUT"
-                  echo "$SCHEMA_CONTENT" | sed 's/^/          /' >> "$OUT"
-                elif [ -n "$SCHEMA_FILE_PATH" ] && [ -f "$SOURCE_PATH$SCHEMA_FILE_PATH" ]; then
-                  echo "      schema:" >> "$OUT"
-                  echo "        type: ${SCHEMA_TYPE}" >> "$OUT"
-                  echo "        content: |" >> "$OUT"
-                  sed 's/^/          /' "$SOURCE_PATH$SCHEMA_FILE_PATH" >> "$OUT"
-                fi
-              done < <(echo "$ENDPOINTS" | jq -c '.[]')
-            fi
+                def env_entry: { key: .name } + secret_ref;
 
-            echo "Workload CR saved to $OUT"
+                def file_entry: { key: .key, mountPath: .mountPath } + secret_ref;
 
-            # --- Step 2: Convert workload CR YAML to JSON ---
-            RUN_NAME={{ "{{" }}inputs.parameters.run-name{{ "}}" }}
+                def endpoint_entry:
+                  { type: (.type // "HTTP"), port: .port }
+                  + (if (.basePath // "") != "" then { basePath: .basePath } else {} end)
+                  + (if (.visibility // null) != null then { visibility: .visibility } else {} end)
+                  + (if (.schemaContent // "") != ""
+                     then { schema: { type: (.schemaType // "REST"), content: .schemaContent } }
+                     else {} end);
+
+                {
+                  metadata: { name: $name, namespace: $namespace },
+                  spec: (
+                    {
+                      owner: { projectName: $projectName, componentName: $componentName },
+                      container: (
+                        { image: $image }
+                        + (if ($envVars | length) > 0 then { env: [ $envVars[] | env_entry ] } else {} end)
+                        + (if ($fileMounts | length) > 0 then { files: [ $fileMounts[] | file_entry ] } else {} end)
+                      )
+                    }
+                    + (if ($endpoints | length) > 0
+                       then { endpoints: ($endpoints | map({ (.name): endpoint_entry }) | add) }
+                       else {} end)
+                  )
+                }
+              ' > "$OUT_JSON"
+
+            # The API server payload carries no apiVersion/kind; the YAML rendered
+            # for the workflow output parameter does.
+            jq -c '{ apiVersion: "openchoreo.dev/v1alpha1", kind: "Workload" } + .' \
+              "$OUT_JSON" > "$OUT_FULL_JSON"
             podman run --rm \
               -v /mnt/vol:/data:rw \
-              mikefarah/yq -o=json 'del(.apiVersion) | del(.kind)' /data/workload-cr.yaml \
-              > /mnt/vol/workload-cr-raw.json
-            podman run --rm \
-              -v /mnt/vol:/data:rw \
-              ghcr.io/jqlang/jq:1.7.1 -c '.' /data/workload-cr-raw.json \
-              > /mnt/vol/workload-cr.json
-            echo "Generated workload JSON payload"
-
+              mikefarah/yq -p=json -o=yaml '.' /data/workload-cr-full.json \
+              > "$OUT_YAML"
+            echo "Workload CR saved to $OUT_YAML"
 
             # --- Step 3: Get OAuth token ---
-            OAUTH_URL={{ "{{" }}inputs.parameters.oauth-token-url{{ "}}" }}
-            OAUTH_HOST={{ "{{" }}inputs.parameters.oauth-host-header{{ "}}" }}
-            CLIENT_ID={{ "{{" }}inputs.parameters.oauth-client-id{{ "}}" }}
             CLIENT_SECRET="${OAUTH_CLIENT_SECRET}"
 
             echo "Requesting OAuth token from ${OAUTH_URL}..."
@@ -191,10 +222,7 @@ spec:
             echo "Successfully obtained access token"
 
             # --- Step 4: Create or update workload via API server ---
-            API_URL={{ "{{" }}inputs.parameters.api-server-url{{ "}}" }}
-            API_HOST={{ "{{" }}inputs.parameters.api-server-host-header{{ "}}" }}
-
-            WORKLOAD_NAME=$(jq -r '.metadata.name' /mnt/vol/workload-cr.json)
+            WORKLOAD_NAME=$(jq -r '.metadata.name' "$OUT_JSON")
 
             echo "Creating workload via ${API_URL}/api/v1/namespaces/${NAMESPACE}/workloads..."
             RESPONSE=$(curl -s -w "\n%{http_code}" \
@@ -202,7 +230,7 @@ spec:
               -H "Host: ${API_HOST}" \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-              -d @/mnt/vol/workload-cr.json)
+              -d @"$OUT_JSON")
 
             HTTP_CODE=$(echo "${RESPONSE}" | tail -1)
             BODY=$(echo "${RESPONSE}" | sed '$d')
@@ -216,7 +244,7 @@ spec:
                 -H "Host: ${API_HOST}" \
                 -H "Content-Type: application/json" \
                 -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-                -d @/mnt/vol/workload-cr.json)
+                -d @"$OUT_JSON")
 
               HTTP_CODE=$(echo "${RESPONSE}" | tail -1)
               BODY=$(echo "${RESPONSE}" | sed '$d')
@@ -248,7 +276,7 @@ spec:
             fi
 
             echo "${WF_RUN_BODY}" > /mnt/vol/workflowrun-get.json
-            jq --rawfile wl /mnt/vol/workload-cr.json \
+            jq --rawfile wl "$OUT_JSON" \
               '.metadata.annotations["openchoreo.dev/workload"] = ($wl | rtrimstr("\n"))' \
               /mnt/vol/workflowrun-get.json > /mnt/vol/workflowrun-updated.json
 

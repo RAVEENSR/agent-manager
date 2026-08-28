@@ -50,6 +50,16 @@ const (
 	MaxMountPathLength      = 4095       // Linux PATH_MAX minus one for safety
 )
 
+// Caps for the repository and build inputs that reach the build workflow. Each
+// of these becomes an argument to git or to the container build running inside
+// the build pod, so each is bounded on its own rather than only by the overall
+// request size.
+const (
+	MaxRepositoryURLLength = 2048 // generous URL bound; the host itself is pinned separately
+	MaxGitBranchLength     = 255  // git has no hard limit, but refs are filenames
+	MaxSafePathLength      = 1024 // application / Dockerfile / schema / base path
+)
+
 // Path parameter names used in HTTP routes
 const (
 	PathParamOrgName      = "orgName"

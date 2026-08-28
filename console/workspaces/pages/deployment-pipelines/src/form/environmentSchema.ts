@@ -54,6 +54,18 @@ const RESTRICTED_THUNDER_HANDLES = new Set([
   "fluent-bit",
   "agent-manager",
   "observability",
+  "console",
+  "api",
+  "api-amp",
+  "thunder",
+  "observer",
+  "traces",
+  "gateway",
+  "api-platform-gateway",
+  "ai-gateway",
+  "otel",
+  "cp",
+  "agents",
 ]);
 
 export const createEnvironmentSchema = z.object({
@@ -70,10 +82,9 @@ export const createEnvironmentSchema = z.object({
   isolationTier: z.enum(isolationTiers).optional(),
   thunderHandle: z
     .string()
-    // Matches agent-manager-service's own minThunderHandleLen — a handle shorter
-    // than what AMS would generate itself is trivially brute-forceable and defeats
-    // the point of the feature, so this is a hard floor, not just advice.
-    .min(10, "Handle must be at least 10 characters")
+    // Matches agent-manager-service's own minThunderHandleLen — a hard floor,
+    // not just client-side advice; the backend enforces it independently.
+    .min(3, "Handle must be at least 3 characters")
     .max(63, "Handle must be 63 characters or less")
     .regex(thunderHandlePattern, "Handle must be lowercase alphanumeric with hyphens only, no leading/trailing hyphen")
     .refine((value) => !RESTRICTED_THUNDER_HANDLES.has(value), {

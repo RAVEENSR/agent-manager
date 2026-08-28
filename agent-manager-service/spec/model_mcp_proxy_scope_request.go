@@ -22,18 +22,17 @@ type MCPProxyScopeRequest struct {
 	// Action name on the proxy's resource server; the token scope is \"<proxy-handle>:<action>\".
 	Action      string  `json:"action"`
 	Description *string `json:"description,omitempty"`
-	// MCP tool names this scope authorizes.
-	Tools []string `json:"tools"`
+	// MCP tool names this scope authorizes. May be omitted or empty to declare a scope before binding it to any tool; such a scope is grantable to roles but enforced on no tool.
+	Tools []string `json:"tools,omitempty"`
 }
 
 // NewMCPProxyScopeRequest instantiates a new MCPProxyScopeRequest object
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewMCPProxyScopeRequest(action string, tools []string) *MCPProxyScopeRequest {
+func NewMCPProxyScopeRequest(action string) *MCPProxyScopeRequest {
 	this := MCPProxyScopeRequest{}
 	this.Action = action
-	this.Tools = tools
 	return &this
 }
 
@@ -101,26 +100,34 @@ func (o *MCPProxyScopeRequest) SetDescription(v string) {
 	o.Description = &v
 }
 
-// GetTools returns the Tools field value
+// GetTools returns the Tools field value if set, zero value otherwise.
 func (o *MCPProxyScopeRequest) GetTools() []string {
-	if o == nil {
+	if o == nil || IsNil(o.Tools) {
 		var ret []string
 		return ret
 	}
-
 	return o.Tools
 }
 
-// GetToolsOk returns a tuple with the Tools field value
+// GetToolsOk returns a tuple with the Tools field value if set, nil otherwise
 // and a boolean to check if the value has been set.
 func (o *MCPProxyScopeRequest) GetToolsOk() ([]string, bool) {
-	if o == nil {
+	if o == nil || IsNil(o.Tools) {
 		return nil, false
 	}
 	return o.Tools, true
 }
 
-// SetTools sets field value
+// HasTools returns a boolean if a field has been set.
+func (o *MCPProxyScopeRequest) HasTools() bool {
+	if o != nil && !IsNil(o.Tools) {
+		return true
+	}
+
+	return false
+}
+
+// SetTools gets a reference to the given []string and assigns it to the Tools field.
 func (o *MCPProxyScopeRequest) SetTools(v []string) {
 	o.Tools = v
 }
@@ -139,7 +146,9 @@ func (o MCPProxyScopeRequest) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Description) {
 		toSerialize["description"] = o.Description
 	}
-	toSerialize["tools"] = o.Tools
+	if !IsNil(o.Tools) {
+		toSerialize["tools"] = o.Tools
+	}
 	return toSerialize, nil
 }
 

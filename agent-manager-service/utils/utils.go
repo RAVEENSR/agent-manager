@@ -440,11 +440,12 @@ func validateBuildConfiguration(build *spec.Build) error {
 	} else if build.DockerBuild != nil {
 		// Validate docker configuration
 		dockerConfig := build.DockerBuild.Docker
-		if dockerConfig.DockerfilePath == "" || !strings.HasPrefix(dockerConfig.DockerfilePath, "/") {
-			return NewValidationError(
-				"Please provide a valid Dockerfile path starting with /",
-				"dockerfilePath is required and must start with /",
-			)
+		if err := validateSafePath(
+			dockerConfig.DockerfilePath,
+			"dockerfilePath",
+			"Please provide a valid Dockerfile path starting with /",
+		); err != nil {
+			return err
 		}
 	} else {
 		return NewValidationError(
@@ -663,6 +664,36 @@ func ValidateCreateGitSecretRequest(req *spec.CreateGitSecretRequest) error {
 	return nil
 }
 
+// safePathRe restricts the caller-supplied paths on an agent to a conservative
+// POSIX subset. Most of them (application path, Dockerfile path, OpenAPI schema
+// path) become directory and file arguments inside the build container; the
+// endpoint base path lands in the Workload CR and in gateway routing. Nothing
+// outside this set has a legitimate use in either place.
+var safePathRe = regexp.MustCompile(`^/[A-Za-z0-9._\-/]*$`)
+
+// validateSafePath checks one absolute path against safePathRe. userMessage is
+// what the API caller sees; field names the payload field in the technical
+// reason. Mirrors the file-mount mountPath rules (see fileMountPathRe).
+func validateSafePath(path, field, userMessage string) error {
+	if path == "" {
+		return NewValidationErrorf(userMessage, "%s is required", field)
+	}
+	if len(path) > MaxSafePathLength {
+		return NewValidationErrorf(userMessage, "%s is longer than %d characters", field, MaxSafePathLength)
+	}
+	if !safePathRe.MatchString(path) {
+		return NewValidationErrorf(
+			userMessage,
+			"%s must be an absolute path containing only letters, digits, '.', '_', '-' and '/'",
+			field,
+		)
+	}
+	if strings.Contains(path, "..") {
+		return NewValidationErrorf(userMessage, "%s must not contain '..' segments", field)
+	}
+	return nil
+}
+
 func validateRepoDetails(repo *spec.RepositoryConfig) error {
 	if repo == nil {
 		return NewValidationError(
@@ -674,6 +705,12 @@ func validateRepoDetails(repo *spec.RepositoryConfig) error {
 		return NewValidationError(
 			"Please provide a repository URL",
 			"repository URL cannot be empty",
+		)
+	}
+	if len(repo.Url) > MaxRepositoryURLLength {
+		return NewValidationErrorf(
+			"The repository URL is too long",
+			"repository URL is longer than %d characters", MaxRepositoryURLLength,
 		)
 	}
 	if !strings.HasPrefix(repo.Url, "https://github.com/") {
@@ -690,17 +727,34 @@ func validateRepoDetails(repo *spec.RepositoryConfig) error {
 			"invalid GitHub repository format (expected: https://github.com/owner/repo)",
 		)
 	}
+	// ParseGitHubURL's owner/repo groups exclude only "/", so the URL still has
+	// to be held to the character set GitHub itself allows. Both halves are
+	// passed to git inside the build container, where anything else is either
+	// unusable or hostile.
+	if !isValidGitHubIdentifier(owner) || !isValidGitHubIdentifier(repoName) {
+		return NewValidationError(
+			"Invalid repository URL. Please use: https://github.com/owner/repo",
+			"repository owner and name may contain only letters, digits, '.', '_' and '-'",
+		)
+	}
 	if repo.Branch == "" {
 		return NewValidationError(
 			"Please specify a branch for the repository",
 			"repository branch cannot be empty",
 		)
 	}
-	if repo.AppPath == "" || !strings.HasPrefix(repo.AppPath, "/") {
+	if !isValidGitHubBranch(repo.Branch) {
 		return NewValidationError(
-			"Please provide a valid application path starting with /",
-			"repository appPath is required and must start with /",
+			"Invalid branch name. Use letters, digits and '.', '_', '-', '@', '+', '/'",
+			"repository branch is not a valid git ref name",
 		)
+	}
+	if err := validateSafePath(
+		repo.AppPath,
+		"repository appPath",
+		"Please provide a valid application path starting with /",
+	); err != nil {
+		return err
 	}
 	// If secretRef field is present (private repo), it must not be empty
 	if repo.SecretRef.Get() != nil && *repo.SecretRef.Get() == "" {
@@ -726,12 +780,32 @@ func validateInputInterface(agentType spec.AgentType, inputInterface *spec.Input
 			"unsupported inputInterface type: %s", inputInterface.Type,
 		)
 	}
+	// The base path is rendered into the Workload CR and into gateway routing, so
+	// it is checked whenever it is set, not only for the sub-type that requires it.
+	if basePath := StrPointerAsStr(inputInterface.BasePath, ""); basePath != "" {
+		if err := validateSafePath(
+			basePath,
+			"inputInterface.basePath",
+			"Please provide a valid base path starting with /",
+		); err != nil {
+			return err
+		}
+	}
 	if StrPointerAsStr(agentType.SubType, "") == string(AgentSubTypeCustomAPI) {
-		if inputInterface.Schema == nil || !strings.HasPrefix(StrPointerAsStr(inputInterface.Schema.Path, ""), "/") {
+		if inputInterface.Schema == nil {
 			return NewValidationError(
 				"Please provide a valid schema path starting with /",
 				"inputInterface.schema.path is required and must start with /",
 			)
+		}
+		// The schema path is resolved against the checked-out source tree in the
+		// build container, so it gets the same treatment as the other build paths.
+		if err := validateSafePath(
+			StrPointerAsStr(inputInterface.Schema.Path, ""),
+			"inputInterface.schema.path",
+			"Please provide a valid schema path starting with /",
+		); err != nil {
+			return err
 		}
 		if IntPointerAsInt(inputInterface.Port, 0) <= 0 || IntPointerAsInt(inputInterface.Port, 0) > 65535 {
 			return NewValidationError(
@@ -1209,27 +1283,67 @@ func isValidGitHubIdentifier(value string) bool {
 	return true
 }
 
-// isValidGitHubBranch validates branch names
+// gitBranchRe is a positive allowlist for git ref names: letters, digits and the
+// punctuation that real branch names use. An allowlist is used rather than a
+// denylist of git's special characters because a branch name is handed to git
+// inside the build container -- a denylist has to enumerate every character that
+// could matter there, and the previous one permitted ";" among others.
+var gitBranchRe = regexp.MustCompile(`^[A-Za-z0-9._@+/-]+$`)
+
+// isValidGitHubBranch validates branch names. Deliberately stricter than git's
+// own refname rules: it covers every branch name seen in practice while leaving
+// no room for shell metacharacters or for a leading "-" that git would read as
+// an option instead of a ref.
 func isValidGitHubBranch(branch string) bool {
-	if branch == "" {
+	if branch == "" || len(branch) > MaxGitBranchLength {
 		return false
 	}
 
-	// Reject path traversal
-	if strings.Contains(branch, "..") {
+	if !gitBranchRe.MatchString(branch) {
 		return false
 	}
 
-	// Reject control characters and null bytes (prevents injection attacks)
-	controlChars := regexp.MustCompile(`[\x00-\x1f\x7f]`)
-	if controlChars.MatchString(branch) {
+	// A leading "-" is read by git as an option rather than a ref.
+	if strings.HasPrefix(branch, "-") {
 		return false
 	}
 
-	// Reject Git special characters and whitespace
-	// Still allows @, +, and other characters that are valid in branch names
-	gitSpecialChars := regexp.MustCompile(`[\s~^:?*\[\\]`)
-	return !gitSpecialChars.MatchString(branch)
+	// Refname rules the character class above cannot express.
+	if strings.HasPrefix(branch, "/") || strings.HasSuffix(branch, "/") ||
+		strings.Contains(branch, "//") {
+		return false
+	}
+	if strings.Contains(branch, "..") || strings.Contains(branch, "@{") {
+		return false
+	}
+	if strings.HasSuffix(branch, ".") || strings.HasSuffix(branch, ".lock") {
+		return false
+	}
+
+	return true
+}
+
+// gitCommitIDRe matches an abbreviated or full SHA-1 object name. The lower bound
+// is git's own minimum abbreviation length rather than the 7 that
+// "git rev-parse --short" happens to emit, so a caller passing a shorter
+// abbreviation is not rejected here and left to fail against the real repository.
+var gitCommitIDRe = regexp.MustCompile(`^[0-9a-fA-F]{4,40}$`)
+
+// ValidateGitCommitID validates an optional commit to build. An empty value means
+// "use the latest commit on the branch" and is accepted. The commit reaches git
+// inside the build container, and its first eight characters also become part of
+// the built image tag, so it is held to an object name and nothing else.
+func ValidateGitCommitID(commitID string) error {
+	if commitID == "" {
+		return nil
+	}
+	if !gitCommitIDRe.MatchString(commitID) {
+		return NewValidationError(
+			"Invalid commit. Provide a commit SHA of 4 to 40 hexadecimal characters",
+			"commitId must be a hexadecimal git object name of 4 to 40 characters",
+		)
+	}
+	return nil
 }
 
 // ValidateListBranchesRequest validates the ListBranchesRequest payload

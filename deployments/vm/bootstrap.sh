@@ -56,7 +56,7 @@ fi
 [[ -n "$VERSION" ]] || \
   die "could not determine the release version — pass --version <release> (simple) or set AMP_VERSION in --config (advanced)"
 
-BUNDLE_URL="${AMP_BUNDLE_URL:-https://github.com/${REPO}/releases/download/amp/v${VERSION}/amp-vm-bundle-${VERSION}.tar.gz}"
+BUNDLE_URL="${AMP_BUNDLE_URL:-https://github.com/${REPO}/releases/download/amp/v${VERSION}/wso2-agent-manager-${VERSION}.tar.gz}"
 
 command -v curl >/dev/null 2>&1 || die "curl is required to download the install bundle"
 command -v tar  >/dev/null 2>&1 || die "tar is required to unpack the install bundle"

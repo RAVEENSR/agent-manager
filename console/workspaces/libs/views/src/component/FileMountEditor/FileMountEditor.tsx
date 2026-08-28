@@ -26,7 +26,8 @@ import {
 import { TextInput } from '../FormElements';
 
 export interface FileMountEditorProps {
-  index: number;
+  /** Unused internally; kept optional for callers that still pass it. */
+  index?: number;
   keyValue: string;
   mountPathValue: string;
   contentValue: string;
@@ -44,7 +45,6 @@ export interface FileMountEditorProps {
 }
 
 export function FileMountEditor({
-  index,
   keyValue,
   mountPathValue,
   contentValue,
@@ -141,7 +141,7 @@ export function FileMountEditor({
   // Collapsed (read-only) view
   if (!isEditing) {
     return (
-      <Stack key={index} direction="row" gap={2} alignItems="center">
+      <Stack direction="row" gap={2} alignItems="center">
         <Box flex={1} minWidth={0}>
           <Box component="span" fontWeight={500}>File Name:</Box>{' '}{keyValue}
         </Box>
@@ -169,7 +169,7 @@ export function FileMountEditor({
 
   // Expanded (editing) view
   return (
-    <Stack key={index} direction="column" gap={1}>
+    <Stack direction="column" gap={1}>
       <Stack direction="row" gap={2} alignItems="end">
         <Box flex={1} minWidth={0}>
           <TextInput
@@ -267,16 +267,16 @@ export function FileMountEditor({
           Updating a Secret file removes the previous content permanently and cannot be restored.
         </Alert>
       )}
-      {!initialIsNew.current && (
-        <Stack direction="row" gap={1} justifyContent="flex-end">
+      <Stack direction="row" gap={1} justifyContent="flex-end">
+        {!initialIsNew.current && (
           <Button variant="outlined" size="small" onClick={handleCancelEditing}>
             Cancel
           </Button>
-          <Button variant="contained" size="small" color="primary" onClick={handleUpdate}>
-            Update
-          </Button>
-        </Stack>
-      )}
+        )}
+        <Button variant="contained" size="small" color="primary" onClick={handleUpdate}>
+          {initialIsNew.current ? 'Save' : 'Update'}
+        </Button>
+      </Stack>
     </Stack>
   );
 }

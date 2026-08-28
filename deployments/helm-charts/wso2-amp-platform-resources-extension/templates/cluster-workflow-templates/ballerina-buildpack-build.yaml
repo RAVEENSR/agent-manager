@@ -24,15 +24,27 @@ spec:
         command:
           - sh
           - -c
+        # Workflow parameters arrive as environment variables rather than being
+        # interpolated into the script body: Argo substitution is textual, so a
+        # spliced parameter would be parsed as shell by the interpreter below.
+        env:
+          - name: IMAGE_NAME
+            value: '{{ "{{" }}workflow.parameters.image-name{{ "}}" }}'
+          - name: IMAGE_TAG
+            value: '{{ "{{" }}workflow.parameters.image-tag{{ "}}" }}'
+          - name: GIT_REVISION
+            value: '{{ "{{" }}inputs.parameters.git-revision{{ "}}" }}'
+          - name: APP_PATH
+            value: '{{ "{{" }}workflow.parameters.app-path{{ "}}" }}'
+          - name: BUILD_ENV_JSON
+            value: '{{ "{{" }}inputs.parameters.build-env{{ "}}" }}'
         args:
           - |-
             set -e
 
             WORKDIR=/mnt/vol/source
 
-            IMAGE="{{ "{{" }}workflow.parameters.image-name{{ "}}" }}:{{ "{{" }}workflow.parameters.image-tag{{ "}}" }}-{{ "{{" }}inputs.parameters.git-revision{{ "}}" }}"
-            APP_PATH="{{ "{{" }}workflow.parameters.app-path{{ "}}" }}"
-            BUILD_ENV_JSON='{{ "{{" }}inputs.parameters.build-env{{ "}}" }}'
+            IMAGE="${IMAGE_NAME}:${IMAGE_TAG}-${GIT_REVISION}"
 
             if [ ! -d "$WORKDIR/$APP_PATH" ]; then
               echo ">> Error: The specified application path '$APP_PATH' does not exist in the repository"

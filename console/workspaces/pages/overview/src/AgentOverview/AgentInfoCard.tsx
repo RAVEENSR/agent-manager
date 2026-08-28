@@ -48,8 +48,6 @@ interface AgentInfoCardProps {
     repository?: RepositoryConfig;
     latestBuild?: BuildResponse;
     isBuildsLoading?: boolean;
-    framework?: string;
-    model?: string;
     build?: Build;
 }
 
@@ -83,7 +81,6 @@ interface SourceInfoProps {
     repoTreeUrl: string | null;
     branch?: string;
     buildpackLabel: string | null;
-    agentTypeLabel: string | null;
 }
 
 function SourceInfo({
@@ -92,7 +89,6 @@ function SourceInfo({
     repoTreeUrl,
     branch,
     buildpackLabel,
-    agentTypeLabel,
 }: SourceInfoProps) {
     return (
         <>
@@ -133,14 +129,6 @@ function SourceInfo({
             {buildpackLabel && (
                 <Chip
                     label={buildpackLabel}
-                    size="small"
-                    variant="outlined"
-                    sx={{ flexShrink: 0, display: { xs: "none", lg: "inline-flex" } }}
-                />
-            )}
-            {agentTypeLabel && (
-                <Chip
-                    label={agentTypeLabel}
                     size="small"
                     variant="outlined"
                     sx={{ flexShrink: 0, display: { xs: "none", lg: "inline-flex" } }}
@@ -194,8 +182,6 @@ export const AgentInfoCard: React.FC<AgentInfoCardProps> = ({
     repository,
     latestBuild,
     isBuildsLoading,
-    framework,
-    model,
     build,
 }) => {
     const buildpackLabel = (() => {
@@ -206,8 +192,6 @@ export const AgentInfoCard: React.FC<AgentInfoCardProps> = ({
         }
         return "Docker";
     })();
-
-    const agentTypeLabel = [framework, model].filter(Boolean).join("/") || null;
 
     const buildsPath = generatePath(
         absoluteRouteMap.children.org.children.projects.children.agents.children.build.path,
@@ -231,7 +215,6 @@ export const AgentInfoCard: React.FC<AgentInfoCardProps> = ({
                         repoTreeUrl={repoTreeUrl}
                         branch={repository?.branch}
                         buildpackLabel={buildpackLabel}
-                        agentTypeLabel={agentTypeLabel}
                     />
                 </Box>
 

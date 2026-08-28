@@ -1,4 +1,6 @@
 .env
 tests_e2e-report.xml
 e2e-report.xml
+security-report.xml
+security_security-report.xml
 

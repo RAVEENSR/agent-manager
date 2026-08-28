@@ -102,8 +102,6 @@ apiGateway:
     # Name of the ConfigMap to create with gateway Helm values.
     # Defaults to "<release-name>-config" if empty.
     configMapName: ""
-    # Helm chart version for the gateway (must match what gateway-operator is configured for)
-    chartVersion: "1.1.0"
 
     # =========================================================================
     # Policy system parameter configurations
@@ -178,45 +176,83 @@ apiGateway:
       # mcpauth_v1:
       #   gatewayhost: "localhost"
 
-    # Root-level config keys injected as environment variables into the
-    # policy engine. Use for policies that reference ${config.<key>} at
-    # root level (e.g., AWS Bedrock, Azure Content Safety, embedding providers).
-    # Keys are converted to env vars: key_name -> APIP_GW_KEY__NAME
-    # (underscores become double underscores to preserve them in koanf).
+    # Raw TOML injected at the TOP of the downstream gateway chart's generated
+    # config.toml, above every [table] section (rendered as gateway.config_toml
+    # in the generated values.yaml). Use for policy "system parameters" that
+    # policies read as ${config.<key>} at root level (e.g. AWS Bedrock,
+    # Azure Content Safety, embedding providers) — TOML requires bare root
+    # keys to precede any [table] header, which is why this leads the file.
+    # Whole [table] sections work here too (tables are order-independent).
+    # Do NOT redefine a table this chart already emits below
+    # ([policy_configurations.*], [controller.*], [router], etc.) — TOML
+    # rejects a duplicate table and the gateway-runtime crash-loops on it.
+    #
+    # config.toml renders into a ConfigMap, not a Secret. For any secret value,
+    # supply an `{{ env "VAR" }}` interpolation token (resolved by the policy
+    # engine at load time) instead of a literal, and inject the backing env
+    # var via apiGateway.config.systemExtraEnv below (backed by a Kubernetes
+    # Secret, never a plaintext value).
     #
     # Example:
-    #   systemEnv:
+    #   config_toml: |
     #     # AWS Bedrock Guardrail
-    #     awsbedrock_guardrail_region: "us-east-1"
-    #     awsbedrock_guardrail_id: ""
-    #     awsbedrock_guardrail_version: "DRAFT"
-    #     awsbedrock_access_key_id: ""
-    #     awsbedrock_secret_access_key: ""
-    #     awsbedrock_session_token: ""
-    #     awsbedrock_role_arn: ""
-    #     awsbedrock_role_region: ""
-    #     awsbedrock_role_external_id: ""
+    #     awsbedrock_guardrail_region = "us-east-1"
+    #     awsbedrock_guardrail_id = ""
+    #     awsbedrock_guardrail_version = "DRAFT"
+    #     awsbedrock_access_key_id = ""
+    #     awsbedrock_secret_access_key = '{{ env "APIP_GW_AWSBEDROCK_SECRET_ACCESS_KEY" }}'
+    #     awsbedrock_session_token = ""
+    #     awsbedrock_role_arn = ""
+    #     awsbedrock_role_region = ""
+    #     awsbedrock_role_external_id = ""
     #
     #     # Azure Content Safety
-    #     azurecontentsafety_endpoint: ""
-    #     azurecontentsafety_key: ""
+    #     azurecontentsafety_endpoint = ""
+    #     azurecontentsafety_key = '{{ env "APIP_GW_AZURECONTENTSAFETY_KEY" }}'
     #
     #     # Embedding Provider (semantic-cache, semantic-prompt-guard, semantic-tool-filtering)
-    #     embedding_provider: "OPENAI"
-    #     embedding_provider_endpoint: ""
-    #     embedding_provider_model: "text-embedding-ada-002"
-    #     embedding_provider_dimension: "1536"
-    #     embedding_provider_api_key: ""
+    #     embedding_provider = "OPENAI"
+    #     embedding_provider_endpoint = ""
+    #     embedding_provider_model = "text-embedding-ada-002"
+    #     embedding_provider_dimension = "1536"
+    #     embedding_provider_api_key = '{{ env "APIP_GW_EMBEDDING_PROVIDER_API_KEY" }}'
     #
     #     # Vector DB (semantic-cache)
-    #     vector_db_provider: "REDIS"
-    #     vector_db_provider_host: ""
-    #     vector_db_provider_port: "6379"
-    #     vector_db_provider_username: ""
-    #     vector_db_provider_password: ""
-    #     vector_db_provider_database: ""
-    #     vector_db_provider_ttl: "3600"
-    systemEnv: {}
+    #     vector_db_provider = "REDIS"
+    #     vector_db_provider_host = ""
+    #     vector_db_provider_port = "6379"
+    #     vector_db_provider_username = ""
+    #     vector_db_provider_password = '{{ env "APIP_GW_VECTOR_DB_PROVIDER_PASSWORD" }}'
+    #     vector_db_provider_database = ""
+    #     vector_db_provider_ttl = "3600"
+    #
+    #     # Granite Guardian Prompt Injection
+    #     granite_guardian_endpoint = "http://granite-guardian:8000"
+    #     granite_guardian_model = "ibm-granite/granite-guardian-3.3-8b"
+    #     granite_guardian_timeout = "10"
+    #     granite_guardian_api_key = '{{ env "APIP_GW_GRANITE_GUARDIAN_API_KEY" }}'
+    #
+    #     # NeMo Guard Content Safety
+    #     nemoguard_endpoint = "http://nemoguard:8101"
+    #     nemoguard_model = "nemoguard"
+    #     nemoguard_timeout = "30"
+    #     nemoguard_api_key = '{{ env "APIP_GW_NEMOGUARD_API_KEY" }}'
+    config_toml: ""
+
+    # Env vars backing any `{{ env "..." }}` tokens used in config_toml above.
+    # config.toml is loaded by both the gateway-controller and gatewayRuntime
+    # (policy engine) pods, so each entry is rendered into BOTH
+    # controller.deployment.extraEnv and gatewayRuntime.deployment.extraEnv.
+    # Secret values should use valueFrom.secretKeyRef rather than a literal value.
+    #
+    # Example:
+    #   systemExtraEnv:
+    #     - name: APIP_GW_AZURECONTENTSAFETY_KEY
+    #       valueFrom:
+    #         secretKeyRef:
+    #           name: azure-content-safety
+    #           key: subscription-key
+    systemExtraEnv: []
 
 # Bootstrap Job configuration
 #

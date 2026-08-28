@@ -707,6 +707,7 @@ curl -fsSL "https://raw.githubusercontent.com/wso2/agent-manager/amp/v0.0.0-dev/
 ENV_NAME=default \
 DISPLAY_NAME="Default" \
 ORG_NAME=default \
+THUNDER_HANDLE=default-idp \
 AMP_API_URL="${API_PUBLIC_URL}/api/v1" \
 IDP_TOKEN_URL="${THUNDER_PUBLIC_URL}/oauth2/token" \
 THUNDER_HOST_BASE_DOMAIN="amp.localhost" \
@@ -714,12 +715,11 @@ bash add-environment-thunder.sh
 ```
 
 The script registers an unguessable handle with Agent Manager before it creates
-the environment's ThunderID instance. To choose a handle yourself, add
-`THUNDER_HANDLE=<10-63-character-handle>` to the command; otherwise Agent
-Manager generates one. The script prints the resulting issuer as
-`http://<handle>.amp.localhost:8080`. Do not derive it from the organization
-and environment names. The existing `*.amp.localhost` routing covers each
-generated handle.
+the environment's ThunderID instance. `THUNDER_HANDLE` is optional (3-63
+characters); omit it to have Agent Manager generate one instead. The script
+prints the resulting issuer as `http://<handle>.amp.localhost:8080`. Do not
+derive it from the organization and environment names. The existing
+`*.amp.localhost` routing covers each handle, generated or chosen.
 
 :::tip Verify
 ```bash

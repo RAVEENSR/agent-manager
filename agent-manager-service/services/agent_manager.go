@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
@@ -37,6 +38,7 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/instrumentation"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/jwtassertion"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/wso2/agent-manager/agent-manager-service/rbac"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 	"github.com/wso2/agent-manager/agent-manager-service/spec"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
@@ -1511,6 +1513,11 @@ func (s *agentManagerService) createComponentAgent(ctx context.Context, ouID, pr
 		return translateOrgError(err)
 	}
 
+	// Preflight: refuse the name while a deleted agent's configurations still hold it.
+	if err := s.checkNoOrphanedConfigs(ctx, ouID, projectName, req.Name); err != nil {
+		return err
+	}
+
 	if requiresGitSecretValidation(req.Provisioning.Repository) {
 		if err := s.validateGitSecretExists(ctx, ouID, req.Provisioning.Repository.GetSecretRef()); err != nil {
 			return err
@@ -1721,14 +1728,16 @@ func (s *agentManagerService) createComponentAgent(ctx context.Context, ouID, pr
 				kindEnvVars = createAgentReq.Configurations.Env
 				kindFileVars = createAgentReq.Configurations.Files
 			}
-			// Kind-sourced agents bypass the build/workflow system, so the LLM env vars
-			// written into the Component workflow params by createAgentLLMConfigs never reach
-			// the container. The Workload CR is authoritative for these agents, so resolve the
-			// system-managed LLM env vars from the persisted config and inject them here.
-			kindEnvVars, envErr := s.mergeKindWorkloadLLMEnvVars(ctx, req.Name, ouID, projectName, firstEnv, kindEnvVars, len(req.ModelConfig) > 0)
+			// Kind-sourced agents bypass the build/workflow system, so the system-managed env
+			// vars written into the Component workflow params by createAgentLLMConfigs and
+			// createAgentMCPConfigs never reach the container. The Workload CR is authoritative
+			// for these agents, so resolve those env vars from the persisted config and inject
+			// them here.
+			kindEnvVars, envErr := s.mergeKindWorkloadSystemEnvVars(ctx, req.Name, ouID, projectName, firstEnv, kindEnvVars)
 			if envErr != nil {
-				s.logger.Error("Failed to resolve LLM env vars for kind-sourced agent workload", "agentName", req.Name, "environment", firstEnv, "error", envErr)
-				rollbackAgentCreate("LLM env var resolution failure")
+				s.logger.Error("Failed to resolve system-managed env vars for kind-sourced agent workload",
+					"agentName", req.Name, "ouID", ouID, "projectName", projectName, "environment", firstEnv, "error", envErr)
+				rollbackAgentCreate("system env var resolution failure")
 				return envErr
 			}
 			kindEndpoints := inputInterfaceToEndpoints(createAgentReq.InputInterface, req.Name)
@@ -1862,23 +1871,25 @@ func (s *agentManagerService) triggerInitialBuild(ctx context.Context, ouID, pro
 	return nil
 }
 
-// mergeKindWorkloadLLMEnvVars appends the system-managed LLM env vars (proxy URL + API key
-// secret ref) for the first environment onto the user-supplied env vars of a kind-sourced agent.
-// Kind-sourced agents create their Workload CR directly, bypassing the build/workflow system that
-// otherwise carries these vars into the container, so they must be injected into the Workload here.
-// When the agent has no LLM configuration, userEnvVars is returned unchanged.
-func (s *agentManagerService) mergeKindWorkloadLLMEnvVars(
-	ctx context.Context, agentName, ouID, projectName, firstEnv string, userEnvVars []client.EnvVar, hasModelConfig bool,
+// mergeKindWorkloadSystemEnvVars appends the system-managed env vars (proxy URL + API key secret
+// ref, for every DB-backed config type) for the first environment onto the user-supplied env vars
+// of a kind-sourced agent. Kind-sourced agents create their Workload CR directly, bypassing the
+// build/workflow system that otherwise carries these vars into the container, so they must be
+// injected into the Workload here.
+//
+// The resolver is consulted unconditionally and reports what the agent's configs actually are,
+// rather than this deciding up front which config types are worth resolving. Enumerating the
+// types here is what previously dropped the env vars of an MCP-only agent, and would drop them
+// again for the next config type added.
+func (s *agentManagerService) mergeKindWorkloadSystemEnvVars(
+	ctx context.Context, agentName, ouID, projectName, firstEnv string, userEnvVars []client.EnvVar,
 ) ([]client.EnvVar, error) {
-	if !hasModelConfig {
-		return userEnvVars, nil
-	}
-	llmEnvVars, err := s.agentConfigurationService.BuildSystemManagedEnvVarsFromConfig(ctx, agentName, ouID, projectName, firstEnv)
+	systemEnvVars, err := s.agentConfigurationService.BuildSystemManagedEnvVarsFromConfig(ctx, agentName, ouID, projectName, firstEnv)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build system-managed LLM env vars: agentName %s, ouID %s, projectName %s, env %s, error: %w",
+		return nil, fmt.Errorf("failed to build system-managed env vars: agentName %s, ouID %s, projectName %s, env %s, error: %w",
 			agentName, ouID, projectName, firstEnv, err)
 	}
-	return append(userEnvVars, llmEnvVars...), nil
+	return append(userEnvVars, systemEnvVars...), nil
 }
 
 func (s *agentManagerService) createAgentLLMConfigs(
@@ -2737,6 +2748,14 @@ func (s *agentManagerService) DeleteAgent(ctx context.Context, ouID string, proj
 		if errors.Is(translatedErr, utils.ErrAgentNotFound) {
 			s.logger.Warn("Agent not found during deletion, delete is idempotent", "agentName", agentName, "ouID", ouID, "projectName", projectName)
 			s.cleanupGitHubAppSource(ctx, ouID, projectName, agentName)
+			// The component is already gone but a previous partially-completed delete may
+			// have left agent_configurations rows behind, each still holding a live LLM
+			// proxy credential, so run the same revocation cleanup here.
+			go func() {
+				cleanupCtx, cancel := detachedCleanupContext(ctx)
+				defer cancel()
+				s.deleteAgentLLMConfigurations(cleanupCtx, ouID, projectName, agentName, isExternalAgent)
+			}()
 			if configErr := s.agentConfigRepo.DeleteAllByAgent(ctx, ouID, projectName, agentName); configErr != nil {
 				s.logger.Warn("Failed to delete agent configs from database", "agentName", agentName, "error", configErr)
 			}
@@ -2752,16 +2771,21 @@ func (s *agentManagerService) DeleteAgent(ctx context.Context, ouID string, proj
 	}
 
 	// Component confirmed deleted — clean up LLM proxy resources and DB records in the
-	// background. context.WithoutCancel detaches the request deadline so the goroutine
-	// is not cancelled when the HTTP handler returns, while still inheriting any values
-	// (trace IDs, logger) from the request context.
-	go s.deleteAgentLLMConfigurations(context.WithoutCancel(ctx), ouID, projectName, agentName, isExternalAgent)
+	// background, on a context that outlives the request but is still bounded
+	// (see detachedCleanupContext).
+	go func() {
+		cleanupCtx, cancel := detachedCleanupContext(ctx)
+		defer cancel()
+		s.deleteAgentLLMConfigurations(cleanupCtx, ouID, projectName, agentName, isExternalAgent)
+	}()
 	if s.agentThunderProvisioning != nil {
 		go s.agentThunderProvisioning.DeleteAllBindings(context.WithoutCancel(ctx), ouID, projectName, agentName)
 	}
 	s.cleanupGitHubAppSource(ctx, ouID, projectName, agentName)
 
-	// Cleanup agent configs from database
+	// Cleanup agent_configs (per-environment instrumentation, CORS and security settings).
+	// Unrelated to the LLM proxy records the goroutine above revokes, so it does not wait
+	// on them: leaving these rows behind would let a same-named agent inherit them.
 	if configErr := s.agentConfigRepo.DeleteAllByAgent(ctx, ouID, projectName, agentName); configErr != nil {
 		s.logger.Warn("Failed to delete agent configs from database", "agentName", agentName, "error", configErr)
 		// Don't fail the deletion - configs will be orphaned but harmless
@@ -2787,6 +2811,67 @@ func (s *agentManagerService) cleanupGitHubAppSource(ctx context.Context, ouID, 
 	if err := s.buildSecretProvisioner.DeleteSource(context.WithoutCancel(ctx), ouID, projectName, agentName); err != nil {
 		s.logger.Warn("Failed to delete GitHub App source binding during agent deletion", "agentName", agentName, "error", err)
 	}
+}
+
+// Agent-deletion cleanup runs detached from the request (see deleteAgentLLMConfigurations),
+// so it can afford to wait out the transient gateway/secret-store failures that make
+// revocation fail while the cluster is under load — the failure mode this path was
+// reported for. Four attempts at a doubling delay spans ~14s per configuration.
+// Variables rather than constants so tests can shrink the delay; production never reassigns them.
+var (
+	agentConfigCleanupAttempts   = 4
+	agentConfigCleanupRetryDelay = 2 * time.Second
+)
+
+// agentCleanupTimeout bounds the detached cleanup goroutine. The retry budget above lets a
+// single configuration occupy ~14s of backoff on top of its external calls, so a many-config
+// agent could otherwise keep the goroutine alive indefinitely if a gateway stops answering.
+// Generous on purpose: the ceiling exists to stop a wedged call from pinning the goroutine for
+// the process lifetime, not to cut short revocations that are still making progress.
+const agentCleanupTimeout = 10 * time.Minute
+
+// detachedCleanupContext returns a context for post-delete cleanup that outlives the request.
+// WithoutCancel drops the request deadline while keeping its values (trace IDs, logger) so the
+// work is not cancelled when the HTTP handler returns; the timeout then puts a ceiling back on.
+func detachedCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), agentCleanupTimeout)
+}
+
+// withAgentConfigCleanupRetry retries a configuration teardown with exponential backoff.
+//
+// Every external step of DeleteForAgentDeletion tolerates an already-gone resource — the
+// proxy/provider revocations swallow their not-found sentinels and DeleteSecret is
+// idempotent by contract — so re-running it after a partial success finishes the
+// remaining steps instead of double-deleting. That is what makes retrying on *any* error
+// safe here: the error it returns is a joined summary of which steps failed, not a typed
+// sentinel that could be classified as transient or permanent.
+//
+// A permanent failure therefore costs the full attempt budget before giving up. That is
+// the accepted trade: an un-revoked credential stays live until someone intervenes, so
+// spending a few seconds to rule out a transient cause is worth more than failing fast.
+func withAgentConfigCleanupRetry(ctx context.Context, logger *slog.Logger, configUUID string, fn func() error) error {
+	var lastErr error
+	for attempt := range agentConfigCleanupAttempts {
+		lastErr = fn()
+		if lastErr == nil {
+			if attempt > 0 {
+				logger.Info("Configuration teardown succeeded on retry", "configUUID", configUUID, "attempt", attempt+1)
+			}
+			return nil
+		}
+		if attempt == agentConfigCleanupAttempts-1 {
+			break
+		}
+		delay := agentConfigCleanupRetryDelay << attempt
+		logger.Warn("Configuration teardown failed, retrying",
+			"configUUID", configUUID, "attempt", attempt+1, "retryIn", delay, "error", lastErr)
+		select {
+		case <-ctx.Done():
+			return lastErr
+		case <-time.After(delay):
+		}
+	}
+	return lastErr
 }
 
 // cleanupAgentMonitors removes all monitors owned by an agent. Best-effort: orphaned
@@ -2821,6 +2906,37 @@ func (s *agentManagerService) deleteAgentAPIArtifact(ctx context.Context, ouID, 
 	}
 }
 
+// checkNoOrphanedConfigs refuses to create an agent whose name still has agent_configurations
+// rows attached to it.
+//
+// Configurations are keyed by (ou_id, project_name, agent_id) where agent_id is the agent's
+// *name*, not a per-instance identity, and DeleteForAgentDeletion deliberately keeps a row
+// whose external teardown failed so the proxy, key and deployment it names can still be found
+// and revoked. Those two facts together mean a new agent created with a deleted agent's name
+// would adopt the surviving rows — and with them a live, un-rotated LLM proxy credential — with
+// nothing in the UI to distinguish it from a fresh binding. Refusing the create is what keeps
+// that from happening silently; deleting the agent again re-runs the revocation and clears the
+// name once it succeeds.
+//
+// A list failure is fatal here rather than best-effort: without the list we cannot tell a clean
+// name from an orphaned one, and guessing wrong leaks a credential.
+func (s *agentManagerService) checkNoOrphanedConfigs(ctx context.Context, ouID, projectName, agentName string) error {
+	listResp, err := s.agentConfigurationService.List(ctx, ouID, projectName, agentName, 1, 0)
+	if err != nil {
+		s.logger.Error("Failed to check for orphaned agent configurations before create",
+			"agentName", agentName, "ouID", ouID, "projectName", projectName, "error", err)
+		return fmt.Errorf("failed to check for leftover configurations for agent %s: %w", agentName, err)
+	}
+	if listResp.Pagination.Count == 0 {
+		return nil
+	}
+
+	s.logger.Error("Refusing to create agent: configurations from a previously deleted agent with this name were not fully revoked",
+		"agentName", agentName, "ouID", ouID, "projectName", projectName, "orphanedConfigs", listResp.Pagination.Count)
+	return fmt.Errorf("%w: %d configuration(s) for agent %q in project %q remain; deletion cleanup may still be running, so retry shortly, then delete the agent again to re-attempt revoking them, or use a different name",
+		utils.ErrOrphanedAgentConfigsExist, listResp.Pagination.Count, agentName, projectName)
+}
+
 // deleteAgentLLMConfigurations removes all LLM and MCP configurations for an agent during agent deletion.
 // isExternalAgent must be resolved by the caller before the component is deleted so this function
 // requires no OC calls. Calls DeleteForAgentDeletion which skips Component/Workload/ReleaseBinding
@@ -2839,8 +2955,16 @@ func (s *agentManagerService) deleteAgentLLMConfigurations(ctx context.Context, 
 			s.logger.Warn("Failed to parse config UUID during agent deletion", "uuid", cfg.UUID, "type", cfg.Type, "error", parseErr)
 			continue
 		}
-		if delErr := s.agentConfigurationService.DeleteForAgentDeletion(ctx, configUUID, ouID, projectName, agentName, isExternalAgent); delErr != nil {
-			s.logger.Warn("Failed to delete configuration during agent deletion", "configUUID", cfg.UUID, "type", cfg.Type, "error", delErr)
+		delErr := withAgentConfigCleanupRetry(ctx, s.logger, cfg.UUID, func() error {
+			return s.agentConfigurationService.DeleteForAgentDeletion(ctx, configUUID, ouID, projectName, agentName, isExternalAgent)
+		})
+		if delErr != nil {
+			// DeleteForAgentDeletion keeps the agent_configurations row when any external
+			// step failed, so the record of what still needs revoking survives. Creating an
+			// agent with this name is refused until it is gone (see checkNoOrphanedConfigs).
+			s.logger.Error("Gave up revoking configuration during agent deletion; its LLM proxy credential may still be live",
+				"configUUID", cfg.UUID, "type", cfg.Type, "agentName", agentName, "ouID", ouID,
+				"attempts", agentConfigCleanupAttempts, "error", delErr)
 		}
 	}
 
@@ -2971,6 +3095,22 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 	if lowestEnv == "" {
 		s.logger.Error("No environment found in deployment pipeline", "projectName", projectName)
 		return "", fmt.Errorf("no environment found in deployment pipeline")
+	}
+
+	// A deploy always targets the pipeline's lowest environment, so the tier has
+	// to be checked here rather than at the edge: the route cannot know where the
+	// agent will land. Nothing is written before this point.
+	//
+	// targetEnv is resolved once, here. It used to be fetched further down, after
+	// most of the deploy request had been assembled, with a lookup failure only
+	// warned about — which meant a deploy could proceed without knowing where it
+	// was going, silently skipping the config, OAuth-issuer and trait work that
+	// needs the environment, and recording isProduction:false for what may have
+	// been a production deploy. Authorization cannot be that tolerant, so the
+	// lookup is now fail-closed and its result is reused below.
+	targetEnv, err := s.requireEnvTier(ctx, ouID, lowestEnv)
+	if err != nil {
+		return "", err
 	}
 
 	// The cell namespace for (project, environment) is owned by a
@@ -3109,28 +3249,21 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 	}
 	s.logger.Debug("Processed file mounts", "agentName", agentName, "count", len(overrideFileVars))
 
-	targetEnv, err := s.ocClient.GetEnvironment(ctx, ouID, lowestEnv)
-	if err != nil {
-		s.logger.Warn("Failed to get environment details", "environment", lowestEnv, "error", err)
-	}
-
 	// Read the existing agent_configs row once so we can resolve omitted request
 	// fields from DB and preserve pinned instrumentation_version during Upsert.
 	var existingConfig *models.AgentConfig
-	if targetEnv != nil {
-		cfg, configErr := s.agentConfigRepo.Get(ctx, ouID, projectName, agentName, targetEnv.Name)
-		switch {
-		case errors.Is(configErr, repositories.ErrAgentConfigNotFound):
-			s.logger.Debug("No config in database, using defaults", "agentName", agentName, "environment", targetEnv.Name)
-		case configErr != nil:
-			return "", fmt.Errorf("failed to read agent config for environment %q: %w", targetEnv.Name, configErr)
-		default:
-			existingConfig = cfg
-			s.logger.Debug("Read config from database", "agentName", agentName, "environment", targetEnv.Name,
-				"enableAutoInstrumentation", cfg.EnableAutoInstrumentation,
-				"enableApiKeySecurity", cfg.EnableApiKeySecurity,
-				"instrumentationVersion", cfg.InstrumentationVersion)
-		}
+	cfg, configErr := s.agentConfigRepo.Get(ctx, ouID, projectName, agentName, targetEnv.Name)
+	switch {
+	case errors.Is(configErr, repositories.ErrAgentConfigNotFound):
+		s.logger.Debug("No config in database, using defaults", "agentName", agentName, "environment", targetEnv.Name)
+	case configErr != nil:
+		return "", fmt.Errorf("failed to read agent config for environment %q: %w", targetEnv.Name, configErr)
+	default:
+		existingConfig = cfg
+		s.logger.Debug("Read config from database", "agentName", agentName, "environment", targetEnv.Name,
+			"enableAutoInstrumentation", cfg.EnableAutoInstrumentation,
+			"enableApiKeySecurity", cfg.EnableApiKeySecurity,
+			"instrumentationVersion", cfg.InstrumentationVersion)
 	}
 
 	// Resolve config values: request > DB > defaults
@@ -3146,10 +3279,8 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 	if err := validateOAuthSecurityConfig(apiCfg); err != nil {
 		return "", err
 	}
-	if targetEnv != nil {
-		if err := s.validateOAuthIssuersInEnvironment(targetEnv.UUID, apiCfg); err != nil {
-			return "", err
-		}
+	if err := s.validateOAuthIssuersInEnvironment(targetEnv.UUID, apiCfg); err != nil {
+		return "", err
 	}
 	enableAutoInstrumentation := tracingCfg.EnableAutoInstrumentation
 	enableApiKeySecurity := apiCfg.EnableApiKeySecurity
@@ -3212,9 +3343,6 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 	// environment's ReleaseBinding instead — see applyEnvScopedWorkloadConfig.
 
 	if isAPIAgent {
-		if targetEnv == nil {
-			return "", fmt.Errorf("cannot deploy API agent without environment details")
-		}
 		apiArtifact, artifactErr := ensureAgentEnvAPIArtifact(s.db, s.artifactRepo, ouID, projectName, agentName, targetEnv.UUID)
 		if artifactErr != nil {
 			return "", fmt.Errorf("cannot deploy API agent without environment API artifact record: %w", artifactErr)
@@ -3261,10 +3389,11 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 	// This updates the Workload image only; env vars and file mounts are applied per-environment
 	// via the release binding below.
 	s.logger.Debug("Deploying agent component in OpenChoreo", "agentName", agentName, "ouID", ouID, "projectName", projectName, "imageId", req.ImageId)
-	// The permission gating this route is agent:deploy-non-production whatever
-	// the pipeline's lowest environment actually is, so the record has to carry
-	// the real target and whether it is production. Without that the trail
-	// cannot distinguish a sandbox push from a production one.
+	// The route declares only the tier floor, whatever the pipeline's lowest
+	// environment actually is, so the record has to carry the real target and
+	// whether it is production. Without that the trail cannot distinguish a
+	// sandbox push from a production one. The flag comes from the tier check
+	// above, which already resolved the environment.
 	deployAttempt, auditErr := audit.Begin(
 		ctx, audit.ActionAgentDeploy,
 		audit.Org(ouID),
@@ -3273,7 +3402,7 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 		audit.Environment(lowestEnv),
 		audit.Detail("agentName", agentName),
 		audit.Detail("environment", lowestEnv),
-		audit.Detail("isProduction", targetEnv != nil && targetEnv.IsProduction),
+		audit.Detail("isProduction", targetEnv.IsProduction),
 		audit.Detail("imageId", req.ImageId),
 	)
 	if auditErr != nil {
@@ -3313,38 +3442,36 @@ func (s *agentManagerService) DeployAgent(ctx context.Context, ouID string, proj
 	// instrumentation_version (captured above) preserves it across the
 	// Upsert — the repo's DoUpdates map includes that column, so omitting
 	// the value would NULL out a customer's pin on every redeploy.
-	if targetEnv != nil {
-		var deployResilienceTimeoutSeconds *int32
-		if resilienceTimeoutSeconds > 0 {
-			deployResilienceTimeoutSeconds = &resilienceTimeoutSeconds
-		}
-		agentConfig := &models.AgentConfig{
-			OUID:                      ouID,
-			ProjectName:               projectName,
-			AgentName:                 agentName,
-			EnvironmentName:           targetEnv.Name,
-			EnableAutoInstrumentation: enableAutoInstrumentation,
-			InstrumentationVersion:    existingInstrumentationVersion,
-			EnableApiKeySecurity:      apiCfg.EnableApiKeySecurity,
-			CORSEnabled:               apiCfg.CORSEnabled,
-			CORSAllowOrigins:          apiCfg.CORSAllowOrigins,
-			CORSAllowMethods:          apiCfg.CORSAllowMethods,
-			CORSAllowHeaders:          apiCfg.CORSAllowHeaders,
-			CORSAllowCredentials:      apiCfg.CORSAllowCredentials,
-			EnableOAuthSecurity:       apiCfg.EnableOAuthSecurity,
-			OAuthIssuers:              apiCfg.OAuthIssuers,
-			OAuthAudiences:            apiCfg.OAuthAudiences,
-			OAuthHeaderName:           apiCfg.OAuthHeaderName,
-			OAuthAuthHeaderPrefix:     apiCfg.OAuthAuthHeaderPrefix,
-			OAuthForwardToken:         apiCfg.OAuthForwardToken,
-			ResilienceTimeoutSeconds:  deployResilienceTimeoutSeconds,
-		}
-		if configErr := s.agentConfigRepo.Upsert(ctx, agentConfig); configErr != nil {
-			s.logger.Error("Failed to persist agent config after deploy", "agentName", agentName, "environment", lowestEnv, "error", configErr)
-			return "", fmt.Errorf("agent deployed to %q but failed to persist its config (retry to reconcile): %w", lowestEnv, configErr)
-		}
-		s.logger.Debug("Persisted instrumentation config to database", "agentName", agentName, "environment", lowestEnv, "enableAutoInstrumentation", enableAutoInstrumentation, "instrumentationVersion", existingInstrumentationVersion)
+	var deployResilienceTimeoutSeconds *int32
+	if resilienceTimeoutSeconds > 0 {
+		deployResilienceTimeoutSeconds = &resilienceTimeoutSeconds
 	}
+	agentConfig := &models.AgentConfig{
+		OUID:                      ouID,
+		ProjectName:               projectName,
+		AgentName:                 agentName,
+		EnvironmentName:           targetEnv.Name,
+		EnableAutoInstrumentation: enableAutoInstrumentation,
+		InstrumentationVersion:    existingInstrumentationVersion,
+		EnableApiKeySecurity:      apiCfg.EnableApiKeySecurity,
+		CORSEnabled:               apiCfg.CORSEnabled,
+		CORSAllowOrigins:          apiCfg.CORSAllowOrigins,
+		CORSAllowMethods:          apiCfg.CORSAllowMethods,
+		CORSAllowHeaders:          apiCfg.CORSAllowHeaders,
+		CORSAllowCredentials:      apiCfg.CORSAllowCredentials,
+		EnableOAuthSecurity:       apiCfg.EnableOAuthSecurity,
+		OAuthIssuers:              apiCfg.OAuthIssuers,
+		OAuthAudiences:            apiCfg.OAuthAudiences,
+		OAuthHeaderName:           apiCfg.OAuthHeaderName,
+		OAuthAuthHeaderPrefix:     apiCfg.OAuthAuthHeaderPrefix,
+		OAuthForwardToken:         apiCfg.OAuthForwardToken,
+		ResilienceTimeoutSeconds:  deployResilienceTimeoutSeconds,
+	}
+	if configErr := s.agentConfigRepo.Upsert(ctx, agentConfig); configErr != nil {
+		s.logger.Error("Failed to persist agent config after deploy", "agentName", agentName, "environment", lowestEnv, "error", configErr)
+		return "", fmt.Errorf("agent deployed to %q but failed to persist its config (retry to reconcile): %w", lowestEnv, configErr)
+	}
+	s.logger.Debug("Persisted instrumentation config to database", "agentName", agentName, "environment", lowestEnv, "enableAutoInstrumentation", enableAutoInstrumentation, "instrumentationVersion", existingInstrumentationVersion)
 
 	s.logger.Info("Agent deployed successfully to "+lowestEnv, "agentName", agentName, "ouID", org.Name, "projectName", projectName, "environment", lowestEnv)
 	return lowestEnv, nil
@@ -3396,7 +3523,9 @@ func (s *agentManagerService) applyEnvScopedWorkloadConfig(
 			"agentName", agentName, "environment", environment, "attempt", attempt)
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			// Wrapped so the caller can still match context.Canceled/DeadlineExceeded with
+			// errors.Is while seeing which operation gave up.
+			return fmt.Errorf("failed to apply environment configuration: %w", ctx.Err())
 		case <-time.After(releaseBindingWaitInterval):
 		}
 	}
@@ -3717,6 +3846,87 @@ func buildTraitEnvConfigs(agentName string, policies []map[string]interface{}, a
 		}
 	}
 	return traitEnvConfigs
+}
+
+// requireEnvTier authorizes the caller to act on the named environment and
+// returns it.
+//
+// The environment tier is an authorization axis of its own, about *where* an
+// action lands rather than what it is: agent:env-non-production is the floor,
+// and agent:env-production is held in addition to it to reach the environments
+// OpenChoreo flags. A production environment requires both — the production
+// grant is an extra permission stacked on the floor, not a wider substitute for
+// it. That is not a free choice: the REST routes and the two MCP tools declare
+// the floor statically and deny before this method is reached, so a rule of
+// "production grant alone is sufficient" could never fire and would leave the
+// two layers describing the same decision differently.
+//
+// The check lives here rather than in route middleware because the MCP surface
+// declares tool permissions statically (mcp/tools/authz.go addTool) and has no
+// HTTP request to read a target environment from. This is the one place both
+// surfaces pass through, and mcp/tools/authz.go's withEffectiveScopes is what
+// guarantees ctx carries the same scopes the tool gate used.
+//
+// The environment is returned even on a denial, because the caller wants the
+// production flag for its audit record and this call has already paid for the
+// lookup; it is nil only when the lookup itself failed. The lookup runs before
+// the RBAC switch is consulted for the same reason: an RBAC_ENABLED=false
+// install should still get a trail that distinguishes a production change from
+// a sandbox one. The cost is that an unresolvable environment fails the
+// operation even with RBAC disabled — deliberate, and called out in Task 5.
+//
+// Nothing here allows on failure. There is deliberately no fallback for an
+// installation where no environment carries the flag: every environment is then
+// non-production, which is what the model says and what the release notes must
+// say too.
+func (s *agentManagerService) requireEnvTier(
+	ctx context.Context, ouID, envName string,
+) (*models.EnvironmentResponse, error) {
+	env, err := s.ocClient.GetEnvironment(ctx, ouID, envName)
+	if err != nil {
+		s.logger.Error("Failed to resolve environment for the tier check",
+			"ouID", ouID, "environment", envName, "error", err)
+		return nil, translateEnvironmentError(err)
+	}
+	if !config.GetConfig().RBACEnabled {
+		return env, nil
+	}
+
+	// The floor is always required. Production adds to it rather than replacing
+	// it, so the missing scope reported is the first one the caller lacks —
+	// naming the production grant to someone who is also missing the floor would
+	// send them after the wrong permission.
+	required := []rbac.Permission{rbac.AgentEnvNonProduction}
+	if env.IsProduction {
+		required = append(required, rbac.AgentEnvProduction)
+	}
+	if perm, short := jwtassertion.FirstMissingScope(ctx, required...); short {
+		// A middleware denial reaches the trail through recordAuthzDeny, which
+		// uses audit.Record plus audit.Skip: the deny event *replaces* the
+		// envelope, because the request never reached a handler. This denial is
+		// different — the caller did reach the service layer, and on the
+		// change-deployment-state path the controller has already opened an
+		// attempt. RecordAncillary is therefore correct here (audit/emit.go:63-71:
+		// facts about how a request was handled, envelope preserved), and the
+		// consequence is deliberate: a tier refusal writes an authz:deny
+		// alongside the envelope rather than in place of it, so "what was
+		// attempted" survives. Status is left to the envelope for the same
+		// reason. grantedScopes is set because every middleware authz:deny
+		// carries it and anything alerting on the action reads it.
+		audit.RecordAncillary(
+			ctx, audit.ActionAuthzDeny,
+			audit.Org(ouID),
+			audit.Environment(envName),
+			audit.OutcomeOpt(audit.OutcomeDeny),
+			audit.RequiredPermissions(required...),
+			audit.Detail("reason", "missing-environment-tier-scope"),
+			audit.Detail("missingScope", perm.Scope()),
+			audit.Detail("grantedScopes", jwtassertion.GrantedScopeCount(ctx)),
+		)
+		return env, fmt.Errorf("%w: %s is required to act on environment %q",
+			utils.ErrForbidden, perm.Scope(), envName)
+	}
+	return env, nil
 }
 
 func findLowestEnvironment(promotionPaths []models.PromotionPath) string {
@@ -4052,6 +4262,18 @@ func (s *agentManagerService) PromoteAgent(ctx context.Context, ouID string, pro
 		return fmt.Errorf("invalid promotion path: %s → %s is not allowed by the deployment pipeline", req.SourceEnvironment, req.TargetEnvironment)
 	}
 
+	// Promotion is the operation the removed agent:promote scope conflated:
+	// moving into staging and moving into production were one permission. The
+	// tier splits them, against the target the caller actually named.
+	//
+	// This resolves the target environment once for the whole promotion — the
+	// gateway-artifact branch below reads it rather than fetching it again, as
+	// the deploy path already does with its own requireEnvTier result.
+	targetEnv, err := s.requireEnvTier(ctx, ouID, req.TargetEnvironment)
+	if err != nil {
+		return err
+	}
+
 	// Check if a deployment is already in progress in target environment
 	inProgress, err := s.ocClient.IsDeploymentInProgress(ctx, ouID, agentName, req.TargetEnvironment)
 	if err != nil {
@@ -4097,8 +4319,12 @@ func (s *agentManagerService) PromoteAgent(ctx context.Context, ouID string, pro
 		return fmt.Errorf("failed to fetch target env system-managed keys: %w", err)
 	}
 	if len(srcSystemKeys) > 0 && len(tgtSystemKeys) == 0 {
-		return fmt.Errorf("%w: agent %q has LLM/system configuration in source environment %q but none in target environment %q — configure system variables in the target environment before promoting",
-			utils.ErrInvalidInput, agentName, req.SourceEnvironment, req.TargetEnvironment)
+		s.logPromotionBlocked(ouID, projectName, agentName, req.TargetEnvironment,
+			"the agent has LLM/system configuration in the source environment but none in the target — promoting would "+
+				"deploy it without the system variables it needs",
+			"sourceEnvironment", req.SourceEnvironment)
+		message, reason := s.missingTargetConfigText(ctx, agentName, ouID, projectName, req.SourceEnvironment, req.TargetEnvironment)
+		return utils.NewInvalidInputError(message, reason)
 	}
 
 	// The key-presence check above cannot see a connection that is present but dead: an MCP
@@ -4254,6 +4480,14 @@ func (s *agentManagerService) PromoteAgent(ctx context.Context, ouID string, pro
 				return fmt.Errorf("failed to process environment variables: %w", err)
 			}
 			envOverrides = append(envOverrides, processed...)
+			// An explicit empty req.Env means "this environment has none", and PromoteComponent
+			// tells nil (leave the binding's env alone) from empty (replace it with nothing) —
+			// so the cleared list has to reach it as a non-nil empty slice rather than the nil
+			// that appending zero processed entries leaves behind. Gated on req.Env because a
+			// files-only request must not clear env vars it never mentioned.
+			if req.Env != nil && envOverrides == nil {
+				envOverrides = []client.EnvVar{}
+			}
 		}
 		if req.Files != nil {
 			processed, err := s.processFileVars(ctx, ouID, projectName, req.TargetEnvironment, agentName, req.Files)
@@ -4316,14 +4550,8 @@ func (s *agentManagerService) PromoteAgent(ctx context.Context, ouID string, pro
 
 		// Each environment must have its own unique artifact UUID so the gateway controller
 		// does not confuse two environments' RestApi resources (same UUID = one overwrites the other).
-		targetEnv, targetEnvErr := s.ocClient.GetEnvironment(ctx, ouID, req.TargetEnvironment)
-		if targetEnvErr != nil {
-			return fmt.Errorf("failed to fetch target environment details: %w", targetEnvErr)
-		}
-		if targetEnv != nil {
-			if err := s.validateOAuthIssuersInEnvironment(targetEnv.UUID, apiCfg); err != nil {
-				return err
-			}
+		if err := s.validateOAuthIssuersInEnvironment(targetEnv.UUID, apiCfg); err != nil {
+			return err
 		}
 
 		artifact, artifactErr := ensureAgentEnvAPIArtifact(s.db, s.artifactRepo, ouID, projectName, agentName, targetEnv.UUID)
@@ -4401,11 +4629,10 @@ func (s *agentManagerService) PromoteAgent(ctx context.Context, ouID string, pro
 	// A promotion is how an agent reaches production, so the record names both
 	// ends of the move rather than just the resource.
 	//
-	// isProduction is deliberately not recorded here: the target environment is
-	// only fetched inside a conditional branch above, and adding a round-trip
-	// to OpenChoreo just to enrich a record would put a network call on the
-	// promotion path. The environment name identifies the target, and the org's
-	// environment list resolves whether it is production.
+	// isProduction is recorded now that the tier check above has already
+	// resolved the target environment. It used to be omitted because enriching
+	// the record would have meant an extra OpenChoreo round-trip; that lookup is
+	// on the authorization path today, so the flag is free.
 	promoteAttempt, auditErr := audit.Begin(
 		ctx, audit.ActionAgentPromote,
 		audit.Org(ouID),
@@ -4415,6 +4642,7 @@ func (s *agentManagerService) PromoteAgent(ctx context.Context, ouID string, pro
 		audit.Detail("agentName", agentName),
 		audit.Detail("sourceEnv", req.SourceEnvironment),
 		audit.Detail("targetEnv", req.TargetEnvironment),
+		audit.Detail("isProduction", targetEnv.IsProduction),
 		audit.Detail("environment", req.TargetEnvironment),
 	)
 	if auditErr != nil {
@@ -4464,8 +4692,147 @@ func (s *agentManagerService) assertMCPBindingsSurvivePromotion(
 	}
 	sort.Strings(brokenByPromotion)
 
-	return fmt.Errorf("%w: agent %q uses MCP connection(s) %s, which work in environment %q but have no endpoint in %q — promoting would deploy the agent with an empty MCP URL and API key. Bind those MCP proxies to an endpoint in %q, then promote",
-		utils.ErrInvalidInput, agentName, strings.Join(brokenByPromotion, ", "), sourceEnv, targetEnv, targetEnv)
+	brokenList := strings.Join(brokenByPromotion, ", ")
+	s.logPromotionBlocked(ouID, projectName, agentName, targetEnv,
+		"MCP configurations are bound to an MCP server in the source environment but to none in the target — "+
+			"promoting would deploy the agent with an empty MCP URL and API key, so it would start and then fail "+
+			"on every tool call",
+		"sourceEnvironment", sourceEnv, "connections", brokenList)
+	message, reason := mcpPromotionBlockText(brokenByPromotion, targetEnv)
+	return utils.NewInvalidInputError(message, reason)
+}
+
+// missingTargetConfigText renders the caller-facing halves of a promotion blocked
+// because the target environment has none of the system-managed configuration the
+// source has. The generic wording describes it all as LLM configuration, which is
+// what the agent's LLM provider needs but says nothing true about an agent whose
+// only system-managed configuration is an MCP connection.
+//
+// The source's configurations are looked up here rather than alongside the key sets
+// the check itself reads, so the extra query is paid only by a promotion already
+// being refused. A lookup that fails leaves the generic wording in place: a block
+// described imprecisely is still the right answer, and turning it into a 500 would
+// hide it.
+func (s *agentManagerService) missingTargetConfigText(
+	ctx context.Context, agentName, ouID, projectName, sourceEnv, targetEnv string,
+) (message, reason string) {
+	genericMessage := fmt.Sprintf("Promotion blocked: no LLM/system configuration in %q", targetEnv)
+	genericReason := fmt.Sprintf("configure system variables in %q, then promote", targetEnv)
+
+	srcConfigs, err := s.agentConfigurationService.ListSystemManagedConfigs(ctx, agentName, ouID, projectName, sourceEnv)
+	if err != nil {
+		s.logger.Warn("Failed to list source env system-managed configurations for a blocked promotion",
+			"agentName", agentName, "projectName", projectName, "ouID", ouID, "environment", sourceEnv, "error", err)
+		return genericMessage, genericReason
+	}
+
+	var mcpNames []string
+	for _, config := range srcConfigs {
+		if config.TypeID == models.AgentConfigTypeIDMCP {
+			mcpNames = append(mcpNames, config.Name)
+		}
+	}
+	if len(mcpNames) == 0 {
+		return genericMessage, genericReason
+	}
+	sort.Strings(mcpNames)
+	hasNonMCPConfig := len(mcpNames) != len(srcConfigs)
+
+	// An agent missing an LLM configuration too is described by the generic message
+	// accurately, and keeping it byte-identical leaves anything already handling this
+	// block working. The MCP connections still have to be named somewhere, or fixing
+	// only what the message asks for earns the same refusal again.
+	if hasNonMCPConfig {
+		return genericMessage, fmt.Sprintf("configure system variables and connect %s, then promote", mcpConfigList(mcpNames))
+	}
+
+	areNotConnected, remedy := "is not connected", "connect it"
+	if len(mcpNames) > 1 {
+		areNotConnected, remedy = "are not connected", "connect them"
+	}
+	return fmt.Sprintf("Promotion blocked: %s %s in %q", mcpConfigList(mcpNames), areNotConnected, targetEnv),
+		fmt.Sprintf("%s in %q, then promote", remedy, targetEnv)
+}
+
+// mcpConfigList names MCP configurations for a caller-facing sentence, agreeing with
+// how many there are rather than hedging with "configuration(s)".
+//
+// A lone name is quoted because it reads as a name; a list is left bare, since
+// briefConnectionList may end it with a "(+N more)" count that must not appear to be
+// part of a name. names must not be empty.
+//
+// Every name is clamped here rather than at the call sites. Names are caller-supplied
+// and accepted up to 255 characters, so one of them can bury the sentence it sits in;
+// clamping where the names are rendered means a caller cannot forget to.
+func mcpConfigList(names []string) string {
+	if len(names) == 1 {
+		return fmt.Sprintf("MCP configuration %q", briefUIDetail(names[0]))
+	}
+	return fmt.Sprintf("MCP configurations %s", briefConnectionList(clampedConfigNames(names)))
+}
+
+// clampedConfigNames bounds each name on its own, because briefConnectionList bounds
+// how many names are shown but never shortens one.
+func clampedConfigNames(names []string) []string {
+	shortened := make([]string, 0, len(names))
+	for _, name := range names {
+		shortened = append(shortened, briefUIDetail(name))
+	}
+	return shortened
+}
+
+// mcpPromotionBlockText renders the caller-facing halves of a promotion blocked
+// by unbound MCP configurations, agreeing with how many there are rather than
+// hedging with "configuration(s)".
+//
+// The message reports only what was observed — the configuration resolves to no
+// MCP server in the target — and not why. Whether the server has an endpoint
+// there is never checked: an absent mapping row alone produces this state, so
+// naming a missing endpoint would send the caller after the wrong problem.
+//
+// names must not be empty.
+func mcpPromotionBlockText(names []string, targetEnv string) (message, reason string) {
+	haveNo, remedy := "has no MCP server", "its MCP server"
+	if len(names) > 1 {
+		haveNo, remedy = "have no MCP server", "their MCP servers"
+	}
+	return fmt.Sprintf("Promotion blocked: %s %s in %q", mcpConfigList(names), haveNo, targetEnv),
+		fmt.Sprintf("deploy %s to %q, then promote", remedy, targetEnv)
+}
+
+// maxBriefUIDetail caps how much of an unbounded upstream detail (a Thunder
+// failure message) a caller-facing error echoes. These promotion errors are
+// rendered inline in the console, which shows the message and reason together,
+// so the full text goes to the log instead.
+const maxBriefUIDetail = 40
+
+// briefUIDetail bounds an opaque upstream string for display. The value is
+// sanitised first because it originates outside this service, matching how
+// every other untrusted string is clamped (see audit.clean).
+func briefUIDetail(detail string) string {
+	return utils.TruncateForLog(utils.SanitizeForLog(detail), maxBriefUIDetail)
+}
+
+// maxBriefConnectionList budgets the connection names a blocked promotion puts
+// on screen. Names are dropped whole and the remainder counted — truncating the
+// joined string mid-name would put a connection that does not exist in front of
+// the user, and the full list goes to the log either way.
+const maxBriefConnectionList = 40
+
+func briefConnectionList(names []string) string {
+	shown := 0
+	width := 0
+	for _, name := range names {
+		width += utf8.RuneCountInString(name) + len(", ")
+		if shown > 0 && width > maxBriefConnectionList {
+			break
+		}
+		shown++
+	}
+	if shown == len(names) {
+		return strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s (+%d more)", strings.Join(names[:shown], ", "), len(names)-shown)
 }
 
 // promotionIdentityPollInterval/promotionIdentityPollBudget bound
@@ -4519,55 +4886,81 @@ func (s *agentManagerService) pollForTargetIdentityReady(ctx context.Context, ou
 // provisioning, permanently failed, and revoked all look identical from
 // there. Only "still provisioning" is something a retry actually fixes; the
 // other states need a state-specific message so the caller knows what to do
-// instead of being told to simply wait and retry.
+// instead of being told to simply wait and retry. Returns the underlying read
+// failure — not a block — when the state cannot be determined at all.
 func (s *agentManagerService) buildPromotionIdentityBlockedError(ctx context.Context, ouID, projectName, agentName, envName string) error {
+	// blocked pairs the operator-facing diagnosis (logged in full) with the
+	// short message/reason the caller sees, so every arm below states both
+	// halves once instead of repeating the log call and the sentinel.
+	blocked := func(diagnosis, message, reason string, logFields ...any) error {
+		s.logPromotionBlocked(ouID, projectName, agentName, envName, diagnosis, logFields...)
+		return utils.NewInvalidInputError(message, reason)
+	}
+
 	if s.agentThunderProvisioning == nil {
 		// AgentID provisioning is disabled for this deployment, so nothing can
 		// ever mint the target's own credential — unlike the "just triggered"
 		// case below, this will never resolve on its own by retrying.
-		return fmt.Errorf(
-			"%w: agent %q has no AgentID identity for target environment %q, and AgentID provisioning is disabled "+
-				"for this deployment — promotion is blocked to prevent the promoted pod from inheriting a "+
-				"different environment's real credentials. Enable AgentID provisioning and provision this "+
-				"environment before promoting",
-			utils.ErrInvalidInput, agentName, envName,
+		return blocked(
+			"the agent has no AgentID identity in the target environment and AgentID provisioning is disabled for this "+
+				"deployment, so nothing can ever mint the target's own credential — promoting would let the promoted pod "+
+				"inherit a different environment's real credentials",
+			fmt.Sprintf("Promotion blocked: no agent identity for %q and identity provisioning is disabled", envName),
+			fmt.Sprintf("enable AgentID provisioning and provision %q first", envName),
 		)
 	}
 
+	// GetBindingState reserves (nil, nil) for "no binding row yet" and wraps
+	// every other failure, so an error here is an operational fault. Blocking
+	// as a retryable validation error would answer 400 for a server-side
+	// failure and tell the caller to retry something a retry cannot fix.
 	state, err := s.agentThunderProvisioning.GetBindingState(ctx, ouID, projectName, agentName, envName)
 	if err != nil {
-		s.logger.Warn("Failed to read agent thunder binding state for promotion error message, falling back to a generic message",
-			"agentName", agentName, "environment", envName, "error", err)
-		state = nil
+		s.logger.Error("Failed to read agent thunder binding state while blocking a promotion",
+			"agentName", agentName, "projectName", projectName, "ouID", ouID, "environment", envName, "error", err)
+		return fmt.Errorf("read AgentID binding state for environment %q: %w", envName, err)
 	}
 
 	switch {
 	case state == nil:
-		return fmt.Errorf(
-			"%w: agent %q has no AgentID identity for target environment %q yet — provisioning was just triggered; "+
-				"check GET .../identities for this agent and retry shortly",
-			utils.ErrInvalidInput, agentName, envName,
+		return blocked(
+			"the agent has no AgentID binding in the target environment yet and provisioning was only just triggered — "+
+				"promoting before it completes would let the promoted pod inherit a different environment's real credentials",
+			fmt.Sprintf("Promotion blocked: the agent identity for %q is still being provisioned", envName),
+			"provisioning was just triggered; retry in a moment",
 		)
 	case state.Status == models.AgentThunderStatusFailed:
-		return fmt.Errorf(
-			"%w: agent %q's AgentID provisioning for target environment %q has permanently failed (%s). "+
-				"Retrying promotion will not fix this — check GET .../identities for this agent and re-provision the environment",
-			utils.ErrInvalidInput, agentName, envName, state.LastError,
+		return blocked(
+			"AgentID provisioning for the target environment has permanently failed, so retrying the promotion cannot fix "+
+				"it — the environment has to be re-provisioned first",
+			fmt.Sprintf("Promotion blocked: agent identity provisioning for %q failed", envName),
+			fmt.Sprintf("re-provision the identity, then retry (%s)", briefUIDetail(state.LastError)),
+			"lastError", state.LastError,
 		)
 	case state.Status == models.AgentThunderStatusCompleted && !state.HasSecret:
-		return fmt.Errorf(
-			"%w: agent %q's AgentID credential for target environment %q has been revoked. "+
-				"Retrying promotion will not fix this — regenerate the credential for %q before promoting",
-			utils.ErrInvalidInput, agentName, envName, envName,
+		return blocked(
+			"the agent's AgentID credential for the target environment has been revoked, so retrying the promotion cannot "+
+				"fix it — the credential has to be regenerated first",
+			fmt.Sprintf("Promotion blocked: the agent identity credential for %q was revoked", envName),
+			fmt.Sprintf("regenerate the credential for %q, then promote", envName),
 		)
 	default: // Pending / InProgress, or any other in-flight state
-		return fmt.Errorf(
-			"%w: agent %q's AgentID identity for target environment %q is not ready yet (still provisioning). "+
-				"Promotion is blocked to prevent the promoted pod from inheriting a different environment's credentials — "+
-				"check GET .../identities for this agent and retry once it shows status=completed for %q",
-			utils.ErrInvalidInput, agentName, envName, envName,
+		return blocked(
+			"the agent's AgentID identity for the target environment is still provisioning — promoting now would let the "+
+				"promoted pod inherit a different environment's real credentials",
+			fmt.Sprintf("Promotion blocked: the agent identity for %q is still being provisioned", envName),
+			"retry once provisioning completes",
+			"status", state.Status,
 		)
 	}
+}
+
+// logPromotionBlocked records why a promotion was refused. The caller only
+// ever sees the short message/reason pair the block returns, so this log is
+// the only place the whole diagnosis exists.
+func (s *agentManagerService) logPromotionBlocked(ouID, projectName, agentName, envName, diagnosis string, extra ...any) {
+	fields := []any{"agentName", agentName, "projectName", projectName, "ouID", ouID, "environment", envName}
+	s.logger.Warn("Promotion blocked: "+diagnosis, append(fields, extra...)...)
 }
 
 // UpdateAgentDeploySettings updates per-environment deploy settings (CORS, API key security,
@@ -4593,9 +4986,14 @@ func (s *agentManagerService) UpdateAgentDeploySettings(ctx context.Context, ouI
 	if agent.Type.Type != string(utils.AgentTypeAPI) {
 		return fmt.Errorf("%w: deploy settings only apply to API-type agents (got %q)", utils.ErrInvalidInput, agent.Type.Type)
 	}
-	targetEnv, err := s.ocClient.GetEnvironment(ctx, ouID, req.EnvironmentName)
+	// Both validates the environment and authorizes the caller against its tier
+	// — one lookup, because requireEnvTier resolves the same environment and
+	// translates the same not-found error. The route's agent:update is the
+	// capability; this is the environment axis, and holding one does not imply
+	// the other.
+	targetEnv, err := s.requireEnvTier(ctx, ouID, req.EnvironmentName)
 	if err != nil {
-		return translateEnvironmentError(err)
+		return err
 	}
 
 	// Resolve final settings: precedence is request → existing DB
@@ -4620,10 +5018,8 @@ func (s *agentManagerService) UpdateAgentDeploySettings(ctx context.Context, ouI
 	if err := validateOAuthSecurityConfig(apiCfg); err != nil {
 		return err
 	}
-	if targetEnv != nil {
-		if err := s.validateOAuthIssuersInEnvironment(targetEnv.UUID, apiCfg); err != nil {
-			return err
-		}
+	if err := s.validateOAuthIssuersInEnvironment(targetEnv.UUID, apiCfg); err != nil {
+		return err
 	}
 	policies := buildPolicies(apiCfg)
 
@@ -4720,8 +5116,12 @@ func (s *agentManagerService) UpdateAgentConfigurations(ctx context.Context, ouI
 	if _, err := s.ocClient.GetComponent(ctx, org.Name, projectName, agentName); err != nil {
 		return translateAgentError(err)
 	}
-	if _, err := s.ocClient.GetEnvironment(ctx, ouID, req.EnvironmentName); err != nil {
-		return translateEnvironmentError(err)
+	// Validating the environment and authorizing the caller against its tier are
+	// the same lookup. This path replaces the environment's entire env var and
+	// file mount set on a running deployment, so it needs the tier check for the
+	// same reason deploy does.
+	if _, err := s.requireEnvTier(ctx, ouID, req.EnvironmentName); err != nil {
+		return err
 	}
 
 	// Fetch system-managed env vars + their keys for the target env. We must filter the user's
@@ -4818,9 +5218,9 @@ func isValidPromotionPath(promotionPaths []models.PromotionPath, source, target 
 }
 
 // getSystemManagedEnvVars fetches existing env vars from the Component CR / ReleaseBinding and
-// identifies system-managed secret env vars (e.g., LLM provider config API keys).
+// identifies system-managed env vars (e.g., LLM provider config URL and API key).
 //
-// System-managed env vars are identified by looking up the secretRef in the DB: if it is
+// System-managed secret env vars are identified by looking up the secretRef in the DB: if it is
 // recorded in agent_env_config_variables_mapping for this agent's LLM configurations, it is
 // system-managed. This is provider-agnostic — it does not rely on secret reference name
 // patterns.
@@ -4830,7 +5230,7 @@ func isValidPromotionPath(promotionPaths []models.PromotionPath, source, target 
 // K8s Secret is different (e.g., "api-key").
 //
 // Returns:
-//   - []client.EnvVar: system-managed env vars with correct SecretKeyRef
+//   - []client.EnvVar: system-managed env vars with correct SecretKeyRef or live plain value
 //   - map[string]bool: set of system-managed env var keys (for filtering from deploy request)
 func (s *agentManagerService) getSystemManagedEnvVars(
 	ctx context.Context,
@@ -4884,6 +5284,22 @@ func (s *agentManagerService) getSystemManagedEnvVars(
 		keySet[existing.Key] = true
 		s.logger.Info("Identified system-managed secret env var",
 			"key", existing.Key, "secretRef", existing.SecretRef, "secretKey", secretKey)
+	}
+
+	// The scan above only catches secret-backed vars; add any plain system-managed vars
+	// (e.g. the LLM provider URL) it missed, using their current live value.
+	systemKeys, err := s.agentConfigurationService.ListSystemManagedEnvVarKeys(ctx, componentName, ouID, projectName, environmentName)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to list system-managed env var keys: %w", err)
+	}
+	for _, existing := range existingConfigs {
+		// Never flatten a secret-backed var to a plain value — its live Value is always empty.
+		if keySet[existing.Key] || !systemKeys[existing.Key] || existing.IsSensitive || existing.SecretRef != "" {
+			continue
+		}
+		result = append(result, client.EnvVar{Key: existing.Key, Value: existing.Value})
+		keySet[existing.Key] = true
+		s.logger.Info("Identified system-managed plain env var", "key", existing.Key)
 	}
 
 	return result, keySet, nil
@@ -5029,17 +5445,57 @@ func (s *agentManagerService) processEnvVars(
 		}
 	}
 
+	// A client-supplied secretRef for a key not in existingKeys is claimed to be
+	// "system-managed" (e.g. an LLM config secret). That claim must be checked against
+	// this exact agent/environment's own current configuration — never trusted as-is —
+	// or any caller holding only read+update on their own agent could wire another
+	// agent's secretRef (recovered from that agent's own config-read response) into a
+	// key here and exfiltrate its value into a workload they control. See CVE-worthy
+	// finding: agent config update accepts unowned secretRef with no ownership check.
+	//
+	// Fetched lazily: only sensitive env vars/file mounts with an empty value and a
+	// secretRef not already in existingKeys need this lookup at all.
+	var systemManagedSecretRefByKey map[string]string
+	getSystemManagedSecretRefByKey := func() (map[string]string, error) {
+		if systemManagedSecretRefByKey != nil {
+			return systemManagedSecretRefByKey, nil
+		}
+		existingConfigs, cfgErr := s.ocClient.GetComponentConfigurations(ctx, ouID, projectName, componentName, environmentName)
+		if cfgErr != nil {
+			return nil, fmt.Errorf("failed to fetch existing configurations for secretRef validation: %w", cfgErr)
+		}
+		systemManagedSecretRefByKey = make(map[string]string)
+		for _, ec := range existingConfigs {
+			if ec.IsSensitive && ec.SecretRef != "" {
+				systemManagedSecretRefByKey[ec.Key] = ec.SecretRef
+			}
+		}
+		return systemManagedSecretRefByKey, nil
+	}
+
 	// First pass: collect secret data from env vars
 	for _, env := range envVars {
 		if env.GetIsSensitive() {
 			if env.HasSecretRef() && env.GetValue() == "" {
-				existingSecretRefName := env.GetSecretRef()
 				if _, ours := existingKeys[env.Key]; ours {
 					preservedSecretKeys = append(preservedSecretKeys, env.Key)
-					s.logger.Debug("Preserving existing secret", "key", env.Key, "secretRef", existingSecretRefName)
+					s.logger.Debug("Preserving existing secret", "key", env.Key)
 				} else {
-					s.logger.Info(fmt.Sprintf("Skipping existing system-managed secret-ref %s for key %s", existingSecretRefName, env.Key))
-					secretRefOverrides[env.Key] = existingSecretRefName
+					refsByKey, refErr := getSystemManagedSecretRefByKey()
+					if refErr != nil {
+						return nil, refErr
+					}
+					realSecretRef, known := refsByKey[env.Key]
+					if !known {
+						return nil, fmt.Errorf("%w: no existing secret reference for key %q; provide a value to set it", utils.ErrInvalidInput, env.Key)
+					}
+					if env.GetSecretRef() != realSecretRef {
+						return nil, fmt.Errorf("%w: secretRef for key %q does not match this agent's own secret reference", utils.ErrInvalidInput, env.Key)
+					}
+					s.logger.Info("Preserving existing system-managed secret-ref",
+						"key", env.Key, "secretRef", realSecretRef,
+						"ouID", ouID, "projectName", projectName, "environmentName", environmentName, "componentName", componentName)
+					secretRefOverrides[env.Key] = realSecretRef
 				}
 			} else if env.GetValue() != "" {
 				secretData[env.Key] = env.GetValue()
@@ -5056,6 +5512,15 @@ func (s *agentManagerService) processEnvVars(
 				if _, ours := existingKeys[f.Key]; ours {
 					preservedSecretKeys = append(preservedSecretKeys, f.Key)
 					s.logger.Debug("Preserving existing file mount secret", "key", f.Key)
+				} else {
+					refsByKey, refErr := getSystemManagedSecretRefByKey()
+					if refErr != nil {
+						return nil, refErr
+					}
+					realSecretRef, known := refsByKey[f.Key]
+					if !known || f.GetSecretRef() != realSecretRef {
+						return nil, fmt.Errorf("%w: secretRef for file mount %q does not match this agent's own secret reference", utils.ErrInvalidInput, f.Key)
+					}
 				}
 			} else if f.GetValue() != "" {
 				secretData[f.Key] = f.GetValue()
@@ -5449,11 +5914,13 @@ func (s *agentManagerService) UpdateAgentDeploymentState(ctx context.Context, ou
 		return fmt.Errorf("deployment state update is not supported for agent type: '%s'", agent.Provisioning.Type)
 	}
 
-	// Validate environment exists
-	_, err = s.ocClient.GetEnvironment(ctx, ouID, environment)
-	if err != nil {
-		s.logger.Error("Failed to validate environment", "environment", environment, "ouID", ouID, "error", err)
-		return translateEnvironmentError(err)
+	// This both validates the environment exists and authorizes the caller
+	// against its tier — one lookup, because requireEnvTier resolves the same
+	// environment and translates the same not-found error. The route's
+	// agent:suspend is the capability; this is the environment axis, and holding
+	// one does not imply the other.
+	if _, err := s.requireEnvTier(ctx, ouID, environment); err != nil {
+		return err
 	}
 
 	// Convert string state to gen.ReleaseBindingSpecState

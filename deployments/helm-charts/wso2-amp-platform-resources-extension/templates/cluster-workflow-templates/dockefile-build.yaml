@@ -22,16 +22,30 @@ spec:
         command:
           - sh
           - -c
+        # Workflow parameters arrive as environment variables rather than being
+        # interpolated into the script body: Argo substitution is textual, so a
+        # spliced parameter would be parsed as shell by the interpreter below.
+        env:
+          - name: IMAGE_NAME
+            value: '{{ "{{" }}workflow.parameters.image-name{{ "}}" }}'
+          - name: IMAGE_TAG
+            value: '{{ "{{" }}workflow.parameters.image-tag{{ "}}" }}'
+          - name: GIT_REVISION
+            value: '{{ "{{" }}inputs.parameters.git-revision{{ "}}" }}'
+          - name: DOCKER_CONTEXT
+            value: '{{ "{{" }}workflow.parameters.docker-context{{ "}}" }}'
+          - name: DOCKERFILE_PATH
+            value: '{{ "{{" }}workflow.parameters.dockerfile-path{{ "}}" }}'
+          - name: BUILD_ENV_JSON
+            value: '{{ "{{" }}inputs.parameters.build-env{{ "}}" }}'
+          - name: BUILD_ARGS_JSON
+            value: '{{ "{{" }}inputs.parameters.build-args{{ "}}" }}'
         args:
           - |-
             set -e
 
             WORKDIR="/mnt/vol/source"
-            IMAGE="{{ "{{" }}workflow.parameters.image-name{{ "}}" }}:{{ "{{" }}workflow.parameters.image-tag{{ "}}" }}-{{ "{{" }}inputs.parameters.git-revision{{ "}}" }}"
-            DOCKER_CONTEXT="{{ "{{" }}workflow.parameters.docker-context{{ "}}" }}"
-            DOCKERFILE_PATH="{{ "{{" }}workflow.parameters.dockerfile-path{{ "}}" }}"
-            BUILD_ENV_JSON='{{ "{{" }}inputs.parameters.build-env{{ "}}" }}'
-            BUILD_ARGS_JSON='{{ "{{" }}inputs.parameters.build-args{{ "}}" }}'
+            IMAGE="${IMAGE_NAME}:${IMAGE_TAG}-${GIT_REVISION}"
 
 
             echo ">> Image: $IMAGE"

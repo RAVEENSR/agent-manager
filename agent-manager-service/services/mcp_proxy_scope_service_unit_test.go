@@ -427,3 +427,67 @@ func TestListEnvironmentScopes_IncludesUndeployedIdentityProxies(t *testing.T) {
 		{Scope: "idle:read", Description: "d", MCPProxyID: "idle", MCPProxyName: "Idle"},
 	}, entries)
 }
+
+// A scope with no tools is a declared-but-unbound catalog entry: still grantable
+// to a role (and still projected into Thunder on that grant), but enforced on no
+// tool. Clearing the last tool must therefore persist as an empty list rather
+// than being rejected — see validateScopeTools.
+func TestMCPProxyScopeUpdate_ClearingAllToolsIsAllowed(t *testing.T) {
+	proxy := scopeTestProxy("gh-proxy", "list_repos")
+	var updated *models.MCPProxyScope
+	scopeRepo := &repomocks.MCPProxyScopeRepositoryMock{
+		GetFunc: func(_ context.Context, _ uuid.UUID, action string) (*models.MCPProxyScope, error) {
+			return &models.MCPProxyScope{Action: action, Tools: []string{"list_repos"}}, nil
+		},
+		UpdateFunc: func(_ context.Context, s *models.MCPProxyScope) error { updated = s; return nil },
+	}
+	redeployer := &recordingRedeployer{}
+	svc := newScopeSvcForTestWithRedeployer(scopeRepo, proxy, redeployer)
+
+	res, err := svc.Update(context.Background(), "org-uuid", "org", "gh-proxy", "read",
+		models.MCPProxyScopeUpdateInput{Tools: []string{}})
+
+	assert.NoError(t, err)
+	// Empty, not nil: the jsonb column must hold [] rather than null.
+	assert.NotNil(t, updated.Tools)
+	assert.Empty(t, updated.Tools)
+	assert.Empty(t, res.Scope.Tools)
+	assert.Len(t, redeployer.calls, 1, "clearing tools must still re-emit the gateway policies")
+}
+
+// nil Tools means "leave unchanged" (models.MCPProxyScopeUpdateInput), so a
+// description-only PUT must not clear the tool list now that empty is legal.
+func TestMCPProxyScopeUpdate_OmittedToolsLeavesToolsUnchanged(t *testing.T) {
+	var updated *models.MCPProxyScope
+	scopeRepo := &repomocks.MCPProxyScopeRepositoryMock{
+		GetFunc: func(_ context.Context, _ uuid.UUID, action string) (*models.MCPProxyScope, error) {
+			return &models.MCPProxyScope{Action: action, Tools: []string{"list_repos"}}, nil
+		},
+		UpdateFunc: func(_ context.Context, s *models.MCPProxyScope) error { updated = s; return nil },
+	}
+	svc := newScopeSvcForTest(scopeRepo, scopeTestProxy("gh-proxy", "list_repos"))
+
+	desc := "updated"
+	_, err := svc.Update(context.Background(), "org-uuid", "org", "gh-proxy", "read",
+		models.MCPProxyScopeUpdateInput{Description: &desc})
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"list_repos"}, updated.Tools)
+}
+
+// A scope can be declared before any tool is wired to it.
+func TestMCPProxyScopeCreate_AllowsScopeWithNoTools(t *testing.T) {
+	var created *models.MCPProxyScope
+	scopeRepo := &repomocks.MCPProxyScopeRepositoryMock{
+		CreateFunc: func(_ context.Context, s *models.MCPProxyScope) error { created = s; return nil },
+	}
+	svc := newScopeSvcForTest(scopeRepo, scopeTestProxy("gh-proxy", "list_repos"))
+
+	res, err := svc.Create(context.Background(), "org-uuid", "org", "gh-proxy",
+		models.MCPProxyScopeInput{Action: "read"})
+
+	assert.NoError(t, err)
+	assert.NotNil(t, created.Tools)
+	assert.Empty(t, created.Tools)
+	assert.Equal(t, "read", res.Scope.Action)
+}

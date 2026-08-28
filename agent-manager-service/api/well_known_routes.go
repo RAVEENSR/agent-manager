@@ -19,9 +19,11 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/wso2/agent-manager/agent-manager-service/config"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/logger"
+	"github.com/wso2/agent-manager/agent-manager-service/rbac"
 )
 
 type protectedResourceMetadata struct {
@@ -47,10 +49,10 @@ func registerWellKnownRoutes(mux *http.ServeMux) {
 		}
 
 		body := protectedResourceMetadata{
-			Resource:               cfg.ServerPublicURL,
+			Resource:               strings.TrimSuffix(cfg.ServerPublicURL, "/") + "/mcp",
 			AuthorizationServers:   cfg.OAuthAuthorizationServers,
 			BearerMethodsSupported: []string{"header"},
-			ScopesSupported:        cfg.OAuthScopesSupported,
+			ScopesSupported:        rbac.MainMCPScopes(),
 		}
 
 		w.Header().Set("Content-Type", "application/json")

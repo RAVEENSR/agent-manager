@@ -69,7 +69,7 @@ func NewMockMiddlewareWithOUID(t *testing.T, ouID string) Middleware {
 			// Set the context values that the middleware expects
 			ctx = context.WithValue(ctx, assertionTokenClaimsKey, tokenClaims)
 			ctx = context.WithValue(ctx, jwtToken, "mock-jwt-token")
-			ctx = context.WithValue(ctx, scopesKey, tokenClaims.Scope)
+			ctx = ContextWithScopes(ctx, tokenClaims.Scope)
 
 			r = r.WithContext(ctx)
 			next.ServeHTTP(w, r)
@@ -89,10 +89,9 @@ func extractOrgFromPath(path string) string {
 }
 
 // ContextWithTokenClaimsAndScope mirrors what the production auth middleware
-// puts on the request context: the parsed claims AND the raw scope string that
+// puts on the request context: the parsed claims AND the scope set that
 // HasAllScopes reads. ContextWithTokenClaims alone is not enough for tests that
 // exercise scope checks, because HasAllScopes uses a separate context key.
 func ContextWithTokenClaimsAndScope(ctx context.Context, claims *TokenClaims) context.Context {
-	ctx = ContextWithTokenClaims(ctx, claims)
-	return context.WithValue(ctx, scopesKey, claims.Scope)
+	return ContextWithScopes(ContextWithTokenClaims(ctx, claims), claims.Scope)
 }

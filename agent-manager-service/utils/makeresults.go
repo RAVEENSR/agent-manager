@@ -17,6 +17,8 @@
 package utils
 
 import (
+	"slices"
+
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/spec"
 )
@@ -1085,4 +1087,43 @@ func convertTraceEvaluatorScores(evals []models.TraceEvaluatorScore) []spec.Trac
 		result[i] = s
 	}
 	return result
+}
+
+// RedactSecretConfigValues returns a copy of cfg with the value of every sensitive
+// env var and file mount omitted, so a secret submitted on create is never
+// serialized back out. Mirrors the read path in GetAgentConfigurations, which
+// blanks the same fields.
+//
+// The copy is not incidental: cfg points into the decoded request body, and for
+// kind-based agents ApplySecretConfigDefaults has already written the kind's stored
+// secret defaults into the backing slices. Redacting in place would make
+// correctness depend on the order in which the service and the handler run.
+func RedactSecretConfigValues(cfg *spec.Configurations) *spec.Configurations {
+	if cfg == nil {
+		return nil
+	}
+	redacted := *cfg
+	redacted.Env = redactSensitiveEnvValues(cfg.Env)
+	redacted.Files = redactSensitiveFileValues(cfg.Files)
+	return &redacted
+}
+
+func redactSensitiveEnvValues(env []spec.EnvironmentVariable) []spec.EnvironmentVariable {
+	redacted := slices.Clone(env)
+	for i := range redacted {
+		if BoolPointerAsBool(redacted[i].IsSensitive, false) {
+			redacted[i].Value = nil
+		}
+	}
+	return redacted
+}
+
+func redactSensitiveFileValues(files []spec.FileMount) []spec.FileMount {
+	redacted := slices.Clone(files)
+	for i := range redacted {
+		if BoolPointerAsBool(redacted[i].IsSensitive, false) {
+			redacted[i].Value = nil
+		}
+	}
+	return redacted
 }

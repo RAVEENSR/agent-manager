@@ -18,7 +18,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, ListingTable, SearchBar, Skeleton, Stack, TablePagination } from "@wso2/oxygen-ui";
-import { Box as CubeIcon, Search as SearchIcon } from "@wso2/oxygen-ui-icons-react";
+import { BookOpenText, Search as SearchIcon } from "@wso2/oxygen-ui-icons-react";
 import type { AgentKindResponse } from "@agent-management-platform/types";
 import { CatalogKindCard, CARD_HEIGHT } from "./CatalogKindCard";
 
@@ -122,7 +122,7 @@ export const CatalogKindListing: React.FC<CatalogKindListingProps> = ({
       ) : items.length === 0 ? (
         <ListingTable.Container sx={{ my: 3 }}>
           <ListingTable.EmptyState
-            illustration={<CubeIcon size={64} />}
+            illustration={<BookOpenText size={64} />}
             title="No agent kinds available"
             description="No agent kinds have been added to the catalog yet."
           />

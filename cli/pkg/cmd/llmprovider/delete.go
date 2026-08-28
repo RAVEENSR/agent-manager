@@ -105,7 +105,8 @@ func runDelete(ctx context.Context, o *DeleteOptions) error {
 		return render.Error(o.IO, o.Scope, clierr.Newf(clierr.Transport, "%v", err))
 	}
 	if resp.HTTPResponse == nil || resp.HTTPResponse.StatusCode != http.StatusNoContent {
-		return render.Error(o.IO, o.Scope, cmdutil.ErrorFromServer(resp.HTTPResponse, cmdutil.FirstNonNil(resp.JSON400, resp.JSON401, resp.JSON404, resp.JSON500)))
+		return render.Error(o.IO, o.Scope, cmdutil.ErrorFromServer(resp.HTTPResponse,
+			cmdutil.FirstNonNil(resp.JSON400, resp.JSON401, resp.JSON403, resp.JSON404, resp.JSON409, resp.JSON500)))
 	}
 
 	if o.IO.JSON {

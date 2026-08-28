@@ -11,10 +11,17 @@ metadata:
   labels:
     {{- include "wso2-amp-gateway-extension.labels" . | nindent 4 }}
     app.kubernetes.io/component: gateway-config
+{{- if .Values.apiGateway.config.systemEnv }}
+{{ fail "apiGateway.config.systemEnv has been replaced by apiGateway.config.config_toml + apiGateway.config.systemExtraEnv. See values.yaml for the migration example." }}
+{{- end }}
 data:
   values.yaml: |
     gateway:
       developmentMode: {{ .Values.developmentMode }}
+      {{- if .Values.apiGateway.config.config_toml }}
+      config_toml: |
+        {{- .Values.apiGateway.config.config_toml | nindent 8 }}
+      {{- end }}
       config:
         controller:
           server:
@@ -142,17 +149,18 @@ data:
             capabilities:
               drop:
                 - ALL
+          {{- if .Values.apiGateway.config.systemExtraEnv }}
+          extraEnv:
+            {{- .Values.apiGateway.config.systemExtraEnv | toYaml | nindent 12 }}
+          {{- end }}
 
       gatewayRuntime:
         deployment:
           podLabels:
             openchoreo.dev/system-component: gateway-runtime
-          {{- if .Values.apiGateway.config.systemEnv }}
+          {{- if .Values.apiGateway.config.systemExtraEnv }}
           extraEnv:
-            {{- range $key, $value := .Values.apiGateway.config.systemEnv }}
-            - name: {{ printf "APIP_GW_%s" ($key | upper | replace "_" "__") | quote }}
-              value: {{ $value | quote }}
-            {{- end }}
+            {{- .Values.apiGateway.config.systemExtraEnv | toYaml | nindent 12 }}
           {{- end }}
         service:
           type: ClusterIP

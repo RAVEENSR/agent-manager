@@ -57,23 +57,23 @@ export function parseMemoryToBytes(str: string): number | undefined {
   return val * (factors[unit] ?? 1);
 }
 
-/** Format usage as percentage of request (e.g. current/request * 100) */
+/** Format usage as percentage of a limit (e.g. current/limit * 100) */
 export function formatUsagePercent(
   current: number,
-  request: number | undefined
+  limit: number | undefined
 ): string | undefined {
-  if (request === undefined || request <= 0) return undefined;
-  const pct = Math.round((current / request) * 100);
+  if (limit === undefined || limit <= 0) return undefined;
+  const pct = Math.round((current / limit) * 100);
   return `${pct}%`;
 }
 
 /** Get color variant for usage percentage: >90% error, >70% warning, else success */
 export function getUsagePercentVariant(
   current: number,
-  request: number | undefined
+  limit: number | undefined
 ): "success" | "warning" | "error" | undefined {
-  if (request === undefined || request <= 0) return undefined;
-  const pct = (current / request) * 100;
+  if (limit === undefined || limit <= 0) return undefined;
+  const pct = (current / limit) * 100;
   if (pct > 90) return "error";
   if (pct > 70) return "warning";
   return "success";

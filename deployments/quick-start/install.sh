@@ -45,8 +45,12 @@ GATEWAY_OPERATOR_VERSION="0.11.0"
 # reaches Programmed=True). Chart *version* and container *image tag* are
 # pinned separately below — setting chartVersion alone still runs an older
 # default image, so GATEWAY_IMAGE_VERSION must also be threaded through.
-GATEWAY_CHART_VERSION="1.2.0"
-GATEWAY_IMAGE_VERSION="1.2.0"
+# The chart trails the images: 1.2.1 gateway-controller/gateway-runtime images
+# are published, but no 1.2.1 gateway chart is, so the newest chart (1.2.2,
+# whose defaults point at 1.2.0 images) is pinned and the image tag override
+# below carries the runtime forward to 1.2.1.
+GATEWAY_CHART_VERSION="1.2.2"
+GATEWAY_IMAGE_VERSION="1.2.1"
 
 # The gateway chart (1.2.0-beta+) requires an encryption key to be mounted from a Kubernetes Secret
 GATEWAY_ENCRYPTION_SECRET_NAME="gateway-encryption-keys"
@@ -483,40 +487,12 @@ create_plane_cert_resources() {
 
 log_step "OpenChoreo Development Environment Setup"
 
-# Verify Docker is pointing at the dedicated 'agent-manager' Colima profile.
-# Detection works from inside the dev container because `docker info` queries
-# the daemon: Colima names the VM node after its profile ('colima' for the
-# default profile, 'colima-<profile>' otherwise). Non-Colima Docker setups
-# (Docker Desktop, Rancher, Linux) fall through this check.
-EXPECTED_COLIMA_PROFILE="agent-manager"
-check_colima_profile() {
-    local node_name
-    node_name=$(docker info --format '{{.Name}}' 2>/dev/null || echo "")
-
-    # Non-Colima daemon -> nothing to enforce
-    case "${node_name}" in
-        colima|colima-*) ;;
-        *) return 0 ;;
-    esac
-
-    local expected="colima-${EXPECTED_COLIMA_PROFILE}"
-    if [ "${node_name}" = "${expected}" ]; then
-        log_success "Colima profile '${EXPECTED_COLIMA_PROFILE}' is active"
-        return 0
-    fi
-
-    log_error "Expected Colima profile '${EXPECTED_COLIMA_PROFILE}', got '${node_name}'."
-    log_info  "Start it with: colima start --profile ${EXPECTED_COLIMA_PROFILE} --vm-type=vz --vz-rosetta --network-address --cpu 4 --memory 8"
-    return 1
-}
-
 # Check and fix Docker permissions
 check_docker_permissions() {
     # Try docker ps first — Docker contexts (e.g., Colima profiles) route to
     # the correct socket automatically, so we don't need to check a hardcoded path.
     if docker ps &>/dev/null; then
         log_success "Docker access verified"
-        check_colima_profile || return 1
         return 0
     fi
 
@@ -524,7 +500,7 @@ check_docker_permissions() {
     local docker_sock="/var/run/docker.sock"
     if [ ! -S "${docker_sock}" ]; then
         log_error "Docker is not accessible and socket not found at ${docker_sock}"
-        log_info "Make sure Docker is running. If using Colima, ensure the correct profile is started."
+        log_info "Make sure Docker is running."
         return 1
     fi
 
@@ -1616,7 +1592,7 @@ ENV_THUNDER_PROVISIONED=false
 if ! install_default_env_thunder; then
     log_error "Default environment Thunder provisioning failed"
     echo "Re-run manually once the platform is ready:"
-    echo "  ENV_NAME=default DISPLAY_NAME=Default ORG_NAME=default \\"
+    echo "  ENV_NAME=default DISPLAY_NAME=Default ORG_NAME=default THUNDER_HANDLE=default-idp \\"
     echo "  AMP_API_URL=${AMP_API_URL:-http://api.amp.localhost:8080/api/v1} \\"
     echo "  IDP_TOKEN_URL=${IDP_TOKEN_URL:-http://thunder.amp.localhost:8080/oauth2/token} \\"
     # install_default_env_thunder() prefers the bundled script and falls back to
@@ -1712,6 +1688,14 @@ if [[ "${SHOW_LOCALHOST_URLS:-true}" == "true" ]]; then
   log_info "Agent Management Platform Console: http://console.amp.localhost:8080"
   log_info "Agent Management Platform API: http://api.amp.localhost:8080"
   log_info "Observability Gateway (for traces): http://default-default.gateway.localhost:19080/otel"
+
+  # Admin login for the console above. Fetched fresh from the amp-admin-credentials
+  # Secret (see wso2-amp-thunder-extension/templates/admin-credentials.yaml) rather
+  # than tracked through the install. Wrappers that set SHOW_LOCALHOST_URLS=false
+  # print their own reachable console URL and their own copy of this instead —
+  # this localhost URL would be wrong there.
+  bash "${SCRIPT_DIR}/../scripts/print-admin-credentials.sh" \
+    "http://console.amp.localhost:8080" "${THUNDER_NS}" || true
 fi
 
 # Print the default environment's Thunder ID console + admin credentials — the

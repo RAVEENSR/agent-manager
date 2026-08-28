@@ -98,8 +98,9 @@ Rules:
 |---|---|---|---|
 | `make spec` | `spec/` types | `docs/api_v1_openapi.yaml` | Docker |
 | `make codegen` | wire DI + mocks (`repomocks/`, `clientmocks/`) | `//go:generate` directives | `moq` on PATH |
+| `make mocks` | mocks only (`repomocks/`, `clientmocks/`), no wire. `PKG=./repositories/...` to scope it | `//go:generate moq` directives | `moq` **`v0.5.3`** installed |
 
-Generated files are checked in and **never hand-edited**. Regenerate and commit the output with your change. `make codegen` needs the `moq` binary (`go install github.com/matryer/moq@latest`) — it can't run via `go run` because the module is `-mod=vendor`. A new repository interface needs a `//go:generate moq ... -pkg repomocks -out repomocks/<file>_mock.go` directive above its declaration (copy an existing one).
+Generated files are checked in and **never hand-edited**. Regenerate and commit the output with your change. `make codegen`/`make mocks` need the `moq` binary pinned at **`v0.5.3`** (`go install github.com/matryer/moq@v0.5.3`) — it can't run via `go run` because the module is `-mod=vendor`. `make mocks` checks the installed version and fails fast if it isn't `v0.5.3`, since a different `moq` version reformats import ordering across every mock file it touches even with no interface change; `make codegen` only checks that `moq` is present on PATH, so if `git status` shows unrelated mock diffs after running it, check `moq --version` before committing. A new repository interface needs a `//go:generate moq ... -pkg repomocks -out repomocks/<file>_mock.go` directive above its declaration (copy an existing one).
 
 ## Engineering rules
 
@@ -189,14 +190,10 @@ If your helper name also exists in an `integration`-tagged file, they collide on
 ## Run one test (config env vars are required — they load at import time)
 
 ```bash
-DB_HOST=localhost DB_PORT=5432 DB_USER=unit DB_PASSWORD=unit DB_NAME=unit \
-OPEN_CHOREO_BASE_URL=http://localhost/api/v1 \
-ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
-SERVER_PORT=8080 \
-go test -run 'TestAgentKindService' ./services/
+make test-run RUN=TestAgentKindService PKG=./services/
 ```
 
-(Or just `make test-unit`, which sets these. Services that sign tokens need `make gen-keys` first.)
+`PKG` defaults to `./...` if omitted. This sets the same config env var defaults as `make test-unit` (`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `OPEN_CHOREO_BASE_URL`, `ENCRYPTION_KEY`, `SERVER_PORT`) and runs `make gen-keys` first, since services that sign tokens need the RSA keys present. Equivalent to running `go test -run <pattern> <pkg>` by hand with those env vars exported — see `scripts/run_single_test.sh` if you need the raw invocation.
 
 ## Done checklist
 

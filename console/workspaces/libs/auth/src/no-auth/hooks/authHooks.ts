@@ -36,6 +36,8 @@ export const useAuthHooks = () => {
     userInfo: demoUserInfo,
     isLoadingUserInfo: false,
     isLoadingIsAuthenticated: false,
+    // Nothing is decoded on this path: the demo user's scopes are a constant.
+    isLoadingAccessToken: false,
     login: () => Promise.resolve(),
     logout: () => Promise.resolve(),
     trySignInSilently: () => Promise.resolve(),

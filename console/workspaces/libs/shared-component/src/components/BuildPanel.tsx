@@ -32,7 +32,6 @@ import {
   SelectChangeEvent,
   CircularProgress,
   FormControl,
-  InputLabel,
   FormHelperText,
   Chip,
 } from "@wso2/oxygen-ui";
@@ -95,15 +94,20 @@ export function BuildPanel({
     !!repoInfo && !!selectedBranch,
   );
 
-  // Keep commitId empty to use latest commit (backend will determine)
-  // User can explicitly select a specific commit if needed
+  const commits = commitsData?.commits || [];
 
+  // An empty commitId means "use latest"; resolve it to the first commit's
+  // sha here so the build request never sends "" (which produces builds
+  // with no commit hash).
   const handleCommitChange = (event: SelectChangeEvent<string>) => {
     setCommitId(event.target.value);
   };
 
   const handleBuild = async () => {
     try {
+      const resolvedCommitId =
+        !isCommitsError && !commitId ? commits[0]?.sha || "" : commitId;
+
       buildAgent(
         {
           params: {
@@ -112,7 +116,7 @@ export function BuildPanel({
             agentName,
           },
           query: {
-            commitId: isCommitsError ? "" : commitId || "",
+            commitId: isCommitsError ? "" : resolvedCommitId,
           },
         },
         {
@@ -126,8 +130,6 @@ export function BuildPanel({
     }
   };
 
-  const commits = commitsData?.commits || [];
-
   return (
     <Box display="flex" flexDirection="column" height="100%">
       <DrawerHeader
@@ -137,7 +139,8 @@ export function BuildPanel({
       />
       <DrawerContent>
         <Typography variant="body2" color="text.secondary">
-          Build {agent?.displayName || agentName} from a specific commit.
+          Build {agent?.displayName || agentName} from the latest commit, or
+          choose a specific one below.
         </Typography>
 
         <Box display="flex" flexDirection="column" gap={2}>
@@ -147,76 +150,78 @@ export function BuildPanel({
               the branch.
             </Alert>
           ) : (
-            <FormControl fullWidth size="small">
-              <InputLabel id="commit-select-label" shrink>
+            <Box>
+              <Typography variant="body2" sx={{ mb: 0.5, fontWeight: 500 }}>
                 Commit
-              </InputLabel>
-              <Select
-                notched
-                displayEmpty
-                labelId="commit-select-label"
-                id="commit-select"
-                value={commitId || ""}
-                label="Commit"
-                onChange={handleCommitChange}
-                disabled={isLoadingCommits || !selectedBranch}
-                renderValue={(selected) => {
-                  if (!selected) {
-                    return (
-                      <Typography variant="body2" color="text.secondary">
-                        Select a commit
-                      </Typography>
-                    );
-                  }
-                  const commit = commits.find((c) => c.sha === selected);
-                  if (commit) {
-                    return (
-                      <Box display="flex" alignItems="center" gap={1}>
-                        <Typography variant="body2" noWrap>
-                          {commit.message?.split("\n")[0] || commit.shortSha}
+              </Typography>
+              <FormControl fullWidth size="small">
+                <Select
+                  displayEmpty
+                  id="commit-select"
+                  value={commitId || ""}
+                  onChange={handleCommitChange}
+                  disabled={isLoadingCommits || !selectedBranch}
+                  renderValue={(selected) => {
+                    if (!selected) {
+                      return (
+                        <Typography variant="body2" color="text.secondary">
+                          Latest commit
                         </Typography>
-                      </Box>
-                    );
+                      );
+                    }
+                    const commit = commits.find((c) => c.sha === selected);
+                    if (commit) {
+                      return (
+                        <Box display="flex" alignItems="center" gap={1}>
+                          <Typography variant="body2" noWrap>
+                            {commit.message?.split("\n")[0] || commit.shortSha}
+                          </Typography>
+                        </Box>
+                      );
+                    }
+                    return selected;
+                  }}
+                  endAdornment={
+                    isLoadingCommits ? (
+                      <CircularProgress size={20} sx={{ mr: 2 }} />
+                    ) : undefined
                   }
-                  return selected;
-                }}
-                endAdornment={
-                  isLoadingCommits ? (
-                    <CircularProgress size={20} sx={{ mr: 2 }} />
-                  ) : undefined
-                }
-                MenuProps={{
-                  PaperProps: {
-                    style: {
-                      maxHeight: 300,
+                  MenuProps={{
+                    PaperProps: {
+                      style: {
+                        maxHeight: 300,
+                      },
                     },
-                  },
-                }}
-              >
-                {commits.map((commit, index) => (
-                  <MenuItem key={commit.sha} value={commit.sha}>
-                    <Box display="flex" flexDirection="column" width="100%">
-                      <Box display="flex" alignItems="center" gap={1}>
-                        <Typography
-                          variant="body2"
-                          noWrap
-                          sx={{ maxWidth: 350 }}
-                        >
-                          {commit.message?.split("\n")[0] || ""}
+                  }}
+                >
+                  {commits.map((commit, index) => (
+                    <MenuItem key={commit.sha} value={commit.sha}>
+                      <Box display="flex" flexDirection="column" width="100%">
+                        <Box display="flex" alignItems="center" gap={1}>
+                          <Typography
+                            variant="body2"
+                            noWrap
+                            sx={{ maxWidth: 350 }}
+                          >
+                            {commit.message?.split("\n")[0] || ""}
+                          </Typography>
+                          {index === 0 && (
+                            <Chip label="Latest" size="small" color="primary" variant="outlined" />
+                          )}
+                        </Box>
+                        <Typography variant="caption" color="text.secondary">
+                          {commit.shortSha}
                         </Typography>
-                        {index === 0 && (
-                          <Chip label="Latest" size="small" color="primary" />
-                        )}
                       </Box>
-                      <Typography variant="caption" color="text.secondary">
-                        {commit.shortSha}
-                      </Typography>
-                    </Box>
-                  </MenuItem>
-                ))}
-              </Select>
-              <FormHelperText>Select the commit to build</FormHelperText>
-            </FormControl>
+                    </MenuItem>
+                  ))}
+                </Select>
+                <FormHelperText>
+                  Select a commit to build, or leave unselected to use the
+                  latest
+                </FormHelperText>
+              </FormControl>
+            </Box>
           )}
         </Box>
 

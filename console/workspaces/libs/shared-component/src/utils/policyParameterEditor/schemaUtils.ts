@@ -442,6 +442,7 @@ function stripExclusiveBranchKeys(
 export function coerceValuesToSchemaTypes(
   schema: ParameterSchema,
   values: ParameterValues,
+  options?: { isArrayItem?: boolean },
 ): ParameterValues {
   if (schema.type !== "object" || !schema.properties) return values;
 
@@ -474,9 +475,14 @@ export function coerceValuesToSchemaTypes(
           typeof item === "object" &&
           item !== null
         ) {
+          // Array items are coerced but not stripped of empty keys: a
+          // half-filled row (e.g. {name: "", value: ""}) must keep every
+          // item-schema key present, or the backend receives a bare `{}`
+          // with none of the row's fields.
           return coerceValuesToSchemaTypes(
             propSchema.items!,
             item as ParameterValues,
+            { isArrayItem: true },
           );
         }
         return coerceValue(item, propSchema.items!);
@@ -491,6 +497,30 @@ export function coerceValuesToSchemaTypes(
   if (branches.length > 0) {
     stripExclusiveBranchKeys(branches, result);
   }
+
+  if (options?.isArrayItem) {
+    return result;
+  }
+
+  // Never send unset optional fields to the gateway: an explicit empty
+  // string/object for an optional param (e.g. an unconfigured endpoint or
+  // API key) fails config.toml parsing downstream, whereas omitting the
+  // key lets the policy fall back to its own default. Required keys are
+  // left as-is so blank-but-required fields still surface as a validation
+  // error instead of silently vanishing.
+  //
+  // Array-typed fields are exempt: an emptied allow-list (e.g.
+  // `allowedTools: []`) is a deliberate "block everything" choice, not an
+  // unset field — dropping the key would silently fall back to the
+  // policy's default list, which can flip a fail-closed intent to fail-open.
+  const requiredKeys = new Set(schema.required ?? []);
+  Object.entries(schema.properties).forEach(([key, propSchema]) => {
+    if (requiredKeys.has(key)) return;
+    if (propSchema.type === "array") return;
+    if (!hasMeaningfulValue(result[key])) {
+      delete result[key];
+    }
+  });
 
   return result;
 }

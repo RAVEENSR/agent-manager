@@ -17,6 +17,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -502,12 +504,17 @@ func TestRevokeAgentIdentitySecret_PipelineLookupFails_StillRevokesConservativel
 // a deploy that proceeded here would permanently drop the agent's
 // credentials until some later operation happened to re-inject them.
 func TestDeployAgent_IdentityInjectionError_AbortsDeploy(t *testing.T) {
+	// These fixtures carry no scopes, so the tier check requireEnvTier runs on
+	// the deploy and promote paths only passes with RBAC off. Stated here rather
+	// than inherited from the config default.
+	setRBACEnabledForTier(t, false)
 	boom := errors.New("secret backend unavailable")
 	deployCalled := false
 	ocClient := &clientmocks.OpenChoreoClientMock{
 		ReplaceReleaseBindingWorkloadOverridesFunc: func(_ context.Context, _, _, _ string, _ []client.EnvVar, _ []client.FileVar) error {
 			return nil
 		},
+		GetEnvironmentFunc: nonProductionEnvStub(),
 		GetOrganizationFunc: func(_ context.Context, name string) (*models.OrganizationResponse, error) {
 			return &models.OrganizationResponse{Name: name}, nil
 		},
@@ -585,6 +592,62 @@ func TestUpdateAgentConfigurations_IdentityInjectionError_AbortsUpdate(t *testin
 	assert.False(t, overridesReplaced, "the env var override rewrite must never happen once identity env vars failed to build")
 }
 
+// TestUpdateAgentConfigurations_RejectsUnownedSecretRef guards against the
+// secretRef ownership bypass: a caller who can read one agent's config (and
+// so learns its real secretRef, e.g. "victim-agent-default-secrets") must not
+// be able to wire that same secretRef into a DIFFERENT agent's config as a
+// claimed "system-managed" reference for a key that agent doesn't yet own.
+// Before the fix, processEnvVars trusted any client-supplied secretRef for a
+// key outside the target agent's own secret without checking it against that
+// agent's actual server-side configuration — so the attacker's env var would
+// resolve, at the workload, straight to the victim's secret value.
+func TestUpdateAgentConfigurations_RejectsUnownedSecretRef(t *testing.T) {
+	setRBACEnabledForTier(t, false)
+	overridesReplaced := false
+	const attackerAgent = "scout-agent"
+	const victimSecretRef = "victim-agent-default-secrets"
+
+	ocClient := &clientmocks.OpenChoreoClientMock{
+		GetOrganizationFunc: func(_ context.Context, name string) (*models.OrganizationResponse, error) {
+			return &models.OrganizationResponse{Name: name}, nil
+		},
+		GetComponentFunc: func(_ context.Context, _, _, _ string) (*models.AgentResponse, error) {
+			return &models.AgentResponse{Provisioning: models.Provisioning{Type: string(utils.InternalAgent)}}, nil
+		},
+		GetEnvironmentFunc: nonProductionEnvStub(),
+		// scout-agent's own configuration has never contained OPENAI_API_KEY under
+		// any secretRef — there is nothing here for the attacker's claim to match.
+		GetComponentConfigurationsFunc: func(context.Context, string, string, string, string) ([]models.EnvVars, error) {
+			return nil, nil
+		},
+		ReplaceReleaseBindingWorkloadOverridesFunc: func(context.Context, string, string, string, []client.EnvVar, []client.FileVar) error {
+			overridesReplaced = true
+			return nil
+		},
+	}
+	injector := &agentIdentityInjectorStub{
+		EnvVarsForEnvironmentFunc: func(context.Context, string, string, string, string) ([]client.EnvVar, error) {
+			return nil, nil
+		},
+	}
+	s := &agentManagerService{ocClient: ocClient, agentIdentityInjection: injector, logger: discardLogger()}
+
+	attackerEnv := spec.EnvironmentVariable{Key: "OPENAI_API_KEY"}
+	attackerEnv.SetIsSensitive(true)
+	attackerEnv.SetValue("")
+	attackerEnv.SetSecretRef(victimSecretRef) // recovered from victim-agent's own config-read response
+
+	err := s.UpdateAgentConfigurations(context.Background(), "acme", "proj1", attackerAgent,
+		&spec.UpdateAgentConfigurationsRequest{
+			EnvironmentName: "dev",
+			Env:             []spec.EnvironmentVariable{attackerEnv},
+		})
+
+	require.Error(t, err, "wiring another agent's secretRef into this agent's config must be rejected")
+	assert.ErrorIs(t, err, utils.ErrInvalidInput, "the rejection must be classified as an invalid-input error, not a generic failure")
+	assert.False(t, overridesReplaced, "the victim's secretRef must never reach the workload override rewrite for an unrelated agent")
+}
+
 // stubAgentConfigurationServiceForPromote implements AgentConfigurationService
 // by embedding the (nil) interface and overriding only the methods PromoteAgent
 // actually calls — any other method call panics on the nil embed, which is fine
@@ -593,7 +656,17 @@ type stubAgentConfigurationServiceForPromote struct {
 	AgentConfigurationService
 	SystemKeysFunc     func(ctx context.Context, agentID, ouID, projectName, environmentName string) (map[string]bool, error)
 	SystemVarsFunc     func(ctx context.Context, agentID, ouID, projectName, environmentName string) ([]client.EnvVar, error)
+	SystemConfigsFunc  func(ctx context.Context, agentID, ouID, projectName, environmentName string) ([]SystemManagedConfigRef, error)
 	UnresolvedMCPsFunc func(ctx context.Context, agentID, ouID, projectName, environmentName string) (map[string]struct{}, error)
+}
+
+// Defaults to "no configuration to describe", so tests that predate the block's
+// per-configuration wording keep the message they were written against.
+func (s *stubAgentConfigurationServiceForPromote) ListSystemManagedConfigs(ctx context.Context, agentID, ouID, projectName, environmentName string) ([]SystemManagedConfigRef, error) {
+	if s.SystemConfigsFunc == nil {
+		return []SystemManagedConfigRef{}, nil
+	}
+	return s.SystemConfigsFunc(ctx, agentID, ouID, projectName, environmentName)
 }
 
 func (s *stubAgentConfigurationServiceForPromote) ListSystemManagedEnvVarKeys(ctx context.Context, agentID, ouID, projectName, environmentName string) (map[string]bool, error) {
@@ -631,6 +704,7 @@ func shrinkPromotionIdentityPollForTest(t *testing.T) {
 // for a non-API-type internal agent (skips the large isAPIAgent branch
 // entirely), for a dev -> staging promotion pipeline.
 func promoteAgentTestFixture(t *testing.T, tgtIdentityEnvVars []client.EnvVar, tgtIdentityErr error) (*agentManagerService, *bool) {
+	setRBACEnabledForTier(t, false)
 	t.Helper()
 	shrinkPromotionIdentityPollForTest(t)
 	promoteCalled := false
@@ -658,6 +732,7 @@ func promoteAgentTestFixture(t *testing.T, tgtIdentityEnvVars []client.EnvVar, t
 		GetComponentReconcileBlockFunc: func(_ context.Context, _, _ string) (*client.ComponentReconcileBlock, error) {
 			return nil, nil //nolint:nilnil // documented contract: a nil block means "not blocked"
 		},
+		GetEnvironmentFunc:              nonProductionEnvStub(),
 		IsDeploymentInProgressFunc:      func(_ context.Context, _, _, _ string) (bool, error) { return false, nil },
 		EnsureProjectReleaseBindingFunc: func(_ context.Context, _, _, _ string) error { return nil },
 		PromoteComponentFunc: func(_ context.Context, _, _, _, _, _ string, _ []client.EnvVar, _ []client.FileVar, _, _ map[string]interface{}) error {
@@ -727,28 +802,45 @@ func (s *provisionForEnvIfMissingStub) ProvisionForEnvironmentIfMissing(_ contex
 	return false, nil
 }
 
+// promoteConfigStub reaches the agent configuration stub a promote fixture was built
+// with, so each stubbing helper is the closure it installs and nothing else.
+func promoteConfigStub(t *testing.T, s *agentManagerService) *stubAgentConfigurationServiceForPromote {
+	t.Helper()
+	agentConfigSvc, ok := s.agentConfigurationService.(*stubAgentConfigurationServiceForPromote)
+	require.True(t, ok)
+	return agentConfigSvc
+}
+
+// stubUnresolvedMCPs makes the named connections unresolved in blockedEnv only,
+// which is what makes a promotion into that environment break them.
+func stubUnresolvedMCPs(t *testing.T, s *agentManagerService, blockedEnv string, names ...string) {
+	t.Helper()
+	promoteConfigStub(t, s).UnresolvedMCPsFunc = func(_ context.Context, _, _, _, envName string) (map[string]struct{}, error) {
+		unresolved := map[string]struct{}{}
+		if envName == blockedEnv {
+			for _, name := range names {
+				unresolved[name] = struct{}{}
+			}
+		}
+		return unresolved, nil
+	}
+}
+
 // An MCP connection that resolves in the source but not the target would promote with its
 // URL and API key injected as empty strings — the agent starts, then fails on every tool
 // call. The promotion must be refused instead, before the component is promoted.
 func TestPromoteAgent_BlocksWhenMCPConnectionUnresolvableInTarget(t *testing.T) {
 	s, promoteCalled := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
-	agentConfigSvc, ok := s.agentConfigurationService.(*stubAgentConfigurationServiceForPromote)
-	require.True(t, ok)
-	agentConfigSvc.UnresolvedMCPsFunc = func(_ context.Context, _, _, _, envName string) (map[string]struct{}, error) {
-		if envName == "staging" {
-			return map[string]struct{}{"booking": {}}, nil
-		}
-		return map[string]struct{}{}, nil
-	}
+	stubUnresolvedMCPs(t, s, "staging", "booking")
 
 	err := s.PromoteAgent(auditableCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
 		SourceEnvironment: "dev",
 		TargetEnvironment: "staging",
 	})
 
-	require.Error(t, err)
-	assert.ErrorIs(t, err, utils.ErrInvalidInput)
-	assert.Contains(t, err.Error(), "booking")
+	ve := requireBriefPromotionBlock(t, err)
+	assert.Contains(t, ve.Message, "booking", "the message must name the connection that blocks the promotion")
+	assert.Contains(t, ve.Reason, "deploy")
 	assert.False(t, *promoteCalled,
 		"promotion must be refused before PromoteComponent — otherwise the agent is already running with an empty MCP URL by the time this error is returned")
 }
@@ -796,22 +888,15 @@ func TestPromoteAgent_BlocksWhenMCPBindingLookupFails(t *testing.T) {
 // the same message on every run instead of reshuffling with Go's map iteration order.
 func TestPromoteAgent_ListsBrokenMCPConnectionsInStableOrder(t *testing.T) {
 	s, _ := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
-	agentConfigSvc, ok := s.agentConfigurationService.(*stubAgentConfigurationServiceForPromote)
-	require.True(t, ok)
-	agentConfigSvc.UnresolvedMCPsFunc = func(_ context.Context, _, _, _, envName string) (map[string]struct{}, error) {
-		if envName == "staging" {
-			return map[string]struct{}{"payments": {}, "booking": {}}, nil
-		}
-		return map[string]struct{}{}, nil
-	}
+	stubUnresolvedMCPs(t, s, "staging", "payments", "booking")
 
 	err := s.PromoteAgent(auditableCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
 		SourceEnvironment: "dev",
 		TargetEnvironment: "staging",
 	})
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "booking, payments")
+	ve := requireBriefPromotionBlock(t, err)
+	assert.Contains(t, ve.Message, "booking, payments")
 }
 
 // PromoteComponent's writes land on the Component whether or not OpenChoreo can reconcile
@@ -898,9 +983,96 @@ func TestPromoteAgent_BlocksWhenTargetIdentityNotReady(t *testing.T) {
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, utils.ErrInvalidInput)
-	assert.Contains(t, err.Error(), "not ready yet")
+	assert.Contains(t, err.Error(), "retry once provisioning completes")
 	assert.False(t, *promoteCalled,
 		"promotion must be blocked BEFORE calling PromoteComponent — otherwise the pod is already promoted with leaked credentials by the time this error is returned")
+}
+
+// The block reports what was actually checked — that the configuration has no
+// MCP server bound in the target — rather than asserting the server has no
+// endpoint there. Only the absent mapping row is observed; the server may well
+// be deployed to the target, with just the binding missing, and sending the
+// user to look for a missing endpoint would send them after the wrong problem.
+func TestPromoteAgent_BlockedMCPPromotion_ReportsTheMissingBindingNotAnUncheckedCause(t *testing.T) {
+	s, _ := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+	stubUnresolvedMCPs(t, s, "staging", "booking")
+
+	err := s.PromoteAgent(auditableCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	ve := requireBriefPromotionBlock(t, err)
+	assert.Contains(t, ve.Message, `MCP configuration "booking" has no MCP server in "staging"`)
+	assert.NotContains(t, ve.Message, "endpoint",
+		"whether the MCP server has an endpoint in the target is never checked, so the block must not claim it")
+}
+
+// "Bind them to an endpoint" named no control the console or the CLI offers.
+// Deploying the MCP server to the target is what actually clears the block:
+// this configuration is already mapped in the source, so ReconcileMCPBindingsForProxy
+// backfills the target mapping as soon as the server lands there.
+func TestPromoteAgent_BlockedMCPPromotion_TellsUserToDeployTheMCPServer(t *testing.T) {
+	s, _ := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+	stubUnresolvedMCPs(t, s, "staging", "booking")
+
+	err := s.PromoteAgent(auditableCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	ve := requireBriefPromotionBlock(t, err)
+	assert.Equal(t, `deploy its MCP server to "staging", then promote`, ve.Reason)
+}
+
+// One broken configuration is the common case, so the block reads as a sentence
+// about it instead of hedging with "configuration(s)" and "their".
+func TestPromoteAgent_BlockedMCPPromotion_ReadsAsPluralOnlyWhenSeveralAreBroken(t *testing.T) {
+	s, _ := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+	stubUnresolvedMCPs(t, s, "staging", "payments", "booking")
+
+	err := s.PromoteAgent(auditableCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	ve := requireBriefPromotionBlock(t, err)
+	assert.Contains(t, ve.Message, `MCP configurations booking, payments have no MCP server in "staging"`)
+	assert.Equal(t, `deploy their MCP servers to "staging", then promote`, ve.Reason)
+	assert.NotContains(t, renderedUIError(ve), "(s)", "the wording agrees with the count instead of hedging")
+}
+
+// The sibling block below shortens a long configuration name, and this one renders
+// its names through the same helper, so it must shorten too. A 255-character name is
+// legal, and pasting one in whole buries the sentence that says what to do about it.
+func TestPromoteAgent_BlockedMCPPromotion_VeryLongConfigName_IsShortenedNotPastedWhole(t *testing.T) {
+	longName := "hotel-booking" + strings.Repeat("x", 242)
+	require.Len(t, longName, 255, "the fixture must use the longest name the API accepts")
+
+	for _, tc := range []struct {
+		name  string
+		names []string
+	}{
+		{"single configuration", []string{longName}},
+		{"several configurations", []string{longName, "payments"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+			stubUnresolvedMCPs(t, s, "staging", tc.names...)
+			logs := captureLogs(s)
+
+			err := s.PromoteAgent(auditableCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+				SourceEnvironment: "dev",
+				TargetEnvironment: "staging",
+			})
+
+			ve := requireBriefPromotionBlock(t, err)
+			rendered := renderedUIError(ve)
+			assert.NotContains(t, rendered, longName, "the whole name must not reach the UI")
+			assert.Contains(t, rendered, "hotel-booking", "enough of the name must survive to identify the configuration")
+			assert.Contains(t, logs(), longName, "the untruncated name must still reach the log")
+		})
+	}
 }
 
 func TestPromoteAgent_TargetIdentityReady_PromotesWithTargetOnlyCredentials(t *testing.T) {
@@ -957,6 +1129,7 @@ func TestPromoteAgent_IdentityBuildError_AbortsBeforePromoting(t *testing.T) {
 // proving the pre-promote kick-off alone is sufficient to unblock a
 // new-environment promotion, with no dependency on any post-promote step.
 func TestPromoteAgent_KickOffThenRetry_SucceedsOnceTargetIdentityCompletes(t *testing.T) {
+	setRBACEnabledForTier(t, false)
 	shrinkPromotionIdentityPollForTest(t)
 	promoteCalled := false
 	var capturedOverrides []client.EnvVar
@@ -964,6 +1137,7 @@ func TestPromoteAgent_KickOffThenRetry_SucceedsOnceTargetIdentityCompletes(t *te
 		ReplaceReleaseBindingWorkloadOverridesFunc: func(_ context.Context, _, _, _ string, _ []client.EnvVar, _ []client.FileVar) error {
 			return nil
 		},
+		GetEnvironmentFunc: nonProductionEnvStub(),
 		GetOrganizationFunc: func(_ context.Context, orgName string) (*models.OrganizationResponse, error) {
 			return &models.OrganizationResponse{Name: orgName}, nil
 		},
@@ -1037,8 +1211,8 @@ func TestPromoteAgent_KickOffThenRetry_SucceedsOnceTargetIdentityCompletes(t *te
 	// First attempt: target environment is brand new — kicks off provisioning
 	// (ProvisionForEnvironmentIfMissing), but the identity isn't ready yet.
 	err := s.PromoteAgent(auditableCtx(t), "acme", "proj1", "my-agent", req)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not ready yet")
+	ve := requireBriefPromotionBlock(t, err)
+	assert.Contains(t, ve.Message, "still being provisioned")
 	assert.False(t, promoteCalled, "must not promote while the target identity is still provisioning")
 
 	// Simulate the async provisioning attempt completing in the background.
@@ -1065,12 +1239,14 @@ func TestPromoteAgent_KickOffThenRetry_SucceedsOnceTargetIdentityCompletes(t *te
 // let the SAME PromoteAgent call succeed, without the caller needing to
 // retry at all.
 func TestPromoteAgent_PollSucceedsWithinBudget_PromotesOnFirstCall(t *testing.T) {
+	setRBACEnabledForTier(t, false)
 	shrinkPromotionIdentityPollForTest(t)
 	promoteCalled := false
 	ocClient := &clientmocks.OpenChoreoClientMock{
 		ReplaceReleaseBindingWorkloadOverridesFunc: func(_ context.Context, _, _, _ string, _ []client.EnvVar, _ []client.FileVar) error {
 			return nil
 		},
+		GetEnvironmentFunc: nonProductionEnvStub(),
 		GetOrganizationFunc: func(_ context.Context, orgName string) (*models.OrganizationResponse, error) {
 			return &models.OrganizationResponse{Name: orgName}, nil
 		},
@@ -1142,21 +1318,17 @@ func TestPromoteAgent_PollSucceedsWithinBudget_PromotesOnFirstCall(t *testing.T)
 func TestPromoteAgent_TargetCredentialRevoked_BlocksWithRegenerateMessage(t *testing.T) {
 	s, promoteCalled := promoteAgentTestFixture(t, nil, nil)
 
-	stub, ok := s.agentThunderProvisioning.(*provisionForEnvIfMissingStub)
-	require.True(t, ok)
-	stub.GetBindingStateFunc = func(context.Context, string, string, string, string) (*AgentThunderBindingState, error) {
-		return &AgentThunderBindingState{Status: models.AgentThunderStatusCompleted, HasSecret: false}, nil
-	}
+	stubBindingState(t, s, &AgentThunderBindingState{Status: models.AgentThunderStatusCompleted, HasSecret: false}, nil)
 
 	err := s.PromoteAgent(auditableCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
 		SourceEnvironment: "dev",
 		TargetEnvironment: "staging",
 	})
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "revoked")
-	assert.Contains(t, err.Error(), "regenerate")
-	assert.NotContains(t, err.Error(), "still provisioning", "a revoked credential must not tell the caller to just retry")
+	ve := requireBriefPromotionBlock(t, err)
+	assert.Contains(t, ve.Message, "revoked")
+	assert.Contains(t, ve.Reason, "regenerate")
+	assert.NotContains(t, renderedUIError(ve), "still being provisioned", "a revoked credential must not tell the caller to just retry")
 	assert.False(t, *promoteCalled)
 }
 
@@ -1167,11 +1339,133 @@ func TestPromoteAgent_TargetCredentialRevoked_BlocksWithRegenerateMessage(t *tes
 func TestPromoteAgent_TargetProvisioningFailed_BlocksWithReprovisionMessage(t *testing.T) {
 	s, promoteCalled := promoteAgentTestFixture(t, nil, nil)
 
+	stubBindingState(t, s, &AgentThunderBindingState{Status: models.AgentThunderStatusFailed, LastError: "thunder unreachable"}, nil)
+
+	err := s.PromoteAgent(auditableCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	ve := requireBriefPromotionBlock(t, err)
+	assert.Contains(t, ve.Message, "failed")
+	assert.Contains(t, ve.Reason, "thunder unreachable")
+	assert.Contains(t, ve.Reason, "re-provision")
+	assert.NotContains(t, renderedUIError(ve), "still being provisioned", "a permanently failed binding must not tell the caller to just retry")
+	assert.False(t, *promoteCalled)
+}
+
+// maxPromotionUIErrorLen guards against a blocked promotion regrowing into the
+// wall of text it used to be. The console renders a failed request as
+// "<message>: <reason>" (see extractServerErrorMessage in the api-client), so
+// both halves together are the UI string. The alert wraps rather than
+// truncates, so this is a legibility budget rather than a rendering limit —
+// the pre-split messages ran past 300 characters.
+//
+// What the code bounds is the unbounded detail it interpolates: upstream
+// failure text and the list of connection names. The environment name is
+// echoed verbatim on purpose (the caller needs to know which one blocked), so
+// a deliberately long environment name can still push a message past this.
+const maxPromotionUIErrorLen = 200
+
+// captureLogs points s at a buffer-backed logger and returns the accumulated
+// output, so a test can assert that detail withheld from the UI still reaches
+// the operator.
+func captureLogs(s *agentManagerService) func() string {
+	var buf bytes.Buffer
+	s.logger = slog.New(slog.NewTextHandler(&buf, nil))
+	return buf.String
+}
+
+// stubBindingState makes GetBindingState return a fixed result, selecting which
+// arm of the hard block's state switch runs.
+func stubBindingState(t *testing.T, s *agentManagerService, state *AgentThunderBindingState, err error) {
+	t.Helper()
 	stub, ok := s.agentThunderProvisioning.(*provisionForEnvIfMissingStub)
 	require.True(t, ok)
+	// (nil, nil) is what GetBindingState itself returns for a missing row.
 	stub.GetBindingStateFunc = func(context.Context, string, string, string, string) (*AgentThunderBindingState, error) {
-		return &AgentThunderBindingState{Status: models.AgentThunderStatusFailed, LastError: "thunder unreachable"}, nil
+		return state, err
 	}
+}
+
+// renderedUIError is the string the console actually shows for a failed
+// request, so assertions about "what the user sees" all measure the same thing.
+func renderedUIError(ve *utils.ValidationError) string {
+	return ve.Message + ": " + ve.Reason
+}
+
+// requireBriefPromotionBlock asserts err is the caller-facing form of a
+// blocked promotion: a ValidationError (so the UI gets the short Message
+// instead of the whole technical string) that still classifies as invalid
+// input, and whose rendered form stays inside the legibility budget.
+func requireBriefPromotionBlock(t *testing.T, err error) *utils.ValidationError {
+	t.Helper()
+	require.Error(t, err)
+	require.ErrorIs(t, err, utils.ErrInvalidInput, "the block must still classify as invalid input, or the controller answers 500 instead of 400")
+	ve := utils.IsValidationError(err)
+	require.NotNil(t, ve, "the block must carry a short UI Message separate from its technical Reason")
+
+	rendered := renderedUIError(ve)
+	assert.LessOrEqual(t, utf8.RuneCountInString(rendered), maxPromotionUIErrorLen,
+		"the UI string is too lengthy (%d runes): %s", utf8.RuneCountInString(rendered), rendered)
+	assert.NotContains(t, rendered, "check GET ", "REST call hints belong in the logs, not the UI")
+	return ve
+}
+
+// The UI must get a short, actionable sentence when the target environment's
+// identity is still provisioning; the rationale for the block (a
+// cross-environment credential leak) is operator detail and belongs in the
+// log instead.
+func TestPromoteAgent_IdentityStillProvisioning_KeepsUIErrorBriefAndLogsDetail(t *testing.T) {
+	s, promoteCalled := promoteAgentTestFixture(t, nil, nil)
+	logs := captureLogs(s)
+
+	err := s.PromoteAgent(auditableCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	ve := requireBriefPromotionBlock(t, err)
+	assert.Contains(t, ve.Message, "staging", "the message must name the environment that blocked the promotion")
+	assert.Contains(t, ve.Message, "still being provisioned")
+	assert.NotContains(t, ve.Message, "inherit", "the leak rationale is operator detail, not a UI message")
+	assert.Contains(t, logs(), "inherit", "the full rationale must still reach the log")
+	assert.Contains(t, logs(), "staging")
+	assert.False(t, *promoteCalled,
+		"promotion must be blocked BEFORE calling PromoteComponent — otherwise the pod is already promoted with leaked credentials by the time this error is returned")
+}
+
+// The same short-message contract for the state the hard block cannot explain
+// from a binding row: provisioning was only just triggered, so no row exists
+// yet.
+func TestPromoteAgent_IdentityBindingMissing_KeepsUIErrorBriefAndSaysRetry(t *testing.T) {
+	s, promoteCalled := promoteAgentTestFixture(t, nil, nil)
+	logs := captureLogs(s)
+	stubBindingState(t, s, nil, nil)
+
+	err := s.PromoteAgent(auditableCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	ve := requireBriefPromotionBlock(t, err)
+	assert.Contains(t, ve.Message, "staging")
+	assert.Contains(t, ve.Reason, "just triggered",
+		"the missing-row arm must be distinguishable from the still-provisioning arm, which shares its Message")
+	assert.Contains(t, logs(), "staging")
+	assert.False(t, *promoteCalled)
+}
+
+// A repository failure reading the binding row is an operational fault, not a
+// caller mistake: GetBindingState reserves (nil, nil) for "no binding row yet"
+// and wraps everything else. Reporting it as a validation error would tell the
+// user to retry a promotion that a retry cannot fix, and would answer 400 for
+// a server-side failure.
+func TestPromoteAgent_BindingStateReadFails_ReportsOperationalFailureNotValidation(t *testing.T) {
+	readFailure := errors.New("read agent thunder binding state: dial tcp: connection refused")
+	s, promoteCalled := promoteAgentTestFixture(t, nil, nil)
+	logs := captureLogs(s)
+	stubBindingState(t, s, nil, readFailure)
 
 	err := s.PromoteAgent(auditableCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
 		SourceEnvironment: "dev",
@@ -1179,10 +1473,56 @@ func TestPromoteAgent_TargetProvisioningFailed_BlocksWithReprovisionMessage(t *t
 	})
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "permanently failed")
-	assert.Contains(t, err.Error(), "thunder unreachable")
-	assert.Contains(t, err.Error(), "re-provision")
-	assert.NotContains(t, err.Error(), "still provisioning", "a permanently failed binding must not tell the caller to just retry")
+	require.ErrorIs(t, err, readFailure, "the underlying failure must stay wrapped so the cause survives to the logs")
+	assert.NotErrorIs(t, err, utils.ErrInvalidInput, "a repository failure is not invalid input; classifying it as one answers 400 for a server fault")
+	assert.Nil(t, utils.IsValidationError(err), "an operational failure must not be dressed up as a user-facing validation message")
+	assert.Contains(t, logs(), "proj1", "the failure must be logged with the project context")
+	assert.False(t, *promoteCalled)
+}
+
+// Realistic worst case for the MCP block: several long connection names.
+// Connection names are user-supplied and unbounded, so
+// without shortening the list the UI string grows into the wall of text the
+// split exists to prevent — and shortening must drop whole names, never cut one
+// mid-name and put a connection that does not exist in front of the user.
+func TestPromoteAgent_ManyLongMCPConnectionNames_KeepsUIErrorBriefAndNamesNoPartialConnection(t *testing.T) {
+	names := []string{"booking-service", "invoicing-api", "notifications-fanout", "payments-gateway", "search-indexer"}
+	s, promoteCalled := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "target-client-id"}}, nil)
+	stubUnresolvedMCPs(t, s, "staging", names...)
+	logs := captureLogs(s)
+
+	err := s.PromoteAgent(auditableCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	ve := requireBriefPromotionBlock(t, err)
+	assert.Contains(t, ve.Message, "(+", "a shortened list must say how many connections it left out")
+	assert.NotContains(t, ve.Message, "…",
+		"a list is shortened by dropping whole names, so no name may be cut mid-word")
+	for _, name := range names {
+		assert.Contains(t, logs(), name, "every blocked connection must reach the log")
+	}
+	assert.False(t, *promoteCalled)
+}
+
+// A Thunder failure message is unbounded — the whole point of the split is
+// that it cannot push the UI string back over the limit. The full text must
+// still be logged verbatim.
+func TestPromoteAgent_ProvisioningFailedWithLongLastError_TruncatesUIReason(t *testing.T) {
+	longLastError := "thunder unreachable: " + strings.Repeat("connection refused; ", 30)
+	s, promoteCalled := promoteAgentTestFixture(t, nil, nil)
+	logs := captureLogs(s)
+	stubBindingState(t, s, &AgentThunderBindingState{Status: models.AgentThunderStatusFailed, LastError: longLastError}, nil)
+
+	err := s.PromoteAgent(auditableCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	ve := requireBriefPromotionBlock(t, err)
+	assert.Contains(t, ve.Reason, "thunder unreachable", "the head of the failure is the most useful part to keep")
+	assert.Contains(t, logs(), longLastError, "the untruncated failure must reach the log")
 	assert.False(t, *promoteCalled)
 }
 
@@ -1199,11 +1539,13 @@ func TestPromoteAgent_TargetProvisioningFailed_BlocksWithReprovisionMessage(t *t
 // a nil-interface panic rather than silently passing. PromoteAgent must not
 // hard-block the promotion just because no AgentID binding will ever exist.
 func TestPromoteAgent_ProvisioningDisabled_SkipsIdentityCheckAndPromotes(t *testing.T) {
+	setRBACEnabledForTier(t, false)
 	promoteCalled := false
 	ocClient := &clientmocks.OpenChoreoClientMock{
 		ReplaceReleaseBindingWorkloadOverridesFunc: func(_ context.Context, _, _, _ string, _ []client.EnvVar, _ []client.FileVar) error {
 			return nil
 		},
+		GetEnvironmentFunc: nonProductionEnvStub(),
 		GetOrganizationFunc: func(_ context.Context, orgName string) (*models.OrganizationResponse, error) {
 			return &models.OrganizationResponse{Name: orgName}, nil
 		},
@@ -1271,11 +1613,13 @@ func TestPromoteAgent_ProvisioningDisabled_SkipsIdentityCheckAndPromotes(t *test
 // CR regardless. If PromoteAgent let this through without the target's own
 // override, the promoted pod would silently inherit that real credential.
 func TestPromoteAgent_ProvisioningDisabledButLowestEnvHasRealCredential_StillBlocks(t *testing.T) {
+	setRBACEnabledForTier(t, false)
 	promoteCalled := false
 	ocClient := &clientmocks.OpenChoreoClientMock{
 		ReplaceReleaseBindingWorkloadOverridesFunc: func(_ context.Context, _, _, _ string, _ []client.EnvVar, _ []client.FileVar) error {
 			return nil
 		},
+		GetEnvironmentFunc: nonProductionEnvStub(),
 		GetOrganizationFunc: func(_ context.Context, orgName string) (*models.OrganizationResponse, error) {
 			return &models.OrganizationResponse{Name: orgName}, nil
 		},
@@ -1334,8 +1678,8 @@ func TestPromoteAgent_ProvisioningDisabledButLowestEnvHasRealCredential_StillBlo
 		TargetEnvironment: "staging",
 	})
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "AgentID provisioning is disabled")
+	ve := requireBriefPromotionBlock(t, err)
+	assert.Contains(t, ve.Message, "provisioning is disabled")
 	assert.False(t, promoteCalled,
 		"promotion must be blocked BEFORE calling PromoteComponent — otherwise the pod is already promoted with the lowest environment's leaked credentials by the time this error is returned")
 }
@@ -2105,4 +2449,181 @@ func TestListOrgAgents_ProjectListFailurePropagates(t *testing.T) {
 
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, utils.ErrOrganizationNotFound, "an unrelated openchoreo failure must not be masked as not-found")
+}
+
+// stubSystemManagedConfigs gives the agent system-managed configuration in
+// configuredEnv and none anywhere else, which is the shape that trips the
+// missing-configuration block on a promotion out of configuredEnv.
+func stubSystemManagedConfigs(t *testing.T, s *agentManagerService, configuredEnv string, configs ...SystemManagedConfigRef) {
+	t.Helper()
+	agentConfigSvc := promoteConfigStub(t, s)
+	agentConfigSvc.SystemKeysFunc = func(_ context.Context, _, _, _, envName string) (map[string]bool, error) {
+		if envName != configuredEnv {
+			return map[string]bool{}, nil
+		}
+		keys := map[string]bool{}
+		for _, config := range configs {
+			keys[config.Name+"_URL"] = true
+		}
+		return keys, nil
+	}
+	agentConfigSvc.SystemConfigsFunc = func(_ context.Context, _, _, _, envName string) ([]SystemManagedConfigRef, error) {
+		if envName != configuredEnv {
+			return []SystemManagedConfigRef{}, nil
+		}
+		return configs, nil
+	}
+}
+
+func mcpConfigRef(name string) SystemManagedConfigRef {
+	return SystemManagedConfigRef{Name: name, TypeID: models.AgentConfigTypeIDMCP}
+}
+
+func llmConfigRef(name string) SystemManagedConfigRef {
+	return SystemManagedConfigRef{Name: name, TypeID: models.AgentConfigTypeIDLLM}
+}
+
+// An agent whose only system-managed configuration is an MCP connection used to be
+// refused with "no LLM/system configuration", sending the user to look for an LLM
+// provider that was never involved. The block must name the configuration that is
+// actually missing from the target.
+func TestPromoteAgent_TargetMissingMCPOnlyConfig_NamesTheConfigurationNotLLM(t *testing.T) {
+	s, promoteCalled := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+	stubSystemManagedConfigs(t, s, "dev", mcpConfigRef("booking"))
+
+	err := s.PromoteAgent(auditableCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	ve := requireBriefPromotionBlock(t, err)
+	assert.Equal(t, `Promotion blocked: MCP configuration "booking" is not connected in "staging"`, ve.Message)
+	assert.Equal(t, `connect it in "staging", then promote`, ve.Reason)
+	assert.NotContains(t, renderedUIError(ve), "LLM",
+		"no LLM provider is involved, so naming one sends the user after a configuration that does not exist")
+	assert.False(t, *promoteCalled)
+}
+
+// One missing configuration is the common case, so the block reads as a sentence
+// about it rather than hedging with "configuration(s)" and "it/them".
+func TestPromoteAgent_TargetMissingSeveralMCPConfigs_ReadsAsPlural(t *testing.T) {
+	s, _ := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+	stubSystemManagedConfigs(t, s, "dev", mcpConfigRef("payments"), mcpConfigRef("booking"))
+
+	err := s.PromoteAgent(auditableCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	ve := requireBriefPromotionBlock(t, err)
+	assert.Equal(t, `Promotion blocked: MCP configurations booking, payments are not connected in "staging"`, ve.Message,
+		"the names are listed in a stable order, so the same refusal reads the same on every run")
+	assert.Equal(t, `connect them in "staging", then promote`, ve.Reason)
+	assert.NotContains(t, renderedUIError(ve), "(s)", "the wording agrees with the count instead of hedging")
+}
+
+// The same block fires when it really is the LLM provider that the target lacks.
+// That wording is correct there and is what callers already handle, so an agent
+// with no MCP connection must keep the message and reason it has always produced.
+func TestPromoteAgent_TargetMissingLLMConfig_KeepsTheGenericWording(t *testing.T) {
+	s, _ := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+	stubSystemManagedConfigs(t, s, "dev", llmConfigRef("openai"))
+
+	err := s.PromoteAgent(auditableCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	ve := requireBriefPromotionBlock(t, err)
+	assert.Equal(t, `Promotion blocked: no LLM/system configuration in "staging"`, ve.Message)
+	assert.Equal(t, `configure system variables in "staging", then promote`, ve.Reason)
+}
+
+// An agent missing both kinds is genuinely missing its LLM configuration, so the
+// message keeps its wording. The MCP connections are missing too, though, and a
+// user who configures only the system variables would be refused all over again —
+// so the reason names them.
+func TestPromoteAgent_TargetMissingLLMAndMCPConfigs_KeepsMessageAndNamesMCPInReason(t *testing.T) {
+	s, _ := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+	stubSystemManagedConfigs(t, s, "dev", llmConfigRef("openai"), mcpConfigRef("booking"))
+
+	err := s.PromoteAgent(auditableCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	ve := requireBriefPromotionBlock(t, err)
+	assert.Equal(t, `Promotion blocked: no LLM/system configuration in "staging"`, ve.Message,
+		"the message stays byte-identical so anything already handling this block keeps working")
+	assert.Equal(t, `configure system variables and connect MCP configuration "booking", then promote`, ve.Reason)
+}
+
+// The lookup that names the configurations runs only to describe a refusal that has
+// already been decided. Failing to describe it must not escalate a 400 the caller can
+// act on into a 500 that hides why the promotion stopped.
+func TestPromoteAgent_ConfigLookupFailsWhileDescribingBlock_StillRefusesWithGenericWording(t *testing.T) {
+	s, promoteCalled := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+	stubSystemManagedConfigs(t, s, "dev", mcpConfigRef("booking"))
+	promoteConfigStub(t, s).SystemConfigsFunc = func(_ context.Context, _, _, _, _ string) ([]SystemManagedConfigRef, error) {
+		return nil, errors.New("database unavailable")
+	}
+
+	err := s.PromoteAgent(auditableCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	ve := requireBriefPromotionBlock(t, err)
+	assert.Equal(t, `Promotion blocked: no LLM/system configuration in "staging"`, ve.Message)
+	assert.False(t, *promoteCalled)
+}
+
+// The reason naming the MCP configurations is the longest string this block can
+// produce, and it is rendered next to an environment name the user chose. Long names
+// and a truncated list together must still fit the console's legibility budget.
+func TestPromoteAgent_ManyMCPConfigsAndLongEnvName_StaysWithinUIBudget(t *testing.T) {
+	longEnv := "production-eu-west-central-1"
+	configs := []SystemManagedConfigRef{
+		llmConfigRef("openai"),
+		mcpConfigRef("hotel-booking-connection"),
+		mcpConfigRef("payments-connection"),
+		mcpConfigRef("inventory-connection"),
+		mcpConfigRef("notifications-connection"),
+	}
+	s, _ := promoteAgentTestFixture(t, nil, nil)
+	stubSystemManagedConfigs(t, s, "dev", configs...)
+
+	message, reason := s.missingTargetConfigText(context.Background(), "my-agent", "acme", "proj1", "dev", longEnv)
+
+	_ = requireBriefPromotionBlock(t, utils.NewInvalidInputError(message, reason))
+}
+
+// Configuration names are accepted up to 255 characters, and this block is the first
+// thing that puts one on screen. A name long enough to bury the sentence it sits in
+// must be cut down to a recognisable prefix rather than pasted in whole.
+func TestPromoteAgent_VeryLongConfigName_IsShortenedNotPastedWhole(t *testing.T) {
+	longName := "hotel-booking" + strings.Repeat("x", 242)
+	require.Len(t, longName, 255, "the fixture must use the longest name the API accepts")
+
+	for _, tc := range []struct {
+		name    string
+		configs []SystemManagedConfigRef
+	}{
+		{"single MCP configuration", []SystemManagedConfigRef{mcpConfigRef(longName)}},
+		{"several MCP configurations", []SystemManagedConfigRef{mcpConfigRef(longName), mcpConfigRef("payments")}},
+		{"LLM and MCP configurations", []SystemManagedConfigRef{llmConfigRef("openai"), mcpConfigRef(longName)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := promoteAgentTestFixture(t, nil, nil)
+			stubSystemManagedConfigs(t, s, "dev", tc.configs...)
+
+			message, reason := s.missingTargetConfigText(context.Background(), "my-agent", "acme", "proj1", "dev", "staging")
+
+			rendered := renderedUIError(utils.NewInvalidInputError(message, reason))
+			assert.NotContains(t, rendered, longName, "the whole name must not reach the UI")
+			assert.Contains(t, rendered, "hotel-booking", "enough of the name must survive to identify the configuration")
+			assert.LessOrEqual(t, utf8.RuneCountInString(rendered), maxPromotionUIErrorLen,
+				"a single name must not be able to blow the message past the budget: %s", rendered)
+		})
+	}
 }

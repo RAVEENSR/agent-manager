@@ -170,11 +170,15 @@ var identityResources = map[string]bool{
 }
 
 // deploymentVerbs mark lifecycle transitions wherever they appear.
+//
+// The environment-tier scopes are deliberately absent: they name where an
+// operation lands rather than what it is, deriveAction filters them out before
+// they can become an action, and a route left with nothing to derive from
+// panics instead. There is no reachable "agent:env-production" to classify.
 var deploymentVerbs = map[string]bool{
 	"deploy": true, "undeploy": true, "promote": true, "build": true,
 	"suspend": true, "resume": true, "restore": true,
-	"change-deployment-state": true, "deploy-production": true,
-	"deploy-non-production": true, "rollback": true,
+	"change-deployment-state": true, "rollback": true,
 }
 
 // credentialVerbs mark credential handling wherever it appears — an

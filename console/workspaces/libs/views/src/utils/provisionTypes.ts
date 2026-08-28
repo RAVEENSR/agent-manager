@@ -27,3 +27,12 @@ export function displayProvisionTypes(provisionType?: string) {
       return "Platform";
   }
 }
+
+export function displayAgentSubType(subType?: string) {
+  switch (subType) {
+    case "custom-api":
+      return "Custom API";
+    case "chat-api":
+      return "Chat";
+  }
+}

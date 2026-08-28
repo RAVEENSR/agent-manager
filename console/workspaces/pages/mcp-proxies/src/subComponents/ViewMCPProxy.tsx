@@ -58,7 +58,6 @@ import { normalizeVersion } from "@agent-management-platform/shared-component";
 import {
   CreatedMetadata,
   PageLayout,
-  UpdatedMetadata,
 } from "@agent-management-platform/views";
 import { MCPProxyManageToolsTab } from "./MCPProxyManageToolsTab";
 import { MCPProxyConnectionTab } from "./MCPProxyConnectionTab";
@@ -271,10 +270,7 @@ export function ViewMCPProxy() {
           ) : undefined
         }
         meta={
-          <>
-            <CreatedMetadata createdAt={proxy?.createdAt} />
-            <UpdatedMetadata updatedAt={proxy?.updatedAt} />
-          </>
+          <CreatedMetadata createdAt={proxy?.createdAt} />
         }
         actions={
           proxy ? (

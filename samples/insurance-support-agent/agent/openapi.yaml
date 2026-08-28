@@ -1,0 +1,117 @@
+openapi: 3.0.3
+info:
+  title: Insurance Support Agent
+  description: |
+    A Strands agent exposing a single POST /chat endpoint. It answers customer
+    questions about insurance policies and claims, and can open a new claim,
+    using five tools over in-memory fixtures.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8000
+    description: Default port, and the port platform-hosted agents are routed to
+  - url: http://localhost:10150
+    description: Local development, when PORT is overridden as the README shows
+paths:
+  /chat:
+    post:
+      summary: Chat with the insurance support agent
+      description: |
+        Sends a customer message to the agent. Conversation history is kept per
+        session_id; omit it to start a new conversation.
+      operationId: chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+            examples:
+              listPolicies:
+                summary: Ask what cover the customer holds
+                value:
+                  session_id: "session_123"
+                  message: "What policies do I have?"
+              claimStatus:
+                summary: Check a claim
+                value:
+                  session_id: "session_123"
+                  message: "What is happening with claim CLM-10432?"
+              fileClaim:
+                summary: Open a new claim
+                value:
+                  session_id: "session_123"
+                  message: "I need to claim on OZ-HOME-2280, a pipe burst and ruined the floor, about £900"
+      responses:
+        "200":
+          description: The agent's reply
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResponse"
+              examples:
+                claimStatusResponse:
+                  summary: Claim status reply
+                  value:
+                    response: "Claim CLM-10432 on your motor policy is in review. An assessor report is expected by 20 August."
+                    session_id: "session_123"
+        "400":
+          description: Empty message
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Agent invocation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /health:
+    get:
+      summary: Liveness check
+      operationId: health
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  company:
+                    type: string
+                    example: O2 Insurance
+components:
+  schemas:
+    ChatRequest:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          description: The customer's message
+        session_id:
+          type: string
+          description: Conversation identifier; generated when omitted
+    ChatResponse:
+      type: object
+      required:
+        - response
+        - session_id
+      properties:
+        response:
+          type: string
+          description: The agent's reply
+        session_id:
+          type: string
+          description: Conversation identifier to send with the next message
+    Error:
+      type: object
+      properties:
+        detail:
+          type: string
+          example: "message must not be empty"

@@ -25,13 +25,14 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
 
 // LLMProxyRepository defines the interface for LLM proxy persistence
 //
 //go:generate moq -rm -fmt goimports -skip-ensure -pkg repomocks -out repomocks/llm_proxy_repository_mock.go . LLMProxyRepository:LLMProxyRepositoryMock
 type LLMProxyRepository interface {
-	Create(p *models.LLMProxy, handle, name, version string, ouID string) error
+	Create(ctx context.Context, p *models.LLMProxy, handle, name, version string, ouID string) error
 	GetByID(proxyID, ouID string) (*models.LLMProxy, error)
 	// GetByIDCtx is GetByID with context propagation, for call paths (e.g.
 	// UndeployLLMProxyDeployment) that need cancellation to reach the query.
@@ -54,6 +55,7 @@ type LLMProxyRepository interface {
 type LLMProxyRepo struct {
 	db           *gorm.DB
 	artifactRepo ArtifactRepository
+	providerRepo LLMProviderRepository
 }
 
 // NewLLMProxyRepo creates a new LLM proxy repository
@@ -61,6 +63,7 @@ func NewLLMProxyRepo(db *gorm.DB) LLMProxyRepository {
 	return &LLMProxyRepo{
 		db:           db,
 		artifactRepo: NewArtifactRepo(db),
+		providerRepo: NewLLMProviderRepo(db),
 	}
 }
 
@@ -113,9 +116,23 @@ func (r *LLMProxyRepo) getProxyUUIDByHandle(tx *gorm.DB, handle string, ouID str
 	return artifact.UUID, nil
 }
 
-// Create inserts a new LLM proxy
-func (r *LLMProxyRepo) Create(p *models.LLMProxy, handle, name, version string, ouID string) error {
+// Create inserts a new LLM proxy. The provider's deleting status is locked and
+// rechecked inside this same transaction (see IsDeletingForUpdate) so it is
+// consistent with LLMProviderService.Delete's MarkDeleting row-locking UPDATE: a
+// concurrent Delete either commits its claim before this transaction starts (and
+// this insert is rejected) or starts after this transaction commits (and is then
+// caught by Delete's own HasAssociatedProxies check). There is no interleaving
+// where the proxy is inserted without either side observing the other.
+func (r *LLMProxyRepo) Create(ctx context.Context, p *models.LLMProxy, handle, name, version string, ouID string) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		deleting, err := r.providerRepo.IsDeletingForUpdate(ctx, tx, p.ProviderUUID)
+		if err != nil {
+			return fmt.Errorf("failed to check provider deleting status: %w", err)
+		}
+		if deleting {
+			return utils.ErrLLMProviderBeingDeleted
+		}
+
 		if p.UUID == uuid.Nil {
 			p.UUID = uuid.New()
 		}

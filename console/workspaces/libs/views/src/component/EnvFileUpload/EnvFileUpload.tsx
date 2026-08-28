@@ -60,7 +60,7 @@ export function parseEnvFileContent(text: string): ParsedEnvEntry[] {
   return result;
 }
 
-const MAX_FILE_SIZE = 1_000_000; // 1 MB — matches backend schema limit
+export const MAX_FILE_SIZE = 1_000_000; // 1 MB — matches backend schema limit
 
 export interface EnvFileUploadButtonProps {
   /**

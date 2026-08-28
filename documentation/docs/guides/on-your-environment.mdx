@@ -197,12 +197,6 @@ Keep this shell session for the whole install, and store the values in your secr
 
 :::
 
-:::info External AI gateways
-
-AI gateways running outside this cluster connect through the control-plane gateway at `https://${CP_GW_PUBLIC_HOST}`. Phase 2 passes this hostname to the Agent Manager install; nothing else is needed beyond the DNS record. See [Register an AI Gateway](./register-ai-gateway.mdx).
-
-:::
-
 ---
 
 ## Phase 1: OpenChoreo Platform
@@ -701,6 +695,7 @@ helm install amp-thunder-extension \
   --set thunder.bootstrap.amObserverClient.clientSecret="${AM_OBSERVER_CLIENT_SECRET}" \
   --set thunder.bootstrap.workloadPublisherClient.clientSecret="${WORKFLOW_PUBLISHER_SECRET}" \
   --set thunder.bootstrap.observerResourceReaderClient.clientSecret="${OBSERVER_READER_SECRET}" \
+  --set thunder.ocIngress.https.enabled=false \
   --values thunder-db-values.yaml \
   --timeout 1800s
 
@@ -715,6 +710,10 @@ The chart bootstraps **six** OAuth clients, and every one it is not given keeps 
 Leaving them out breaks the platform in two ways at once. The defaults stay valid, so an install that looks hardened still accepts `openchoreo-workload-publisher-secret` and `openchoreo-observer-resource-reader-client-secret`. And because the consumers read the *generated* values from OpenBao, they present a secret Thunder does not have: every agent build fails at the workload-publish step with `Failed to get access token`, from a `401 invalid_client` that never reaches the build log.
 
 When verifying, note the two client families use different token-endpoint auth methods — the four `amp*` clients use HTTP Basic, these two use POST-body credentials. Testing with the wrong method returns `400`, not `401`, which is easy to misread as a rejected credential.
+:::
+
+:::warning Disable Thunder's own local-dev gateway
+`thunder.ocIngress.https.enabled` defaults to `true`. It exists so a local k3d install can reach Thunder over HTTPS without depending on the control plane's own gateway TLS — it stands up a second, dedicated Gateway plus a self-signed "AMP Local Dev CA" certificate, independent of the wildcard certificate this guide creates in [Step 5](#step-5-install-openchoreo-control-plane). On a real cluster this is redundant rather than harmful, since every other plane still gets its own LoadBalancer address — but it is still an unused Gateway and certificate with no purpose here, so turn it off with the `--set` above.
 :::
 
 :::info MCP resource identifiers
@@ -740,6 +739,16 @@ kubectl exec -n ${THUNDER_NS} deploy/amp-thunder-extension-deployment -- \
   | grep -o '"issuer":"[^"]*"'
 # Expected: "issuer":"${THUNDER_PUBLIC_URL}"  (must match your THUNDER_PUBLIC_URL value)
 ```
+:::
+
+:::info Console admin password
+This install also generated the console's `admin` password — it is never a shipped default (unlike a plain `admin`/`admin` login, that would be guessable from this chart's own public source), and it is not shown anywhere in this command's output. Retrieve it with:
+
+```bash
+kubectl get secret amp-admin-credentials -n ${THUNDER_NS} -o jsonpath='{.data.password}' | base64 -d
+```
+
+Reused across reinstalls rather than rotated, so this command keeps working later too. See [Identity and Access](#identity-and-access) for what to do with this login before exposing the platform.
 :::
 
 ### Step 5: Install OpenChoreo Control Plane
@@ -1461,6 +1470,7 @@ Platform Thunder's certificate comes from a real, publicly-trusted CA, so env-Th
 ENV_NAME=default \
 DISPLAY_NAME="Default" \
 ORG_NAME=default \
+THUNDER_HANDLE=default-idp \
 WAIT_TIMEOUT=300s \
 AMP_API_URL="${API_PUBLIC_URL}/api/v1" \
 IDP_TOKEN_URL="${THUNDER_PUBLIC_URL}/oauth2/token" \
@@ -1508,6 +1518,7 @@ Keeping your system bundle in there too (rather than only the one CA) matters be
 ENV_NAME=default \
 DISPLAY_NAME="Default" \
 ORG_NAME=default \
+THUNDER_HANDLE=default-idp \
 WAIT_TIMEOUT=300s \
 AMP_API_URL="${API_PUBLIC_URL}/api/v1" \
 IDP_TOKEN_URL="${THUNDER_PUBLIC_URL}/oauth2/token" \
@@ -1523,6 +1534,11 @@ bash add-environment-thunder.sh
 
   </TabItem>
 </Tabs>
+
+Both commands above register `default-idp` as this Environment's handle.
+`THUNDER_HANDLE` is optional (3-63 characters); change it or omit it to have
+Agent Manager generate one instead. The script prints the resulting issuer as
+`https://<handle>.${BASE_DOMAIN}`.
 
 :::info
 Only the Let's Encrypt path can use `SKIP_CA_BUNDLE_TRUST=true` — it's specifically for a certificate that's already backed by a CA every trust store already knows. For a Corporate CA, that flag doesn't help you: setting it to `true` skips the fetch outright, and simply omitting it falls back to the script's own auto-detect, which looks for a secret named `amp-local-root-ca-secret` — a name the Corporate CA tab in Step 3 never creates. `PLATFORM_THUNDER_CA_PEM` sidesteps that entirely by pulling whatever certificate is actually being served, live, regardless of what you named things, but it only solves trust *inside the cluster*. The `CURL_CA_BUNDLE` step above is a separate fix for trust on **your own machine**, where this script's own `curl` calls run. (Running with the self-signed evaluation chain? See the [nip.io appendix](#appendix-installing-without-a-domain-nipio).)
@@ -1621,7 +1637,7 @@ Open the Console, log in, then create → build → deploy an agent; its invoke 
 
 Port-forwarding remains available as a debugging fallback for any individual service (all Agent Manager services are ClusterIP), e.g. `kubectl port-forward -n wso2-amp svc/amp-console 3000:3000`.
 
-**Default credentials:** `admin` / `admin` — bootstrap only; replace before exposing the platform (see [Identity and Access](#identity-and-access)).
+**Admin login:** username `admin`, with a generated password retrieved from the `amp-admin-credentials` Secret — bootstrap only; replace before exposing the platform (see [Identity and Access](#identity-and-access)).
 
 ---
 
@@ -1676,7 +1692,7 @@ Work down this table against an existing install. The **When** column matters: t
 | OpenBao sealed, persistent, and unseal keys escrowed | [Step 2](#step-2-set-up-the-secret-stores) | Any time — re-seeding required |
 | OpenSearch volume sized to retention, admin password matches OpenBao | [Step 8](#step-8-setup-observability-plane) | Any time |
 | Container registry is yours, with `tlsVerify=true` | [Phase 2](#phase-2-agent-manager-installation) | Any time — affects new builds |
-| Console `admin`/`admin` replaced by real users or a connected IdP | [Identity](#identity-and-access) | Any time |
+| Console admin's generated bootstrap password replaced by real users or a connected IdP | [Identity](#identity-and-access) | Any time |
 | JWT signature verification active on the API and the observer | [Identity](#identity-and-access) | Any time |
 | Gateway development mode off with encryption keys configured | [Gateway hardening](#gateway-hardening) | Both are set during installation |
 | Post-upgrade patches re-applied | [After a chart upgrade](#after-a-chart-upgrade) | After every relevant `helm upgrade` |
@@ -1699,7 +1715,13 @@ Two cautions learned the hard way. Because these use `kubectl patch`/`apply`, th
 
 ### Identity and Access
 
-The seeded `admin`/`admin` console login is for bootstrap only. Create real users in Thunder or connect your organization's identity provider before exposing the platform — see ThunderID's [Manage Users](https://thunderid.dev/docs/v1.0.x/guides/users/manage-users/) and [Manage Identity Providers](https://thunderid.dev/docs/v1.0.x/guides/identity-providers/manage-identity-providers/) guides. This is separate from [Configure Identity Providers at the Gateway](./configure-identity-providers-at-the-gateway.mdx), which covers the issuers a gateway trusts for agent endpoints.
+The console's `admin` login is not something you set on a production install: leave `thunder.setup.admin.password` unset (the guidance in [Step 4](#step-4-install-thunder-extension-identity-provider) does) and Thunder's chart generates its password itself at install time — a random 10-character value, stored in the `amp-admin-credentials` Secret in the Thunder namespace, reused across reinstalls rather than rotated — so there is never a shipped default to leave unchanged. This is different from the quick-start and VM installers, which set that same field to a fixed, memorable password on purpose, since those install onto a machine only the operator reaches. Retrieve the real value in effect either way with:
+
+```bash
+kubectl get secret amp-admin-credentials -n ${THUNDER_NS} -o jsonpath='{.data.password}' | base64 -d
+```
+
+Log in with it once, then go to the user profile menu in the console and set your own password before doing anything else — this seeded login is for bootstrap only, not a credential to keep using. Beyond that, create real users in Thunder or connect your organization's identity provider before exposing the platform — see ThunderID's [Manage Users](https://thunderid.dev/docs/v1.0.x/guides/users/manage-users/) and [Manage Identity Providers](https://thunderid.dev/docs/v1.0.x/guides/identity-providers/manage-identity-providers/) guides. This is separate from [Configure Identity Providers at the Gateway](./configure-identity-providers-at-the-gateway.mdx), which covers the issuers a gateway trusts for agent endpoints.
 
 Each environment also gets its own Thunder instance, provisioned in Phase 2, which issues agents their OAuth credentials in that environment. Those are separate installations from the platform Thunder; its admin password is generated once at provisioning and shown only in the verify step, so capture it into your secret manager then. Apply the same database and credential hygiene per environment.
 
@@ -1806,8 +1828,6 @@ Two constraints are worth knowing before you choose:
 - A gateway's role is fixed when it first registers. A later `helm upgrade` with a different `gateway.type` only logs a drift warning — it never rewrites the role — so an environment's topology cannot be switched in place. Moving an existing environment to a split topology means deleting and recreating it.
 
 `REGULAR` and `AI` are still accepted as input, mapping to `BOTH` and `EGRESS`, but they are deprecated; prefer the role names.
-
-AI gateways can also run **outside** the cluster (for example, close to a private LLM endpoint), connecting back through the control-plane gateway at `https://${CP_GW_PUBLIC_HOST}`. Register those as `EGRESS`, since they serve outbound traffic only — see [Register an AI Gateway](./register-ai-gateway.mdx). The WSO2 [AI Gateway Kubernetes deployment guide](https://wso2.com/api-platform/docs/ai-gateway/1.1.0/deployment-modes/kubernetes/gateway-operator/) covers running one under the gateway operator.
 
 ### Build Workflows
 

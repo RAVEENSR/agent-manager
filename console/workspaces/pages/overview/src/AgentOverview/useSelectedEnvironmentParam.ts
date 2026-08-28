@@ -28,9 +28,10 @@ export const ENV_SEARCH_PARAM = "env";
  * an environment outside the current list — the rightmost (most-promoted)
  * environment that `isDeployed` reports as deployed, so users land on
  * whatever's furthest along the pipeline instead of always Dev. Falls back
- * further to the first environment when none are deployed yet, or when no
+ * further to the first environment when none are deployed yet. When no
  * `isDeployed` predicate is given (e.g. external agents, which have no
- * platform-managed deployment concept).
+ * platform-managed deployment concept to check), there's nothing to filter
+ * on, so it defaults straight to the rightmost (most-promoted) environment.
  */
 export function useSelectedEnvironmentParam(
   environments: Environment[],
@@ -43,8 +44,9 @@ export function useSelectedEnvironmentParam(
   // case, once a selection is in the URL, skips it entirely.
   const selectedEnvironment =
     environments.find((env) => env.name === requestedName) ??
-    (isDeployed ? [...environments].reverse().find(isDeployed) : undefined) ??
-    environments[0];
+    (isDeployed
+      ? [...environments].reverse().find(isDeployed) ?? environments[0]
+      : environments[environments.length - 1]);
 
   const selectEnvironment = (name: string) => {
     setSearchParams(

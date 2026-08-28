@@ -80,6 +80,11 @@ const (
 	StatusFailed  = "failed"
 )
 
+// LLMProviderStatusDeleting marks a provider as having an in-flight Delete, set
+// atomically before any gateway I/O so concurrent proxy creation can be rejected
+// instead of racing the undeploy/delete sequence.
+const LLMProviderStatusDeleting = "DELETING"
+
 // Version defaults
 const (
 	DefaultProxyVersion = "1.0.0"

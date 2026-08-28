@@ -19,8 +19,9 @@ var _ MappedNullable = &MCPProxyScopeUpdateRequest{}
 
 // MCPProxyScopeUpdateRequest struct for MCPProxyScopeUpdateRequest
 type MCPProxyScopeUpdateRequest struct {
-	Description *string  `json:"description,omitempty"`
-	Tools       []string `json:"tools,omitempty"`
+	Description *string `json:"description,omitempty"`
+	// Replaces the scope's tool list. Omit to leave it unchanged; send an empty array to unbind the scope from every tool.
+	Tools []string `json:"tools,omitempty"`
 }
 
 // NewMCPProxyScopeUpdateRequest instantiates a new MCPProxyScopeUpdateRequest object

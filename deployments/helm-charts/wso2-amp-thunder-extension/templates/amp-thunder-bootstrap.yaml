@@ -458,11 +458,10 @@ data:
           - { name: Update, handle: update, description: "Update agent configuration and resource configs" }
           - { name: Delete, handle: delete, description: "Delete an agent" }
           - { name: Build, handle: build, description: "Trigger an agent build" }
-          - { name: Promote, handle: promote, description: "Promote an agent deployment across environments" }
           - { name: Rollback, handle: rollback, description: "Rollback an agent deployment" }
           - { name: Suspend, handle: suspend, description: "Suspend or stop an agent deployment" }
-          - { name: Deploy Non-Production, handle: deploy-non-production, description: "Deploy an agent to a non-production environment" }
-          - { name: Deploy Production, handle: deploy-production, description: "Deploy an agent to a production environment" }
+          - { name: Act on Non-Production Environments, handle: env-non-production, description: "Deploy, promote, or suspend an agent in a non-production environment" }
+          - { name: Act on Production Environments, handle: env-production, description: "Deploy, promote, or suspend an agent in an environment flagged isProduction" }
           - { name: Manage Token, handle: token-manage, description: "Generate agent tokens" }
           - { name: Manage API Key, handle: api-key-manage, description: "Create, update, and delete agent API keys" }
       - name: Agent Kind
@@ -532,6 +531,68 @@ data:
         description: Source repository browsing
         actions:
           - { name: Read, handle: read, description: "Browse repository branches and commits" }
+
+  60-mcp-resource-servers.yaml: |
+  {{- $firstMCPResourceServer := true }}
+  {{- range $server := .Values.thunder.bootstrap.mcpResourceServers }}
+  {{- $baseURL := index $.Values.thunder.bootstrap $server.baseUrlValue }}
+  {{- if and (not $baseURL) (not $server.optional) }}
+  {{- fail (printf "thunder.bootstrap.%s must be set" $server.baseUrlValue) }}
+  {{- end }}
+  {{- if $baseURL }}
+  {{- if not $firstMCPResourceServer }}
+    ---
+  {{- end }}
+    resource_type: resource_server
+    id: {{ $server.id | quote }}
+    name: {{ $server.name | quote }}
+    description: {{ $server.description | quote }}
+    identifier: {{ printf "%s/mcp" ($baseURL | trimSuffix "/") | quote }}
+    ouHandle: default
+    delimiter: ":"
+    resources:
+      - name: Agent Manager
+        handle: amp
+        description: Top-level namespace for Agent Manager MCP permissions
+    {{- if eq $server.permissionSet "observability-only" }}
+      - name: Observability
+        handle: observability
+        parent: amp
+        description: Observability MCP permissions
+        actions:
+          - { name: Trace Read, handle: trace-read, description: "Read agent execution traces" }
+          - { name: Log Read, handle: log-read, description: "Read agent runtime logs" }
+          - { name: Build Log Read, handle: build-log-read, description: "Read agent build logs" }
+          - { name: Metric Read, handle: metric-read, description: "Read agent and system metrics" }
+    {{- else }}
+      - name: Project
+        handle: project
+        parent: amp
+        description: Project operations exposed by Agent Manager MCP
+        actions:
+          - { name: Create, handle: create, description: "Create a project" }
+          - { name: Read, handle: read, description: "View project details" }
+      - name: Environment
+        handle: environment
+        parent: amp
+        description: Environment operations exposed by Agent Manager MCP
+        actions:
+          - { name: Read, handle: read, description: "View environment details" }
+      - name: Agent
+        handle: agent
+        parent: amp
+        description: Agent operations exposed by Agent Manager MCP
+        actions:
+          - { name: Create, handle: create, description: "Create an agent" }
+          - { name: Read, handle: read, description: "View agent details" }
+          - { name: Build, handle: build, description: "Trigger an agent build" }
+          - { name: Act on Non-Production Environments, handle: env-non-production, description: "Deploy or suspend an agent in a non-production environment" }
+          - { name: Suspend, handle: suspend, description: "Suspend an agent deployment" }
+          - { name: Manage Token, handle: token-manage, description: "Generate agent tokens" }
+    {{- end }}
+  {{- $firstMCPResourceServer = false }}
+  {{- end }}
+  {{- end }}
 
   61-amp-role-admin.yaml: |
     resource_type: role
@@ -608,9 +669,8 @@ data:
           - "amp:agent:update"
           - "amp:agent:delete"
           - "amp:agent:build"
-          - "amp:agent:deploy-non-production"
-          - "amp:agent:deploy-production"
-          - "amp:agent:promote"
+          - "amp:agent:env-non-production"
+          - "amp:agent:env-production"
           - "amp:agent:rollback"
           - "amp:agent:suspend"
           - "amp:agent:token-manage"
@@ -646,6 +706,28 @@ data:
           - "amp:repository:read"
           - "amp:profile:read"
           - "amp:profile:update-attributes"
+    {{- range $server := .Values.thunder.bootstrap.mcpResourceServers }}
+    {{- if index $.Values.thunder.bootstrap $server.baseUrlValue }}
+      - resourceServerId: {{ $server.id }}
+        permissions:
+    {{- if eq $server.permissionSet "observability-only" }}
+          - "amp:observability:trace-read"
+          - "amp:observability:log-read"
+          - "amp:observability:build-log-read"
+          - "amp:observability:metric-read"
+    {{- else }}
+          - "amp:project:create"
+          - "amp:project:read"
+          - "amp:environment:read"
+          - "amp:agent:create"
+          - "amp:agent:read"
+          - "amp:agent:build"
+          - "amp:agent:env-non-production"
+          - "amp:agent:suspend"
+          - "amp:agent:token-manage"
+    {{- end }}
+    {{- end }}
+    {{- end }}
     assignments:
       - id: amp-api-client
         type: app
@@ -667,6 +749,7 @@ data:
           - "amp:project:update"
           - "amp:project:delete"
           - "amp:environment:read"
+          - "amp:gateway:read"
           - "amp:data-plane:read"
           - "amp:deployment-pipeline:read"
           - "amp:git-secret:create"
@@ -688,15 +771,19 @@ data:
           - "amp:llm-proxy:deploy"
           - "amp:llm-proxy:api-key-manage"
           - "amp:evaluator:read"
-          - "amp:agent-kind:read"
           - "amp:agent:create"
           - "amp:agent:read"
           - "amp:agent:update"
           - "amp:agent:delete"
           - "amp:agent:build"
-          - "amp:agent:deploy-non-production"
+          - "amp:agent:env-non-production"
+          - "amp:agent:suspend"
           - "amp:agent:token-manage"
           - "amp:agent:api-key-manage"
+          - "amp:agent-kind:read"
+          - "amp:agent-kind:create"
+          - "amp:agent-kind:update"
+          - "amp:agent-kind:delete"
           - "amp:monitor:create"
           - "amp:monitor:read"
           - "amp:monitor:update"
@@ -707,10 +794,33 @@ data:
           - "amp:observability:log-read"
           - "amp:observability:build-log-read"
           - "amp:observability:metric-read"
+          - "amp:agent-identity:read"
           - "amp:catalog:read"
           - "amp:repository:read"
           - "amp:profile:read"
           - "amp:profile:update-attributes"
+    {{- range $server := .Values.thunder.bootstrap.mcpResourceServers }}
+    {{- if index $.Values.thunder.bootstrap $server.baseUrlValue }}
+      - resourceServerId: {{ $server.id }}
+        permissions:
+    {{- if eq $server.permissionSet "observability-only" }}
+          - "amp:observability:trace-read"
+          - "amp:observability:log-read"
+          - "amp:observability:build-log-read"
+          - "amp:observability:metric-read"
+    {{- else }}
+          - "amp:project:create"
+          - "amp:project:read"
+          - "amp:environment:read"
+          - "amp:agent:create"
+          - "amp:agent:read"
+          - "amp:agent:build"
+          - "amp:agent:env-non-production"
+          - "amp:agent:suspend"
+          - "amp:agent:token-manage"
+    {{- end }}
+    {{- end }}
+    {{- end }}
 
   63-amp-role-ai-lead.yaml: |
     resource_type: role
@@ -726,6 +836,7 @@ data:
           - "amp:environment:read"
           - "amp:data-plane:read"
           - "amp:deployment-pipeline:read"
+          - "amp:git-secret:read"
           - "amp:llm-provider-template:create"
           - "amp:llm-provider-template:read"
           - "amp:llm-provider-template:update"
@@ -753,30 +864,56 @@ data:
           - "amp:evaluator:read"
           - "amp:evaluator:update"
           - "amp:evaluator:delete"
-          - "amp:agent-kind:read"
           - "amp:agent:read"
           - "amp:agent:build"
-          - "amp:agent:deploy-non-production"
+          - "amp:agent:env-non-production"
+          - "amp:agent:suspend"
           - "amp:agent:api-key-manage"
+          - "amp:agent-kind:read"
+          - "amp:monitor:create"
           - "amp:monitor:read"
+          - "amp:monitor:update"
+          - "amp:monitor:delete"
+          - "amp:monitor:execute"
           - "amp:monitor:score-read"
           - "amp:observability:trace-read"
           - "amp:observability:metric-read"
           - "amp:catalog:read"
+          - "amp:repository:read"
           - "amp:profile:read"
           - "amp:profile:update-attributes"
+    {{- range $server := .Values.thunder.bootstrap.mcpResourceServers }}
+    {{- if index $.Values.thunder.bootstrap $server.baseUrlValue }}
+      - resourceServerId: {{ $server.id }}
+        permissions:
+    {{- if eq $server.permissionSet "observability-only" }}
+          - "amp:observability:trace-read"
+          - "amp:observability:metric-read"
+    {{- else }}
+          - "amp:project:read"
+          - "amp:environment:read"
+          - "amp:agent:read"
+          - "amp:agent:build"
+          - "amp:agent:env-non-production"
+          - "amp:agent:suspend"
+    {{- end }}
+    {{- end }}
+    {{- end }}
 
   64-amp-role-platform-engineer.yaml: |
     resource_type: role
     id: amp-role-platform-engineer
     name: Platform Engineer
-    description: "Platform engineering: manage environments, gateways, and agent deployments"
+    description: "Platform engineering: manage environments, gateways, projects, the LLM and MCP catalog, agent identities, and agent deployments in every environment"
     ouHandle: default
     permissions:
       - resourceServerId: amp-resource-server
         permissions:
           - "amp:org:view"
+          - "amp:project:create"
           - "amp:project:read"
+          - "amp:project:update"
+          - "amp:project:delete"
           - "amp:environment:create"
           - "amp:environment:read"
           - "amp:environment:update"
@@ -791,28 +928,76 @@ data:
           - "amp:deployment-pipeline:read"
           - "amp:deployment-pipeline:update"
           - "amp:deployment-pipeline:delete"
+          - "amp:git-secret:read"
+          - "amp:llm-provider-template:create"
+          - "amp:llm-provider-template:read"
+          - "amp:llm-provider-template:update"
+          - "amp:llm-provider-template:delete"
+          - "amp:llm-provider:create"
           - "amp:llm-provider:read"
+          - "amp:llm-provider:update"
+          - "amp:llm-provider:delete"
           - "amp:llm-provider:configure-guardrail"
+          - "amp:llm-provider:connect"
+          - "amp:llm-provider:deploy"
+          - "amp:llm-provider:api-key-manage"
+          - "amp:mcp-server:create"
           - "amp:mcp-server:read"
+          - "amp:mcp-server:update"
+          - "amp:mcp-server:delete"
           - "amp:mcp-server:configure-guardrail"
+          - "amp:mcp-server:connect"
+          - "amp:mcp-server:api-key-manage"
+          - "amp:scope:create"
           - "amp:scope:read"
-          - "amp:agent-kind:read"
+          - "amp:scope:update"
+          - "amp:scope:delete"
+          - "amp:evaluator:read"
           - "amp:agent:read"
           - "amp:agent:build"
-          - "amp:agent:api-key-manage"
-          - "amp:agent:deploy-non-production"
-          - "amp:agent:deploy-production"
-          - "amp:agent:promote"
+          - "amp:agent:env-non-production"
+          - "amp:agent:env-production"
           - "amp:agent:rollback"
           - "amp:agent:suspend"
+          - "amp:agent:api-key-manage"
+          - "amp:agent-kind:read"
+          - "amp:monitor:create"
           - "amp:monitor:read"
+          - "amp:monitor:update"
+          - "amp:monitor:delete"
+          - "amp:monitor:execute"
           - "amp:monitor:score-read"
+          - "amp:observability:trace-read"
           - "amp:observability:log-read"
           - "amp:observability:build-log-read"
           - "amp:observability:metric-read"
+          - "amp:agent-identity:read"
+          - "amp:agent-identity:create"
+          - "amp:agent-identity:update"
+          - "amp:agent-identity:delete"
           - "amp:catalog:read"
           - "amp:profile:read"
           - "amp:profile:update-attributes"
+    {{- range $server := .Values.thunder.bootstrap.mcpResourceServers }}
+    {{- if index $.Values.thunder.bootstrap $server.baseUrlValue }}
+      - resourceServerId: {{ $server.id }}
+        permissions:
+    {{- if eq $server.permissionSet "observability-only" }}
+          - "amp:observability:trace-read"
+          - "amp:observability:log-read"
+          - "amp:observability:build-log-read"
+          - "amp:observability:metric-read"
+    {{- else }}
+          - "amp:project:create"
+          - "amp:project:read"
+          - "amp:environment:read"
+          - "amp:agent:read"
+          - "amp:agent:build"
+          - "amp:agent:env-non-production"
+          - "amp:agent:suspend"
+    {{- end }}
+    {{- end }}
+    {{- end }}
 
   65-amp-group-admins.yaml: |
     resource_type: group
@@ -851,14 +1036,13 @@ data:
     #
     # No credentials block here, deliberately: Thunder's own "01-" bootstrap document
     # (which runs first in the same import batch, since it sorts before "67-") already
-    # creates this exact user and sets its credential from thunder.setup.admin.password
-    # (explicitly set, matching defaultUsers[0].password below — the subchart does not
-    # default this itself). Setting credentials again here,
-    # on the very same id in the very same batch, fails with USR-1028 "Credential update
-    # not allowed" — Thunder refuses a second credential write against a user that
-    # already has one, even within a single bootstrap run. If you change
-    # defaultUsers[0].password, also update thunder.setup.admin.password to match, since
-    # that is what actually sets this account's real password.
+    # creates this exact user and sets its credential from
+    # thunder.setup.admin.passwordRef (see values.yaml — generated once by this chart's
+    # own admin-credentials.yaml, not an inline value here). Setting credentials again
+    # here, on the very same id in the very same batch, fails with USR-1028 "Credential
+    # update not allowed" — Thunder refuses a second credential write against a user
+    # that already has one, even within a single bootstrap run. defaultUsers[0] has no
+    # password field for this reason — it would be silently unused, not a real copy.
     id: "01900000-0000-7000-8000-000000000030"
     type: Person
     ouHandle: default

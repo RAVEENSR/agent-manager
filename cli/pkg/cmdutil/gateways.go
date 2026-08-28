@@ -1,0 +1,62 @@
+// Copyright (c) 2026, WSO2 LLC. (https://www.wso2.com).
+//
+// WSO2 LLC. licenses this file to you under the Apache License,
+// Version 2.0 (the "License"); you may not use this file except
+// in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+package cmdutil
+
+import (
+	"context"
+
+	amsvc "github.com/wso2/agent-manager/cli/pkg/clients/amsvc/gen"
+	"github.com/wso2/agent-manager/cli/pkg/clierr"
+)
+
+// gatewayPageLimit is the page size ListAllGateways requests. The server defaults
+// to 100 per page and caps a page at 1000.
+const gatewayPageLimit = int32(200)
+
+// ListAllGateways returns every gateway in the org, following the response's
+// pagination metadata rather than trusting one page. A single unpaginated request
+// reads as the whole set but is capped at the server's default page size, which
+// made a gateway past that boundary invisible: resolving it by name failed as
+// "unknown gateway", and completion offered a silently truncated list.
+//
+// Returns a clierr on transport failure or a non-2xx response, along with the pages
+// gathered before it. Callers that need the complete set must treat a non-nil error
+// as fatal; a best-effort caller such as shell completion can still use the partial
+// result, which beats offering nothing when a later page times out.
+func ListAllGateways(ctx context.Context, client *amsvc.ClientWithResponses, org string) ([]amsvc.GatewayResponse, error) {
+	var all []amsvc.GatewayResponse
+	for {
+		limit, offset := gatewayPageLimit, int32(len(all))
+		resp, err := client.ListGatewaysWithResponse(ctx, org, &amsvc.ListGatewaysParams{
+			Limit:  &limit,
+			Offset: &offset,
+		})
+		if err != nil {
+			return all, clierr.Newf(clierr.Transport, "list gateways: %v", err)
+		}
+		if resp.JSON200 == nil {
+			return all, ErrorFromServer(resp.HTTPResponse,
+				FirstNonNil(resp.JSON400, resp.JSON401, resp.JSON500))
+		}
+		all = append(all, resp.JSON200.Gateways...)
+		// An empty page terminates regardless of Total: a Total the server
+		// over-reports would otherwise loop forever.
+		if len(resp.JSON200.Gateways) == 0 || int32(len(all)) >= resp.JSON200.Total {
+			return all, nil
+		}
+	}
+}

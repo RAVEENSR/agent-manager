@@ -25,7 +25,7 @@ import type { OrgPathParams } from './common';
 export interface MCPProxyScopeRequest {
   action: string;
   description?: string;
-  tools: string[];
+  tools?: string[];
 }
 
 export interface MCPProxyScopeUpdateRequest {

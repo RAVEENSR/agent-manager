@@ -1,8 +1,10 @@
 package configuration
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	"github.com/wso2/agent-manager/test/e2e/framework"
@@ -34,6 +36,25 @@ func CreateAgentMCPConfig(g Gomega, client *framework.AMPClient, orgName, projNa
 	framework.ExpectStatus(g, resp, 201)
 
 	return framework.DecodeBody[framework.AgentModelConfigResponse](g, resp)
+}
+
+// DeleteAgentMCPConfigBestEffort removes a disposable MCP binding before its
+// agent and proxy are deleted. Removing the binding first avoids a proxy-delete
+// conflict during suite teardown, while never hiding the original spec result
+// behind a cleanup failure.
+func DeleteAgentMCPConfigBestEffort(ctx context.Context, client *framework.AMPClient, orgName, projName, agentName, configID string) {
+	if configID == "" {
+		return
+	}
+	path := fmt.Sprintf("/api/v1/orgs/%s/projects/%s/agents/%s/mcp-configs/%s",
+		orgName, projName, agentName, configID)
+	response, err := client.DeleteWithContext(ctx, path)
+	if err != nil {
+		ginkgo.GinkgoWriter.Printf("teardown: delete agent MCP config %q failed: %v\n", configID, err)
+		return
+	}
+	defer response.Body.Close()
+	ginkgo.GinkgoWriter.Printf("teardown: deleted agent MCP config %q (status %d)\n", configID, response.StatusCode)
 }
 
 // ListAgentModelConfigs returns all model configurations for an agent.

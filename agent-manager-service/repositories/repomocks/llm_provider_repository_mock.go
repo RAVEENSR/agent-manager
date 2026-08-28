@@ -4,8 +4,10 @@
 package repomocks
 
 import (
+	"context"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"gorm.io/gorm"
 )
@@ -16,6 +18,9 @@ import (
 //
 //		// make and configure a mocked repositories.LLMProviderRepository
 //		mockedLLMProviderRepository := &LLMProviderRepositoryMock{
+//			ClearDeletingFunc: func(providerUUID uuid.UUID) error {
+//				panic("mock out the ClearDeleting method")
+//			},
 //			CountFunc: func(orgUUID string) (int, error) {
 //				panic("mock out the Count method")
 //			},
@@ -34,8 +39,17 @@ import (
 //			GetByUUIDFunc: func(providerID string, orgUUID string) (*models.LLMProvider, error) {
 //				panic("mock out the GetByUUID method")
 //			},
+//			HasAssociatedProxiesFunc: func(ctx context.Context, providerUUID uuid.UUID) (bool, error) {
+//				panic("mock out the HasAssociatedProxies method")
+//			},
+//			IsDeletingForUpdateFunc: func(ctx context.Context, tx *gorm.DB, providerUUID uuid.UUID) (bool, error) {
+//				panic("mock out the IsDeletingForUpdate method")
+//			},
 //			ListFunc: func(orgUUID string, limit int, offset int) ([]*models.LLMProvider, error) {
 //				panic("mock out the List method")
+//			},
+//			MarkDeletingFunc: func(providerUUID uuid.UUID) (bool, error) {
+//				panic("mock out the MarkDeleting method")
 //			},
 //			UpdateFunc: func(p *models.LLMProvider, providerID string, orgUUID string) error {
 //				panic("mock out the Update method")
@@ -47,6 +61,9 @@ import (
 //
 //	}
 type LLMProviderRepositoryMock struct {
+	// ClearDeletingFunc mocks the ClearDeleting method.
+	ClearDeletingFunc func(providerUUID uuid.UUID) error
+
 	// CountFunc mocks the Count method.
 	CountFunc func(orgUUID string) (int, error)
 
@@ -65,14 +82,28 @@ type LLMProviderRepositoryMock struct {
 	// GetByUUIDFunc mocks the GetByUUID method.
 	GetByUUIDFunc func(providerID string, orgUUID string) (*models.LLMProvider, error)
 
+	// HasAssociatedProxiesFunc mocks the HasAssociatedProxies method.
+	HasAssociatedProxiesFunc func(ctx context.Context, providerUUID uuid.UUID) (bool, error)
+
+	// IsDeletingForUpdateFunc mocks the IsDeletingForUpdate method.
+	IsDeletingForUpdateFunc func(ctx context.Context, tx *gorm.DB, providerUUID uuid.UUID) (bool, error)
+
 	// ListFunc mocks the List method.
 	ListFunc func(orgUUID string, limit int, offset int) ([]*models.LLMProvider, error)
+
+	// MarkDeletingFunc mocks the MarkDeleting method.
+	MarkDeletingFunc func(providerUUID uuid.UUID) (bool, error)
 
 	// UpdateFunc mocks the Update method.
 	UpdateFunc func(p *models.LLMProvider, providerID string, orgUUID string) error
 
 	// calls tracks calls to the methods.
 	calls struct {
+		// ClearDeleting holds details about calls to the ClearDeleting method.
+		ClearDeleting []struct {
+			// ProviderUUID is the providerUUID argument value.
+			ProviderUUID uuid.UUID
+		}
 		// Count holds details about calls to the Count method.
 		Count []struct {
 			// OrgUUID is the orgUUID argument value.
@@ -121,6 +152,22 @@ type LLMProviderRepositoryMock struct {
 			// OrgUUID is the orgUUID argument value.
 			OrgUUID string
 		}
+		// HasAssociatedProxies holds details about calls to the HasAssociatedProxies method.
+		HasAssociatedProxies []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// ProviderUUID is the providerUUID argument value.
+			ProviderUUID uuid.UUID
+		}
+		// IsDeletingForUpdate holds details about calls to the IsDeletingForUpdate method.
+		IsDeletingForUpdate []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// Tx is the tx argument value.
+			Tx *gorm.DB
+			// ProviderUUID is the providerUUID argument value.
+			ProviderUUID uuid.UUID
+		}
 		// List holds details about calls to the List method.
 		List []struct {
 			// OrgUUID is the orgUUID argument value.
@@ -129,6 +176,11 @@ type LLMProviderRepositoryMock struct {
 			Limit int
 			// Offset is the offset argument value.
 			Offset int
+		}
+		// MarkDeleting holds details about calls to the MarkDeleting method.
+		MarkDeleting []struct {
+			// ProviderUUID is the providerUUID argument value.
+			ProviderUUID uuid.UUID
 		}
 		// Update holds details about calls to the Update method.
 		Update []struct {
@@ -140,14 +192,50 @@ type LLMProviderRepositoryMock struct {
 			OrgUUID string
 		}
 	}
-	lockCount       sync.RWMutex
-	lockCreate      sync.RWMutex
-	lockDelete      sync.RWMutex
-	lockExists      sync.RWMutex
-	lockGetByHandle sync.RWMutex
-	lockGetByUUID   sync.RWMutex
-	lockList        sync.RWMutex
-	lockUpdate      sync.RWMutex
+	lockClearDeleting        sync.RWMutex
+	lockCount                sync.RWMutex
+	lockCreate               sync.RWMutex
+	lockDelete               sync.RWMutex
+	lockExists               sync.RWMutex
+	lockGetByHandle          sync.RWMutex
+	lockGetByUUID            sync.RWMutex
+	lockHasAssociatedProxies sync.RWMutex
+	lockIsDeletingForUpdate  sync.RWMutex
+	lockList                 sync.RWMutex
+	lockMarkDeleting         sync.RWMutex
+	lockUpdate               sync.RWMutex
+}
+
+// ClearDeleting calls ClearDeletingFunc.
+func (mock *LLMProviderRepositoryMock) ClearDeleting(providerUUID uuid.UUID) error {
+	if mock.ClearDeletingFunc == nil {
+		panic("LLMProviderRepositoryMock.ClearDeletingFunc: method is nil but LLMProviderRepository.ClearDeleting was just called")
+	}
+	callInfo := struct {
+		ProviderUUID uuid.UUID
+	}{
+		ProviderUUID: providerUUID,
+	}
+	mock.lockClearDeleting.Lock()
+	mock.calls.ClearDeleting = append(mock.calls.ClearDeleting, callInfo)
+	mock.lockClearDeleting.Unlock()
+	return mock.ClearDeletingFunc(providerUUID)
+}
+
+// ClearDeletingCalls gets all the calls that were made to ClearDeleting.
+// Check the length with:
+//
+//	len(mockedLLMProviderRepository.ClearDeletingCalls())
+func (mock *LLMProviderRepositoryMock) ClearDeletingCalls() []struct {
+	ProviderUUID uuid.UUID
+} {
+	var calls []struct {
+		ProviderUUID uuid.UUID
+	}
+	mock.lockClearDeleting.RLock()
+	calls = mock.calls.ClearDeleting
+	mock.lockClearDeleting.RUnlock()
+	return calls
 }
 
 // Count calls CountFunc.
@@ -378,6 +466,82 @@ func (mock *LLMProviderRepositoryMock) GetByUUIDCalls() []struct {
 	return calls
 }
 
+// HasAssociatedProxies calls HasAssociatedProxiesFunc.
+func (mock *LLMProviderRepositoryMock) HasAssociatedProxies(ctx context.Context, providerUUID uuid.UUID) (bool, error) {
+	if mock.HasAssociatedProxiesFunc == nil {
+		panic("LLMProviderRepositoryMock.HasAssociatedProxiesFunc: method is nil but LLMProviderRepository.HasAssociatedProxies was just called")
+	}
+	callInfo := struct {
+		Ctx          context.Context
+		ProviderUUID uuid.UUID
+	}{
+		Ctx:          ctx,
+		ProviderUUID: providerUUID,
+	}
+	mock.lockHasAssociatedProxies.Lock()
+	mock.calls.HasAssociatedProxies = append(mock.calls.HasAssociatedProxies, callInfo)
+	mock.lockHasAssociatedProxies.Unlock()
+	return mock.HasAssociatedProxiesFunc(ctx, providerUUID)
+}
+
+// HasAssociatedProxiesCalls gets all the calls that were made to HasAssociatedProxies.
+// Check the length with:
+//
+//	len(mockedLLMProviderRepository.HasAssociatedProxiesCalls())
+func (mock *LLMProviderRepositoryMock) HasAssociatedProxiesCalls() []struct {
+	Ctx          context.Context
+	ProviderUUID uuid.UUID
+} {
+	var calls []struct {
+		Ctx          context.Context
+		ProviderUUID uuid.UUID
+	}
+	mock.lockHasAssociatedProxies.RLock()
+	calls = mock.calls.HasAssociatedProxies
+	mock.lockHasAssociatedProxies.RUnlock()
+	return calls
+}
+
+// IsDeletingForUpdate calls IsDeletingForUpdateFunc.
+func (mock *LLMProviderRepositoryMock) IsDeletingForUpdate(ctx context.Context, tx *gorm.DB, providerUUID uuid.UUID) (bool, error) {
+	if mock.IsDeletingForUpdateFunc == nil {
+		panic("LLMProviderRepositoryMock.IsDeletingForUpdateFunc: method is nil but LLMProviderRepository.IsDeletingForUpdate was just called")
+	}
+	callInfo := struct {
+		Ctx          context.Context
+		Tx           *gorm.DB
+		ProviderUUID uuid.UUID
+	}{
+		Ctx:          ctx,
+		Tx:           tx,
+		ProviderUUID: providerUUID,
+	}
+	mock.lockIsDeletingForUpdate.Lock()
+	mock.calls.IsDeletingForUpdate = append(mock.calls.IsDeletingForUpdate, callInfo)
+	mock.lockIsDeletingForUpdate.Unlock()
+	return mock.IsDeletingForUpdateFunc(ctx, tx, providerUUID)
+}
+
+// IsDeletingForUpdateCalls gets all the calls that were made to IsDeletingForUpdate.
+// Check the length with:
+//
+//	len(mockedLLMProviderRepository.IsDeletingForUpdateCalls())
+func (mock *LLMProviderRepositoryMock) IsDeletingForUpdateCalls() []struct {
+	Ctx          context.Context
+	Tx           *gorm.DB
+	ProviderUUID uuid.UUID
+} {
+	var calls []struct {
+		Ctx          context.Context
+		Tx           *gorm.DB
+		ProviderUUID uuid.UUID
+	}
+	mock.lockIsDeletingForUpdate.RLock()
+	calls = mock.calls.IsDeletingForUpdate
+	mock.lockIsDeletingForUpdate.RUnlock()
+	return calls
+}
+
 // List calls ListFunc.
 func (mock *LLMProviderRepositoryMock) List(orgUUID string, limit int, offset int) ([]*models.LLMProvider, error) {
 	if mock.ListFunc == nil {
@@ -415,6 +579,38 @@ func (mock *LLMProviderRepositoryMock) ListCalls() []struct {
 	mock.lockList.RLock()
 	calls = mock.calls.List
 	mock.lockList.RUnlock()
+	return calls
+}
+
+// MarkDeleting calls MarkDeletingFunc.
+func (mock *LLMProviderRepositoryMock) MarkDeleting(providerUUID uuid.UUID) (bool, error) {
+	if mock.MarkDeletingFunc == nil {
+		panic("LLMProviderRepositoryMock.MarkDeletingFunc: method is nil but LLMProviderRepository.MarkDeleting was just called")
+	}
+	callInfo := struct {
+		ProviderUUID uuid.UUID
+	}{
+		ProviderUUID: providerUUID,
+	}
+	mock.lockMarkDeleting.Lock()
+	mock.calls.MarkDeleting = append(mock.calls.MarkDeleting, callInfo)
+	mock.lockMarkDeleting.Unlock()
+	return mock.MarkDeletingFunc(providerUUID)
+}
+
+// MarkDeletingCalls gets all the calls that were made to MarkDeleting.
+// Check the length with:
+//
+//	len(mockedLLMProviderRepository.MarkDeletingCalls())
+func (mock *LLMProviderRepositoryMock) MarkDeletingCalls() []struct {
+	ProviderUUID uuid.UUID
+} {
+	var calls []struct {
+		ProviderUUID uuid.UUID
+	}
+	mock.lockMarkDeleting.RLock()
+	calls = mock.calls.MarkDeleting
+	mock.lockMarkDeleting.RUnlock()
 	return calls
 }
 

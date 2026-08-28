@@ -55,14 +55,23 @@ import {
 import type {
   Environment,
   EnvironmentVariable,
-  FileMount,
 } from "@agent-management-platform/types";
+import {
+  RestrictedAction,
+  useAgentEnvironmentAccess,
+} from "@agent-management-platform/shared-component";
 import {
   compatibleInstrumentationVersions,
   normalizePythonMinor,
   pickInstrumentationVersion,
 } from "../utils/instrumentation";
-import { excludeSystemVars, sortSystemLast } from "../utils/envVars";
+import { isStoredSecret, sortSystemLast, toSubmittableEnv } from "../utils/envVars";
+import {
+  type FileMountRow,
+  newFileMountRow,
+  seedFileMountRows,
+  toFileMount,
+} from "../utils/fileMounts";
 
 interface PromoteAgentDrawerProps {
   open: boolean;
@@ -77,7 +86,7 @@ interface PromoteFormState {
   targetEnvironment: string;
   useConfigFromSourceEnv: boolean;
   env: EnvironmentVariable[];
-  files: FileMount[];
+  files: FileMountRow[];
   instrumentationVersion: string;
   // True once the user explicitly picks a version. When false, the version is
   // omitted from the promote request so the backend inherits the source env's
@@ -138,6 +147,12 @@ export function PromoteAgentDrawer({
       environments?.find((e) => e.name === name)?.displayName ?? name,
     [environments],
   );
+
+  // Promotion is gated on the tier of the environment being promoted INTO, so
+  // every target is decided separately: a caller may hold staging and not
+  // production even though both are downstream of here.
+  const targetAccess = useAgentEnvironmentAccess(orgId);
+  const selectedTargetAccess = targetAccess(formState.targetEnvironment);
 
   const {
     mutateAsync: promoteAgent,
@@ -227,7 +242,7 @@ export function PromoteAgentDrawer({
     setFormState((prev) => ({
       ...prev,
       env: displayEnv,
-      files: cfg?.files ?? [],
+      files: seedFileMountRows(cfg?.files),
     }));
     setFilledForTarget(target);
   }, [
@@ -320,7 +335,7 @@ export function PromoteAgentDrawer({
   const handleAddFile = useCallback(() => {
     setFormState((prev) => ({
       ...prev,
-      files: [{ key: "", mountPath: "", value: "" }, ...prev.files],
+      files: [newFileMountRow(), ...prev.files],
     }));
   }, []);
 
@@ -358,18 +373,10 @@ export function PromoteAgentDrawer({
             ...(formState.useConfigFromSourceEnv
               ? {}
               : {
-                  env: excludeSystemVars(formState.env).map(
-                    ({ key, value, isSensitive, secretRef }) =>
-                      // Preserve the secret reference for secrets the user did not edit.
-                      isSensitive && secretRef && !value
-                        ? ({
-                            key,
-                            isSensitive,
-                            secretRef,
-                          } as EnvironmentVariable)
-                        : { key, value, isSensitive },
-                  ),
-                  files: formState.files,
+                  env: toSubmittableEnv(formState.env),
+                  files: formState.files
+                    .filter((f) => f.key && f.mountPath)
+                    .map(toFileMount),
                   // Only send the version when the user explicitly picked a
                   // compatible one; otherwise omit it so the backend inherits
                   // the source env's pin rather than overwriting the target with
@@ -424,6 +431,14 @@ export function PromoteAgentDrawer({
               </Alert>
             )}
 
+            {!selectedTargetAccess.allowed && (
+              <Alert severity="warning">
+                <Typography variant="body2">
+                  {selectedTargetAccess.reason}
+                </Typography>
+              </Alert>
+            )}
+
             {targetEnvOptions.length > 1 && (
               <>
                 <Form.Section>
@@ -446,7 +461,11 @@ export function PromoteAgentDrawer({
                           <em>Select target environment</em>
                         </MenuItem>
                         {targetEnvOptions.map((t) => (
-                          <MenuItem key={t.name} value={t.name}>
+                          <MenuItem
+                            key={t.name}
+                            value={t.name}
+                            disabled={!targetAccess(t.name).allowed}
+                          >
                             {envDisplayName(t.name)}
                           </MenuItem>
                         ))}
@@ -545,9 +564,7 @@ export function PromoteAgentDrawer({
                                   keyValue={item.key}
                                   valueValue={item.value}
                                   isSensitive={item.isSensitive ?? false}
-                                  isExistingSecret={
-                                    !!(item.secretRef && item.isSensitive)
-                                  }
+                                  isExistingSecret={isStoredSecret(item)}
                                   isSystem={item.isSystem}
                                   onKeyChange={(v) =>
                                     handleEnvChange(index, "key", v)
@@ -581,7 +598,7 @@ export function PromoteAgentDrawer({
                               variant="outlined"
                               startIcon={<Plus size={14} />}
                               onClick={handleAddFile}
-                              disabled={isPending}
+                              disabled={isPending || !targetConfigReady}
                             >
                               Add
                             </Button>
@@ -591,11 +608,10 @@ export function PromoteAgentDrawer({
                               No file mounts. Click Add to define them.
                             </Typography>
                           ) : (
-                            <Stack spacing={1}>
+                            <Stack spacing={1} divider={<Divider />}>
                               {formState.files.map((file, index) => (
                                 <FileMountEditor
-                                  key={index}
-                                  index={index}
+                                  key={file.id}
                                   keyValue={file.key}
                                   mountPathValue={file.mountPath}
                                   contentValue={file.value}
@@ -689,14 +705,16 @@ export function PromoteAgentDrawer({
               >
                 Cancel
               </Button>
-              <Button
-                type="submit"
-                variant="contained"
-                color="primary"
-                disabled={isPending || !formState.targetEnvironment}
-              >
-                {isPending ? "Promoting..." : "Promote"}
-              </Button>
+              <RestrictedAction decision={selectedTargetAccess}>
+                <Button
+                  type="submit"
+                  variant="contained"
+                  color="primary"
+                  disabled={isPending || !formState.targetEnvironment}
+                >
+                  {isPending ? "Promoting..." : "Promote"}
+                </Button>
+              </RestrictedAction>
             </Box>
           </Stack>
         </form>

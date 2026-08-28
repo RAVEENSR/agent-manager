@@ -349,6 +349,12 @@ run_advanced_install() {
   Deployed agents: https://<org>-<project>.${AMP_AGENTS_BASE}/...
 EOF
   [[ -n "$AMP_HOST_CP" ]] && echo "  Gateway control plane: https://${AMP_HOST_CP}  (connect external gateways here; registration token is secret-bearing)"
+
+  # install.sh's own admin-credentials print is suppressed by SHOW_LOCALHOST_URLS=false
+  # (it only knows the unreachable localhost console URL), so print it here with the
+  # real one instead.
+  bash "${QS_DIR}/../scripts/print-admin-credentials.sh" \
+    "https://${AMP_HOST_CONSOLE}" "${THUNDER_NS:-amp-thunder}" || true
 }
 
 if [[ "$DRY_RUN" == "true" ]]; then

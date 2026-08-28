@@ -17,7 +17,6 @@
  */
 
 import {
-    type Configurations,
     isAgentIdentityEnabled,
 } from "@agent-management-platform/types";
 import type { DeploymentStatus } from "@agent-management-platform/shared-component";
@@ -34,7 +33,6 @@ interface EnvironmentSectionsContentProps {
     projectId: string;
     agentId: string;
     envId: string;
-    configurations?: Configurations;
     external?: boolean;
     deploymentStatus?: DeploymentStatus;
 }
@@ -48,7 +46,7 @@ interface EnvironmentSectionsContentProps {
  * since both are compact per-environment identity/interface summaries.
  */
 export function EnvironmentSectionsContent({
-    orgId, projectId, agentId, envId, configurations, external, deploymentStatus,
+    orgId, projectId, agentId, envId, external, deploymentStatus,
 }: EnvironmentSectionsContentProps) {
     const agentIdEnabled = isAgentIdentityEnabled();
 
@@ -60,7 +58,6 @@ export function EnvironmentSectionsContent({
                 projectId={projectId}
                 agentId={agentId}
                 envId={envId}
-                configurations={configurations}
                 external={external}
                 deploymentStatus={deploymentStatus}
             />
@@ -75,6 +72,7 @@ export function EnvironmentSectionsContent({
                             projectId={projectId}
                             agentId={agentId}
                             envId={envId}
+                            external={external}
                         />
                     </Grid>
                 )}

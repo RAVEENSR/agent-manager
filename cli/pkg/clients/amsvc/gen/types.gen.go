@@ -1329,7 +1329,7 @@ type AgentIdentityEnvironmentView struct {
 	// EnvironmentName Environment this binding belongs to
 	EnvironmentName string `json:"environmentName"`
 
-	// LastError Most recent provisioning error, if the last attempt failed
+	// LastError Short, user-safe reason the last provisioning attempt failed (never raw upstream/database error text)
 	LastError *string `json:"lastError,omitempty"`
 
 	// ProvisioningType Whether the agent runs on the platform (`internal`) or outside it (`external`)
@@ -4061,8 +4061,8 @@ type MCPProxyScopeRequest struct {
 	Action      string  `json:"action"`
 	Description *string `json:"description,omitempty"`
 
-	// Tools MCP tool names this scope authorizes.
-	Tools []string `json:"tools"`
+	// Tools MCP tool names this scope authorizes. May be omitted or empty to declare a scope before binding it to any tool; such a scope is grantable to roles but enforced on no tool.
+	Tools *[]string `json:"tools,omitempty"`
 }
 
 // MCPProxyScopeResponse defines model for MCPProxyScopeResponse.
@@ -4079,8 +4079,10 @@ type MCPProxyScopeResponse struct {
 
 // MCPProxyScopeUpdateRequest defines model for MCPProxyScopeUpdateRequest.
 type MCPProxyScopeUpdateRequest struct {
-	Description *string   `json:"description,omitempty"`
-	Tools       *[]string `json:"tools,omitempty"`
+	Description *string `json:"description,omitempty"`
+
+	// Tools Replaces the scope's tool list. Omit to leave it unchanged; send an empty array to unbind the scope from every tool.
+	Tools *[]string `json:"tools,omitempty"`
 }
 
 // MCPServerInfoFetchRequest defines model for MCPServerInfoFetchRequest.
@@ -4894,9 +4896,8 @@ type ThunderUrlRequest struct {
 	// Handle DNS-label-safe handle (lowercase alphanumeric with hyphens, no
 	// leading/trailing hyphen) that replaces "<org>-<env>" in
 	// "<handle>.<baseDomain>". Must be globally unique across
-	// all orgs/environments, and at least 10 characters (matching what
-	// the server itself generates — anything shorter is trivially
-	// guessable). Omit to auto-generate a 10-character handle.
+	// all orgs/environments, and at least 3 characters. Omit to
+	// auto-generate a 10-character handle.
 	Handle *string `json:"handle,omitempty"`
 }
 
@@ -6015,14 +6016,14 @@ type UpdateLLMProviderTemplateJSONRequestBody = UpdateLLMProviderTemplateRequest
 // CreateLLMProviderJSONRequestBody defines body for CreateLLMProvider for application/json ContentType.
 type CreateLLMProviderJSONRequestBody = CreateLLMProviderRequest
 
-// UpdateLLMProviderJSONRequestBody defines body for UpdateLLMProvider for application/json ContentType.
-type UpdateLLMProviderJSONRequestBody = UpdateLLMProviderRequest
-
 // CreateLLMProviderAPIKeyJSONRequestBody defines body for CreateLLMProviderAPIKey for application/json ContentType.
 type CreateLLMProviderAPIKeyJSONRequestBody = CreateLLMAPIKeyRequest
 
 // RotateLLMProviderAPIKeyJSONRequestBody defines body for RotateLLMProviderAPIKey for application/json ContentType.
 type RotateLLMProviderAPIKeyJSONRequestBody = RotateLLMAPIKeyRequest
+
+// UpdateLLMProviderJSONRequestBody defines body for UpdateLLMProvider for application/json ContentType.
+type UpdateLLMProviderJSONRequestBody = UpdateLLMProviderRequest
 
 // UpdateLLMProviderCatalogStatusJSONRequestBody defines body for UpdateLLMProviderCatalogStatus for application/json ContentType.
 type UpdateLLMProviderCatalogStatusJSONRequestBody = UpdateLLMProviderCatalogRequest

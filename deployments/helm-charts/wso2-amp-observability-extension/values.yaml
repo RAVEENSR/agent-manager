@@ -34,11 +34,24 @@ amObserver:
     # Seeded by wso2-amp-thunder-extension (amObserverClient); authorized via
     # the amp-observer-reader ClusterAuthzRoleBinding in
     # wso2-amp-platform-resources-extension. No amp:* scopes.
-    # Override idpClientSecret in production (the default is a local-dev
-    # placeholder).
+    # Generate this the same way as every other client secret in this
+    # product (e.g. AM_OBSERVER_CLIENT_SECRET="$(openssl rand -hex 32)") and
+    # pass it here AND to thunder.bootstrap.amObserverClient.clientSecret —
+    # they must match, since Thunder is what actually issued this client.
+    # Prefer existingSecret below over the inline value for production.
     # NOTE: the Thunder bootstrap job is a pre-install-only hook — on an existing install, helm upgrade does NOT create this client; re-run the bootstrap job (or reinstall the thunder extension) before rolling out this value.
     idpClientId: "am-observer-client"
+    # Unlike apiKey/encryptionKey elsewhere in this product, there is no safe
+    # empty-value fallback here: this must match whatever Thunder actually
+    # issued for amObserverClient, so it stays at the same default that chart
+    # ships (thunder.bootstrap.amObserverClient.clientSecret) rather than
+    # being emptied — override BOTH together via existingSecret in production.
     idpClientSecret: "am-observer-client-secret"
+    # Reference an existing secret for IDP credentials (recommended for production).
+    # When set, idpClientId/idpClientSecret above are ignored.
+    existingSecret: ""
+    existingSecretClientIdKey: "idpClientId"
+    existingSecretClientSecretKey: "idpClientSecret"
     defaultNamespace: "default"
   # JWT authentication — must match the agent-manager keyManager config so the
   # same user token issued by Thunder is accepted by both services. Thunder
@@ -54,10 +67,11 @@ amObserver:
   # Publisher tokens (aud amp-publisher-*) are matched by a separate regex in
   # the observer's auth middleware and do not need to be listed here.
   # MCP tokens minted for the observer MCP client (am-obs-mcp) carry the
-  # RFC 8707 resource identifier — this service's publicUrl WITH a trailing
-  # slash — as their audience. That URL is NOT listed here: the chart appends
-  # publicUrl (slash included) to this list automatically, so overriding
-  # publicUrl alone keeps MCP tokens valid. "am-obs-mcp" is listed
+  # RFC 8707 resource identifier — this service's publicUrl with "/mcp"
+  # appended (no trailing slash, per the MCP spec's canonical-URI guidance) —
+  # as their audience. That URL is NOT listed here: the chart appends
+  # publicUrl+"/mcp" to this list automatically, so overriding publicUrl
+  # alone keeps MCP tokens valid. "am-obs-mcp" is listed
   # defensively; MCP logins normally carry that resource URL as the
   # audience, not the client ID (unlike amp-api-client's client-credentials
   # fallback, this can't occur for am-obs-mcp, a public client restricted to

@@ -47,7 +47,11 @@ if [[ -z "${PLATFORM_RESOURCES_HELM_ARGS+x}" ]]; then
     PLATFORM_RESOURCES_HELM_ARGS=()
 fi
 if [[ -z "${THUNDER_HELM_ARGS+x}" ]]; then
-    THUNDER_HELM_ARGS=()
+    # thunder.setup.admin.password fixes the console admin login at "admin"
+    # for local convenience — the chart's own default (unset) would generate
+    # a random one instead, which production wants but is unnecessary friction
+    # on a machine only the person running this installer can reach.
+    THUNDER_HELM_ARGS=(--set thunder.setup.admin.password=admin)
 fi
 if [[ -z "${EVALUATION_HELM_ARGS+x}" ]]; then
     EVALUATION_HELM_ARGS=()
@@ -284,6 +288,7 @@ install_default_env_thunder() {
     ENV_NAME=default \
         DISPLAY_NAME="Default" \
         ORG_NAME=default \
+        THUNDER_HANDLE=default-idp \
         AMP_API_URL="${AMP_API_URL:-http://api.amp.localhost:8080/api/v1}" \
         IDP_TOKEN_URL="${IDP_TOKEN_URL:-http://thunder.amp.localhost:8080/oauth2/token}" \
         SCRIPT_BASE_URL="${script_base_url}" \
@@ -295,12 +300,12 @@ install_default_env_thunder() {
     fi
 
     # Learn the handle add-environment-thunder.sh's register_thunder_url actually
-    # stored (always server-generated here, since THUNDER_HANDLE is never set
-    # above) via GET — this process has no other way to know it, and there's no
-    # pattern to compute from org/env instead. Every later consumer of the
-    # default environment's Thunder address (the gateway wiring below, and
-    # install.sh's completion banner) reads this SAME global instead of
-    # re-deriving anything, so they can't drift out of sync with each other.
+    # stored via GET — this process has no other way to know it (a re-run
+    # reuses whatever was registered on the first run, not necessarily
+    # THUNDER_HANDLE above). Every later consumer of the default environment's
+    # Thunder address (the gateway wiring below, and install.sh's completion
+    # banner) reads this SAME global instead of re-deriving anything, so they
+    # can't drift out of sync with each other.
     if ! DEFAULT_ENV_THUNDER_HANDLE="$(AMP_API_URL="${AMP_API_URL:-http://api.amp.localhost:8080/api/v1}" \
         IDP_TOKEN_URL="${IDP_TOKEN_URL:-http://thunder.amp.localhost:8080/oauth2/token}" \
         get_thunder_url_handle default default)"; then

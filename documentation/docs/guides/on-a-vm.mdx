@@ -119,11 +119,11 @@ flowchart TB
     end
 
     browser -->|"HTTPS :443"| caddy
-    le <-->|"TLS-ALPN-01<br/>inside the :443 handshake"| caddy
+    le <-->|"TLS-ALPN-01<br/>inside the :443 handshake<br/>one certificate per host, on demand"| caddy
     caddy -->|"console.amp.&lt;IP&gt;.sslip.io<br/>api.amp.&lt;IP&gt;.sslip.io<br/>thunder.amp.&lt;IP&gt;.sslip.io<br/>cp.amp.&lt;IP&gt;.sslip.io"| cpgw
-    caddy -->|"*.amp.&lt;IP&gt;.sslip.io<br/>on-demand TLS"| cpgw
+    caddy -->|"*.amp.&lt;IP&gt;.sslip.io"| cpgw
     caddy -->|"observer.amp.&lt;IP&gt;.sslip.io"| opgw
-    caddy -->|"gateway.amp.&lt;IP&gt;.sslip.io<br/>*.agents.&lt;IP&gt;.sslip.io<br/>on-demand TLS"| dpgw
+    caddy -->|"gateway.amp.&lt;IP&gt;.sslip.io<br/>*.agents.&lt;IP&gt;.sslip.io"| dpgw
     cpgw --> console
     cpgw --> api
     cpgw --> thunder
@@ -136,7 +136,7 @@ flowchart TB
 
 Every public hostname resolves to the VM's IP (via sslip.io) and arrives at Caddy on `:443`; Caddy terminates TLS and reverse-proxies to the matching loopback port. The Agent Manager services are ClusterIP inside the cluster: Caddy forwards the console, API, Thunder, gateway-control-plane, and per-environment Thunder hosts to the OpenChoreo control-plane kgateway (loopback `:8080`), the observer host to the observability-plane kgateway (loopback `:11080`), and the OTel-ingest host plus the deployed-agent wildcard to the data-plane kgateway (loopback `:19080`). Each gateway routes by the preserved `Host` header. Certificates are obtained over that same `:443` using the TLS-ALPN-01 challenge, so no inbound port 80 is needed.
 
-Two of these tiers are **dynamic**: a new host appears the first time you deploy into a new org/project, and each time you create an environment. A wildcard certificate cannot be issued for them via TLS-ALPN-01 up front, so Caddy issues one concrete certificate per hostname **on demand**, at the first request to it.
+Every certificate here is issued **on demand**, one per concrete hostname, at the first handshake to it. That is forced by the wildcard sites: TLS-ALPN-01 cannot issue a wildcard certificate, and Caddy will not eagerly issue for a name a wildcard it manages already covers — which `*.amp.<IP>.sslip.io` does for every fixed host. The difference between the tiers is only whether the installer can walk them first: it knows the six fixed hosts, so it requests their certificates at the end of the install, which is why the console is normally ready by the time you open it. That walk is best effort — a request that fails is logged and does not stop the install, leaving that host on the same first-request path as the dynamic ones below. The other two tiers are **dynamic** — a new host appears the first time you deploy into a new org/project, and each time you create an environment — so they cannot be pre-warmed, and their first request is the one that triggers issuance.
 
 | URL | Purpose |
 |---|---|
@@ -161,7 +161,7 @@ The **`admin`** account is provisioned with the `Agent Manager Admin` role durin
 
 ## Deployed-agent invocation
 
-When you deploy an agent, its endpoint is published on a per-project host `<org>-<project>.agents.<IP>.sslip.io` and routed by Caddy to the OpenChoreo data-plane gateway. Because these hostnames are dynamic (a new one per org/project), Caddy issues their TLS certificates **on demand** at the first request (via the same ACME challenge as the fixed hosts), rather than up front. Invocations are authenticated with a user token that the gateway validates against the public Thunder issuer.
+When you deploy an agent, its endpoint is published on a per-project host `<org>-<project>.agents.<IP>.sslip.io` and routed by Caddy to the OpenChoreo data-plane gateway. Because these hostnames are dynamic (a new one per org/project), Caddy issues their TLS certificates **on demand** at the first request — the same path the fixed hosts take, without the install-time pre-warm that spares those the wait. Invocations are authenticated with a user token that the gateway validates against the public Thunder issuer.
 
 Because issuance is on demand and uses TLS-ALPN-01 (the challenge runs inside the `:443` handshake), the **very first request to a newly-deployed agent host can fail with a one-time certificate error**. That first connection is consumed by Caddy answering the ACME challenge, so the client briefly sees the challenge certificate instead of the real one. Every client hits this; only the wording differs. Chromium-based browsers (Chrome, Edge, Brave) report `ERR_CERTIFICATE_TRANSPARENCY_REQUIRED`, while other browsers and command-line clients report their own untrusted-certificate error. Issuance completes within a second or two; reload the page (or open it in a fresh tab) and it serves the trusted Let's Encrypt certificate. This only affects the first hit per new agent host; the certificate is then cached in the `amp-caddy-data` volume.
 
@@ -171,7 +171,7 @@ amp-api advertises each agent endpoint with the `https://` scheme (the installer
 
 ## TLS
 
-Caddy obtains and auto-renews trusted Let's Encrypt certificates on first start, with no manual certificate steps. Issuance uses the **TLS-ALPN-01** challenge, which runs inside the `:443` TLS handshake, so only inbound 443 is ever required and there is no port-80 dependency. Certificates and the ACME account persist in the `amp-caddy-data` Docker volume, so restarts do not re-request them.
+Caddy obtains and auto-renews trusted Let's Encrypt certificates with no manual certificate steps. Issuance is per hostname and on demand (see [What gets exposed](#what-gets-exposed)); the installer pre-warms the six fixed hosts once Caddy is up, so the URLs it prints usually work on the first click. A pre-warm that fails is logged rather than fatal, and that host's certificate is then obtained at its first request instead. Issuance uses the **TLS-ALPN-01** challenge, which runs inside the `:443` TLS handshake, so only inbound 443 is ever required and there is no port-80 dependency. Certificates and the ACME account persist in the `amp-caddy-data` Docker volume, so restarts do not re-request them.
 
 Because the challenge happens inside the TLS handshake, the public `:443` must reach Caddy as **raw TCP**; do not put a TLS-terminating load balancer in front of the VM. There is no `:80` listener, so plain `http://` URLs are not served (no automatic http→https redirect); always use the `https://` URLs the installer prints.
 
@@ -421,7 +421,7 @@ Download and unpack the versioned install bundle, then generate an annotated con
 ```bash
 # on the VM
 VER=<AMP_VERSION>   # e.g. an amp/v* release tag, without the "amp/v" prefix
-curl -fsSL "https://github.com/wso2/agent-manager/releases/download/amp/v${VER}/amp-vm-bundle-${VER}.tar.gz" | tar xz
+curl -fsSL "https://github.com/wso2/agent-manager/releases/download/amp/v${VER}/wso2-agent-manager-${VER}.tar.gz" | tar xz
 deployments/vm/install-advanced.sh --init > amp-config.env
 chmod 600 amp-config.env
 ```

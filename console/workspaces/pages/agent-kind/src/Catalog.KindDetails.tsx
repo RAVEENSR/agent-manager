@@ -33,14 +33,14 @@ import {
   Stack,
   Typography,
 } from "@wso2/oxygen-ui";
-import { PageLayout, DescriptionCard } from "@agent-management-platform/views";
+import { PageLayout, DescriptionCard, PageMetaItem } from "@agent-management-platform/views";
 import { absoluteRouteMap } from "@agent-management-platform/types";
 import { LabelChips, SwaggerSpecViewer, parseOpenApiSpecContent } from "@agent-management-platform/shared-component";
 import { useGetAgentKind, useGetBuild, useListKindAgents, useListProjects, useGetAgentKindVersion } from "@agent-management-platform/api-client";
 import { SectionCard } from "./SectionCard";
-import { ExternalLink, Layers, Plus } from "@wso2/oxygen-ui-icons-react";
+import { Clock, ExternalLink, BookOpenText, Plus, Tag } from "@wso2/oxygen-ui-icons-react";
 
-const KIND_AVATAR = { children: <Layers size={32} />, color: "primary.main" };
+const KIND_AVATAR = { children: <BookOpenText size={32} />, color: "primary.main" };
 
 export const CatalogKindDetails: React.FC = () => {
   const navigate = useNavigate();
@@ -180,12 +180,22 @@ export const CatalogKindDetails: React.FC = () => {
   return (
     <PageLayout
       title={kind.displayName}
-      description={releasedLabel ?? "View details of this Agent Kind."}
       backHref={backHref}
       backLabel="Back to Agent Catalog"
       variant="card"
       avatar={KIND_AVATAR}
-      titleTail={<LabelChips labels={kind.labels} />}
+      meta={
+        <>
+          {kind.labels && Object.keys(kind.labels).length > 0 && (
+            <PageMetaItem icon={<Tag size={12} />} label="Custom tags">
+              <LabelChips labels={kind.labels} />
+            </PageMetaItem>
+          )}
+          <PageMetaItem icon={<Clock size={12} />}>
+            {releasedLabel ?? "View details of this Agent Kind."}
+          </PageMetaItem>
+        </>
+      }
       actions={[
         versionSelector || undefined,
         kindVersion?.sourceProjectName && kindVersion?.sourceAgentName && (

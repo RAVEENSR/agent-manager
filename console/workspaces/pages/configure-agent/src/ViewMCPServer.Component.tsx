@@ -99,12 +99,6 @@ type AuthInfoEntry = {
   value?: string;
 };
 
-// Fixed, never-renameable AMP_AGENTID_* names (client.EnvVarAgentID* in
-// constants.go) — kept as their own reference instead of folding into
-// envVarReferenceRows. Now defined in shared-component so the agent-creation flow
-// shows the same variables; re-exported here for existing importers.
-export { AGENTID_ENV_VAR_ROWS };
-
 // Mirrors how buildMCPPythonSnippet resolves the (possibly renamed) URL var,
 // so both guides stay consistent if that name changes.
 function buildAgentIDPythonSnippet(urlEnvVar: string): string {
@@ -114,7 +108,12 @@ function buildAgentIDPythonSnippet(urlEnvVar: string): string {
     "import requests",
     "from langchain_mcp_adapters.client import MultiServerMCPClient",
     "",
-    "# 1. Request a token using the injected AgentID credentials.",
+    "# 1. This tool's URL is also the OAuth 2.0 target resource (RFC 8707) —",
+    "# it must be known before minting the token, not just before calling the tool.",
+    `mcp_server_url = os.environ.get("${urlEnvVar}", "").strip()`,
+    "",
+    "# 2. Request a token using the injected AgentID credentials, scoped to",
+    "# this specific tool via the resource parameter.",
     'client_id = os.environ["AMP_AGENTID_CLIENT_ID"]',
     'client_secret = os.environ["AMP_AGENTID_CLIENT_SECRET"]',
     'token_endpoint = os.environ["AMP_AGENTID_TOKEN_ENDPOINT"]',
@@ -123,14 +122,17 @@ function buildAgentIDPythonSnippet(urlEnvVar: string): string {
     "token_response = requests.post(",
     "    token_endpoint,",
     "    auth=(client_id, client_secret),",
-    '    data={"grant_type": "client_credentials", "scope": scopes},',
+    "    data={",
+    '        "grant_type": "client_credentials",',
+    '        "scope": scopes,',
+    '        "resource": mcp_server_url,',
+    "    },",
     "    timeout=30,",
     ")",
     "token_response.raise_for_status()",
     'access_token = token_response.json()["access_token"]',
     "",
-    "# 2. Call this tool's URL with the token as a normal Bearer header.",
-    `mcp_server_url = os.environ.get("${urlEnvVar}", "").strip()`,
+    "# 3. Call this tool's URL with the token as a normal Bearer header.",
     "server_configs: dict[str, dict[str, Any]] = {",
     '    "mcp_server": {',
     '        "url": mcp_server_url,',
@@ -685,8 +687,9 @@ export const ViewMCPServerComponent = () => {
                 <Typography variant="body2">
                   This tool uses OAuth (AgentID) security. Use the client
                   credentials and identity provider endpoints below to
-                  request a token, then call the MCP URL with it as a Bearer
-                  token.
+                  request a token, passing the MCP URL as the{" "}
+                  <code>resource</code> parameter, then call the MCP URL with
+                  the token as a Bearer header.
                 </Typography>
               </Alert>
 

@@ -573,6 +573,16 @@ func (c *openChoreoClient) PromoteComponent(ctx context.Context, ouID, projectNa
 			if ctConfigs != nil {
 				binding.Spec.ComponentTypeEnvironmentConfigs = ctConfigs
 			}
+			// Force a pod rollout, for the same reason Deploy does: a re-promotion
+			// whose source release and resolved overrides are unchanged writes back a
+			// byte-identical spec, which Kubernetes treats as a no-op — no reconcile,
+			// no rollout — while the API and the audit record both report a successful
+			// promote. That silence also hides the fresh agent API key minted on every
+			// promote: it is written to a fixed secret location, so the reference in
+			// the spec never changes and the pod keeps serving the old key.
+			// Must come after the ctConfigs assignment above, which replaces the map
+			// holding restartedAt wholesale and would otherwise drop the stamp.
+			bumpRestartedAt(binding)
 		}); err != nil {
 			return err
 		}
@@ -1162,6 +1172,67 @@ func (c *openChoreoClient) fetchRuntimeReplicaState(ctx context.Context, namespa
 	return state
 }
 
+// agentStartupBudget bounds how long an agent may report "still starting" before the
+// deployment is called failed instead.
+//
+// The number comes from the probes the agent-api component type renders (see
+// component-types/agent-api.yaml): a startup probe of initialDelaySeconds 10 +
+// periodSeconds 5 x failureThreshold 60 = 310s, after which kubelet kills the container
+// and the warm pool replaces the pod. The extra slack covers what happens before the
+// container starts at all — pulling the agent image and running the instrumentation init
+// container — which is charged to the same clock, because the only timestamp available
+// is the binding's (getLastDeployedTime), not the container's.
+//
+// Past this point the startup probe has already given up at least once, so nothing is
+// still starting. Observed case: an agent throttled at its 100m CPU limit never finished
+// importing, never bound its port, and cycled pods every ~5 minutes while the console
+// showed "in progress" indefinitely.
+const agentStartupBudget = 10 * time.Minute
+
+// bootDeadlineExceeded reports whether a booting agent has been booting for longer than
+// any pod could plausibly take to start.
+//
+// Measured from deployAttemptTime, never from getLastDeployedTime: the latter falls back
+// to the binding's creation timestamp, which would date a rollout that has just started
+// to whenever the binding first appeared and fail it on the spot.
+//
+// A binding whose status records no deploy returns false: without a clock this cannot
+// prove the agent is failed, and reporting a healthy-but-slow rollout as failed is the
+// worse error.
+func bootDeadlineExceeded(binding *gen.ReleaseBinding) bool {
+	started := deployAttemptTime(binding)
+	if started.IsZero() {
+		return false
+	}
+	return time.Since(started) > agentStartupBudget
+}
+
+// probedPorts lists the ports the platform's TCP startup probe targets, taken from the
+// endpoints the binding publishes. Logged when a boot overruns its budget: the platform
+// cannot see inside the pod, so the port it probes is the one fact that lets an operator
+// tell a wrongly-declared port (or an agent bound to 127.0.0.1) from an agent that is
+// merely too slow. Empty when the binding publishes no service URL.
+func probedPorts(binding *gen.ReleaseBinding) []int32 {
+	if binding.Status == nil || binding.Status.Endpoints == nil {
+		return nil
+	}
+	var ports []int32
+	for _, ep := range *binding.Status.Endpoints {
+		if ep.ServiceURL != nil && ep.ServiceURL.Port != nil {
+			ports = append(ports, *ep.ServiceURL.Port)
+		}
+	}
+	return ports
+}
+
+// bindingEnvironment is a nil-safe read of the binding's environment for logging.
+func bindingEnvironment(binding *gen.ReleaseBinding) string {
+	if binding.Spec == nil {
+		return ""
+	}
+	return binding.Spec.Environment
+}
+
 // determineDeploymentStatus determines deployment status from release binding conditions,
 // downgrading "active" to "in-progress" while the agent's pods are still starting.
 // Pass an unknown runtimeReplicaState to derive the status from the binding alone.
@@ -1192,6 +1263,30 @@ func determineDeploymentStatus(binding *gen.ReleaseBinding, runtime runtimeRepli
 					return DeploymentStatusFailed
 				}
 				if runtime.isBooting() {
+					// Nothing in the resource tree distinguishes "still starting" from
+					// "will never start": pods are absent from it, the warm pool reports
+					// Healthy at zero ready replicas, and it publishes no Ready condition
+					// for notReadyResource to pick up. Elapsed time is the only signal
+					// left, so a boot that overruns its budget is reported as failed
+					// rather than sitting at in-progress forever.
+					if bootDeadlineExceeded(binding) {
+						// The response carries only a status, so this log is the sole
+						// record of WHY a deployment went from starting to failed. It
+						// names what was observed — nothing accepted connections on the
+						// probed port in time — and not a cause: a wrong port, a bind to
+						// 127.0.0.1, a crash during startup and a CPU-throttled import
+						// are indistinguishable from outside the pod, so asserting one
+						// would send the operator after the wrong problem.
+						slog.Debug("Agent never became ready within the startup budget, reporting failed",
+							"binding", binding.Metadata.Name,
+							"environment", bindingEnvironment(binding),
+							"elapsed", time.Since(deployAttemptTime(binding)).Round(time.Second),
+							"budget", agentStartupBudget,
+							"probedPorts", probedPorts(binding),
+							"desiredReplicas", runtime.desired,
+							"readyReplicas", runtime.ready)
+						return DeploymentStatusFailed
+					}
 					return DeploymentStatusInProgress
 				}
 				return DeploymentStatusActive
@@ -1277,6 +1372,26 @@ func toDeploymentDetailsResponse(binding *gen.ReleaseBinding, componentRelease *
 // Sandbox agents stay Ready=True across redeploys — only LastSpecUpdateTime changes on each
 // deploy — so we take the max of both to return the true last-deployed time.
 func getLastDeployedTime(binding *gen.ReleaseBinding) time.Time {
+	if t := deployAttemptTime(binding); !t.IsZero() {
+		return t
+	}
+	// Nothing records a deploy: the binding has existed since creation without one
+	// being observed, which is the closest answer available for display.
+	if binding.Metadata.CreationTimestamp != nil {
+		return *binding.Metadata.CreationTimestamp
+	}
+
+	return time.Time{}
+}
+
+// deployAttemptTime returns when the current deploy attempt was last observed, from the
+// binding's status alone. Zero when the status records no deploy.
+//
+// Deliberately excludes Metadata.CreationTimestamp, which getLastDeployedTime falls back
+// to: creation dates a binding, not an attempt to start the agent. A binding created
+// weeks ago and redeployed a moment ago would otherwise measure a rollout that has just
+// begun as weeks old.
+func deployAttemptTime(binding *gen.ReleaseBinding) time.Time {
 	var readyTime, specUpdateTime time.Time
 
 	if binding.Status != nil {
@@ -1292,18 +1407,10 @@ func getLastDeployedTime(binding *gen.ReleaseBinding) time.Time {
 		}
 	}
 
-	t := readyTime
-	if specUpdateTime.After(t) {
-		t = specUpdateTime
+	if specUpdateTime.After(readyTime) {
+		return specUpdateTime
 	}
-	if !t.IsZero() {
-		return t
-	}
-	if binding.Metadata.CreationTimestamp != nil {
-		return *binding.Metadata.CreationTimestamp
-	}
-
-	return time.Time{}
+	return readyTime
 }
 
 // extractEndpointsFromBinding extracts endpoint URLs from the release binding status

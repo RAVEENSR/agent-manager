@@ -38,6 +38,27 @@ func (p Permission) Scope() string {
 	return ResourceServer + ":" + string(p)
 }
 
+// MainMCPScopes returns exactly the permission scopes required by the tools
+// registered on the Agent Manager MCP endpoint.
+func MainMCPScopes() []string {
+	permissions := []Permission{
+		ProjectRead,
+		ProjectCreate,
+		AgentRead,
+		AgentCreate,
+		AgentTokenManage,
+		AgentBuild,
+		AgentEnvNonProduction,
+		AgentSuspend,
+		EnvironmentRead,
+	}
+	scopes := make([]string, 0, len(permissions))
+	for _, permission := range permissions {
+		scopes = append(scopes, permission.Scope())
+	}
+	return scopes
+}
+
 // Org permissions
 const (
 	OrgView                 Permission = "org:view"
@@ -157,18 +178,23 @@ const (
 
 // Agent permissions
 const (
-	AgentCreate              Permission = "agent:create"
-	AgentRead                Permission = "agent:read"
-	AgentUpdate              Permission = "agent:update"
-	AgentDelete              Permission = "agent:delete"
-	AgentBuild               Permission = "agent:build"
-	AgentDeployNonProduction Permission = "agent:deploy-non-production"
-	AgentDeployProduction    Permission = "agent:deploy-production"
-	AgentPromote             Permission = "agent:promote"
-	AgentRollback            Permission = "agent:rollback"
-	AgentSuspend             Permission = "agent:suspend"
-	AgentTokenManage         Permission = "agent:token-manage"
-	AgentAPIKeyManage        Permission = "agent:api-key-manage"
+	AgentCreate Permission = "agent:create"
+	AgentRead   Permission = "agent:read"
+	AgentUpdate Permission = "agent:update"
+	AgentDelete Permission = "agent:delete"
+	AgentBuild  Permission = "agent:build"
+	// The environment tier is an authorization axis of its own, about where an
+	// action lands rather than what it is. AgentEnvNonProduction is the floor —
+	// "may act on environments at all" — and AgentEnvProduction is held in
+	// addition to it to reach the environments OpenChoreo flags isProduction.
+	// The production grant is never sufficient on its own: every surface
+	// declares the floor statically and denies before the tier is evaluated.
+	AgentEnvNonProduction Permission = "agent:env-non-production"
+	AgentEnvProduction    Permission = "agent:env-production"
+	AgentRollback         Permission = "agent:rollback"
+	AgentSuspend          Permission = "agent:suspend"
+	AgentTokenManage      Permission = "agent:token-manage"
+	AgentAPIKeyManage     Permission = "agent:api-key-manage"
 )
 
 // Agent Kind permissions

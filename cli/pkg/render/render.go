@@ -64,6 +64,19 @@ func JSONSuccess(ios *iostreams.IOStreams, scope Scope, data any) error {
 	return writeJSON(ios.Out, successEnvelope{Scope: scope, Data: data})
 }
 
+// EmptyList tells an interactive user that a list command matched nothing, which
+// a table of bare headers does not. Piped output stays silent so a caller can
+// still count lines, and --json is handled by JSONSuccess instead.
+//
+// Call it only after the --json branch, in place of rendering an empty table.
+func EmptyList(ios *iostreams.IOStreams, message string) error {
+	if !ios.IsStdoutTTY() {
+		return nil
+	}
+	_, err := fmt.Fprintln(ios.ErrOut, message)
+	return err
+}
+
 // JSONError writes the error JSON envelope to io.Out and returns a sentinel
 // that signals the envelope has already been written.
 func JSONError(ios *iostreams.IOStreams, scope Scope, err error) error {

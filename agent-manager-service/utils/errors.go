@@ -33,6 +33,12 @@ type ValidationError struct {
 	// Can include field names, specific validation rules, etc.
 	// Example: "inputInterface.schema.path is required and must start with /"
 	Reason string
+
+	// sentinel, when set, is the classification error this failure also matches
+	// under errors.Is — so a check like errors.Is(err, ErrInvalidInput) still
+	// recognises a ValidationError raised in place of a wrapped sentinel.
+	// Unexported so a constructor is the only way to set it.
+	sentinel error
 }
 
 // Error implements the error interface, returning the technical reason for logging.
@@ -40,21 +46,32 @@ func (e *ValidationError) Error() string {
 	return e.Reason
 }
 
+// Unwrap exposes the classification sentinel to errors.Is/errors.As.
+func (e *ValidationError) Unwrap() error {
+	return e.sentinel
+}
+
 // NewValidationError creates a new ValidationError with user-friendly message and technical reason.
 func NewValidationError(message, reason string) *ValidationError {
-	return &ValidationError{
-		Message: message,
-		Reason:  reason,
-	}
+	return &ValidationError{Message: message, Reason: reason, sentinel: nil}
+}
+
+// NewInvalidInputError is NewValidationError for a failure that must also keep
+// matching ErrInvalidInput under errors.Is, so callers that route on the
+// sentinel keep working while the UI gets the short Message instead of the
+// whole technical string.
+//
+// The sentinel is fixed rather than a parameter because every ValidationError
+// is rendered as 400 by WriteValidationErrorResponse — pairing one with a
+// not-found or conflict sentinel would still answer 400.
+func NewInvalidInputError(message, reason string) *ValidationError {
+	return &ValidationError{Message: message, Reason: reason, sentinel: ErrInvalidInput}
 }
 
 // NewValidationErrorf creates a new ValidationError with formatted reason string.
 // The message should be user-friendly, while reasonFmt is for technical details.
 func NewValidationErrorf(message, reasonFmt string, args ...interface{}) *ValidationError {
-	return &ValidationError{
-		Message: message,
-		Reason:  fmt.Sprintf(reasonFmt, args...),
-	}
+	return NewValidationError(message, fmt.Sprintf(reasonFmt, args...))
 }
 
 // IsValidationError checks if an error is a ValidationError and returns it.
@@ -85,7 +102,12 @@ var (
 	ErrDeploymentPipelineNotFound   = errors.New("deployment pipeline not found")
 	ErrDeploymentPipelineInUse      = errors.New("deployment pipeline is referenced by one or more projects")
 	ErrDeploymentInProgress         = errors.New("a deployment is already in progress")
-	ErrProjectHasAssociatedAgents   = errors.New("project has associated agents")
+	// ErrBuildInProgress is returned when agent configuration is created/updated
+	// while a build is running. Argo Workflows resolves workflow.parameters once
+	// at WorkflowRun submission, so a config change written to the Component CR
+	// after that point is never picked up by the in-flight build. Maps to 409.
+	ErrBuildInProgress            = errors.New("a build is already in progress for this agent")
+	ErrProjectHasAssociatedAgents = errors.New("project has associated agents")
 	// ErrComponentNotReconcilable reports that OpenChoreo cannot reconcile the agent's Component,
 	// so a deploy or promote would be silently discarded: the writes land on the Component and
 	// Workload, but no new ComponentRelease is cut, so the pods restart on the previous snapshot
@@ -171,6 +193,9 @@ var (
 	ErrLLMProviderNotFound         = errors.New("LLM provider not found")
 	ErrLLMProviderExists           = errors.New("LLM provider already exists")
 	ErrLLMProviderHasProxies       = errors.New("cannot delete LLM provider: it has associated LLM proxies. Please delete all proxies before deleting the provider")
+	ErrLLMProviderUndeployFailed   = errors.New("cannot delete LLM provider: undeploying it from its gateways failed. Retry, or undeploy manually before deleting")
+	ErrLLMProviderDeleteInProgress = errors.New("cannot delete LLM provider: a delete is already in progress for it")
+	ErrLLMProviderBeingDeleted     = errors.New("cannot create LLM proxy: the LLM provider is being deleted")
 	ErrLLMProxyNotFound            = errors.New("LLM proxy not found")
 	ErrLLMProxyExists              = errors.New("LLM proxy already exists")
 	ErrMCPProxyNotFound            = errors.New("MCP proxy not found")
@@ -201,6 +226,11 @@ var (
 	// Agent Configuration errors
 	ErrAgentConfigNotFound      = errors.New("agent configuration not found")
 	ErrAgentConfigAlreadyExists = errors.New("agent configuration already exists for this agent")
+	// ErrOrphanedAgentConfigsExist is returned when an agent is created with the name of a
+	// previously deleted agent whose configuration rows survived, because revoking their LLM
+	// proxy credentials failed. Configurations are keyed by agent name, so letting the create
+	// through would silently hand the new agent the old agent's un-rotated credential. Maps to 409.
+	ErrOrphanedAgentConfigsExist = errors.New("configurations from a previously deleted agent with this name have not been fully revoked")
 	// ErrAgentConfigNotExternal is returned when a user-managed API key action
 	// (create/rotate/revoke) is attempted against a configuration whose agent is
 	// managed/internal. Only external agents own their proxy API keys; managed

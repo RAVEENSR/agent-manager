@@ -18,6 +18,7 @@ package llmprovider
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/spf13/cobra"
 
@@ -84,6 +85,10 @@ func runList(ctx context.Context, o *ListOptions) error {
 
 	if o.IO.JSON {
 		return render.JSONSuccess(o.IO, o.Scope, resp.JSON200)
+	}
+
+	if len(resp.JSON200.Providers) == 0 {
+		return render.EmptyList(o.IO, fmt.Sprintf("No LLM providers found in organization %q.", o.Org))
 	}
 
 	tp := tableprinter.New(o.IO, "id", "name", "template", "status", "created")

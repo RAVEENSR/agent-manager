@@ -30,6 +30,7 @@ import {
 import { Edit, Eye, EyeOff, Lock, Trash2 as DeleteOutline, X } from '@wso2/oxygen-ui-icons-react';
 import { useState } from 'react';
 import { TextInput } from '../FormElements';
+import { MAX_FILE_SIZE, parseEnvFileContent } from '../EnvFileUpload';
 
 export interface EnvVariableEditorProps {
   /**
@@ -56,6 +57,12 @@ export interface EnvVariableEditorProps {
    * Callback to remove this environment variable
    */
   onRemove: () => void;
+  /**
+   * Called instead of onKeyChange/onValueChange when the pasted clipboard text
+   * contains multiple "KEY=VALUE" lines (e.g. the full contents of a .env
+   * file), so the caller can split it into multiple rows.
+   */
+  onBulkPaste?: (entries: { key: string; value: string }[]) => void;
   /**
    * Label for the key field (default: "Key")
    */
@@ -90,7 +97,9 @@ export interface EnvVariableEditorProps {
   keyDisabled?: boolean;
   /**
    * Whether this is an existing secret (already saved, not newly created)
-   * When true, the value field will be locked by default and require explicit edit action
+   * When true, the key and value fields are locked by default (both unlock
+   * together). Non-system rows can unlock them either via the explicit Edit
+   * action, or by unchecking "Mark as Secret" (which clears isSensitive).
    */
   isExistingSecret?: boolean;
   /**
@@ -109,6 +118,7 @@ export function EnvVariableEditor({
   onKeyChange,
   onValueChange,
   onRemove,
+  onBulkPaste,
   keyLabel = 'Key',
   valueLabel = 'Value',
   isValueSecret = false,
@@ -121,11 +131,14 @@ export function EnvVariableEditor({
   isSystem = false,
 }: EnvVariableEditorProps) {
   // Existing secrets start locked: the stored value is never returned, so the
-  // field is masked until the user explicitly clicks Edit to enter a new value.
+  // field is masked until the user explicitly clicks Edit. The key name is locked
+  // alongside it — both unlock together, since renaming without invalidating the
+  // stored secretRef is exactly what Edit is meant to allow.
   const [isEditing, setIsEditing] = useState(false);
-  // Snapshot of the value when editing started, so Cancel can restore it even
-  // after the user has typed a new value.
-  const [valueBeforeEdit, setValueBeforeEdit] = useState('');
+  // Snapshot of the key/value when editing started, so Cancel can restore both even
+  // after the user has typed changes. Kept as one object since the two always move
+  // together (set on Edit, read on Cancel).
+  const [beforeEdit, setBeforeEdit] = useState({ key: '', value: '' });
   // Toggles plaintext reveal of a secret value while the user is typing it.
   const [showValue, setShowValue] = useState(false);
 
@@ -139,6 +152,30 @@ export function EnvVariableEditor({
   const handleKeyPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
     if (keyDisabled || isValueLocked) return;
     const pasted = e.clipboardData.getData('text');
+
+    // A paste this large is almost certainly the wrong clipboard contents (e.g.
+    // an entire log file), not a real .env list — let the browser's default
+    // paste behavior handle it instead of splitting it into countless rows.
+    if (pasted.length > MAX_FILE_SIZE) return;
+
+    // Pasting one or more "KEY=VALUE" lines (including the full contents of a
+    // .env file) parses through the same helper as the upload path, so a
+    // single entry with a leading/trailing comment line isn't corrupted by
+    // falling through to the raw-text fallback below.
+    if (onBulkPaste) {
+      const entries = parseEnvFileContent(pasted);
+      if (entries.length > 1) {
+        e.preventDefault();
+        onBulkPaste(entries);
+        return;
+      }
+      if (entries.length === 1) {
+        e.preventDefault();
+        onBulkPaste([entries[0]]);
+        return;
+      }
+    }
+
     const equalsIdx = pasted.indexOf('=');
     if (equalsIdx === -1) return;
 
@@ -158,13 +195,14 @@ export function EnvVariableEditor({
   };
 
   const handleStartEdit = () => {
-    setValueBeforeEdit(valueValue);
+    setBeforeEdit({ key: keyValue, value: valueValue });
     setIsEditing(true);
   };
 
   const handleCancelEdit = () => {
-    // Restore the previous value and re-lock the field, discarding any edits.
-    onValueChange(valueBeforeEdit);
+    // Restore the previous key/value and re-lock the fields, discarding any edits.
+    onKeyChange(beforeEdit.key);
+    onValueChange(beforeEdit.value);
     setIsEditing(false);
     setShowValue(false);
   };
@@ -204,7 +242,7 @@ export function EnvVariableEditor({
             onPaste={handleKeyPaste}
             error={!!keyError}
             helperText={keyError}
-            disabled={keyDisabled || isSystem}
+            disabled={keyDisabled || isValueLocked}
           />
         </Box>
         <Box flex={1} minWidth={0}>
@@ -267,18 +305,18 @@ export function EnvVariableEditor({
                   for the whole edit session even after typing clears the stored
                   secret flag upstream. System rows are excluded outright, even when
                   they happen to be an existing secret — they're never editable. */}
-              <Tooltip title={isEditing ? 'Cancel edit' : 'Edit value'}>
+              <Tooltip title={isEditing ? 'Cancel edit' : 'Edit key/value'}>
                 <IconButton
                   size="small"
-                  aria-label={isEditing ? 'Cancel edit' : 'Edit value'}
+                  aria-label={isEditing ? 'Cancel edit' : 'Edit key/value'}
                   onClick={isEditing ? handleCancelEdit : handleStartEdit}
                   sx={
                     isEditing
                       ? undefined
                       : {
-                          visibility: isSecretLocked && !isSystem ? 'visible' : 'hidden',
-                          pointerEvents: isSecretLocked && !isSystem ? 'auto' : 'none',
-                        }
+                        visibility: isSecretLocked && !isSystem ? 'visible' : 'hidden',
+                        pointerEvents: isSecretLocked && !isSystem ? 'auto' : 'none',
+                      }
                   }
                 >
                   {isEditing ? <X size={16} /> : <Edit size={16} />}

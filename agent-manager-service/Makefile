@@ -32,6 +32,20 @@ codegen: ## Run code gen.
 	@go generate -tags=wireinject ./...
 	@echo "Go generate done"
 
+MOQ_REQUIRED_VERSION := v0.5.3
+
+.PHONY: mocks
+mocks: ## Regenerate moq mocks only (runs every //go:generate moq directive; codegen also runs this plus wire). Usage: make mocks [PKG=./repositories/...]
+	@command -v moq >/dev/null 2>&1 || { echo "ERROR: 'moq' not found on PATH. Install: go install github.com/matryer/moq@$(MOQ_REQUIRED_VERSION)"; exit 1; }
+	@moq_version="$$(moq --version 2>&1 | awk '{print $$NF}')"; \
+	if [ "$$moq_version" != "$(MOQ_REQUIRED_VERSION)" ]; then \
+		echo "ERROR: 'moq' version $$moq_version found, but $(MOQ_REQUIRED_VERSION) is required (a different version reformats import ordering across every mock file it touches). Install: go install github.com/matryer/moq@$(MOQ_REQUIRED_VERSION)"; \
+		exit 1; \
+	fi
+	@echo "Regenerating moq mocks in $(if $(PKG),$(PKG),$$(go list ./... | grep -v '/wiring$$'))"
+	@go generate -tags=wireinject $(if $(PKG),$(PKG),$$(go list ./... | grep -v '/wiring$$'))
+	@echo "Mock generation done"
+
 .PHONY: fmt
 fmt: ## Format code.
 	sh scripts/fmt.sh
@@ -47,6 +61,10 @@ test-unit: gen-keys ## Run fast unit tests (no database required).
 .PHONY: test-integration
 test-integration: gen-keys ## Run integration tests with an isolated test database (-tags=integration).
 	bash scripts/run_tests_isolated.sh
+
+.PHONY: test-run
+test-run: gen-keys ## Run one test/pattern with the unit-tier config env vars set. Usage: make test-run RUN=TestAgentKindService PKG=./services/
+	@bash scripts/run_single_test.sh "$(RUN)" "$(PKG)"
 
 .PHONY: dev-test
 dev-test: test-integration ## Alias for test-integration (isolated DB). Kept for backwards compatibility.

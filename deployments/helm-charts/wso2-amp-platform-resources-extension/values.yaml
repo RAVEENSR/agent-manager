@@ -188,12 +188,23 @@ project:
   # Description for the project
   description: "Default project for WSO2 Agent Manager"
 
-# ClusterProjectType referenced by the default Project.
+# Namespace the platform resources below are created in. It must match the
+# service's OPEN_CHOREO_DEFAULT_NAMESPACE, since that is the namespace the
+# service creates projects in — and a namespaced ProjectType is only resolvable
+# from within its own namespace.
+openchoreoNamespace: default
+
+# ProjectType referenced by the default Project.
 # OpenChoreo 1.2.0+ makes Project.spec.type a required reference to a
-# (Cluster)ProjectType that 
+# (Cluster)ProjectType, which provides the per-environment resource template
+# (here, the cell namespace). A namespaced ProjectType is used rather than a
+# cluster-scoped ClusterProjectType so the type is not shared across tenants.
+#
+# The name is deliberately not configurable: it is a contract with the service,
+# which references client.DefaultProjectTypeName. If the two diverged, every
+# project created through the API would fail to reconcile with
+# ProjectTypeNotFound.
 projectType:
-  # Name of the ClusterProjectType (must be a DNS-1123 label)
-  name: default
   # Display name for the project type
   displayName: "Default Project Type"
   # Description for the project type

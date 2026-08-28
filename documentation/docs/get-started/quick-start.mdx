@@ -30,7 +30,17 @@ Ensure the following before you begin:
 
 The quick-start includes a dev container with all required tools pre-installed (kubectl, Helm, K3d). This ensures a consistent environment across different systems.
 
-### Step 1: Run the Dev Container
+### Option A: Download and run `start.sh`
+
+`start.sh` checks your local prerequisites (Docker installed and running, free disk space, CPU architecture) and then launches the dev container for you:
+
+```bash
+curl -fsSL https://github.com/wso2/agent-manager/releases/download/amp/v0.0.0-dev/start.sh -o start.sh
+chmod +x start.sh
+./start.sh
+```
+
+### Option B: Run the Dev Container directly
 
 ```bash
 docker run --rm -it --name amp-quick-start \
@@ -39,9 +49,7 @@ docker run --rm -it --name amp-quick-start \
   ghcr.io/wso2/amp-quick-start:v0.0.0-dev
 ```
 
-### Step 2: Run Installation Inside Container
-
-Once inside the container, run the installation script:
+Either way, the container drops you into a shell once it starts. From there, run the installer yourself:
 
 ```bash
 ./install.sh

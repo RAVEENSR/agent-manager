@@ -77,7 +77,13 @@ func TestSystemManagedMCPURLReturnsProxyURLForMatchingMapping(t *testing.T) {
 			},
 			GetByUUIDFunc: func(gotGatewayID string) (*models.Gateway, error) {
 				require.Equal(t, gatewayUUID.String(), gotGatewayID)
-				return &models.Gateway{UUID: gatewayUUID, Vhost: "https://gateway.example.com"}, nil
+				// RuntimeURL seeded so this asserts MCP stays on the public vhost rather
+				// than merely lacking an internal address to switch to.
+				return &models.Gateway{
+					UUID:       gatewayUUID,
+					Vhost:      "https://gateway.example.com",
+					RuntimeURL: "http://api-platform-acme-dev-gw-gateway-gateway-runtime.acme-dev:22893",
+				}, nil
 			},
 		},
 	}
@@ -155,4 +161,79 @@ func TestSystemManagedMCPURLMissingEnvMappingReturnsEmptyURL(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Empty(t, url)
+}
+
+// TestSystemManagedLLMURLUsesGatewayRuntimeURL pins the address a platform-hosted agent's
+// pod is handed for its LLM proxy. The pod's NetworkPolicy only permits egress to gateway
+// namespaces on the runtime port, so the public vhost here is a dead address.
+func TestSystemManagedLLMURLUsesGatewayRuntimeURL(t *testing.T) {
+	gateway := newGateway(t, models.GatewayRoleEgress, true)
+	gateway.Vhost = "https://gateway.example.com"
+	gateway.RuntimeURL = "http://api-platform-acme-dev-gw-gateway-gateway-runtime.acme-dev:22893"
+
+	url, err := callSystemManagedLLMURL(t, gateway, "/llm/proxy")
+
+	require.NoError(t, err)
+	require.Equal(t, "http://api-platform-acme-dev-gw-gateway-gateway-runtime.acme-dev:22893/llm/proxy", url)
+}
+
+// TestSystemManagedLLMURLFailsClosedWithoutRuntimeURL guards the fallback: a gateway with no
+// in-cluster address must abort the injection rather than hand the pod a vhost it cannot reach.
+func TestSystemManagedLLMURLFailsClosedWithoutRuntimeURL(t *testing.T) {
+	gateway := newGateway(t, models.GatewayRoleEgress, true)
+	gateway.Vhost = "https://gateway.example.com"
+	gateway.RuntimeURL = ""
+
+	_, err := callSystemManagedLLMURL(t, gateway, "/llm/proxy")
+
+	require.ErrorIs(t, err, errGatewayRuntimeURLUnregistered)
+}
+
+// callSystemManagedLLMURL resolves the LLM URL for a config whose single mapping is deployed
+// to gateway, reusing gatewayFixtureRepo so gateway lookup behaves as the real SQL does.
+func callSystemManagedLLMURL(t *testing.T, gateway *models.Gateway, contextPath string) (string, error) {
+	t.Helper()
+	configUUID, envUUID, proxyUUID := uuid.New(), uuid.New(), uuid.New()
+	svc := &agentConfigurationService{
+		envMappingRepo: &repomocks.EnvAgentModelMappingRepositoryMock{
+			GetByConfigAndEnvFunc: func(_ context.Context, gotConfigUUID, gotEnvUUID uuid.UUID) (*models.EnvAgentModelMapping, error) {
+				require.Equal(t, configUUID, gotConfigUUID)
+				require.Equal(t, envUUID, gotEnvUUID)
+				return &models.EnvAgentModelMapping{
+					ConfigUUID:      configUUID,
+					EnvironmentUUID: envUUID,
+					LLMProxyUUID:    proxyUUID,
+					LLMProxy: &models.LLMProxy{
+						UUID:          proxyUUID,
+						Handle:        "acme-openai-proxy",
+						Configuration: models.LLMProxyConfig{Context: &contextPath},
+					},
+				}, nil
+			},
+		},
+		llmProxyDeploymentService: &LLMProxyDeploymentService{
+			proxyRepo: &repomocks.LLMProxyRepositoryMock{
+				GetByIDFunc: func(gotProxyID, gotOuID string) (*models.LLMProxy, error) {
+					require.Equal(t, "acme-openai-proxy", gotProxyID)
+					require.Equal(t, "org", gotOuID)
+					return &models.LLMProxy{UUID: proxyUUID}, nil
+				},
+			},
+			deploymentRepo: &repomocks.DeploymentRepositoryMock{
+				GetDeploymentsWithStateFunc: func(artifactUUID, orgUUID string, _, _ *string, _ int) ([]*models.Deployment, error) {
+					require.Equal(t, proxyUUID.String(), artifactUUID)
+					require.Equal(t, "org", orgUUID)
+					return []*models.Deployment{{GatewayUUID: gateway.UUID}}, nil
+				},
+			},
+		},
+		gatewayRepo: gatewayFixtureRepo(t, envUUID.String(), []*models.Gateway{gateway}),
+	}
+
+	return svc.systemManagedLLMURL(context.Background(), &models.AgentConfiguration{
+		UUID:        configUUID,
+		Name:        "model",
+		ProjectName: "project",
+		AgentID:     "agent",
+	}, "org", "dev", envUUID)
 }
