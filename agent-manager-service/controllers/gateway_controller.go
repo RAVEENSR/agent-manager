@@ -250,10 +250,34 @@ func (c *gatewayController) GetGateway(w http.ResponseWriter, r *http.Request) {
 	utils.WriteSuccessResponse(w, http.StatusOK, response)
 }
 
+// impersonatedOUID returns the org UUID from the impersonation header, if the
+// caller sent a well-formed one. Temporary workaround for ListGateways only —
+// everywhere else the token is the sole source of org identity. Do not reuse.
+func impersonatedOUID(r *http.Request) (string, bool) {
+	raw := strings.TrimSpace(r.Header.Get(occlient.HeaderImpersonateOrg))
+	if raw == "" {
+		return "", false
+	}
+	if _, err := uuid.Parse(raw); err != nil {
+		return "", false
+	}
+	return raw, true
+}
+
 func (c *gatewayController) ListGateways(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	log := logger.GetLogger(ctx)
 	ouID := middleware.OUIDFromRequest(r)
+
+	// Header wins over the token; the context is rewritten too.
+	if impersonated, ok := impersonatedOUID(r); ok && impersonated != ouID {
+		log.Warn("ListGateways: org impersonation header overrides token org",
+			"tokenOuID", ouID, "impersonatedOuID", impersonated)
+		ouID = impersonated
+		org, _ := middleware.GetResolvedOrg(ctx)
+		org.OUID = impersonated
+		ctx = middleware.WithResolvedOrg(ctx, org)
+	}
 
 	// Parse and validate pagination parameters
 	limit := getIntQueryParam(r, "limit", defaultLimit)
