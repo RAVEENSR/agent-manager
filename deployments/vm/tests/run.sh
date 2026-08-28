@@ -276,7 +276,9 @@ assert_eq "caddy console upstream (via kgateway)" "	reverse_proxy 127.0.0.1:8080
 # platform-Thunder host, and the env-Thunder base-domain wildcard (*.<domain>,
 # no fixed "thunder." segment) — kgateway itself discriminates by Host header
 # via each backend's HTTPRoute.
-assert_eq "caddy cp-kgateway upstream count" "4" "$(grep -cF '127.0.0.1:8080' <<<"$cf")"
+# console, api, thunder, the env-Thunder base-domain wildcard, and the on-demand ask
+# endpoint — cp is excluded in this render (external gateways off).
+assert_eq "caddy cp-kgateway upstream count" "5" "$(grep -cF '127.0.0.1:8080' <<<"$cf")"
 assert_eq "caddy env-thunder wildcard site" "*.amp.203.0.113.10.sslip.io {" \
   "$(grep -F '*.amp.203.0.113.10.sslip.io {' <<<"$cf" | head -1)"
 # gateway host routes through the kgateway data plane (19080), not the ClusterIP
@@ -370,6 +372,27 @@ assert_eq "coredns host aliases -> node" "yes" \
 assert_eq "coredns no longer targets host.k3d.internal as dest" "no" \
   "$(has "$cd_cfg" 'localhost host.k3d.internal')"
 
+# --- render_caddyfile: fixed hosts get on-demand certs, approved at the ask endpoint ---
+# The env-Thunder wildcard (*.amp.<ip>) covers every fixed host, and Caddy skips eager
+# issuance for a name a managed wildcard covers — so left eager these never get a
+# certificate at all and every request fails the handshake.
+cf_od="$(render_caddyfile 203.0.113.10 "ops@example.com" true)"
+# One tls block per site, each carrying on_demand: 6 fixed hosts + 3 wildcard sites.
+assert_eq "caddy on_demand on every site" "9" "$(grep -cE '^\s+on_demand$' <<<"$cf_od")"
+console_tls="$(awk '/^console\.amp/,/^}/' <<<"$cf_od")"
+assert_eq "caddy console site is on-demand" "yes" "$(has "$console_tls" 'on_demand')"
+assert_eq "caddy console keeps TLS-ALPN-01 issuer" "yes" "$(has "$console_tls" 'disable_http_challenge')"
+ask_block="$(awk '/^http:\/\/127\.0\.0\.1:9753/,/^}/' <<<"$cf_od")"
+assert_eq "ask endpoint approves console" "yes" \
+  "$(has "$ask_block" '{query.domain} == "console.amp.203.0.113.10.sslip.io"')"
+assert_eq "ask endpoint approves cp when enabled" "yes" \
+  "$(has "$ask_block" '{query.domain} == "cp.amp.203.0.113.10.sslip.io"')"
+# Exact match only — a look-alike must still satisfy AMS's registered-handle check.
+assert_eq "ask endpoint does not suffix-match the base domain" "no" \
+  "$(has "$ask_block" '{query.domain}.endsWith(".amp.203.0.113.10.sslip.io")')"
+ask_block_nocp="$(awk '/^http:\/\/127\.0\.0\.1:9753/,/^}/' <<<"$cf")"
+assert_eq "ask endpoint omits cp when disabled" "no" "$(has "$ask_block_nocp" 'cp.amp')"
+
 # --- render_caddyfile: deployed-agent invocation (wildcard site, on-demand TLS,
 #     CORS, ask endpoint) ---
 cf_ai="$(render_caddyfile 203.0.113.10 "ops@example.com" true)"
@@ -424,10 +447,6 @@ assert_eq "agent site on_demand + disable_http_challenge" "yes" \
   assert_eq "core thunder MCP base URL (observer)" \
     "thunder.bootstrap.observerMcpBaseUrl=https://observer.amp.example.com" \
     "$(grep -F 'observerMcpBaseUrl' <<<"$core_th")"
-  # The dev origin is opt-in (empty chart default), so a VM install must not
-  # register it at all.
-  assert_eq "core thunder leaves the dev MCP origin unset" "" \
-    "$(grep -F 'agentManagerMcpDevBaseUrl' <<<"$core_th")"
 
   core_obs="$(observability_helm_args)"
   assert_eq "core observability audience carries the public observer URL" \
@@ -515,6 +534,10 @@ assert_eq "agent site on_demand + disable_http_challenge" "yes" \
   AMP_HOST_CP=cp.amp.example.com
   AMP_AGENTS_BASE=agents.amp.example.com
   cf_byoc="$(caddyfile byoc "" /opt/amp/certs/fullchain.pem /opt/amp/certs/privkey.pem "")"
+  # byoc serves one operator-supplied cert on every site, so nothing is ever issued
+  # on demand — the wildcard-coverage problem that forces on_demand under
+  # letsencrypt does not apply here.
+  assert_eq "core caddy byoc has no on_demand" "no" "$(has "$cf_byoc" 'on_demand')"
   assert_eq "byoc serves provided cert/key" "yes" \
     "$(has "$cf_byoc" 'tls /opt/amp/certs/fullchain.pem /opt/amp/certs/privkey.pem')"
   assert_eq "byoc no acme issuer" "no" "$(has "$cf_byoc" 'issuer acme')"

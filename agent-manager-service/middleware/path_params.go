@@ -145,10 +145,12 @@ func (rr *RouteRegistrar) HandleFuncWithValidationAndAnyAuthz(pattern string, ha
 	rr.register(pattern, perms, RequireAnyPermission(perms...), handler)
 }
 
-func (rr *RouteRegistrar) HandleFuncWithValidationAndDynamicAuthz(pattern string, resolver PermissionResolver, handler http.HandlerFunc) {
-	// The permission is resolved per request, so none is known at registration
-	// time. The resolved one is recorded on the event by RequireDynamicPermission.
-	rr.register(pattern, nil, RequireDynamicPermission(resolver), handler)
+// HandleFuncWithValidationAndAllAuthz requires the token to carry EVERY listed
+// permission. Registering with no permissions is a bug that fails at startup:
+// requireScopes panics on an empty list rather than install a route that gates
+// on nothing.
+func (rr *RouteRegistrar) HandleFuncWithValidationAndAllAuthz(pattern string, handler http.HandlerFunc, perms ...rbac.Permission) {
+	rr.register(pattern, perms, RequireAllPermissions(perms...), handler)
 }
 
 // registerRootOU mirrors register but uses the root-OU org resolution variant.

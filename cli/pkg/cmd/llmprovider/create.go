@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/google/uuid"
 	openapi_types "github.com/oapi-codegen/runtime/types"
@@ -36,16 +37,28 @@ import (
 )
 
 const (
-	defaultVersion = "v1"
+	// defaultVersion must satisfy the spec's `^v\d+\.\d+$` pattern. "v1" does not,
+	// and was accepted only because the server did not validate it.
+	defaultVersion = "v1.0"
 	defaultContext = "/"
 	// defaultAuthType matches the auth scheme of the built-in templates that
 	// require a credential (openai, anthropic, mistralai, …). It is only sent
 	// when the user also supplies a key or an explicit auth override.
 	defaultAuthType = "api-key"
+	// defaultAccessMode matches what the console sends. A deployed proxy defaults
+	// to deny_all server-side and is then unreachable, so a provider created
+	// without an explicit mode would be created correctly and still not work.
+	defaultAccessMode = "allow_all"
 )
 
 // validAuthTypes are the upstream auth schemes accepted by the service.
 var validAuthTypes = []string{"api-key", "none"}
+
+// validAccessModes are the access control modes accepted by the service.
+var validAccessModes = []string{"allow_all", "deny_all"}
+
+// versionRegex mirrors the spec's `version` pattern.
+var versionRegex = regexp.MustCompile(`^v\d+\.\d+$`)
 
 type CreateOptions struct {
 	IO           *iostreams.IOStreams
@@ -74,13 +87,23 @@ type CreateOptions struct {
 	APIKey      string
 	APIKeyStdin bool
 
-	Gateways []string
+	AccessMode string
+	Gateways   []string
 }
 
 // keyRequested reports whether the user asked to attach a credential, without
 // reading stdin (so it is safe to call during validation).
 func (o *CreateOptions) keyRequested() bool {
 	return o.APIKey != "" || o.APIKeyStdin
+}
+
+// accessMode falls back to the default so a caller that builds CreateOptions
+// directly cannot send an empty mode, which the service would reject.
+func (o *CreateOptions) accessMode() string {
+	if o.AccessMode == "" {
+		return defaultAccessMode
+	}
+	return o.AccessMode
 }
 
 func validateCreate(opts *CreateOptions) error {
@@ -100,8 +123,14 @@ func validateCreate(opts *CreateOptions) error {
 	if msg := contextViolation(opts.Context); msg != "" {
 		v = append(v, msg)
 	}
+	if !versionRegex.MatchString(opts.Version) {
+		v = append(v, fmt.Sprintf("--version must match %s, e.g. %s", versionRegex, defaultVersion))
+	}
 	if !isValidAuthType(opts.AuthType) {
 		v = append(v, fmt.Sprintf("--auth-type must be one of: %s", strings.Join(validAuthTypes, ", ")))
+	}
+	if !slices.Contains(validAccessModes, opts.accessMode()) {
+		v = append(v, fmt.Sprintf("--access-mode must be one of: %s", strings.Join(validAccessModes, ", ")))
 	}
 	if opts.APIKey != "" && opts.APIKeyStdin {
 		v = append(v, "--api-key and --api-key-stdin are mutually exclusive")
@@ -112,8 +141,11 @@ func validateCreate(opts *CreateOptions) error {
 	if opts.keyRequested() && opts.AuthType == "none" {
 		v = append(v, "an API key cannot be used with --auth-type none")
 	}
-	if _, err := parseGateways(opts.Gateways); err != nil {
-		v = append(v, err.Error())
+	for _, g := range opts.Gateways {
+		// Identical messages collapse: three blank values are one mistake.
+		if msg := gatewayViolation(g); msg != "" && !slices.Contains(v, msg) {
+			v = append(v, msg)
+		}
 	}
 
 	if len(v) == 0 {
@@ -124,6 +156,40 @@ func validateCreate(opts *CreateOptions) error {
 
 func isValidAuthType(t string) bool {
 	return slices.Contains(validAuthTypes, t)
+}
+
+// gatewayNameMaxLen mirrors the spec's maxLength on GatewayResponse.name.
+const gatewayNameMaxLen = 64
+
+// gatewayViolation returns a validation message when value can be neither a gateway
+// UUID nor a gateway name, or "" when it could be either. Rejecting the impossible
+// shapes here keeps them from costing a paginated walk of every gateway in the org
+// before resolution fails.
+//
+// It stops short of the spec's `^[a-z0-9-]+$` name pattern on purpose: a plausible
+// name still has to be resolved against the server, so mirroring the pattern buys
+// nothing beyond these checks and makes the CLI reject valid input the day the server
+// relaxes the rule. The checks kept are the ones cmdutil.ValidatePathParam already
+// applies to the gateway passed to `amctl gateway get`, plus the length bound.
+func gatewayViolation(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "--gateways must not contain a blank value"
+	}
+	if _, err := uuid.Parse(trimmed); err == nil {
+		return ""
+	}
+	if strings.Contains(trimmed, "/") {
+		return fmt.Sprintf("--gateways value %q must not contain '/'", trimmed)
+	}
+	if strings.ContainsFunc(trimmed, unicode.IsSpace) {
+		return fmt.Sprintf("--gateways value %q must not contain whitespace", trimmed)
+	}
+	if len(trimmed) > gatewayNameMaxLen {
+		return fmt.Sprintf("--gateways value %q is longer than a gateway name can be (at most %d characters)",
+			trimmed, gatewayNameMaxLen)
+	}
+	return ""
 }
 
 // handleRegex matches a valid resource handle: letters, digits, '-' and '_'.
@@ -157,18 +223,57 @@ func contextViolation(ctx string) string {
 	return ""
 }
 
-// parseGateways converts the raw --gateways values into typed UUIDs, reporting
-// the first malformed value.
-func parseGateways(raw []string) ([]openapi_types.UUID, error) {
+// gatewayNames returns the --gateways values that are not UUIDs, in order and
+// deduplicated. Kept separate so a UUID-only --gateways can skip the lookup that
+// resolving names would otherwise cost.
+func gatewayNames(raw []string) []string {
+	names := []string{}
+	for _, g := range raw {
+		trimmed := strings.TrimSpace(g)
+		if trimmed == "" {
+			continue
+		}
+		if _, err := uuid.Parse(trimmed); err == nil {
+			continue
+		}
+		if !slices.Contains(names, trimmed) {
+			names = append(names, trimmed)
+		}
+	}
+	return names
+}
+
+// parseGateways converts the raw --gateways values into typed UUIDs, resolving any
+// that are names through nameToUUID. A nil nameToUUID rejects every name, which is
+// what a UUID-only --gateways gets: resolveGatewayNames skips the lookup entirely.
+//
+// Duplicates are dropped after resolution, keeping the first occurrence and the
+// caller's order: a gateway named twice — or named once by name and once by UUID —
+// is one placement, and sending it twice draws a confusing rejection from the
+// server's "no two gateways may share an environment" check.
+func parseGateways(raw []string, nameToUUID map[string]openapi_types.UUID) ([]openapi_types.UUID, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
 	out := make([]openapi_types.UUID, 0, len(raw))
+	seen := make(map[openapi_types.UUID]struct{}, len(raw))
 	for _, g := range raw {
-		id, err := uuid.Parse(strings.TrimSpace(g))
-		if err != nil {
-			return nil, fmt.Errorf("invalid gateway id %q: must be a UUID", g)
+		trimmed := strings.TrimSpace(g)
+		if trimmed == "" {
+			return nil, fmt.Errorf("--gateways must not contain a blank value")
 		}
+		id, err := uuid.Parse(trimmed)
+		if err != nil {
+			resolved, ok := nameToUUID[trimmed]
+			if !ok {
+				return nil, fmt.Errorf("unknown gateway %q: pass a gateway name or UUID from 'amctl gateway list'", trimmed)
+			}
+			id = resolved
+		}
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		seen[id] = struct{}{}
 		out = append(out, id)
 	}
 	return out, nil
@@ -222,13 +327,21 @@ func NewCreateCmd(f *cmdutil.Factory) *cobra.Command {
 	cmd.Flags().StringVar(&opts.AuthHeader, "auth-header", "", "Override the template's auth header name")
 	cmd.Flags().StringVar(&opts.APIKey, "api-key", "", "Provider API key (leaks into shell history; prefer --api-key-stdin)")
 	cmd.Flags().BoolVar(&opts.APIKeyStdin, "api-key-stdin", false, "Read the provider API key from stdin")
-	cmd.Flags().StringSliceVar(&opts.Gateways, "gateways", nil, "Gateway UUIDs to deploy the provider to (repeatable)")
+	cmd.Flags().StringVar(&opts.AccessMode, "access-mode", defaultAccessMode,
+		fmt.Sprintf("Route access control for the deployed proxy: %s", strings.Join(validAccessModes, " or ")))
+	cmd.Flags().StringSliceVar(&opts.Gateways, "gateways", nil, "Gateway names or UUIDs to deploy the provider to (repeatable)")
 
 	_ = cmd.RegisterFlagCompletionFunc("auth-type", func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
 		return validAuthTypes, cobra.ShellCompDirectiveNoFileComp
 	})
+	_ = cmd.RegisterFlagCompletionFunc("access-mode", func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+		return validAccessModes, cobra.ShellCompDirectiveNoFileComp
+	})
 	_ = cmd.RegisterFlagCompletionFunc("template", func(cmd *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return cmdutil.CompleteLLMProviderTemplates(cmd, f), cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = cmd.RegisterFlagCompletionFunc("gateways", func(cmd *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return cmdutil.CompleteGateways(cmd, f), cobra.ShellCompDirectiveNoFileComp
 	})
 
 	return cmd
@@ -247,12 +360,17 @@ func runCreate(ctx context.Context, o *CreateOptions) error {
 		}
 	}
 
-	req, err := buildCreateRequest(o, key)
+	client, err := o.Client(ctx)
 	if err != nil {
 		return render.Error(o.IO, o.Scope, err)
 	}
 
-	client, err := o.Client(ctx)
+	gatewayUUIDs, err := resolveGatewayNames(ctx, client, o.Org, o.Gateways)
+	if err != nil {
+		return render.Error(o.IO, o.Scope, err)
+	}
+
+	req, err := buildCreateRequest(o, key, gatewayUUIDs)
 	if err != nil {
 		return render.Error(o.IO, o.Scope, err)
 	}
@@ -273,10 +391,42 @@ func runCreate(ctx context.Context, o *CreateOptions) error {
 	return nil
 }
 
+// resolveGatewayNames maps any non-UUID --gateways values to their UUIDs by listing
+// the org's gateways. Returns nil without calling the server when every value is
+// already a UUID, so the common scripted case costs no extra request.
+func resolveGatewayNames(
+	ctx context.Context, client *amsvc.ClientWithResponses, org string, raw []string,
+) (map[string]openapi_types.UUID, error) {
+	names := gatewayNames(raw)
+	if len(names) == 0 {
+		return nil, nil
+	}
+
+	gateways, err := cmdutil.ListAllGateways(ctx, client, org)
+	if err != nil {
+		return nil, err
+	}
+
+	byName := make(map[string]openapi_types.UUID, len(gateways))
+	for _, g := range gateways {
+		id, err := uuid.Parse(g.Uuid)
+		if err != nil {
+			// Skipping the entry would report the gateway as unknown, blaming the
+			// user's input for a malformed UUID the server sent.
+			return nil, clierr.Newf(clierr.Internal,
+				"server returned gateway %q with an unparseable uuid %q", g.Name, g.Uuid)
+		}
+		byName[g.Name] = id
+	}
+	return byName, nil
+}
+
 // buildCreateRequest maps the resolved options into the create payload. The
 // upstream block is attached only when the user supplies a URL or an auth input,
 // so a bare `create <id> --display-name --template` defers entirely to the template.
-func buildCreateRequest(o *CreateOptions, key string) (amsvc.CreateLLMProviderRequest, error) {
+func buildCreateRequest(
+	o *CreateOptions, key string, gatewayUUIDs map[string]openapi_types.UUID,
+) (amsvc.CreateLLMProviderRequest, error) {
 	req := amsvc.CreateLLMProviderRequest{
 		Id:       o.ID,
 		Name:     o.DisplayName,
@@ -308,12 +458,19 @@ func buildCreateRequest(o *CreateOptions, key string) (amsvc.CreateLLMProviderRe
 		req.Upstream = amsvc.UpstreamConfig{Main: main}
 	}
 
-	gws, err := parseGateways(o.Gateways)
+	gws, err := parseGateways(o.Gateways, gatewayUUIDs)
 	if err != nil {
 		return req, cmdutil.FlagErrors([]string{err.Error()})
 	}
 	if len(gws) > 0 {
 		req.Gateways = &gws
+	}
+
+	// Sent unconditionally: a deployed proxy defaults to deny_all server-side, so a
+	// provider created without an access control block is unreachable.
+	req.AccessControl = &amsvc.LLMAccessControl{
+		Mode:       amsvc.LLMAccessControlMode(o.accessMode()),
+		Exceptions: &[]amsvc.RouteException{},
 	}
 
 	return req, nil

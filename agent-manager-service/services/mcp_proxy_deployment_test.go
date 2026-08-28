@@ -738,11 +738,10 @@ func TestGenerateMCPProxyDeploymentYAML_UpstreamURLPassthrough(t *testing.T) {
 }
 
 // TestAppendMCPIdentityAuthPolicies_InvertsScopesToPerToolRules covers the Agent Identity
-// policy emission: mcp-auth (pinned issuer, no requiredScopes — jwt-auth would enforce
-// all of them) plus one mcp-authz rule per tool, inverted from the proxy's scope->tools rows.
+// policy emission: mcp-auth (pinned issuer + the advertised scope union) plus one mcp-authz
+// rule per tool, inverted from the proxy's scope->tools rows.
 func TestAppendMCPIdentityAuthPolicies_InvertsScopesToPerToolRules(t *testing.T) {
-	on := true
-	sec := &models.SecurityConfig{Enabled: &on, Identity: &models.IdentitySecurity{Enabled: &on}}
+	sec := identityEnabledSecurity()
 	scopes := []models.MCPProxyScope{
 		{Action: "read", Tools: []string{"get_repo", "list_repos"}},
 		{Action: "admin", Tools: []string{"delete_repo", "get_repo"}},
@@ -753,7 +752,7 @@ func TestAppendMCPIdentityAuthPolicies_InvertsScopesToPerToolRules(t *testing.T)
 	auth := out[0]
 	assert.Equal(t, "mcp-auth", auth.Name)
 	assert.Equal(t, []interface{}{"ThunderKeyManager"}, auth.Params["issuers"])
-	assert.NotContains(t, auth.Params, "requiredScopes")
+	assert.Equal(t, []string{"gh-proxy:admin", "gh-proxy:read"}, auth.Params["requiredScopes"])
 
 	authz := out[1]
 	assert.Equal(t, "mcp-authz", authz.Name)
@@ -766,13 +765,27 @@ func TestAppendMCPIdentityAuthPolicies_InvertsScopesToPerToolRules(t *testing.T)
 }
 
 func TestAppendMCPIdentityAuthPolicies_NoScopesEmitsAuthOnly(t *testing.T) {
-	on := true
-	sec := &models.SecurityConfig{Enabled: &on, Identity: &models.IdentitySecurity{Enabled: &on}}
-	out := appendMCPIdentityAuthPolicies(nil, sec, "gh-proxy", nil)
+	out := appendMCPIdentityAuthPolicies(nil, identityEnabledSecurity(), "gh-proxy", nil)
 	assert.Len(t, out, 1)
 	assert.Equal(t, "mcp-auth", out[0].Name)
 	_, hasScopes := out[0].Params["requiredScopes"]
 	assert.False(t, hasScopes)
+}
+
+// A scope covering no tool still belongs in mcp-auth's advertised union — it is a scope
+// clients may request — even though it yields no mcp-authz rule to enforce.
+func TestAppendMCPIdentityAuthPolicies_ToollessScopeIsAdvertisedButNotEnforced(t *testing.T) {
+	scopes := []models.MCPProxyScope{
+		{Action: "read", Tools: []string{"get_repo"}},
+		{Action: "audit"},
+	}
+	out := appendMCPIdentityAuthPolicies(nil, identityEnabledSecurity(), "gh-proxy", scopes)
+	assert.Len(t, out, 2)
+
+	assert.Equal(t, []string{"gh-proxy:audit", "gh-proxy:read"}, out[0].Params["requiredScopes"])
+	assert.Equal(t, []map[string]interface{}{
+		{"name": "get_repo", "requiredScopes": []string{"gh-proxy:read"}},
+	}, out[1].Params["tools"])
 }
 
 func TestAppendMCPIdentityAuthPolicies_IdentityOffEmitsNothing(t *testing.T) {
@@ -819,4 +832,16 @@ func TestMCPProxyEnvArtifactHandleDistinguishesEndpoints(t *testing.T) {
 	if handle1 == handle2 {
 		t.Fatalf("expected distinct handles for different endpoints in the same environment")
 	}
+}
+
+// A scope bound to no tools contributes no mcp-authz rule; when it is the only
+// scope, mcp-authz is omitted entirely and the endpoint degrades to
+// authenticated-only rather than emitting an empty rule set.
+func TestAppendMCPIdentityAuthPolicies_ScopeWithNoToolsEmitsAuthOnly(t *testing.T) {
+	out := appendMCPIdentityAuthPolicies(nil, identityEnabledSecurity(), "gh-proxy", []models.MCPProxyScope{
+		{Action: "read", Tools: []string{}},
+	})
+	assert.Len(t, out, 1)
+	assert.Equal(t, "mcp-auth", out[0].Name)
+	assert.Equal(t, []string{"gh-proxy:read"}, out[0].Params["requiredScopes"])
 }

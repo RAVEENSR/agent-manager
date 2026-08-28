@@ -16,23 +16,22 @@
  * under the License.
  */
 
-import { useGetAgent, useUserDisplayName } from "@agent-management-platform/api-client";
+import { useGetAgent, useGetAgentKind, useUserDisplayName } from "@agent-management-platform/api-client";
 import { InternalAgentOverview } from "./InternalAgentOverview";
 import { useParams } from "react-router-dom";
 import { ExternalAgentOverview } from "./ExternalAgentOverview";
 import { useState } from "react";
-import { Box, Button, Chip, Divider, Skeleton, Stack } from "@wso2/oxygen-ui";
+import { Box, Button, Divider, Skeleton, Stack } from "@wso2/oxygen-ui";
 import { Edit, Tag } from "@wso2/oxygen-ui-icons-react";
 import { EditAgentDrawer } from "./EditAgentDrawer";
 import {
     PageLayout,
-    displayProvisionTypes,
     DescriptionCard,
     CreatedMetadata,
     CreatedByMetadata,
     PageMetaItem,
 } from "@agent-management-platform/views";
-import { LabelChips } from "@agent-management-platform/shared-component";
+import { AgentTypeChips, LabelChips } from "@agent-management-platform/shared-component";
 
 function AgentOverviewSkeleton() {
     return (
@@ -57,6 +56,7 @@ export function AgentOverview() {
         userId: agent?.createdBy?.id ?? "",
     });
     const createdByName = resolvedName ?? agent?.createdBy?.display ?? agent?.createdBy?.id;
+    const { data: kind } = useGetAgentKind({ orgName: orgId ?? "", kindName: agent?.kindName ?? "" });
 
     return (
         <>
@@ -65,13 +65,14 @@ export function AgentOverview() {
                 title={agent?.displayName ?? "Agent"}
                 isLoading={isAgentLoading}
                 titleTail={
-                    <Chip
-                        label={displayProvisionTypes(agent?.provisioning?.type)}
-                        color="default"
-                        size="small"
-                        variant="outlined"
-                        sx={{ flexShrink: 0 }}
-                    />
+                    <Stack direction="row" spacing={1} alignItems="center">
+                        <AgentTypeChips
+                            provisioning={agent?.provisioning}
+                            agentType={agent?.agentType}
+                            kindName={agent?.kindName}
+                            kindDisplayName={kind?.displayName}
+                        />
+                    </Stack>
                 }
                 meta={
                     <>

@@ -1,0 +1,87 @@
+name: PR Open Notification
+
+# Announces new pull requests in Google Chat so reviewers see them without
+# watching the repository. Fires on `opened` and `reopened` for ready PRs, and
+# on `ready_for_review` so a PR raised as a draft is announced when it actually
+# becomes reviewable rather than being missed.
+#
+# `pull_request_target` (not `pull_request`) is deliberate: PRs from forks --
+# how most contributions arrive -- cannot read repository secrets under
+# `pull_request`, so the webhook URL would always be empty and every fork PR
+# would go unannounced. The usual `pull_request_target` hazard does not apply
+# here because this workflow never checks out or executes PR code; it only
+# reads fields from the event payload, and it passes them through `env` rather
+# than interpolating them into the shell so a crafted branch name or title
+# cannot inject commands.
+#
+# One-time setup:
+#   - in the Chat space that should receive PR notices: Apps & integrations ->
+#     Webhooks -> add a webhook, and copy its URL
+#   - set that URL as the `GCHAT_PR_WEBHOOK_URL` repository secret
+#
+# That is deliberately a separate secret from the `GCHAT_WEBHOOK_URL` used by
+# nightly.yml, instrumentation-matrix-nightly.yaml and
+# traceloop-release-watch.yaml for build and release alerts. A Chat incoming
+# webhook is bound to the space it was created in -- the space id is part of
+# the URL -- so a different space cannot reuse an existing webhook, and PR
+# traffic wants a different audience than nightly failures anyway. Until the
+# secret exists the job logs a warning and passes, so it never blocks a PR.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review]
+
+# Reads nothing from the API; the webhook URL is the only credential needed.
+permissions: {}
+
+jobs:
+  notify:
+    name: Post new PR to Google Chat
+    runs-on: ubuntu-latest
+    # Draft PRs stay quiet until they are marked ready for review.
+    if: >-
+      github.repository == 'wso2/agent-manager' &&
+      github.event.pull_request.draft == false
+    steps:
+      - name: Notify Google Chat
+        env:
+          GCHAT_PR_WEBHOOK_URL: ${{ secrets.GCHAT_PR_WEBHOOK_URL }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          EVENT_ACTION: ${{ github.event.action }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GCHAT_PR_WEBHOOK_URL}" ]; then
+            echo "::warning::GCHAT_PR_WEBHOOK_URL secret is not set; skipping Google Chat notification."
+            exit 0
+          fi
+
+          case "${EVENT_ACTION}" in
+            reopened)         HEADING='Pull request reopened' ;;
+            ready_for_review) HEADING='Pull request ready for review' ;;
+            *)                HEADING='New pull request' ;;
+          esac
+
+          # jq escapes the title and author, which are attacker-controlled text.
+          PAYLOAD=$(jq -n \
+            --arg heading "$HEADING" \
+            --arg number "$PR_NUMBER" \
+            --arg title "$PR_TITLE" \
+            --arg author "$PR_AUTHOR" \
+            --arg base "$BASE_REF" \
+            --arg url "$PR_URL" \
+            '{text: ("*\($heading)* — <\($url)|#\($number)> " + $title
+                     + "\nby \($author) → `\($base)`")}')
+
+          HTTP_CODE=$(curl -sS -o /tmp/gchat-resp.txt -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json; charset=UTF-8' \
+            -d "$PAYLOAD" "$GCHAT_PR_WEBHOOK_URL")
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Google Chat webhook returned HTTP ${HTTP_CODE}"
+            cat /tmp/gchat-resp.txt || true
+            exit 1
+          fi
+          echo "Google Chat notified for PR #${PR_NUMBER}."

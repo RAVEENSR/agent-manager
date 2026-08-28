@@ -2911,9 +2911,12 @@ func (c *openChoreoClient) GetComponentFileMounts(ctx context.Context, ouID, pro
 		}
 	}
 
-	// Overlay this environment's release binding overrides. Deploy writes the effective set here
-	// and clears the Workload base, so without this the mounts vanish from the console after the
-	// first deploy even though they are mounted on the pod. Mirrors GetComponentConfigurations.
+	// Overlay this environment's release binding overrides. Deploy writes the effective set here,
+	// so without this a mount added to one environment is invisible to the console and to
+	// GET .../file-mounts, which would report the shared base for every environment instead.
+	// Union semantics match the render: mergeFileConfigs falls back to the base for keys an
+	// override omits, and the base is retained, so base-only mounts still read correctly.
+	// Mirrors GetComponentConfigurations.
 	releaseBindingResp, err := c.ocClient.ListReleaseBindingsWithResponse(ctx, namespaceName, &gen.ListReleaseBindingsParams{
 		Component: &componentName,
 		Limit:     &defaultListLimit,

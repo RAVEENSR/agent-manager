@@ -232,7 +232,7 @@ func TestCreate_ContextTrailingSlash(t *testing.T) {
 func TestValidateCreate_RootContextOK(t *testing.T) {
 	err := validateCreate(&CreateOptions{
 		ID: "openai", DisplayName: "OpenAI", Template: "openai",
-		Context: "/", AuthType: "api-key",
+		Context: "/", AuthType: "api-key", Version: defaultVersion,
 	})
 	if err != nil {
 		t.Fatalf("expected valid options, got %v", err)
@@ -259,7 +259,52 @@ func TestCreate_BlankAPIKey(t *testing.T) {
 		"--api-key must not be blank")
 }
 
-func TestCreate_BadGateway(t *testing.T) {
-	runTreeExpectViolation(t, []string{"llm-provider", "create", "p", "--display-name", "X", "--template", "openai", "--gateways", "not-a-uuid"},
-		"invalid gateway id")
+func TestCreate_BlankGateway(t *testing.T) {
+	runTreeExpectViolation(t, []string{"llm-provider", "create", "p", "--display-name", "X", "--template", "openai", "--gateways", "  "},
+		"--gateways must not contain a blank value")
+}
+
+// A value that can be neither a UUID nor a gateway name is rejected here rather
+// than after resolveGatewayNames has paged through every gateway in the org. The
+// command tree is built with a nil client factory, so reaching the server at all
+// would fail differently than a flag violation.
+func TestCreate_MalformedGatewayFailsBeforeTheLookup(t *testing.T) {
+	base := []string{"llm-provider", "create", "p", "--display-name", "X", "--template", "openai"}
+	for _, tc := range []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{"slash", "acme/edge", "must not contain '/'"},
+		{"whitespace", "ai gateway", "must not contain whitespace"},
+		{"too long", strings.Repeat("g", gatewayNameMaxLen+1), "longer than a gateway name can be"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runTreeExpectViolation(t, append(append([]string{}, base...), "--gateways", tc.value), tc.want)
+		})
+	}
+}
+
+// The shape gate must not take over resolution: a value that looks like a gateway
+// name is still the server's to accept or reject, because only the server knows
+// which names exist.
+func TestValidateCreate_PlausibleGatewayNameIsNotRejectedLocally(t *testing.T) {
+	err := validateCreate(&CreateOptions{
+		ID: "openai", DisplayName: "OpenAI", Template: "openai",
+		Context: "/", AuthType: "api-key", Version: defaultVersion,
+		Gateways: []string{"not-a-uuid-or-a-name", "22222222-2222-2222-2222-222222222222"},
+	})
+	if err != nil {
+		t.Fatalf("expected valid options, got %v", err)
+	}
+}
+
+func TestCreate_BadVersion(t *testing.T) {
+	runTreeExpectViolation(t, []string{"llm-provider", "create", "p", "--display-name", "X", "--template", "openai", "--version", "v1"},
+		"--version must match")
+}
+
+func TestCreate_BadAccessMode(t *testing.T) {
+	runTreeExpectViolation(t, []string{"llm-provider", "create", "p", "--display-name", "X", "--template", "openai", "--access-mode", "everyone"},
+		"--access-mode must be one of")
 }

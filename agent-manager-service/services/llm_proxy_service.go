@@ -17,6 +17,7 @@
 package services
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -51,7 +52,7 @@ func NewLLMProxyService(
 }
 
 // Create creates a new LLM proxy
-func (s *LLMProxyService) Create(ouID, createdBy string, proxy *models.LLMProxy) (*models.LLMProxy, error) {
+func (s *LLMProxyService) Create(ctx context.Context, ouID, createdBy string, proxy *models.LLMProxy) (*models.LLMProxy, error) {
 	if proxy == nil {
 		return nil, utils.ErrInvalidInput
 	}
@@ -85,6 +86,12 @@ func (s *LLMProxyService) Create(ouID, createdBy string, proxy *models.LLMProxy)
 	if providerModel == nil {
 		return nil, utils.ErrLLMProviderNotFound
 	}
+	// Whether the provider is mid-delete is deliberately NOT checked here: reading
+	// providerModel.Status now and inserting later would itself be a TOCTOU race
+	// against LLMProviderService.Delete's MarkDeleting. Instead proxyRepo.Create
+	// locks and rechecks the provider's status inside the same transaction as the
+	// insert (see LLMProxyRepo.Create / IsDeletingForUpdate), returning
+	// utils.ErrLLMProviderBeingDeleted atomically with the insert decision.
 
 	// Check if proxy already exists
 	exists, err := s.proxyRepo.Exists(handle, ouID)
@@ -120,7 +127,10 @@ func (s *LLMProxyService) Create(ouID, createdBy string, proxy *models.LLMProxy)
 	}
 
 	// Create proxy
-	if err := s.proxyRepo.Create(proxy, handle, name, version, ouID); err != nil {
+	if err := s.proxyRepo.Create(ctx, proxy, handle, name, version, ouID); err != nil {
+		if errors.Is(err, utils.ErrLLMProviderBeingDeleted) {
+			return nil, utils.ErrLLMProviderBeingDeleted
+		}
 		return nil, fmt.Errorf("failed to create proxy: %w", err)
 	}
 

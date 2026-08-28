@@ -206,7 +206,11 @@ var actionOverrides = map[string]Action{
 	"POST /orgs/{orgName}/projects/{projName}/agents/{agentName}/publish-kind": "agent-kind:publish",
 
 	// One permission, several operations — deployment lifecycle.
-	"POST /orgs/{orgName}/projects/{projName}/agents/{agentName}/deployments":                "agent:deploy",
+	"POST /orgs/{orgName}/projects/{projName}/agents/{agentName}/deployments": "agent:deploy",
+	// Gated on the environment tier, not on a promote-specific scope, so the
+	// route declares no permission that names the operation. Without this
+	// override there is nothing to derive from and registration panics.
+	"POST /orgs/{orgName}/projects/{projName}/agents/{agentName}/promote":                    "agent:promote",
 	"POST /orgs/{orgName}/projects/{projName}/agents/{agentName}/deployments/state":          "agent:change-deployment-state",
 	"POST /orgs/{orgName}/llm-providers/{providerId}/deployments":                            "llm-provider:deploy",
 	"POST /orgs/{orgName}/llm-providers/{providerId}/deployments/undeploy":                   "llm-provider:undeploy",
@@ -346,26 +350,53 @@ var methodVerbs = map[string]string{
 //  3. for multi-permission routes, the first permission's resource with a verb
 //     from the HTTP method, since no single permission is authoritative.
 //
-// A route carrying no permission at all has nothing to derive from and returns
+// Axis permissions are dropped before any of that: an environment tier says
+// where an operation lands, never what it is, so it cannot name the action.
+//
+// A route left with no naming permission has nothing to derive from and returns
 // empty, which makes NewRouteMeta panic. That is deliberate: such a route would
-// otherwise be labelled from its path, producing an action with no class, no
-// severity and no detail schema that nothing would ever flag. Declare it in
-// actionOverrides instead.
+// otherwise be labelled from its path or from its axis, producing an action with
+// no class, no severity and no detail schema that nothing would ever flag.
+// Declare it in actionOverrides instead.
 func deriveAction(method, path string, perms []rbac.Permission) Action {
 	if override, ok := actionOverrides[method+" "+path]; ok {
 		return override
 	}
-	if len(perms) == 1 {
-		return Action(perms[0])
+	named := namingPermissions(perms)
+	if len(named) == 1 {
+		return Action(named[0])
 	}
-	verb := methodVerbs[method]
-	if verb == "" {
-		verb = strings.ToLower(method)
-	}
-	if len(perms) > 1 {
-		return Action(Action(perms[0]).Resource() + ":" + verb)
+	if len(named) > 1 {
+		verb := methodVerbs[method]
+		if verb == "" {
+			verb = strings.ToLower(method)
+		}
+		return Action(Action(named[0]).Resource() + ":" + verb)
 	}
 	return ""
+}
+
+// axisPermissions gate an operation on where it lands rather than on what it is.
+// They are an authorization axis of their own, held in addition to the
+// capability the route demands, so they never describe the operation.
+var axisPermissions = map[rbac.Permission]bool{
+	rbac.AgentEnvNonProduction: true,
+	rbac.AgentEnvProduction:    true,
+}
+
+// namingPermissions returns the permissions that can name an action — every one
+// the route declares, less the axes. Filtering here rather than special-casing
+// each tier-gated route is what makes the fail-closed guard cover the next one:
+// a route gated only on an axis derives nothing and panics at startup, instead
+// of quietly registering "agent:env-non-production" as an action.
+func namingPermissions(perms []rbac.Permission) []rbac.Permission {
+	named := make([]rbac.Permission, 0, len(perms))
+	for _, perm := range perms {
+		if !axisPermissions[perm] {
+			named = append(named, perm)
+		}
+	}
+	return named
 }
 
 // OverrideKeys returns every actionOverrides key. Used by the coverage test to

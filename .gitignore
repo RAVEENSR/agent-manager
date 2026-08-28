@@ -79,8 +79,15 @@ generator/*
 
 .*_cache/
 __pycache__/
+.venv/
 .deepeval/
 .claude/
 local-scripts/
 
 website/
+
+samples/insurance-support-agent/web/node_modules/
+samples/insurance-support-agent/web/dist/
+samples/insurance-support-agent/web/*.tsbuildinfo
+samples/insurance-support-agent/agent/.venv/
+samples/insurance-support-agent/**/__pycache__/

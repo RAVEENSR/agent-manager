@@ -18,39 +18,63 @@ package framework
 
 import (
 	"os"
+	"strings"
 	"time"
 )
 
 // Config holds all configuration for the e2e test suite.
 type Config struct {
-	AMPBaseURL       string
-	ObserverBaseURL  string
-	IDPTokenURL      string
-	IDPClientID      string
-	IDPClientSecret  string
-	DefaultOrg       string
-	DefaultProject   string
-	DefaultEnv       string
-	ReadinessTimeout time.Duration
-	TavilyAPIKey     string
-	OpenAIAPIKey     string
+	AMPBaseURL                string
+	ObserverBaseURL           string
+	IDPTokenURL               string
+	IDPClientID               string
+	IDPClientSecret           string
+	ThunderAdminURL           string
+	ThunderSystemResource     string
+	ThunderSystemClientID     string
+	ThunderSystemClientSecret string
+	AgentIDTokenURL           string
+	SecurityProbeRepository   string
+	SecurityProbeBranch       string
+	SecurityProbeAppPath      string
+	DefaultOrg                string
+	DefaultProject            string
+	DefaultEnv                string
+	ReadinessTimeout          time.Duration
+	TavilyAPIKey              string
+	OpenAIAPIKey              string
 }
 
 // LoadConfig reads configuration from environment variables with sensible defaults
 // matching the quick-start install.sh deployment.
 func LoadConfig() *Config {
+	defaultOrg := envOrDefault("DEFAULT_ORG", "default")
+	defaultEnv := envOrDefault("DEFAULT_ENV", "default")
+	thunderAdminURL := envOrDefault("THUNDER_ADMIN_URL", "http://thunder.amp.localhost:8080")
+
 	return &Config{
-		AMPBaseURL:       envOrDefault("AMP_API_BASE_URL", "http://api.amp.localhost:8080"),
-		ObserverBaseURL:  envOrDefault("AM_OBSERVER_BASE_URL", "http://traces.amp.localhost:11080"),
-		IDPTokenURL:      envOrDefault("IDP_TOKEN_URL", "http://thunder.amp.localhost:8080/oauth2/token"),
-		IDPClientID:      envOrDefault("IDP_CLIENT_ID", "amp-api-client"),
-		IDPClientSecret:  envOrDefault("IDP_CLIENT_SECRET", "amp-api-client-secret"),
-		DefaultOrg:       envOrDefault("DEFAULT_ORG", "default"),
-		DefaultProject:   envOrDefault("DEFAULT_PROJECT", "default"),
-		DefaultEnv:       envOrDefault("DEFAULT_ENV", "default"),
-		ReadinessTimeout: envDurationOrDefault("READINESS_TIMEOUT", 5*time.Minute),
-		TavilyAPIKey:     envOrDefault("TAVILY_API_KEY", ""),
-		OpenAIAPIKey:     envOrDefault("OPENAI_API_KEY", ""),
+		AMPBaseURL:                envOrDefault("AMP_API_BASE_URL", "http://api.amp.localhost:8080"),
+		ObserverBaseURL:           envOrDefault("AM_OBSERVER_BASE_URL", "http://traces.amp.localhost:11080"),
+		IDPTokenURL:               envOrDefault("IDP_TOKEN_URL", "http://thunder.amp.localhost:8080/oauth2/token"),
+		IDPClientID:               envOrDefault("IDP_CLIENT_ID", "amp-api-client"),
+		IDPClientSecret:           envOrDefault("IDP_CLIENT_SECRET", "amp-api-client-secret"),
+		ThunderAdminURL:           thunderAdminURL,
+		ThunderSystemResource:     envOrDefault("THUNDER_SYSTEM_RESOURCE", strings.TrimRight(thunderAdminURL, "/")+"/mcp"),
+		ThunderSystemClientID:     envOrDefault("THUNDER_SYSTEM_CLIENT_ID", "amp-system-client"),
+		ThunderSystemClientSecret: envOrDefault("THUNDER_SYSTEM_CLIENT_SECRET", "amp-system-client-secret"),
+		// Environment Thunder hosts use registered opaque handles, not a derivable
+		// org/environment hostname. The agentid suite discovers the URL through
+		// Agent Manager unless a shared/cloud target supplies an explicit override.
+		AgentIDTokenURL:         envOrDefault("AGENT_IDP_TOKEN_URL", ""),
+		SecurityProbeRepository: envOrDefault("SECURITY_PROBE_REPOSITORY_URL", "https://github.com/wso2/agent-manager"),
+		SecurityProbeBranch:     envOrDefault("SECURITY_PROBE_REPOSITORY_BRANCH", "main"),
+		SecurityProbeAppPath:    envOrDefault("SECURITY_PROBE_APP_PATH", "/test/e2e/fixtures/security-probe-agent"),
+		DefaultOrg:              defaultOrg,
+		DefaultProject:          envOrDefault("DEFAULT_PROJECT", "default"),
+		DefaultEnv:              defaultEnv,
+		ReadinessTimeout:        envDurationOrDefault("READINESS_TIMEOUT", 5*time.Minute),
+		TavilyAPIKey:            envOrDefault("TAVILY_API_KEY", ""),
+		OpenAIAPIKey:            envOrDefault("OPENAI_API_KEY", ""),
 	}
 }
 

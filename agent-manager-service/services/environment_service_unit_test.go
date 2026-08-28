@@ -1459,7 +1459,7 @@ func TestEnvironmentService_SetThunderURL(t *testing.T) {
 		assert.ErrorIs(t, err, boom)
 	})
 
-	t.Run("rejects a handle shorter than 10 characters", func(t *testing.T) {
+	t.Run("rejects a handle shorter than 3 characters", func(t *testing.T) {
 		repo := &repomocks.EnvThunderURLRepositoryMock{
 			InsertFunc: func(context.Context, *models.EnvThunderURL) error {
 				t.Fatal("must not upsert a too-short handle")
@@ -1468,11 +1468,22 @@ func TestEnvironmentService_SetThunderURL(t *testing.T) {
 		}
 		svc := newEnvServiceWithThunderURLRepo(repo)
 
-		// 9 characters — one short of the boundary, so this fails precisely
-		// because minThunderHandleLen is 10, not because it's trivially short.
-		_, err := svc.SetThunderURL(context.Background(), "ou-123", "prod", "abcdefghi")
+		// 2 characters — one short of the boundary, so this fails precisely
+		// because minThunderHandleLen is 3, not because it's trivially short.
+		_, err := svc.SetThunderURL(context.Background(), "ou-123", "prod", "ab")
 		require.Error(t, err)
 		assert.ErrorIs(t, err, utils.ErrInvalidThunderHandle)
+	})
+
+	t.Run("accepts a handle exactly at the 3-character floor", func(t *testing.T) {
+		repo := &repomocks.EnvThunderURLRepositoryMock{
+			InsertFunc: func(context.Context, *models.EnvThunderURL) error { return nil },
+		}
+		svc := newEnvServiceWithThunderURLRepo(repo)
+
+		resolved, err := svc.SetThunderURL(context.Background(), "ou-123", "prod", "abc")
+		require.NoError(t, err)
+		assert.Equal(t, "abc", resolved)
 	})
 
 	t.Run("rejects uppercase and other invalid characters", func(t *testing.T) {
@@ -1484,7 +1495,7 @@ func TestEnvironmentService_SetThunderURL(t *testing.T) {
 		}
 		svc := newEnvServiceWithThunderURLRepo(repo)
 
-		// Each is padded to >=10 characters so it actually reaches the format
+		// Each is padded to >=3 characters so it actually reaches the format
 		// check instead of failing on length first — the one invalid trait
 		// (uppercase, underscore, leading/trailing hyphen, dot, space) is what's
 		// under test here, not shortness.
@@ -1518,12 +1529,30 @@ func TestEnvironmentService_SetThunderURL(t *testing.T) {
 		}
 		svc := newEnvServiceWithThunderURLRepo(repo)
 
-		// "kubernetes" is exactly 10 characters — long enough to clear
-		// minThunderHandleLen, so this actually exercises the reserved-word
-		// check rather than failing on length first ("localhost" is only 9).
+		// "kubernetes" clears minThunderHandleLen (3), so this actually exercises
+		// the reserved-word check rather than failing on length first.
 		_, err := svc.SetThunderURL(context.Background(), "ou-123", "prod", "kubernetes")
 		require.Error(t, err)
 		assert.ErrorIs(t, err, utils.ErrInvalidThunderHandle)
+	})
+
+	t.Run("rejects every platform fixed subdomain across all deployment flavors", func(t *testing.T) {
+		repo := &repomocks.EnvThunderURLRepositoryMock{
+			InsertFunc: func(context.Context, *models.EnvThunderURL) error {
+				t.Fatal("must not upsert a reserved handle")
+				return nil
+			},
+		}
+		svc := newEnvServiceWithThunderURLRepo(repo)
+
+		for _, reserved := range []string{
+			"console", "api", "api-amp", "thunder", "observer", "traces",
+			"gateway", "api-platform-gateway", "ai-gateway", "otel", "agents",
+		} {
+			_, err := svc.SetThunderURL(context.Background(), "ou-123", "prod", reserved)
+			require.Error(t, err, "handle %q must be rejected", reserved)
+			assert.ErrorIs(t, err, utils.ErrInvalidThunderHandle, "handle %q", reserved)
+		}
 	})
 
 	t.Run("rejects an empty ouID", func(t *testing.T) {
@@ -1723,7 +1752,7 @@ func TestEnvironmentService_IsThunderHandleAvailable(t *testing.T) {
 		}
 		svc := newEnvServiceWithThunderURLRepo(repo)
 
-		available, err := svc.IsThunderHandleAvailable(context.Background(), "short")
+		available, err := svc.IsThunderHandleAvailable(context.Background(), "ab")
 		require.Error(t, err)
 		assert.ErrorIs(t, err, utils.ErrInvalidThunderHandle)
 		assert.False(t, available)

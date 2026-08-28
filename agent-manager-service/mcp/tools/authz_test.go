@@ -378,3 +378,69 @@ func TestAuthzMiddlewarePassesThroughOtherMethods(t *testing.T) {
 		t.Fatalf("tools/list result was intercepted: got %T", result)
 	}
 }
+
+// TestAuthzMiddlewarePutsPerRequestScopesOnContext is the regression for a split
+// decision. The tool gate reads the per-request token's scopes; anything deeper
+// — the service layer's environment-tier check — reads ctx. Before the fix those
+// were two different scope sets, so one tools/call could be gated on the request
+// token and tiered on the session token.
+//
+// The session here grants the production tier and the per-request token does
+// not, which is exactly the direction that matters: the narrower token must win.
+func TestAuthzMiddlewarePutsPerRequestScopesOnContext(t *testing.T) {
+	setRBACEnabled(t, true)
+	reg := newToolRegistry()
+	reg.permissions["some_tool"] = []rbac.Permission{rbac.AgentBuild}
+	ctx := jwtassertion.ContextWithTokenClaimsAndScope(context.Background(), &jwtassertion.TokenClaims{
+		OuId:  testOrgName,
+		Scope: rbac.AgentBuild.Scope() + " " + rbac.AgentEnvProduction.Scope(),
+	})
+	extra := &gomcp.RequestExtra{TokenInfo: &auth.TokenInfo{
+		Scopes: []string{rbac.AgentBuild.Scope(), rbac.AgentEnvNonProduction.Scope()},
+		Extra:  map[string]any{TokenInfoOUIDKey: testOrgName},
+	}}
+
+	var sawProduction, sawNonProduction bool
+	next := func(handlerCtx context.Context, _ string, _ gomcp.Request) (gomcp.Result, error) {
+		sawProduction = jwtassertion.HasAllScopes(handlerCtx, []string{rbac.AgentEnvProduction.Scope()})
+		sawNonProduction = jwtassertion.HasAllScopes(handlerCtx, []string{rbac.AgentEnvNonProduction.Scope()})
+		return &gomcp.CallToolResult{}, nil
+	}
+	req := &gomcp.CallToolRequest{Params: &gomcp.CallToolParamsRaw{Name: "some_tool"}, Extra: extra}
+	if _, err := reg.authzMiddleware()(next)(ctx, methodCallTool, req); err != nil {
+		t.Fatalf("middleware returned unexpected error: %v", err)
+	}
+	if sawProduction {
+		t.Error("handler context carries the session's production tier, which the per-request token did not grant")
+	}
+	if !sawNonProduction {
+		t.Error("handler context is missing the per-request token's non-production tier")
+	}
+}
+
+// TestAuthzMiddlewareKeepsSessionScopesWithoutTokenInfo covers the other branch:
+// in-memory transports have no HTTP layer, so Extra.TokenInfo is always nil and
+// the session scopes already on ctx are the effective set. Rewriting ctx from an
+// absent TokenInfo would blank them.
+func TestAuthzMiddlewareKeepsSessionScopesWithoutTokenInfo(t *testing.T) {
+	setRBACEnabled(t, true)
+	reg := newToolRegistry()
+	reg.permissions["some_tool"] = []rbac.Permission{rbac.AgentBuild}
+	ctx := jwtassertion.ContextWithTokenClaimsAndScope(context.Background(), &jwtassertion.TokenClaims{
+		OuId:  testOrgName,
+		Scope: rbac.AgentBuild.Scope() + " " + rbac.AgentEnvNonProduction.Scope(),
+	})
+
+	var sawNonProduction bool
+	next := func(handlerCtx context.Context, _ string, _ gomcp.Request) (gomcp.Result, error) {
+		sawNonProduction = jwtassertion.HasAllScopes(handlerCtx, []string{rbac.AgentEnvNonProduction.Scope()})
+		return &gomcp.CallToolResult{}, nil
+	}
+	req := &gomcp.CallToolRequest{Params: &gomcp.CallToolParamsRaw{Name: "some_tool"}}
+	if _, err := reg.authzMiddleware()(next)(ctx, methodCallTool, req); err != nil {
+		t.Fatalf("middleware returned unexpected error: %v", err)
+	}
+	if !sawNonProduction {
+		t.Error("the session scopes were lost from the handler context")
+	}
+}

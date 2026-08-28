@@ -298,6 +298,12 @@ thunder_helm_args() {
   for k in setup bootstrap; do
     printf '%s\n' "--set" "thunder.${k}.ampConsoleClient.redirectUris[0]=https://${AMP_HOST_CONSOLE}/login"
   done
+
+  # Fixes the console admin login at "admin" for convenience — the chart's
+  # own default (unset) would generate a random one instead, which is what a
+  # publicly reachable production install wants but is unnecessary friction
+  # on a VM only the operator controls.
+  printf '%s\n' "--set" "thunder.setup.admin.password=admin"
 }
 
 # build_thunder_helm_args <ip> — sslip.io-from-IP wrapper.
@@ -433,8 +439,22 @@ caddyfile() {
     letsencrypt)
       # Every public site forces the TLS-ALPN-01 ACME challenge (it runs inside the
       # :443 TLS handshake) so certificate issuance never depends on inbound port 80.
-      tls_block=$'\ttls {\n\t\tissuer acme {\n\t\t\tdisable_http_challenge\n\t\t}\n\t}\n'
+      #
+      # The fixed hosts (console/api/thunder/observer/gateway/cp) get on_demand as
+      # well, even though their names are known here and could be issued eagerly.
+      # They have to: the env-Thunder site below is a wildcard sitting directly under
+      # the base domain (*.amp.<ip>.sslip.io), so it COVERS every fixed host, and
+      # Caddy skips eager issuance for any name a managed wildcard covers. That
+      # wildcard is itself on-demand, because TLS-ALPN-01 cannot issue a wildcard —
+      # so with the fixed hosts left eager, nothing ever obtains their certificates:
+      # Caddy logs "enabling automatic TLS certificate management" for all of them,
+      # never attempts a single obtain (no ACME account, empty certificate store),
+      # and every request dies in the handshake with an internal error, on a cluster
+      # that is otherwise entirely healthy. on_demand moves issuance to the first
+      # handshake per host, and prewarm_fixed_host_certs walks them at install time
+      # so no user's request is the one that races it.
       agent_tls=$'\ttls {\n\t\ton_demand\n\t\tissuer acme {\n\t\t\tdisable_http_challenge\n\t\t}\n\t}\n'
+      tls_block="$agent_tls"
       [[ -n "$email" ]] && gopts+=$'\temail '"$email"$'\n'
       gopts+=$'\tauto_https disable_redirects\n'
       gopts+=$'\ton_demand_tls {\n\t\task http://127.0.0.1:9753/internal/thunder-ask\n\t}\n'
@@ -548,8 +568,21 @@ caddyfile() {
     # this header existed.
     local ask_secret_header=""
     [[ -n "$ask_secret" ]] && ask_secret_header=$'\t\theader_up X-Thunder-Ask-Secret '"${ask_secret}"$'\n'
-    printf 'http://127.0.0.1:9753 {\n\t@gateway_or_agents expression `{query.domain}.endsWith(".%s") || {query.domain}.endsWith(".%s")`\n\trespond @gateway_or_agents 200\n\treverse_proxy 127.0.0.1:8080 {\n\t\theader_up Host %s\n%s\t}\n}\n\n' \
-      "$AMP_HOST_GATEWAY" "$AMP_AGENTS_BASE" "$AMP_HOST_API" "$ask_secret_header"
+    # The fixed hosts are on-demand too (see the letsencrypt tls_block above), so
+    # their issuance also has to be approved here. They cannot fall through to AMS:
+    # it answers for registered env-Thunder handles, which is a bare single label
+    # under the base domain, and would 403 "console"/"api"/... — leaving the whole
+    # platform without certificates. Matched exactly, not by suffix, so only these
+    # names are covered and a look-alike still has to satisfy AMS.
+    local fixed_hosts=("$AMP_HOST_CONSOLE" "$AMP_HOST_API" "$AMP_HOST_THUNDER" "$AMP_HOST_OBSERVER" "$AMP_HOST_GATEWAY")
+    [[ -n "$AMP_HOST_CP" ]] && fixed_hosts+=("$AMP_HOST_CP")
+    local fixed_expr="" fixed_host
+    for fixed_host in "${fixed_hosts[@]}"; do
+      [[ -n "$fixed_expr" ]] && fixed_expr+=" || "
+      fixed_expr+="{query.domain} == \"${fixed_host}\""
+    done
+    printf 'http://127.0.0.1:9753 {\n\t@gateway_or_agents expression `{query.domain}.endsWith(".%s") || {query.domain}.endsWith(".%s")`\n\trespond @gateway_or_agents 200\n\t@fixed_hosts expression `%s`\n\trespond @fixed_hosts 200\n\treverse_proxy 127.0.0.1:8080 {\n\t\theader_up Host %s\n%s\t}\n}\n\n' \
+      "$AMP_HOST_GATEWAY" "$AMP_AGENTS_BASE" "$fixed_expr" "$AMP_HOST_API" "$ask_secret_header"
   fi
 
   # Deployed-agent endpoints: <org>-<project>.<AGENTS_BASE> (one host per org/project,
@@ -561,6 +594,36 @@ caddyfile() {
     "$([[ "$scheme" == http ]] && printf 'http://')" "$AMP_AGENTS_BASE" "$addr_suffix" "$agent_tls" "$cors_block"
 
   unset -f _site
+}
+
+# prewarm_fixed_host_certs <ip> <external_gateways:true|false (default true)>
+# Walk every fixed host once so its certificate exists before anyone browses to it.
+#
+# Those hosts are on-demand in letsencrypt mode (see caddyfile()), so the first
+# handshake to each triggers issuance — and that first request is consumed by the
+# ACME challenge, so the client sees the challenge certificate rather than the real
+# one, the same one-time error on-a-vm.mdx documents for the dynamic agent hosts.
+# Doing the walk here means the operator's first console visit is never that request.
+#
+# Best-effort by design: a failure here only restores the previous behaviour
+# (issued on the first real request), so it must never fail the install.
+prewarm_fixed_host_certs() {
+  local ip="$1" external_gateways="${2:-true}" host fqdn
+  local hosts=(console api thunder observer gateway)
+  [[ "$external_gateways" == "true" ]] && hosts+=(cp)
+  log "Pre-warming TLS certificates for the fixed hosts"
+  for host in "${hosts[@]}"; do
+    fqdn="$(vm_host "$host" "$ip")"
+    # --resolve pins the connection to the loopback listener, since a cloud VM
+    # often cannot reach its own public IP; SNI still selects the right site, which
+    # is all Caddy needs to start issuance.
+    if curl -sS -o /dev/null -m 90 --retry 2 --retry-all-errors \
+      --resolve "${fqdn}:443:127.0.0.1" "https://${fqdn}/" >/dev/null 2>&1; then
+      log "  ${fqdn}: certificate ready"
+    else
+      log "  ${fqdn}: not issued yet — it will be obtained on the first request"
+    fi
+  done
 }
 
 # render_caddyfile <ip> <acme_email> <external_gateways:true|false (default true)>

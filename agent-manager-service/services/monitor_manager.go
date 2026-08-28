@@ -18,6 +18,7 @@ package services
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -1441,25 +1442,27 @@ func (s *monitorManagerService) resolveMonitorSecretRef(ctx context.Context, ouI
 	return "", "", fmt.Errorf("SecretReference %s has no \"LLM_API_KEY\" data source (found %d sources)", secretRefName, len(ref.Data))
 }
 
-// monitorProxyName derives the LLM proxy name (and handle) for a monitor's
-// provider. Monitor names are unique only per agent
-// (UNIQUE(name, ou_id, project_name, agent_name)), so a handle built from just
-// name+provider collides when two agents have a monitor of the same name and
-// provider, and provisioning fails with "LLM proxy already exists". Including the
-// monitor UUID makes the handle unique to the monitor. The name is capped at 52
-// chars so that appending "-deployment" (11 chars) never exceeds the Kubernetes
-// 63-char name limit; when capping, the unique suffix is kept and the readable
-// prefix is trimmed.
+// monitorProxyName derives the LLM proxy handle for a monitor's provider. The
+// monitor UUID suffix guarantees uniqueness across monitors. The provider is
+// represented by an 8-char sha256 fingerprint rather than a truncated name
+// substring - a substring can get squeezed out entirely once the monitor name
+// consumes the length budget, so two different providers derive the *same*
+// handle and provisioning fails with "LLM proxy already exists" (see
+// monitor_proxy_name_test.go). A fixed-length hash can't be starved out that
+// way. Worst case the handle is 52 chars (4 name + 8 fingerprint + 32 UUID +
+// separators + "-proxy"), keeping "-deployment" (+11) under the k8s 63-char limit.
 func monitorProxyName(monitorID uuid.UUID, monitorName, providerName string) string {
 	// Use the full dashless UUID (not a truncated prefix): a shortened suffix
 	// could still collide when two monitor UUIDs share their leading hex digits.
 	monitorSuffix := strings.ReplaceAll(monitorID.String(), "-", "")
-	readable := fmt.Sprintf("%s-%s", sanitizeForK8sName(monitorName), sanitizeForK8sName(providerName))
-	// Reserve room for "-<suffix>-proxy".
-	if maxReadable := 52 - 1 - len(monitorSuffix) - len("-proxy"); len(readable) > maxReadable {
-		readable = strings.TrimRight(readable[:maxReadable], "-")
+	providerFingerprint := fmt.Sprintf("%x", sha256.Sum256([]byte(providerName)))[:8]
+
+	const maxNameLen = 4
+	name := sanitizeForK8sName(monitorName)
+	if len(name) > maxNameLen {
+		name = strings.TrimRight(name[:maxNameLen], "-")
 	}
-	return fmt.Sprintf("%s-%s-proxy", readable, monitorSuffix)
+	return fmt.Sprintf("%s-%s-%s-proxy", name, providerFingerprint, monitorSuffix)
 }
 
 // resolveMonitorGateway anchors on the LLM provider's existing deployment, exactly as

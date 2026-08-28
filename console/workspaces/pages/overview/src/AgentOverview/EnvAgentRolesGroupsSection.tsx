@@ -17,10 +17,11 @@
 
 import { useMemo, useState } from "react";
 import { Alert, Avatar, Box, Button, CircularProgress, IconButton, Skeleton, Tooltip, Typography } from "@wso2/oxygen-ui";
-import { AlertTriangle, Copy, Fingerprint, RefreshCw } from "@wso2/oxygen-ui-icons-react";
+import { AlertTriangle, Copy, Fingerprint, Info, RefreshCw } from "@wso2/oxygen-ui-icons-react";
 import {
   useAgentIdentityBinding,
   useListAgentIdentityAgents,
+  useProvisionAgentIdentity,
   useRetryAgentIdentityProvisioning,
 } from "@agent-management-platform/api-client";
 import { isAgentIdentityEnabled } from "@agent-management-platform/types";
@@ -35,6 +36,14 @@ interface EnvAgentRolesGroupsSectionProps {
   projectId: string;
   agentId: string;
   envId: string;
+  /**
+   * Only Externally-Hosted agents can self-serve provisioning for an
+   * environment added after the agent already existed (see the "Create
+   * Agent ID" action below) — Internal agents get theirs automatically when
+   * promoted to a new environment, and the backend rejects this action for
+   * them, so the action is hidden entirely rather than shown and left to fail.
+   */
+  external?: boolean;
 }
 
 /**
@@ -48,7 +57,7 @@ interface EnvAgentRolesGroupsSectionProps {
  * response.
  */
 export const EnvAgentRolesGroupsSection: React.FC<EnvAgentRolesGroupsSectionProps> = ({
-  orgId, projectId, agentId, envId,
+  orgId, projectId, agentId, envId, external,
 }) => {
   // useAgentIdentityBinding has no `enabled` option, so the ids are withheld
   // when Agent ID is disabled to keep the identity request from firing.
@@ -59,12 +68,35 @@ export const EnvAgentRolesGroupsSection: React.FC<EnvAgentRolesGroupsSectionProp
       : { orgId: "", projectId: "", agentId: "", envId: "" },
   );
   const isFailed = binding?.status === "failed";
+  // No binding row exists for this environment at all yet — distinct from
+  // "pending"/"in_progress" (already attempted, still running) or "failed"
+  // (attempted, didn't work). This is the state an Externally-Hosted agent is
+  // stuck in forever if its environment was added to the pipeline after the
+  // agent was created: nothing ever attempts provisioning on its own for that
+  // combination, so it needs an explicit action (see canSelfProvision below).
+  const hasNoBinding = !isLoadingIdentity && !binding;
+  const canSelfProvision = Boolean(external) && hasNoBinding;
 
   const { mutate: retryProvisioning, isPending: isRetrying } = useRetryAgentIdentityProvisioning();
   const handleRetry = () => {
     retryProvisioning({
       params: { orgName: orgId, projName: projectId, agentName: agentId },
       body: { environment: envId },
+    });
+  };
+
+  // isError persists the last attempt's outcome (not just a transient
+  // snackbar) so a failed click leaves a visible reason behind instead of
+  // silently reverting to the same neutral "not created yet" state — the
+  // same reasoning the existing Retry alert below already follows for a
+  // failed identity. It clears itself the moment a later attempt succeeds,
+  // since TanStack Query's isError reflects only the most recent call.
+  const { mutate: provisionIdentity, isPending: isProvisioning, isError: isProvisionError } =
+    useProvisionAgentIdentity();
+  const handleProvision = () => {
+    provisionIdentity({
+      params: { orgName: orgId, projName: projectId, agentName: agentId },
+      query: { environment: envId },
     });
   };
 
@@ -146,6 +178,10 @@ export const EnvAgentRolesGroupsSection: React.FC<EnvAgentRolesGroupsSectionProp
             <Typography variant="body2" color="error">
               Unable to load Agent ID. Try again later.
             </Typography>
+          ) : canSelfProvision ? (
+            <Typography variant="body2" color="text.disabled">
+              Not created for this environment yet
+            </Typography>
           ) : provisioned ? (
             <Typography variant="body2" color="text.disabled">
               Provisioning identity…
@@ -155,32 +191,38 @@ export const EnvAgentRolesGroupsSection: React.FC<EnvAgentRolesGroupsSectionProp
               Agent ID not available
             </Typography>
           )}
-          <Box mt={0.5}>
-            {isLoading ? (
-              <Skeleton variant="text" width={180} height={16} />
-            ) : isRolesGroupsError ? (
-              <Typography variant="caption" color="error">
-                Unable to load roles/groups. Try again later.
-              </Typography>
-            ) : hasTags ? (
-              <>
-                {roles.length > 0 && (
-                  <Typography variant="caption" color="text.disabled" display="block">
-                    Roles: {roles.map((role) => role.name).join(", ")}
-                  </Typography>
-                )}
-                {groups.length > 0 && (
-                  <Typography variant="caption" color="text.disabled" display="block">
-                    Groups: {groups.map((group) => group.name).join(", ")}
-                  </Typography>
-                )}
-              </>
-            ) : (
-              <Typography variant="caption" color="text.disabled">
-                No roles or groups assigned
-              </Typography>
-            )}
-          </Box>
+          {/* Roles/groups are meaningless before any identity exists, and
+              "No roles or groups assigned" reads as though one does — skip
+              this sub-row entirely for canSelfProvision; the Alert below
+              already carries the explanation and the action for that case. */}
+          {!canSelfProvision && (
+            <Box mt={0.5}>
+              {isLoading ? (
+                <Skeleton variant="text" width={180} height={16} />
+              ) : isRolesGroupsError ? (
+                <Typography variant="caption" color="error">
+                  Unable to load roles/groups. Try again later.
+                </Typography>
+              ) : hasTags ? (
+                <>
+                  {roles.length > 0 && (
+                    <Typography variant="caption" color="text.disabled" display="block">
+                      Roles: {roles.map((role) => role.name).join(", ")}
+                    </Typography>
+                  )}
+                  {groups.length > 0 && (
+                    <Typography variant="caption" color="text.disabled" display="block">
+                      Groups: {groups.map((group) => group.name).join(", ")}
+                    </Typography>
+                  )}
+                </>
+              ) : (
+                <Typography variant="caption" color="text.disabled">
+                  No roles or groups assigned
+                </Typography>
+              )}
+            </Box>
+          )}
         </Box>
         )}
       </Box>
@@ -203,6 +245,29 @@ export const EnvAgentRolesGroupsSection: React.FC<EnvAgentRolesGroupsSectionProp
           sx={{ mt: 1.5, flexWrap: "wrap", "& .MuiAlert-action": { flexShrink: 0 } }}
         >
           Provisioning failed{binding?.lastError ? `: ${binding.lastError}` : ""}
+        </Alert>
+      )}
+      {canSelfProvision && (
+        <Alert
+          severity={isProvisionError ? "error" : "info"}
+          icon={isProvisionError ? <AlertTriangle size={18} /> : <Info size={18} />}
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              onClick={handleProvision}
+              disabled={isProvisioning}
+              startIcon={isProvisioning ? <CircularProgress size={14} color="inherit" /> : <Fingerprint size={14} />}
+              sx={{ whiteSpace: "nowrap" }}
+            >
+              {isProvisioning ? "Creating..." : "Create Agent ID"}
+            </Button>
+          }
+          sx={{ mt: 1.5, flexWrap: "wrap", "& .MuiAlert-action": { flexShrink: 0 } }}
+        >
+          {isProvisionError
+            ? "Couldn't create the Agent ID for this environment. Check that the environment is reachable, then try again."
+            : "This environment was added after the agent was created, so it has no Agent ID yet."}
         </Alert>
       )}
     </OverviewSectionCard>

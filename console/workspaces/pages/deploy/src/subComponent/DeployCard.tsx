@@ -67,12 +67,16 @@ import {
   useTheme,
 } from "@wso2/oxygen-ui";
 import {
+  AGENT_SUSPEND_SCOPE,
+  ALLOWED,
   DeploymentStatus,
   EnvStatus,
   IsolationTierBadge,
   ResourceMetricChip,
+  RestrictedAction,
   formatUsagePercent,
   getUsagePercentVariant,
+  useAgentEnvironmentAccess,
 } from "@agent-management-platform/shared-component";
 import { EditDeployConfigDrawer } from "./EditDeployConfigDrawer";
 import {
@@ -83,11 +87,31 @@ import {
   TraceListTimeRange,
 } from "@agent-management-platform/types";
 import { extractBuildIdFromImageId } from "../utils/extractBuildIdFromImageId";
-import { normalizePythonMinor } from "../utils/instrumentation";
+import {
+  buildpackLanguage,
+  isInstrumentableLanguage,
+  normalizePythonMinor,
+} from "../utils/instrumentation";
 import { formatDistanceToNow } from "date-fns";
 import { useCallback, useMemo, useState } from "react";
 import { EditResourceConfigsDrawer } from "./EditResourceConfigsDrawer";
 import { PromoteAgentDrawer } from "./PromoteAgentDrawer";
+
+// Statuses where a deployment exists in the environment and can therefore be
+// torn down. Suspend flips the release binding's state to Undeploy, which
+// OpenChoreo reconciles by DELETING the rendered releases — it is level-
+// triggered, so it is well defined mid-rollout and against a crash-looping
+// agent, neither of which the backend restricts. Gating on ACTIVE alone left
+// the only stop button disabled exactly when it is most needed: a wedged
+// rollout (an unpullable image never leaves "in-progress") or a failing agent
+// restarting in a loop. Only not-deployed/suspended are excluded — there is
+// nothing to undeploy.
+const SUSPENDABLE_STATUSES: DeploymentStatus[] = [
+  DeploymentStatus.ACTIVE,
+  DeploymentStatus.DEPLOYING,
+  DeploymentStatus.ERROR,
+  DeploymentStatus.FAILED,
+];
 
 function DeploymentStatusPanel({ status }: { status: DeploymentStatus }) {
   const theme = useTheme();
@@ -147,33 +171,33 @@ function ResourceConfigsPanel({
   const lastMemory = metrics?.memory?.length
     ? metrics.memory[metrics.memory.length - 1]?.value
     : undefined;
-  const lastCpuRequest = metrics?.cpuRequests?.length
-    ? metrics.cpuRequests[metrics.cpuRequests.length - 1]?.value
+  const lastCpuLimit = metrics?.cpuLimits?.length
+    ? metrics.cpuLimits[metrics.cpuLimits.length - 1]?.value
     : undefined;
-  const lastMemoryRequest = metrics?.memoryRequests?.length
-    ? metrics.memoryRequests[metrics.memoryRequests.length - 1]?.value
+  const lastMemoryLimit = metrics?.memoryLimits?.length
+    ? metrics.memoryLimits[metrics.memoryLimits.length - 1]?.value
     : undefined;
-  const cpuRequest = resourceConfigs?.resources?.requests?.cpu ?? "—";
-  const memoryRequest = resourceConfigs?.resources?.requests?.memory ?? "—";
+  const cpuLimit = resourceConfigs?.resources?.limits?.cpu ?? "—";
+  const memoryLimit = resourceConfigs?.resources?.limits?.memory ?? "—";
   const cpuPercent =
-    lastCpu !== undefined && lastCpuRequest !== undefined && lastCpuRequest > 0
-      ? formatUsagePercent(lastCpu, lastCpuRequest)
+    lastCpu !== undefined && lastCpuLimit !== undefined && lastCpuLimit > 0
+      ? formatUsagePercent(lastCpu, lastCpuLimit)
       : undefined;
   const memoryPercent =
     lastMemory !== undefined &&
-      lastMemoryRequest !== undefined &&
-      lastMemoryRequest > 0
-      ? formatUsagePercent(lastMemory, lastMemoryRequest)
+      lastMemoryLimit !== undefined &&
+      lastMemoryLimit > 0
+      ? formatUsagePercent(lastMemory, lastMemoryLimit)
       : undefined;
   const cpuVariant =
-    lastCpu !== undefined && lastCpuRequest !== undefined && lastCpuRequest > 0
-      ? getUsagePercentVariant(lastCpu, lastCpuRequest)
+    lastCpu !== undefined && lastCpuLimit !== undefined && lastCpuLimit > 0
+      ? getUsagePercentVariant(lastCpu, lastCpuLimit)
       : undefined;
   const memoryVariant =
     lastMemory !== undefined &&
-      lastMemoryRequest !== undefined &&
-      lastMemoryRequest > 0
-      ? getUsagePercentVariant(lastMemory, lastMemoryRequest)
+      lastMemoryLimit !== undefined &&
+      lastMemoryLimit > 0
+      ? getUsagePercentVariant(lastMemory, lastMemoryLimit)
       : undefined;
 
   if (isLoading) {
@@ -213,20 +237,20 @@ function ResourceConfigsPanel({
       <ResourceMetricChip
         icon={<Cpu size={16} />}
         label="CPU"
-        primaryValue={cpuRequest}
+        primaryValue={cpuLimit}
         secondaryValue={cpuPercent}
         secondaryTooltip={
-          cpuPercent ? "Current usage as % of requested." : undefined
+          cpuPercent ? "Current usage as % of limit." : undefined
         }
         secondaryVariant={cpuVariant}
       />
       <ResourceMetricChip
         icon={<MemoryStick size={16} />}
         label="Memory"
-        primaryValue={memoryRequest}
+        primaryValue={memoryLimit}
         secondaryValue={memoryPercent}
         secondaryTooltip={
-          memoryPercent ? "Current usage as % of requested." : undefined
+          memoryPercent ? "Current usage as % of limit." : undefined
         }
         secondaryVariant={memoryVariant}
       />
@@ -314,6 +338,15 @@ export function DeployCard(props: DeployCardProps) {
     projName: projectId,
   });
 
+  const environmentAccess = useAgentEnvironmentAccess(orgId);
+
+  // Suspend and re-deploy both go through the deployment-state route, which
+  // demands the capability AND the tier of the environment being changed.
+  const deploymentStateAccess = environmentAccess(
+    currentEnvironment,
+    AGENT_SUSPEND_SCOPE,
+  );
+
   const hasPromotionTarget = useMemo(() => {
     if (!pipeline) return false;
     // Only show Promote when this environment has at least one downstream
@@ -325,6 +358,19 @@ export function DeployCard(props: DeployCardProps) {
         (p.targetEnvironmentRefs?.length ?? 0) > 0,
     );
   }, [pipeline, currentEnvironment.name]);
+
+  // Promote opens a drawer that can target any environment downstream of this
+  // one, so the button stays live while the caller can reach at least one of
+  // them; the drawer gates each target on its own. When none is reachable the
+  // first denial is what the tooltip explains.
+  const promoteAccess = useMemo(() => {
+    const targets =
+      pipeline?.promotionPaths.find(
+        (p) => p.sourceEnvironmentRef === currentEnvironment.name,
+      )?.targetEnvironmentRefs ?? [];
+    const decisions = targets.map((t) => environmentAccess(t.name));
+    return decisions.find((d) => d.allowed) ?? decisions[0] ?? ALLOWED;
+  }, [pipeline, currentEnvironment.name, environmentAccess]);
   const { mutate: updateDeploymentState, isPending: isUpdating } =
     useUpdateDeploymentState();
 
@@ -371,10 +417,10 @@ export function DeployCard(props: DeployCardProps) {
   });
 
   const isApiAgent = agent?.agentType?.type === "agent-api";
-  const isPythonBuildpack =
-    agent?.build?.type === "buildpack" &&
-    "buildpack" in (agent.build ?? {}) &&
-    (agent.build as { buildpack?: { language?: string } }).buildpack?.language === "python";
+  const agentLanguage = buildpackLanguage(agent);
+  const isPythonBuildpack = agentLanguage === "python";
+  const isBallerinaBuildpack = agentLanguage === "ballerina";
+  const isInstrumentable = isInstrumentableLanguage(agentLanguage);
   const agentPythonVersion = normalizePythonMinor(
     (agent?.build as { buildpack?: { languageVersion?: string } } | undefined)
       ?.buildpack?.languageVersion,
@@ -632,7 +678,6 @@ export function DeployCard(props: DeployCardProps) {
                       sx={{ padding: 0.5 }}
                       startIcon={<SlidersVertical size={16} />}
                       onClick={handleOpenConfigureDrawer}
-                      disabled={currentDeployment?.status === DeploymentStatus.DEPLOYING}
                     >
                       Configure
                     </Button>
@@ -680,7 +725,7 @@ export function DeployCard(props: DeployCardProps) {
                     </Box>
                   )}
                   {/* Tracing - Instrumentation overview */}
-                  {isPythonBuildpack && (
+                  {isInstrumentable && (
                     <Box display="flex" alignItems="center" gap={1}>
                       <Workflow size={14} style={{ opacity: 0.6 }} />
                       <Typography variant="body2">Tracing - Instrumentation</Typography>
@@ -726,6 +771,7 @@ export function DeployCard(props: DeployCardProps) {
               title="Configurations and Secrets"
               isApiAgent={isApiAgent}
               isPythonBuildpack={isPythonBuildpack}
+              isBallerinaBuildpack={isBallerinaBuildpack}
               agentPythonVersion={agentPythonVersion}
             />
           )}
@@ -750,49 +796,57 @@ export function DeployCard(props: DeployCardProps) {
                 </Tooltip>
                 <Stack direction="row" justifyContent="right" spacing={1} alignItems="center">
                 {currentDeployment?.status !== DeploymentStatus.SUSPENDED && (
-                  <Button
-                    startIcon={<PauseCircle size={16} />}
-                    variant="text"
-                    size="small"
-                    onClick={handleStop}
-                    disabled={
-                      isUpdating ||
-                      currentDeployment?.status !== DeploymentStatus.ACTIVE
-                    }
-                  >
-                    Suspend
-                  </Button>
+                  <RestrictedAction decision={deploymentStateAccess}>
+                    <Button
+                      startIcon={<PauseCircle size={16} />}
+                      variant="text"
+                      size="small"
+                      onClick={handleStop}
+                      disabled={
+                        isUpdating ||
+                        !SUSPENDABLE_STATUSES.includes(
+                          currentDeployment?.status as DeploymentStatus,
+                        )
+                      }
+                    >
+                      Suspend
+                    </Button>
+                  </RestrictedAction>
                 )}
                 {currentDeployment?.status === DeploymentStatus.SUSPENDED && (
-                  <Button
-                    startIcon={
-                      isUpdating ? (
-                        <CircularProgress size={14} />
-                      ) : (
-                        <PlayCircle size={16} />
-                      )
-                    }
-                    variant="text"
-                    color="success"
-                    size="small"
-                    onClick={handleRedeploy}
-                    disabled={isUpdating}
-                  >
-                    Re-deploy
-                  </Button>
+                  <RestrictedAction decision={deploymentStateAccess}>
+                    <Button
+                      startIcon={
+                        isUpdating ? (
+                          <CircularProgress size={14} />
+                        ) : (
+                          <PlayCircle size={16} />
+                        )
+                      }
+                      variant="text"
+                      color="success"
+                      size="small"
+                      onClick={handleRedeploy}
+                      disabled={isUpdating}
+                    >
+                      Re-deploy
+                    </Button>
+                  </RestrictedAction>
                 )}
                 {hasPromotionTarget && (
                   <>
                     <Divider orientation="vertical" flexItem />
-                    <Button
-                      variant="contained"
-                      size="small"
-                      startIcon={<ArrowRightFromLine size={16} />}
-                      onClick={handleOpenPromoteDrawer}
-                      disabled={!isEnvironmentActive}
-                    >
-                      Promote
-                    </Button>
+                    <RestrictedAction decision={promoteAccess}>
+                      <Button
+                        variant="contained"
+                        size="small"
+                        startIcon={<ArrowRightFromLine size={16} />}
+                        onClick={handleOpenPromoteDrawer}
+                        disabled={!isEnvironmentActive}
+                      >
+                        Promote
+                      </Button>
+                    </RestrictedAction>
                   </>
                 )}
                 </Stack>

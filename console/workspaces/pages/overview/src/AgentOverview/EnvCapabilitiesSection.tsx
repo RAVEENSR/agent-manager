@@ -19,13 +19,13 @@
 import { useState } from "react";
 import { Box, Button, Chip, Tooltip, Typography } from "@wso2/oxygen-ui";
 import { Plug } from "@wso2/oxygen-ui-icons-react";
+import { useGetAgentConfigurations } from "@agent-management-platform/api-client";
 import {
     CollapsibleSection,
     DeploymentStatus,
     getAgentDeploymentPath,
     OverviewSectionCard,
 } from "@agent-management-platform/shared-component";
-import { type Configurations } from "@agent-management-platform/types";
 import { TextInput } from "@agent-management-platform/views";
 import { ConsumerConfigDrawer, type AuthMode } from "./ConsumerConfigDrawer";
 import { useAgentEndpointResources } from "./useAgentEndpointResources";
@@ -35,7 +35,6 @@ interface EnvCapabilitiesSectionProps {
     projectId: string;
     agentId: string;
     envId: string;
-    configurations?: Configurations;
     external?: boolean;
     deploymentStatus?: DeploymentStatus;
 }
@@ -104,13 +103,38 @@ const StatusPill: React.FC<StatusPillProps> = ({ label, value, tooltip }) => (
  * aren't deployed through this platform, so there's nothing to fetch).
  */
 export const EnvCapabilitiesSection: React.FC<EnvCapabilitiesSectionProps> = ({
-    orgId, projectId, agentId, envId, configurations, external, deploymentStatus,
+    orgId, projectId, agentId, envId, external, deploymentStatus,
 }) => {
     const [consumerConfigOpen, setConsumerConfigOpen] = useState(false);
 
-    const { invokeUrl, isLoading, isError } = useAgentEndpointResources({
+    const {
+        invokeUrl,
+        isLoading: isEndpointLoading,
+        isError: isEndpointError,
+    } = useAgentEndpointResources({
         orgId, projectId, agentId, envId, external,
     });
+
+    // Auth/CORS are per-environment settings, fetched keyed on envId — GetAgent
+    // only returns the lowest pipeline environment's configuration, so every
+    // env's card would otherwise show the same values regardless of which
+    // environment tab is selected (mirrors DeployCard.tsx's envConfig fetch).
+    // orgName is withheld for external agents (nothing to fetch), matching
+    // useAgentEndpointResources' own skip pattern above.
+    const {
+        data: configurations,
+        isLoading: isConfigLoading,
+        isError: isConfigError,
+    } = useGetAgentConfigurations(
+        { orgName: external ? "" : orgId, projName: projectId, agentName: agentId },
+        { environment: envId },
+    );
+
+    // Combined so the card never renders a stale/default "None · Disabled"
+    // security summary while the per-env config is still loading, or silently
+    // shows the wrong posture if that fetch fails outright.
+    const isLoading = isEndpointLoading || isConfigLoading;
+    const isError = isEndpointError || isConfigError;
 
     // Mirrors DeployCard.tsx's authMode derivation so the wording matches the
     // Deploy page's own security summary.

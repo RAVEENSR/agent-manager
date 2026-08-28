@@ -537,10 +537,12 @@ func appendMCPAPIKeyAuthPolicy(policies []models.MCPPolicy, security *models.Sec
 // appendMCPIdentityAuthPolicies emits the Agent Identity gateway policies for a
 // flattened per-environment artifact: mcp-auth (JWT validation against the
 // ThunderKeyManager key manager) and mcp-authz (per-tool requiredScopes
-// enforcement). mcp-auth must NOT carry requiredScopes: it forwards its params
-// verbatim to jwt-auth, which enforces every listed scope (all-of), so a scope
-// union there 401s any token holding only a subset. Tools with no covering scope
-// get no rule — gateway default-permit means authenticated-only.
+// enforcement). mcp-auth's requiredScopes is advertisement only — it becomes
+// scopes_supported in the protected resource metadata and the scope hint in the
+// WWW-Authenticate challenge, so clients learn what to request; mcp-auth strips
+// it before delegating to jwt-auth (wso2/gateway-controllers commit 7045133,
+// mcp-auth v1.1.1). Tools with no covering scope get no mcp-authz rule — gateway
+// default-permit means authenticated-only.
 func appendMCPIdentityAuthPolicies(policies []models.MCPPolicy, security *models.SecurityConfig, proxyHandle string, scopes []models.MCPProxyScope) []models.MCPPolicy {
 	if !mcpIdentityEnabled(security) {
 		return policies
@@ -555,8 +557,10 @@ func appendMCPIdentityAuthPolicies(policies []models.MCPPolicy, security *models
 	// *describes* all-of semantics; the shipped code is any-of. Re-verify on any
 	// gateway policy version bump.
 	toolScopes := map[string][]string{}
+	scopeSet := map[string]struct{}{}
 	for _, sc := range scopes {
 		str := sc.ScopeString(proxyHandle)
+		scopeSet[str] = struct{}{}
 		for _, tool := range sc.Tools {
 			toolScopes[tool] = append(toolScopes[tool], str)
 		}
@@ -575,6 +579,16 @@ func appendMCPIdentityAuthPolicies(policies []models.MCPPolicy, security *models
 
 	authParams := map[string]interface{}{
 		"issuers": []interface{}{mcpIdentityIssuerKeyManager},
+	}
+	// Every scope of the proxy, including ones covering no tool: the union is what
+	// a client should ask for, not what any single call enforces.
+	if len(scopeSet) > 0 {
+		union := make([]string, 0, len(scopeSet))
+		for sc := range scopeSet {
+			union = append(union, sc)
+		}
+		sort.Strings(union)
+		authParams["requiredScopes"] = union
 	}
 
 	out := make([]models.MCPPolicy, 0, len(policies)+2)

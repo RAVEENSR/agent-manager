@@ -16,7 +16,7 @@ Both environments and deployment pipelines live under the **Infrastructure** sec
 
 - Admin access to the WSO2 Agent Manager Console.
 - A terminal with `kubectl` and `helm` configured against your cluster (environments are provisioned and removed by a script that installs/uninstalls an API Platform Gateway via Helm).
-- At least one [AI Gateway registered](./register-ai-gateway.mdx) and active.
+- At least one [AI Gateway](../concepts/gateway.mdx) active. The installer registers one per environment.
 
 ---
 
@@ -40,7 +40,7 @@ Environments are provisioned by a script that creates the environment in Agent M
    | Field | Description | Example |
    |---|---|---|
    | **Display Name** | Human-readable name shown throughout the Console. | `Production` |
-   | **Identity Service Handle** | Optional unique DNS label for this environment's ThunderID URL. Use 10–63 lowercase letters, digits, or hyphens; leave it blank to let Agent Manager generate an unguessable handle. | `x7f2q9kzab` |
+   | **Identity Service Handle** | Optional unique DNS label for this environment's ThunderID URL. Use 3–63 lowercase letters, digits, or hyphens; leave it blank to let Agent Manager generate an unguessable handle. | `x7f2q9kzab` |
    | **Isolation Tier** | Container runtime isolation for agents deployed to this environment. The dropdown lists three sandboxing tiers of increasing strength — `Sandboxing T1 (runc)` (default), `Sandboxing T2 (gVisor)`, and `Sandboxing T3 (Kata Containers)`. Stronger tiers need a dedicated node set up first; see [Isolation tiers](#isolation-tiers) below. | `Sandboxing T1 (runc)` |
    | **Production environment** | Mark this environment as production. Production environments are typically the last stage of a pipeline. | — |
 

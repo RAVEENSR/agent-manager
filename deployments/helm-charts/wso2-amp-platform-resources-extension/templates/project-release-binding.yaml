@@ -1,6 +1,6 @@
 # OpenChoreo 1.2.0+ project-release model: a ProjectReleaseBinding deploys the
 # Project's (Cluster)ProjectType to a specific environment. It owns the cell
-# namespace for (Project, Environment) and applies the ClusterProjectType's
+# namespace for (Project, Environment) and applies the ProjectType's
 # resources (the cell namespace) there. Without it the cell namespace is never
 # created and component ReleaseBindings fail with "namespace ... not found".
 # spec.projectRelease is left unset; the Project controller seeds it once with
@@ -9,7 +9,7 @@ apiVersion: openchoreo.dev/v1alpha1
 kind: ProjectReleaseBinding
 metadata:
   name: {{ .Values.project.name }}-{{ .Values.environment.name }}
-  namespace: default
+  namespace: {{ .Values.openchoreoNamespace }}
   labels:
     openchoreo.dev/project: {{ .Values.project.name }}
     openchoreo.dev/environment: {{ .Values.environment.name }}

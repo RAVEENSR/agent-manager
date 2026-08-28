@@ -26,7 +26,7 @@ type ApiDeleteLLMProviderDeploymentRequest struct {
 	ctx          context.Context
 	ApiService   *LLMDeploymentsAPIService
 	orgName      string
-	id           string
+	providerId   string
 	deploymentId string
 }
 
@@ -41,16 +41,16 @@ Delete a deployment (must be undeployed first)
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name/handle
-	@param id Provider UUID
+	@param providerId Provider UUID
 	@param deploymentId Deployment UUID
 	@return ApiDeleteLLMProviderDeploymentRequest
 */
-func (a *LLMDeploymentsAPIService) DeleteLLMProviderDeployment(ctx context.Context, orgName string, id string, deploymentId string) ApiDeleteLLMProviderDeploymentRequest {
+func (a *LLMDeploymentsAPIService) DeleteLLMProviderDeployment(ctx context.Context, orgName string, providerId string, deploymentId string) ApiDeleteLLMProviderDeploymentRequest {
 	return ApiDeleteLLMProviderDeploymentRequest{
 		ApiService:   a,
 		ctx:          ctx,
 		orgName:      orgName,
-		id:           id,
+		providerId:   providerId,
 		deploymentId: deploymentId,
 	}
 }
@@ -68,9 +68,9 @@ func (a *LLMDeploymentsAPIService) DeleteLLMProviderDeploymentExecute(r ApiDelet
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/orgs/{orgName}/llm-providers/{id}/deployments/{deploymentId}"
+	localVarPath := localBasePath + "/orgs/{orgName}/llm-providers/{providerId}/deployments/{deploymentId}"
 	localVarPath = strings.Replace(localVarPath, "{"+"orgName"+"}", url.PathEscape(parameterValueToString(r.orgName, "orgName")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"providerId"+"}", url.PathEscape(parameterValueToString(r.providerId, "providerId")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"deploymentId"+"}", url.PathEscape(parameterValueToString(r.deploymentId, "deploymentId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -180,7 +180,7 @@ type ApiDeployLLMProviderRequest struct {
 	ctx                context.Context
 	ApiService         *LLMDeploymentsAPIService
 	orgName            string
-	id                 string
+	providerId         string
 	deployAgentRequest *DeployAgentRequest
 }
 
@@ -200,15 +200,15 @@ Deploy an LLM provider to a gateway
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name/handle
-	@param id Provider UUID
+	@param providerId Provider UUID
 	@return ApiDeployLLMProviderRequest
 */
-func (a *LLMDeploymentsAPIService) DeployLLMProvider(ctx context.Context, orgName string, id string) ApiDeployLLMProviderRequest {
+func (a *LLMDeploymentsAPIService) DeployLLMProvider(ctx context.Context, orgName string, providerId string) ApiDeployLLMProviderRequest {
 	return ApiDeployLLMProviderRequest{
 		ApiService: a,
 		ctx:        ctx,
 		orgName:    orgName,
-		id:         id,
+		providerId: providerId,
 	}
 }
 
@@ -228,9 +228,9 @@ func (a *LLMDeploymentsAPIService) DeployLLMProviderExecute(r ApiDeployLLMProvid
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/orgs/{orgName}/llm-providers/{id}/deployments"
+	localVarPath := localBasePath + "/orgs/{orgName}/llm-providers/{providerId}/deployments"
 	localVarPath = strings.Replace(localVarPath, "{"+"orgName"+"}", url.PathEscape(parameterValueToString(r.orgName, "orgName")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"providerId"+"}", url.PathEscape(parameterValueToString(r.providerId, "providerId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -342,7 +342,7 @@ type ApiGetLLMProviderDeploymentRequest struct {
 	ctx          context.Context
 	ApiService   *LLMDeploymentsAPIService
 	orgName      string
-	id           string
+	providerId   string
 	deploymentId string
 }
 
@@ -357,16 +357,16 @@ Retrieve detailed information about a specific deployment
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name/handle
-	@param id Provider UUID
+	@param providerId Provider UUID
 	@param deploymentId Deployment UUID
 	@return ApiGetLLMProviderDeploymentRequest
 */
-func (a *LLMDeploymentsAPIService) GetLLMProviderDeployment(ctx context.Context, orgName string, id string, deploymentId string) ApiGetLLMProviderDeploymentRequest {
+func (a *LLMDeploymentsAPIService) GetLLMProviderDeployment(ctx context.Context, orgName string, providerId string, deploymentId string) ApiGetLLMProviderDeploymentRequest {
 	return ApiGetLLMProviderDeploymentRequest{
 		ApiService:   a,
 		ctx:          ctx,
 		orgName:      orgName,
-		id:           id,
+		providerId:   providerId,
 		deploymentId: deploymentId,
 	}
 }
@@ -387,9 +387,9 @@ func (a *LLMDeploymentsAPIService) GetLLMProviderDeploymentExecute(r ApiGetLLMPr
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/orgs/{orgName}/llm-providers/{id}/deployments/{deploymentId}"
+	localVarPath := localBasePath + "/orgs/{orgName}/llm-providers/{providerId}/deployments/{deploymentId}"
 	localVarPath = strings.Replace(localVarPath, "{"+"orgName"+"}", url.PathEscape(parameterValueToString(r.orgName, "orgName")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"providerId"+"}", url.PathEscape(parameterValueToString(r.providerId, "providerId")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"deploymentId"+"}", url.PathEscape(parameterValueToString(r.deploymentId, "deploymentId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -497,7 +497,7 @@ type ApiGetLLMProviderDeploymentsRequest struct {
 	ctx        context.Context
 	ApiService *LLMDeploymentsAPIService
 	orgName    string
-	id         string
+	providerId string
 	gatewayId  *string
 	status     *string
 }
@@ -525,15 +525,15 @@ Retrieve all deployments for an LLM provider
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name/handle
-	@param id Provider UUID
+	@param providerId Provider UUID
 	@return ApiGetLLMProviderDeploymentsRequest
 */
-func (a *LLMDeploymentsAPIService) GetLLMProviderDeployments(ctx context.Context, orgName string, id string) ApiGetLLMProviderDeploymentsRequest {
+func (a *LLMDeploymentsAPIService) GetLLMProviderDeployments(ctx context.Context, orgName string, providerId string) ApiGetLLMProviderDeploymentsRequest {
 	return ApiGetLLMProviderDeploymentsRequest{
 		ApiService: a,
 		ctx:        ctx,
 		orgName:    orgName,
-		id:         id,
+		providerId: providerId,
 	}
 }
 
@@ -553,9 +553,9 @@ func (a *LLMDeploymentsAPIService) GetLLMProviderDeploymentsExecute(r ApiGetLLMP
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/orgs/{orgName}/llm-providers/{id}/deployments"
+	localVarPath := localBasePath + "/orgs/{orgName}/llm-providers/{providerId}/deployments"
 	localVarPath = strings.Replace(localVarPath, "{"+"orgName"+"}", url.PathEscape(parameterValueToString(r.orgName, "orgName")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"providerId"+"}", url.PathEscape(parameterValueToString(r.providerId, "providerId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -668,7 +668,7 @@ type ApiRestoreLLMProviderDeploymentRequest struct {
 	ctx          context.Context
 	ApiService   *LLMDeploymentsAPIService
 	orgName      string
-	id           string
+	providerId   string
 	deploymentId *string
 	gatewayId    *string
 }
@@ -696,15 +696,15 @@ Restore a previously undeployed deployment
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name/handle
-	@param id Provider UUID
+	@param providerId Provider UUID
 	@return ApiRestoreLLMProviderDeploymentRequest
 */
-func (a *LLMDeploymentsAPIService) RestoreLLMProviderDeployment(ctx context.Context, orgName string, id string) ApiRestoreLLMProviderDeploymentRequest {
+func (a *LLMDeploymentsAPIService) RestoreLLMProviderDeployment(ctx context.Context, orgName string, providerId string) ApiRestoreLLMProviderDeploymentRequest {
 	return ApiRestoreLLMProviderDeploymentRequest{
 		ApiService: a,
 		ctx:        ctx,
 		orgName:    orgName,
-		id:         id,
+		providerId: providerId,
 	}
 }
 
@@ -724,9 +724,9 @@ func (a *LLMDeploymentsAPIService) RestoreLLMProviderDeploymentExecute(r ApiRest
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/orgs/{orgName}/llm-providers/{id}/deployments/restore"
+	localVarPath := localBasePath + "/orgs/{orgName}/llm-providers/{providerId}/deployments/restore"
 	localVarPath = strings.Replace(localVarPath, "{"+"orgName"+"}", url.PathEscape(parameterValueToString(r.orgName, "orgName")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"providerId"+"}", url.PathEscape(parameterValueToString(r.providerId, "providerId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -852,7 +852,7 @@ type ApiUndeployLLMProviderDeploymentRequest struct {
 	ctx          context.Context
 	ApiService   *LLMDeploymentsAPIService
 	orgName      string
-	id           string
+	providerId   string
 	deploymentId *string
 	gatewayId    *string
 }
@@ -880,15 +880,15 @@ Undeploy a specific deployment of an LLM provider
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name/handle
-	@param id Provider UUID
+	@param providerId Provider UUID
 	@return ApiUndeployLLMProviderDeploymentRequest
 */
-func (a *LLMDeploymentsAPIService) UndeployLLMProviderDeployment(ctx context.Context, orgName string, id string) ApiUndeployLLMProviderDeploymentRequest {
+func (a *LLMDeploymentsAPIService) UndeployLLMProviderDeployment(ctx context.Context, orgName string, providerId string) ApiUndeployLLMProviderDeploymentRequest {
 	return ApiUndeployLLMProviderDeploymentRequest{
 		ApiService: a,
 		ctx:        ctx,
 		orgName:    orgName,
-		id:         id,
+		providerId: providerId,
 	}
 }
 
@@ -908,9 +908,9 @@ func (a *LLMDeploymentsAPIService) UndeployLLMProviderDeploymentExecute(r ApiUnd
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/orgs/{orgName}/llm-providers/{id}/deployments/undeploy"
+	localVarPath := localBasePath + "/orgs/{orgName}/llm-providers/{providerId}/deployments/undeploy"
 	localVarPath = strings.Replace(localVarPath, "{"+"orgName"+"}", url.PathEscape(parameterValueToString(r.orgName, "orgName")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"providerId"+"}", url.PathEscape(parameterValueToString(r.providerId, "providerId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}

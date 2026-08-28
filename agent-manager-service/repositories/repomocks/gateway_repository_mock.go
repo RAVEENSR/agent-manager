@@ -60,7 +60,7 @@ import (
 //			EnvironmentMappingExistsFunc: func(gatewayID string, environmentID string) (bool, error) {
 //				panic("mock out the EnvironmentMappingExists method")
 //			},
-//			GetActiveTokenByPrefixFunc: func(tokenPrefix string) (*models.GatewayToken, error) {
+//			GetActiveTokenByPrefixFunc: func(ctx context.Context, tokenPrefix string) (*models.GatewayToken, error) {
 //				panic("mock out the GetActiveTokenByPrefix method")
 //			},
 //			GetActiveTokensByGatewayUUIDFunc: func(gatewayId string) ([]*models.GatewayToken, error) {
@@ -176,7 +176,7 @@ type GatewayRepositoryMock struct {
 	EnvironmentMappingExistsFunc func(gatewayID string, environmentID string) (bool, error)
 
 	// GetActiveTokenByPrefixFunc mocks the GetActiveTokenByPrefix method.
-	GetActiveTokenByPrefixFunc func(tokenPrefix string) (*models.GatewayToken, error)
+	GetActiveTokenByPrefixFunc func(ctx context.Context, tokenPrefix string) (*models.GatewayToken, error)
 
 	// GetActiveTokensByGatewayUUIDFunc mocks the GetActiveTokensByGatewayUUID method.
 	GetActiveTokensByGatewayUUIDFunc func(gatewayId string) ([]*models.GatewayToken, error)
@@ -331,6 +331,8 @@ type GatewayRepositoryMock struct {
 		}
 		// GetActiveTokenByPrefix holds details about calls to the GetActiveTokenByPrefix method.
 		GetActiveTokenByPrefix []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
 			// TokenPrefix is the tokenPrefix argument value.
 			TokenPrefix string
 		}
@@ -969,19 +971,21 @@ func (mock *GatewayRepositoryMock) EnvironmentMappingExistsCalls() []struct {
 }
 
 // GetActiveTokenByPrefix calls GetActiveTokenByPrefixFunc.
-func (mock *GatewayRepositoryMock) GetActiveTokenByPrefix(tokenPrefix string) (*models.GatewayToken, error) {
+func (mock *GatewayRepositoryMock) GetActiveTokenByPrefix(ctx context.Context, tokenPrefix string) (*models.GatewayToken, error) {
 	if mock.GetActiveTokenByPrefixFunc == nil {
 		panic("GatewayRepositoryMock.GetActiveTokenByPrefixFunc: method is nil but GatewayRepository.GetActiveTokenByPrefix was just called")
 	}
 	callInfo := struct {
+		Ctx         context.Context
 		TokenPrefix string
 	}{
+		Ctx:         ctx,
 		TokenPrefix: tokenPrefix,
 	}
 	mock.lockGetActiveTokenByPrefix.Lock()
 	mock.calls.GetActiveTokenByPrefix = append(mock.calls.GetActiveTokenByPrefix, callInfo)
 	mock.lockGetActiveTokenByPrefix.Unlock()
-	return mock.GetActiveTokenByPrefixFunc(tokenPrefix)
+	return mock.GetActiveTokenByPrefixFunc(ctx, tokenPrefix)
 }
 
 // GetActiveTokenByPrefixCalls gets all the calls that were made to GetActiveTokenByPrefix.
@@ -989,9 +993,11 @@ func (mock *GatewayRepositoryMock) GetActiveTokenByPrefix(tokenPrefix string) (*
 //
 //	len(mockedGatewayRepository.GetActiveTokenByPrefixCalls())
 func (mock *GatewayRepositoryMock) GetActiveTokenByPrefixCalls() []struct {
+	Ctx         context.Context
 	TokenPrefix string
 } {
 	var calls []struct {
+		Ctx         context.Context
 		TokenPrefix string
 	}
 	mock.lockGetActiveTokenByPrefix.RLock()

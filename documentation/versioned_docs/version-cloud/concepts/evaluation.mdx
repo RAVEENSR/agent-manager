@@ -217,8 +217,12 @@ Custom evaluators can define **configurable parameters**: typed inputs (string, 
 
 For example, a "Response Format Check" evaluator might define a `required_format` parameter (enum: `json`, `markdown`, `plain`) so different monitors can check for different formats without duplicating the evaluator.
 
-:::info Tutorial
-For a step-by-step walkthrough of creating custom evaluators in the AMP Console, see the [Custom Evaluators](../tutorials/custom-evaluators.mdx) tutorial.
+:::info Guide
+For a step-by-step walkthrough of creating custom evaluators in the AMP Console, see the [Custom Evaluators](../guides/custom-evaluators.mdx) guide.
+:::
+
+:::note Network access
+Custom evaluator code runs with restricted network egress — it can reach only what evaluation itself needs (trace data, the LLM gateway for LLM-Judge evaluators, and the scoring endpoint), not arbitrary external services. Design evaluators that don't depend on unrelated outbound network calls.
 :::
 
 ## Monitors
@@ -306,7 +310,7 @@ Evaluation scores are also visible directly in the trace view, making it easy to
 - **Span header**: when you select a span, evaluator scores appear as color-coded percentage chips alongside duration, token count, and model information
 - **Scores tab**: a dedicated tab in the span details panel shows each evaluator's result with the score and a markdown-rendered explanation. Skipped evaluators display a skip reason. Trace-level scores appear on the root span, while agent-level and LLM-level scores appear on their respective spans.
 
-See the [Evaluation Monitors](../tutorials/evaluation-monitors.mdx) tutorial for a step-by-step walkthrough.
+See the [Evaluation Monitors](../guides/evaluation-monitors.mdx) guide for a step-by-step walkthrough.
 
 ---
 

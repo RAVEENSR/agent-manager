@@ -100,6 +100,12 @@ function getActionSuccessMessage(action: MutationActionConfig): string {
   return `${toTitleCase(action.target)} ${SUCCESS_VERB_MAP[action.verb]} successfully`;
 }
 
+// Max `reason` length shown inline in the single-line, non-wrapping snackbar
+// (see SnackBar's `noWrap` message Typography) before it's dropped in favor of
+// just the base message. Exported so callers pushing their own snackbar directly
+// (outside useApiMutation) can bound `reason` the same way.
+export const MAX_SNACKBAR_REASON_LENGTH = 20;
+
 /**
  * Extracts a human-readable, server-provided message from a thrown error so it
  * can be surfaced to the user (e.g. a CONFLICT explaining why a delete failed).
@@ -109,8 +115,16 @@ function getActionSuccessMessage(action: MutationActionConfig): string {
  * when the backend sends one, sits under `.body.reason`, not on the error itself.
  * Returns undefined for synthetic transport messages so the caller can fall back
  * to a friendly generic message instead of leaking "HTTP error! status: 500".
+ *
+ * `maxReasonLength`, when given, drops `reason` from the result once it exceeds
+ * that length — for callers (like the single-line, non-wrapping snackbar) whose
+ * display has no room for a long reason. Callers with room to wrap (e.g. a
+ * drawer's inline Alert) should omit it and show the reason in full.
  */
-export function extractServerErrorMessage(error: unknown): string | undefined {
+export function extractServerErrorMessage(
+  error: unknown,
+  { maxReasonLength }: { maxReasonLength?: number } = {},
+): string | undefined {
   if (!error || typeof error !== "object") {
     return undefined;
   }
@@ -123,9 +137,10 @@ export function extractServerErrorMessage(error: unknown): string | undefined {
     if (typeof candidate === "string") {
       const trimmed = candidate.trim();
       if (trimmed && !/^HTTP error! status:/i.test(trimmed)) {
-        return typeof body?.reason === "string" && body.reason.trim()
-          ? `${trimmed}: ${body.reason.trim()}`
-          : trimmed;
+        const reason = typeof body?.reason === "string" ? body.reason.trim() : "";
+        const reasonFits =
+          reason.length > 0 && (maxReasonLength === undefined || reason.length <= maxReasonLength);
+        return reasonFits ? `${trimmed}: ${reason}` : trimmed;
       }
     }
   }
@@ -337,7 +352,7 @@ export function useApiMutation<
         pushSnackBar({
           message:
             resolveMessage(errorMessage, error, variables) ??
-            extractServerErrorMessage(error) ??
+            extractServerErrorMessage(error, { maxReasonLength: MAX_SNACKBAR_REASON_LENGTH }) ??
             fallbackMessage,
           type: "error",
         });

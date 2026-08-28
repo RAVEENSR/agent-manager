@@ -76,4 +76,54 @@ func TestMonitorProxyName(t *testing.T) {
 			t.Errorf("expected distinct truncated names for different monitors, both were %q", name)
 		}
 	})
+
+	// Regression for issue #1670: switching providers used to derive the same
+	// handle as the still-live old proxy, failing with "LLM proxy already exists".
+	t.Run("same monitor, different provider does not collide (issue #1670)", func(t *testing.T) {
+		cases := []struct {
+			name, monitorName, providerA, providerB string
+		}{
+			{"live repro name", "repro-monitor", "openai", "anthropic"},
+			{"another live repro name", "test-monitor-llm", "openai", "anthropic"},
+			{
+				"long, near-identical monitor and provider names", "this is monitor use to test 01",
+				"openai-llm-provider-01", "openai-llm-provider-02",
+			},
+		}
+		for _, c := range cases {
+			a := monitorProxyName(id1, c.monitorName, c.providerA)
+			b := monitorProxyName(id1, c.monitorName, c.providerB)
+			if a == b {
+				t.Errorf("%s: expected distinct proxy names when only the provider changes, both were %q", c.name, a)
+			}
+			if len(a) > 52 || len(b) > 52 {
+				t.Errorf("%s: proxy name too long: %q (%d) / %q (%d), max=52", c.name, a, len(a), b, len(b))
+			}
+		}
+	})
+
+	// Two monitors and two providers, all four combinations: no cell in the
+	// (monitor x provider) grid should collide with any other.
+	t.Run("full grid of monitors x providers stays distinct", func(t *testing.T) {
+		monitors := []struct {
+			id   uuid.UUID
+			name string
+		}{
+			{id1, "this is monitor use to test 01"},
+			{id2, "this is monitor use to test 02"},
+		}
+		providers := []string{"openai-llm-provider-01", "openai-llm-provider-02"}
+
+		seen := make(map[string]string)
+		for _, m := range monitors {
+			for _, p := range providers {
+				h := monitorProxyName(m.id, m.name, p)
+				key := m.name + "|" + p
+				if prevKey, ok := seen[h]; ok {
+					t.Errorf("collision: %q and %q both produced %q", prevKey, key, h)
+				}
+				seen[h] = key
+			}
+		}
+	})
 }

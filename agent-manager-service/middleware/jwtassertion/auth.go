@@ -36,6 +36,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/wso2/agent-manager/agent-manager-service/config"
+	"github.com/wso2/agent-manager/agent-manager-service/rbac"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
 
@@ -263,7 +264,7 @@ func JWTAuthMiddleware(header, resourceMetadataURL string) func(http.Handler) ht
 			ctx := r.Context()
 			ctx = context.WithValue(ctx, assertionTokenClaimsKey, claims)
 			ctx = context.WithValue(ctx, jwtToken, tokenString)
-			ctx = context.WithValue(ctx, scopesKey, claims.Scope)
+			ctx = ContextWithScopes(ctx, claims.Scope)
 			r = r.WithContext(ctx)
 			next.ServeHTTP(w, r)
 		})
@@ -293,17 +294,110 @@ func GetJWTFromContext(ctx context.Context) string {
 	return token
 }
 
-func HasAllScopes(ctx context.Context, requiredScopes []string) bool {
-	scopes, ok := ctx.Value(scopesKey).(string)
-	if !ok {
+// effectiveScopes is the parsed scope set that decides one request. It is what
+// sits under scopesKey, rather than the raw claim, because a single request
+// consults it several times — once per permission the route declares, then
+// again in the service layer's environment-tier gate — while a real token
+// carries on the order of a hundred scopes. Parsing at the entry point makes
+// every one of those checks a map lookup instead of a re-parse.
+type effectiveScopes struct {
+	set map[string]struct{}
+}
+
+func newEffectiveScopes(scopes []string) *effectiveScopes {
+	set := make(map[string]struct{}, len(scopes))
+	for _, scope := range scopes {
+		if scope != "" {
+			set[scope] = struct{}{}
+		}
+	}
+	return &effectiveScopes{set: set}
+}
+
+// ContextWithScopes returns ctx carrying a space-separated scope string as the
+// set HasAllScopes judges against. Use it at any entry point that establishes an
+// effective scope set out of band from the HTTP assertion middleware — the MCP
+// tool gate does, because its per-request token, not the session, decides the
+// call.
+func ContextWithScopes(ctx context.Context, scopes string) context.Context {
+	return ContextWithScopeList(ctx, strings.Fields(scopes))
+}
+
+// ContextWithScopeList is ContextWithScopes for a caller that already holds the
+// scopes as a slice — the MCP token verifier hands them over that way — so they
+// are not joined into a string only to be split apart again.
+func ContextWithScopeList(ctx context.Context, scopes []string) context.Context {
+	return context.WithValue(ctx, scopesKey, newEffectiveScopes(scopes))
+}
+
+// scopesFromContext returns the effective scope set, or nil if none was
+// established. Reading it is how a caller gets the answer the gate gave rather
+// than TokenClaims.Scope: on the MCP surface those two differ by design, and the
+// whole point of ContextWithScopes is that this is the authoritative set.
+func scopesFromContext(ctx context.Context) *effectiveScopes {
+	scopes, _ := ctx.Value(scopesKey).(*effectiveScopes)
+	return scopes
+}
+
+// GrantedScopeCount reports how many distinct scopes decide this request. Audit
+// denials record the count instead of the scopes themselves: it distinguishes
+// "token with no scopes at all" from "token missing this one scope" without
+// copying a potentially huge claim into every record.
+func GrantedScopeCount(ctx context.Context) int {
+	scopes := scopesFromContext(ctx)
+	if scopes == nil {
+		return 0
+	}
+	return len(scopes.set)
+}
+
+// FirstMissingScope returns the first permission in perms whose scope the
+// request's effective scope set does not carry, and whether there was one.
+//
+// Every gate on this codebase's AND paths — the route middleware, the MCP tool
+// gate, the service layer's environment-tier check — needs the same two facts:
+// whether the caller is short, and which grant to name if so. Naming the *first*
+// one is deliberate where permissions build on each other: telling someone who
+// lacks the environment floor to go get the production grant sends them after
+// the wrong permission.
+func FirstMissingScope(ctx context.Context, perms ...rbac.Permission) (rbac.Permission, bool) {
+	scopes := scopesFromContext(ctx)
+	for _, perm := range perms {
+		// No scope set was established at all — no token, or an entry point that
+		// never installed one. Everything the route asks for is missing, so the
+		// first one asked for is the one to name.
+		if scopes == nil {
+			return perm, true
+		}
+		if _, held := scopes.set[perm.Scope()]; !held {
+			return perm, true
+		}
+	}
+	return "", false
+}
+
+// HoldsAnyScope reports whether the effective scope set carries at least one of
+// perms — the OR counterpart to FirstMissingScope.
+func HoldsAnyScope(ctx context.Context, perms ...rbac.Permission) bool {
+	scopes := scopesFromContext(ctx)
+	if scopes == nil {
 		return false
 	}
-	scopeSet := make(map[string]struct{})
-	for _, s := range strings.Fields(scopes) {
-		scopeSet[s] = struct{}{}
+	for _, perm := range perms {
+		if _, held := scopes.set[perm.Scope()]; held {
+			return true
+		}
+	}
+	return false
+}
+
+func HasAllScopes(ctx context.Context, requiredScopes []string) bool {
+	scopes := scopesFromContext(ctx)
+	if scopes == nil {
+		return false
 	}
 	for _, scope := range requiredScopes {
-		if _, exists := scopeSet[scope]; !exists {
+		if _, exists := scopes.set[scope]; !exists {
 			// as soon as one is missing return false
 			return false
 		}

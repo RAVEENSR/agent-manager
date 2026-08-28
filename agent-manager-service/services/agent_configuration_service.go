@@ -39,6 +39,16 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
 
+// SystemManagedConfigRef identifies one agent configuration that injects
+// system-managed env vars into an environment. ListSystemManagedEnvVarKeys
+// flattens every configuration into a single set of variable names, which is
+// all its callers need but leaves an error message unable to say what kind of
+// configuration those names came from; this keeps the identity instead.
+type SystemManagedConfigRef struct {
+	Name   string
+	TypeID uint
+}
+
 // AgentConfigurationService interface defines agent configuration business logic
 type AgentConfigurationService interface {
 	Create(ctx context.Context, ouID, projectName, agentID string,
@@ -70,6 +80,11 @@ type AgentConfigurationService interface {
 	// (i.e. injected by agent LLM/MCP configurations) for the given agent and environment.
 	// Used during promote to strip these keys from inherited workload overrides.
 	ListSystemManagedEnvVarKeys(ctx context.Context, agentID, ouID, projectName, environmentName string) (map[string]bool, error)
+	// ListSystemManagedConfigs returns the agent's configurations that have system-managed
+	// env vars in the given environment, by name and type. Promote calls it only once it has
+	// already decided to refuse, to say which configurations the target environment is
+	// missing rather than describing them all as LLM configuration.
+	ListSystemManagedConfigs(ctx context.Context, agentID, ouID, projectName, environmentName string) ([]SystemManagedConfigRef, error)
 	// BuildSystemManagedEnvVarsFromConfig constructs system-managed env vars for a given
 	// agent and environment from all DB configs. Used during promotion when the target
 	// environment's ReleaseBinding doesn't have these vars yet.
@@ -322,15 +337,34 @@ func ensureURLScheme(host string) string {
 	return "https://" + host
 }
 
-// buildProxyURL constructs the proxy base URL from the gateway's public vhost and
-// an optional context path. Every agent — sandboxed included — gets the public
-// URL so the address always matches the identity resource identifier.
-func buildProxyURL(gateway *models.Gateway, contextPath *string) string {
+// buildPublicProxyURL constructs the proxy base URL from the gateway's public vhost and
+// an optional context path. This is the address for callers outside the cluster, and for
+// MCP, whose URL doubles as the identity resource identifier. Platform-hosted agents get
+// buildInternalProxyURL instead — they reach the gateway in-cluster.
+func buildPublicProxyURL(gateway *models.Gateway, contextPath *string) string {
 	base := ensureURLScheme(gateway.Vhost)
 	if contextPath != nil {
 		return fmt.Sprintf("%s%s", base, *contextPath)
 	}
 	return base
+}
+
+// errGatewayRuntimeURLUnregistered means the gateway has no in-cluster address recorded, so
+// no internal caller can reach it. Falling back to the public vhost would hairpin the caller
+// out through an ingress its NetworkPolicy denies, so this fails closed.
+var errGatewayRuntimeURLUnregistered = errors.New("gateway has no runtimeUrl registered")
+
+// buildInternalProxyURL constructs the proxy base URL from the gateway's in-cluster runtime
+// address, for callers that run inside the cluster.
+func buildInternalProxyURL(gateway *models.Gateway, contextPath *string) (string, error) {
+	base := strings.TrimSpace(gateway.RuntimeURL)
+	if base == "" {
+		return "", fmt.Errorf("%w: %s", errGatewayRuntimeURLUnregistered, gateway.UUID)
+	}
+	if contextPath != nil {
+		return fmt.Sprintf("%s%s", base, *contextPath), nil
+	}
+	return base, nil
 }
 
 // buildLLMEnvVars constructs the two env vars (URL and API key) from the env config templates.
@@ -356,6 +390,21 @@ func buildLLMEnvVars(templates []EnvConfigTemplate, proxyURL, secretRefName stri
 			},
 		},
 	}
+}
+
+// internalLLMEnvVars builds a platform-hosted agent's LLM env vars against the gateway's
+// in-cluster address, the only one its pod can route to. Every LLM injection site goes
+// through here so the choice of address is made once rather than re-decided per site.
+// Its sibling buildMCPEnvVars still takes a plain URL: an MCP proxy's address is
+// legitimately public, since it doubles as the OAuth resource identifier.
+func internalLLMEnvVars(
+	templates []EnvConfigTemplate, gateway *models.Gateway, contextPath *string, secretRefName string,
+) ([]client.EnvVar, error) {
+	proxyURL, err := buildInternalProxyURL(gateway, contextPath)
+	if err != nil {
+		return nil, err
+	}
+	return buildLLMEnvVars(templates, proxyURL, secretRefName), nil
 }
 
 func buildMCPEnvVars(templates []EnvConfigTemplate, proxyURL, secretRefName string) []client.EnvVar {
@@ -968,12 +1017,40 @@ func (s *agentConfigurationService) Create(ctx context.Context, ouID, projectNam
 	// Determine if this is an external agent
 	isExternalAgent := agent.Provisioning.Type == string(utils.ExternalAgent)
 
+	if err := s.rejectIfBuildInProgress(ctx, ouID, projectName, agentID, agent.KindName); err != nil {
+		return nil, err
+	}
+
 	switch req.Type {
 	case models.AgentConfigTypeMCP:
 		return s.createMCPConfig(ctx, ouID, projectName, agentID, req, createdBy, isExternalAgent)
 	default:
 		return s.createLLMConfig(ctx, ouID, projectName, agentID, req, createdBy, isExternalAgent)
 	}
+}
+
+// rejectIfBuildInProgress blocks agent configuration create/update while a
+// source-based agent's build is running. Argo Workflows resolves
+// workflow.parameters once at WorkflowRun submission, so a config write to
+// the Component CR after that point is never picked up by the in-flight
+// build; the resulting deployment silently carries stale env vars. Kind-sourced
+// agents are exempt: they have no build/workflow step (kindName != "").
+func (s *agentConfigurationService) rejectIfBuildInProgress(ctx context.Context, ouID, projectName, agentID, kindName string) error {
+	if kindName != "" {
+		return nil
+	}
+
+	builds, err := s.ocClient.ListBuilds(ctx, ouID, projectName, agentID)
+	if err != nil {
+		return fmt.Errorf("failed to check build status: %w", err)
+	}
+
+	for _, build := range builds {
+		if build.Status == client.WorkflowStatusPending || build.Status == client.WorkflowStatusRunning {
+			return fmt.Errorf("%w for agent %s", utils.ErrBuildInProgress, agentID)
+		}
+	}
+	return nil
 }
 
 func (s *agentConfigurationService) createLLMConfig(ctx context.Context, ouID, projectName, agentID string,
@@ -1120,7 +1197,7 @@ func (s *agentConfigurationService) createLLMConfig(ctx context.Context, ouID, p
 		// Capture index immediately after append to avoid fragile len(slice)-1 indexing below.
 		rbIdx := len(rollbackResources) - 1
 
-		proxy, err := s.llmProxyService.Create(ouID, createdBy, proxyConfig)
+		proxy, err := s.llmProxyService.Create(ctx, ouID, createdBy, proxyConfig)
 		if err != nil {
 			s.processRollBack(ctx, rollbackResources, ouID, config.UUID)
 			return nil, fmt.Errorf("failed to create proxy for environment %s: %w", envName, err)
@@ -1182,12 +1259,12 @@ func (s *agentConfigurationService) createLLMConfig(ctx context.Context, ouID, p
 		rollbackResources[rbIdx].proxySecretLoc = &proxySecretLoc
 		rollbackResources[rbIdx].secretRefName = secretRefName
 
-		// Build proxy URL with nil-safe context access.
+		// Public proxy URL (nil-safe context) — what an external agent's operator is handed.
 		var proxyContext *string
 		if proxy != nil {
 			proxyContext = proxy.Configuration.Context
 		}
-		proxyURL := buildProxyURL(gateway, proxyContext)
+		proxyURL := buildPublicProxyURL(gateway, proxyContext)
 
 		// Capture credentials for external agents.
 		if isExternalAgent {
@@ -1246,7 +1323,12 @@ func (s *agentConfigurationService) createLLMConfig(ctx context.Context, ouID, p
 		// first-environment's vars to avoid last-write-wins clobbering (HIGH-3).
 		if !isExternalAgent {
 			// Build the two env vars (URL plain, API key via secretKeyRef).
-			envVarsToInject := buildLLMEnvVars(envConfigTemplates, proxyURL, secretRefName)
+			envVarsToInject, urlErr := internalLLMEnvVars(envConfigTemplates, gateway, proxyContext, secretRefName)
+			if urlErr != nil {
+				s.rollbackProxies(ctx, rollbackResources, ouID)
+				s.compensatingDeleteConfig(ctx, config.UUID, ouID)
+				return nil, fmt.Errorf("failed to resolve internal proxy URL for environment %s: %w", envName, urlErr)
+			}
 
 			// Step 3: Inject per-environment URL and API key ref into the ReleaseBinding.
 			// Each environment gets its own ReleaseBinding with the correct per-env proxy URL,
@@ -1269,7 +1351,8 @@ func (s *agentConfigurationService) createLLMConfig(ctx context.Context, ouID, p
 		s.logger.Info(
 			"Created proxy and deployment for environment",
 			"environment", envName,
-			"proxyURL", proxyURL,
+			// Public address of the proxy — NOT what a platform agent's pod is handed.
+			"proxyPublicURL", proxyURL,
 			"proxyUUID", proxy.UUID,
 		)
 	}
@@ -1755,7 +1838,7 @@ func (s *agentConfigurationService) processEnvProviderChange(
 		oldProxyUUID:      existingMapping.LLMProxyUUID,
 	}
 
-	proxy, err := s.llmProxyService.Create(ouID, models.UserRoleSystem, proxyConfig)
+	proxy, err := s.llmProxyService.Create(ctx, ouID, models.UserRoleSystem, proxyConfig)
 	if err != nil {
 		return "", rbRes, pendingAppBinding{}, fmt.Errorf("failed to create proxy for environment %s: %w", envName, err)
 	}
@@ -1869,10 +1952,13 @@ func (s *agentConfigurationService) processEnvProviderChange(
 	// but a bootstrap default is last-write-wins across environments. The Component CR write is
 	// therefore scoped to the first environment, matching every other injection site in this file.
 	if !isExternalAgent {
-		proxyURL := buildProxyURL(gateway, proxy.Configuration.Context)
-		envVarsToInject := buildLLMEnvVars(envConfigTemplates, proxyURL, secretRefName)
+		envVarsToInject, urlErr := internalLLMEnvVars(envConfigTemplates, gateway, proxy.Configuration.Context, secretRefName)
+		if urlErr != nil {
+			return "", rbRes, pendingAppBinding{}, fmt.Errorf("failed to resolve internal proxy URL for environment %s: %w", envName, urlErr)
+		}
 		if rbErr := s.ocClient.UpdateReleaseBindingEnvVars(ctx, ouID, config.ProjectName, config.AgentID, envName, envVarsToInject); rbErr != nil {
-			s.logger.Warn("failed to patch ReleaseBinding in Scenario A", "env", envName, "err", rbErr)
+			s.logger.Error("failed to patch ReleaseBinding in Scenario A", "env", envName, "err", rbErr)
+			return "", rbRes, pendingAppBinding{}, fmt.Errorf("failed to update release binding env vars for environment %s: %w", envName, rbErr)
 		}
 		// Bootstrap default for agents with no ReleaseBinding yet.
 		if firstEnvName != "" && envName == firstEnvName {
@@ -2047,7 +2133,7 @@ func (s *agentConfigurationService) processNewEnv(
 	// Register provider credentials immediately so they are cleaned up on any subsequent failure.
 	rbRes := rollbackResource{providerAPIKeyID: providerAPIKeyID, providerUUID: providerUUID, providerSecretLoc: providerSecretLoc}
 
-	proxy, err := s.llmProxyService.Create(ouID, models.UserRoleSystem, proxyConfig)
+	proxy, err := s.llmProxyService.Create(ctx, ouID, models.UserRoleSystem, proxyConfig)
 	if err != nil {
 		return rbRes, pendingAppBinding{}, fmt.Errorf("failed to create proxy for environment %s: %w", envName, err)
 	}
@@ -2146,9 +2232,11 @@ func (s *agentConfigurationService) processNewEnv(
 	// last-write-wins clobbering across multiple environments (HIGH-3).
 	if !isExternalAgent {
 		// Reuse the gateway already resolved for deployment (resolveGatewayForProvider)
-		proxyURL := buildProxyURL(gateway, proxy.Configuration.Context)
-
-		envVarsToInject := buildLLMEnvVars(envConfigTemplates, proxyURL, secretRefName)
+		envVarsToInject, urlErr := internalLLMEnvVars(envConfigTemplates, gateway, proxy.Configuration.Context, secretRefName)
+		if urlErr != nil {
+			s.rollbackProxies(ctx, []rollbackResource{rbRes}, ouID)
+			return rollbackResource{}, pendingAppBinding{}, fmt.Errorf("failed to resolve internal proxy URL for environment %s: %w", envName, urlErr)
+		}
 		// Inject per-env URL into the ReleaseBinding for this specific environment.
 		if rbErr := s.ocClient.UpdateReleaseBindingEnvVars(ctx, ouID, config.ProjectName, config.AgentID, envName, envVarsToInject); rbErr != nil {
 			s.logger.Warn("failed to patch ReleaseBinding in Scenario C", "env", envName, "err", rbErr)
@@ -2884,6 +2972,15 @@ func (s *agentConfigurationService) UpdateMCP(ctx context.Context, configUUID uu
 	if config.ProjectName != projectName || config.AgentID != agentName || config.TypeID != models.AgentConfigTypeIDMCP {
 		return nil, utils.ErrAgentConfigNotFound
 	}
+
+	agent, err := s.ocClient.GetComponent(ctx, ouID, projectName, agentName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to validate agent: %w", err)
+	}
+	if err := s.rejectIfBuildInProgress(ctx, ouID, projectName, agentName, agent.KindName); err != nil {
+		return nil, err
+	}
+
 	return s.updateMCPConfig(ctx, config, ouID, projectName, agentName, req)
 }
 
@@ -2908,6 +3005,14 @@ func (s *agentConfigurationService) Update(ctx context.Context, configUUID uuid.
 	// Validate project and agent scoping
 	if existingConfig.ProjectName != projectName || existingConfig.AgentID != agentName {
 		return nil, utils.ErrAgentConfigNotFound
+	}
+
+	agent, err := s.ocClient.GetComponent(ctx, ouID, projectName, agentName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to validate agent: %w", err)
+	}
+	if err := s.rejectIfBuildInProgress(ctx, ouID, projectName, agentName, agent.KindName); err != nil {
+		return nil, err
 	}
 
 	if existingConfig.TypeID == models.AgentConfigTypeIDMCP {
@@ -3146,7 +3251,6 @@ func (s *agentConfigurationService) Update(ctx context.Context, configUUID uuid.
 								s.logger.Warn("Phase 1b: failed to resolve gateway for re-injection", "environment", envName, "err", gwErr)
 								continue
 							}
-							proxyURL := buildProxyURL(gateway, mapping.LLMProxy.Configuration.Context)
 							// Use persisted SecretReference from DB rather than deriving from mutable config name.
 							envVars1b, varErr1b := s.envVariableRepo.ListByConfigAndEnv(ctx, existingConfig.UUID, mapping.EnvironmentUUID)
 							secretRefName := ""
@@ -3167,7 +3271,11 @@ func (s *agentConfigurationService) Update(ctx context.Context, configUUID uuid.
 								s.logger.Warn("Phase 1b: no persisted SecretReference found, skipping re-injection", "environment", envName)
 								continue
 							}
-							envVarsToInject := buildLLMEnvVars(newEnvConfigTemplates, proxyURL, secretRefName)
+							envVarsToInject, urlErr := internalLLMEnvVars(newEnvConfigTemplates, gateway, mapping.LLMProxy.Configuration.Context, secretRefName)
+							if urlErr != nil {
+								s.logger.Warn("Phase 1b: failed to resolve internal proxy URL for re-injection", "environment", envName, "err", urlErr)
+								continue
+							}
 							s.logger.Info("Phase 1b: atomically replacing env vars in ReleaseBinding",
 								"environment", envName, "keysToRemove", changedOldKeys, "envVarsToAdd", len(envVarsToInject))
 							if rbErr := s.ocClient.ReplaceReleaseBindingEnvVars(ctx, ouID, projectName, agentName, envName, changedOldKeys, envVarsToInject); rbErr != nil {
@@ -3198,12 +3306,10 @@ func (s *agentConfigurationService) Update(ctx context.Context, configUUID uuid.
 	}
 
 	// Determine agent type and first env for internal-agent env var injection.
-	// Fail closed: if GetComponent errors, return rather than defaulting to internal (which could corrupt CRs).
-	agentComp, agentErr := s.ocClient.GetComponent(ctx, ouID, projectName, agentName)
-	if agentErr != nil {
-		return nil, fmt.Errorf("failed to determine agent type: %w", agentErr)
-	}
-	isExternalAgent := agentComp.Provisioning.Type == string(utils.ExternalAgent)
+	// agent was already loaded above (fail-closed: that earlier GetComponent
+	// error already returns rather than defaulting to internal, which could
+	// corrupt CRs), so reuse it instead of re-fetching the same component.
+	isExternalAgent := agent.Provisioning.Type == string(utils.ExternalAgent)
 	firstEnvName := ""
 	if !isExternalAgent {
 		if pipeline, pipelineErr := s.ocClient.GetProjectDeploymentPipeline(ctx, ouID, projectName); pipelineErr == nil && pipeline != nil {
@@ -5469,35 +5575,51 @@ func (s *agentConfigurationService) ListAgentLLMConfigSecretReferences(ctx conte
 func (s *agentConfigurationService) ListSystemManagedEnvVarKeys(
 	ctx context.Context, agentID, ouID, projectName, environmentName string,
 ) (map[string]bool, error) {
-	envUUID, err := s.resolveEnvironmentUUID(ctx, ouID, environmentName)
+	configured, err := s.listConfigsWithEnvVars(ctx, agentID, ouID, projectName, environmentName)
 	if err != nil {
 		return nil, err
 	}
 
-	configs, err := s.agentConfigRepo.ListByAgent(ctx, ouID, projectName, agentID, agentConfigListAll, 0)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list agent configurations: %w", err)
-	}
-
 	keys := make(map[string]bool)
-	for _, config := range configs {
-		vars, err := s.envVariableRepo.ListByConfigAndEnv(ctx, config.UUID, envUUID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list env config variables for config %s: %w", config.UUID, err)
-		}
-		for _, v := range vars {
+	for _, entry := range configured {
+		for _, v := range entry.vars {
 			keys[v.VariableName] = true
 		}
 	}
 	return keys, nil
 }
 
-// BuildSystemManagedEnvVarsFromConfig constructs system-managed env vars for a given
-// agent and environment from every DB-backed agent config. Used during promotion when
-// the target environment's ReleaseBinding doesn't have these vars yet.
-func (s *agentConfigurationService) BuildSystemManagedEnvVarsFromConfig(
+func (s *agentConfigurationService) ListSystemManagedConfigs(
 	ctx context.Context, agentID, ouID, projectName, environmentName string,
-) ([]client.EnvVar, error) {
+) ([]SystemManagedConfigRef, error) {
+	configured, err := s.listConfigsWithEnvVars(ctx, agentID, ouID, projectName, environmentName)
+	if err != nil {
+		return nil, err
+	}
+
+	refs := make([]SystemManagedConfigRef, 0, len(configured))
+	for _, entry := range configured {
+		refs = append(refs, SystemManagedConfigRef{Name: entry.config.Name, TypeID: entry.config.TypeID})
+	}
+	return refs, nil
+}
+
+// configWithEnvVars is one agent configuration together with the variable rows it
+// injects into a single environment.
+type configWithEnvVars struct {
+	config *models.AgentConfiguration
+	vars   []models.AgentEnvConfigVariable
+}
+
+// listConfigsWithEnvVars returns the agent's configurations that are set up for
+// environmentName, each with its variable rows there. A configuration with no rows in
+// the environment was never set up for it and is left out, which is the single
+// definition of "system-managed here" that both ListSystemManagedEnvVarKeys and
+// ListSystemManagedConfigs project from — the promotion block decides on the keys and
+// words its refusal from the configurations, so the two must not be able to disagree.
+func (s *agentConfigurationService) listConfigsWithEnvVars(
+	ctx context.Context, agentID, ouID, projectName, environmentName string,
+) ([]configWithEnvVars, error) {
 	envUUID, err := s.resolveEnvironmentUUID(ctx, ouID, environmentName)
 	if err != nil {
 		return nil, err
@@ -5506,6 +5628,45 @@ func (s *agentConfigurationService) BuildSystemManagedEnvVarsFromConfig(
 	configs, err := s.agentConfigRepo.ListByAgent(ctx, ouID, projectName, agentID, agentConfigListAll, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list agent configurations: %w", err)
+	}
+
+	configured := make([]configWithEnvVars, 0, len(configs))
+	for i := range configs {
+		config := &configs[i]
+		vars, err := s.envVariableRepo.ListByConfigAndEnv(ctx, config.UUID, envUUID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list env config variables for config %s: %w", config.UUID, err)
+		}
+		if len(vars) == 0 {
+			continue
+		}
+		configured = append(configured, configWithEnvVars{config: config, vars: vars})
+	}
+	return configured, nil
+}
+
+// BuildSystemManagedEnvVarsFromConfig constructs system-managed env vars for a given
+// agent and environment from every DB-backed agent config. Used during promotion when
+// the target environment's ReleaseBinding doesn't have these vars yet, and when building
+// a kind-sourced agent's Workload CR at creation. Returns no vars for an agent with no
+// configs, so callers need not pre-check which config types the agent has.
+func (s *agentConfigurationService) BuildSystemManagedEnvVarsFromConfig(
+	ctx context.Context, agentID, ouID, projectName, environmentName string,
+) ([]client.EnvVar, error) {
+	configs, err := s.agentConfigRepo.ListByAgent(ctx, ouID, projectName, agentID, agentConfigListAll, 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list agent configurations: %w", err)
+	}
+	// Resolve the environment only once we know there is a config to build vars for.
+	// This keeps the no-config case free of a remote environment lookup, so callers can
+	// invoke this unconditionally instead of pre-checking which config types exist.
+	if len(configs) == 0 {
+		return nil, nil
+	}
+
+	envUUID, err := s.resolveEnvironmentUUID(ctx, ouID, environmentName)
+	if err != nil {
+		return nil, err
 	}
 
 	var result []client.EnvVar
@@ -5554,6 +5715,9 @@ func (s *agentConfigurationService) BuildSystemManagedEnvVarsFromConfig(
 	return result, nil
 }
 
+// systemManagedLLMURL returns the gateway's IN-CLUSTER address for the config's LLM proxy.
+// Its only consumer builds Workload/ReleaseBinding CRs, i.e. addresses read by an agent pod.
+// Do not reuse it for an API response — see systemManagedMCPURL for the public counterpart.
 func (s *agentConfigurationService) systemManagedLLMURL(
 	ctx context.Context, config *models.AgentConfiguration, ouID, environmentName string, envUUID uuid.UUID,
 ) (string, error) {
@@ -5577,9 +5741,12 @@ func (s *agentConfigurationService) systemManagedLLMURL(
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve gateway for LLM proxy in %s: %w", environmentName, err)
 	}
-	return buildProxyURL(gateway, mapping.LLMProxy.Configuration.Context), nil
+	return buildInternalProxyURL(gateway, mapping.LLMProxy.Configuration.Context)
 }
 
+// systemManagedMCPURL returns the PUBLIC address for the config's MCP proxy. Unlike its LLM
+// counterpart it must stay public: the same URL is the OAuth resource identifier, so an
+// in-cluster address here would put an unroutable audience in every AgentID token.
 func (s *agentConfigurationService) systemManagedMCPURL(
 	ctx context.Context, config *models.AgentConfiguration, ouID, environmentName string, envUUID uuid.UUID,
 ) (string, error) {

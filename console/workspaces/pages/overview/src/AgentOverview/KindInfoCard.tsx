@@ -41,12 +41,10 @@ interface KindInfoCardProps {
     /** The kind version deployed in the selected environment. Absent when nothing
      *  is deployed there, or when the deployed image matches no published version. */
     kindVersion?: string;
-    framework?: string;
-    model?: string;
 }
 
 export const KindInfoCard: React.FC<KindInfoCardProps> = ({
-    orgId, kindName, kindVersion, framework, model,
+    orgId, kindName, kindVersion,
 }) => {
     const { data: kind, isLoading } = useGetAgentKind({ orgName: orgId, kindName });
 
@@ -96,27 +94,20 @@ export const KindInfoCard: React.FC<KindInfoCardProps> = ({
                                 </IconButton>
                             </Box>
 
-                            {(kindVersion || framework || model) && (
+                            {kindVersion && (
                                 <Box display="flex" alignItems="center" gap={1.5} minWidth={0}>
-                                    {kindVersion && (
-                                        <Box display="flex" alignItems="center" gap={0.5} sx={{ flexShrink: 0 }}>
-                                            <Tag size={13} />
-                                            <Typography variant="body2" color="text.secondary" noWrap>
-                                                {kindVersion}
-                                            </Typography>
-                                        </Box>
-                                    )}
+                                    <Box display="flex" alignItems="center" gap={0.5} sx={{ flexShrink: 0 }}>
+                                        <Tag size={13} />
+                                        <Typography variant="body2" color="text.secondary" noWrap>
+                                            {kindVersion}
+                                        </Typography>
+                                    </Box>
                                     {versionData && (
                                         <Typography variant="body2" color="text.secondary" noWrap>
                                             {formatDistanceToNow(
                                                 new Date(versionData.createdAt),
                                                 { addSuffix: true },
                                             )}
-                                        </Typography>
-                                    )}
-                                    {(framework || model) && (
-                                        <Typography variant="caption" color="text.secondary" noWrap sx={{ flexShrink: 0 }}>
-                                            {`Agent Type: ${[framework, model].filter(Boolean).join("/")}`}
                                         </Typography>
                                     )}
                                 </Box>

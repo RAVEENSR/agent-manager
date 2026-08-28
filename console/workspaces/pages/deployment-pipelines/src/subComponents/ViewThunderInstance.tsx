@@ -63,7 +63,7 @@ export const ViewThunderInstance: React.FC = () => {
 
   return (
       <PageLayout
-        title="Thunder Id"
+        title="ThunderID"
         backHref={backHref}
         backLabel="Back to Environment"
         description={`The agent identity used to manage agents, users, roles, and groups for the ${envName} environment.`}
@@ -80,7 +80,7 @@ export const ViewThunderInstance: React.FC = () => {
               target="_blank"
               rel="noopener noreferrer"
             >
-              Visit Thunder Console
+              Go to the Console
             </Button>
           ) : undefined
         }

@@ -19,6 +19,7 @@ package client
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 
@@ -258,5 +259,109 @@ func TestNotReadyResourceIsReportedAsFailed(t *testing.T) {
 			externalSecretNode("env-secrets", "False", "SecretSyncedError", syncErr),
 		)
 		assert.False(t, runtimeReplicaStateFromTree(tree).isFailed())
+	})
+}
+
+// bindingBootingSince returns a Ready binding whose last deploy happened `ago` in the past,
+// which is what bootDeadlineExceeded measures against. LastSpecUpdateTime is set because
+// getLastDeployedTime takes the max of it and the Ready condition's transition time.
+func bindingBootingSince(ago time.Duration) *gen.ReleaseBinding {
+	binding := readyBinding()
+	deployedAt := time.Now().Add(-ago)
+	(*binding.Status.Conditions)[0].LastTransitionTime = deployedAt
+	binding.Status.LastSpecUpdateTime = &deployedAt
+	return binding
+}
+
+// An agent whose container never binds its port fails its TCP startup probe forever: the
+// pod is replaced every few minutes, and because pods are absent from the resource tree and
+// the warm pool reports Healthy with zero ready replicas, every payload the control plane
+// sees is identical to a healthy boot. Without a deadline the deployment reports
+// "in-progress" for as long as the agent exists.
+func TestBootingPastTheStartupBudgetIsReportedAsFailed(t *testing.T) {
+	booting := runtimeReplicaState{found: true, desired: 1, ready: 0}
+
+	t.Run("within the budget is still in progress", func(t *testing.T) {
+		binding := bindingBootingSince(agentStartupBudget / 2)
+		assert.Equal(t, DeploymentStatusInProgress, determineDeploymentStatus(binding, booting))
+	})
+
+	t.Run("past the budget is failed", func(t *testing.T) {
+		binding := bindingBootingSince(agentStartupBudget + time.Minute)
+		assert.Equal(t, DeploymentStatusFailed, determineDeploymentStatus(binding, booting),
+			"a startup probe that has already given up is not still starting")
+	})
+
+	t.Run("a serving agent is never failed by age", func(t *testing.T) {
+		// The budget only applies to a boot in progress. A long-running healthy agent has
+		// a last-deployed time far in the past and must stay active.
+		serving := runtimeReplicaState{found: true, desired: 1, ready: 1}
+		binding := bindingBootingSince(30 * 24 * time.Hour)
+		assert.Equal(t, DeploymentStatusActive, determineDeploymentStatus(binding, serving))
+	})
+
+	t.Run("unknown readiness is never failed by age", func(t *testing.T) {
+		// Tree fetch failed or no warm pool node: isBooting() is false, so the binding
+		// alone decides and the deadline is never consulted.
+		binding := bindingBootingSince(agentStartupBudget + time.Minute)
+		assert.Equal(t, DeploymentStatusActive, determineDeploymentStatus(binding, runtimeReplicaState{}))
+	})
+
+	t.Run("a binding with no timestamps stays in progress", func(t *testing.T) {
+		// getLastDeployedTime returns the zero time when the binding carries no condition
+		// transition, no spec update and no creation timestamp. time.Since(zero) is
+		// centuries, so without the IsZero guard every such binding would report failed.
+		binding := readyBinding()
+		assert.True(t, getLastDeployedTime(binding).IsZero(), "guards the premise of this case")
+		assert.Equal(t, DeploymentStatusInProgress, determineDeploymentStatus(binding, booting))
+	})
+
+	t.Run("an old binding with no deploy timestamps stays in progress", func(t *testing.T) {
+		// Creation dates the binding, not an attempt to start the agent. A binding that
+		// has existed for weeks and is redeploying now must not be failed on the strength
+		// of its age, so the budget is measured from deployAttemptTime, which excludes
+		// the creation timestamp getLastDeployedTime falls back to.
+		binding := readyBinding()
+		created := time.Now().Add(-30 * 24 * time.Hour)
+		binding.Metadata.CreationTimestamp = &created
+		(*binding.Status.Conditions)[0].LastTransitionTime = time.Time{}
+		binding.Status.LastSpecUpdateTime = nil
+
+		assert.Equal(t, created, getLastDeployedTime(binding),
+			"display still falls back to creation")
+		assert.True(t, deployAttemptTime(binding).IsZero(),
+			"but no deploy attempt is recorded")
+		assert.Equal(t, DeploymentStatusInProgress, determineDeploymentStatus(binding, booting))
+	})
+
+	t.Run("an overrunning boot does not override suspended", func(t *testing.T) {
+		binding := bindingBootingSince(agentStartupBudget + time.Minute)
+		state := gen.ReleaseBindingSpecStateUndeploy
+		binding.Spec.State = &state
+		assert.Equal(t, DeploymentStatusSuspended, determineDeploymentStatus(binding, booting))
+	})
+}
+
+// The probed port is the one fact in the failure log that distinguishes a misdeclared port
+// from an agent that is merely slow, so it must survive the shapes a binding can take.
+func TestProbedPorts(t *testing.T) {
+	t.Run("reads the service URL port", func(t *testing.T) {
+		port := int32(8000)
+		binding := readyBinding()
+		binding.Status.Endpoints = &[]gen.EndpointURLStatus{{
+			Name:       "it-helpdesk-endpoint",
+			ServiceURL: &gen.EndpointURL{Host: "it-helpdesk.dp-default", Port: &port},
+		}}
+		assert.Equal(t, []int32{8000}, probedPorts(binding))
+	})
+
+	t.Run("an endpoint without a service URL contributes nothing", func(t *testing.T) {
+		binding := readyBinding()
+		binding.Status.Endpoints = &[]gen.EndpointURLStatus{{Name: "no-url"}}
+		assert.Empty(t, probedPorts(binding))
+	})
+
+	t.Run("no endpoints is empty, not a panic", func(t *testing.T) {
+		assert.Empty(t, probedPorts(readyBinding()))
 	})
 }

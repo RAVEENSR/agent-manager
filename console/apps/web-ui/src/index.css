@@ -45,3 +45,30 @@ html[data-color-scheme="dark"] {
 .lucide:not(.lucide-logo) * {
   vector-effect: non-scaling-stroke;
 }
+
+/*
+ * Browser autofill background override (#1616)
+ *
+ * Chromium/WebKit apply a native UA background paint to autofilled inputs via
+ * an internal render layer that cannot be overridden with `background-color`.
+ * The only reliable approach is an inset `box-shadow` large enough to cover the
+ * autofill highlight, combined with `-webkit-text-fill-color` so text remains
+ * readable even when the browser also forces a text color.
+ *
+ * We reference the Oxygen UI CSS variables that `OxygenUIThemeProvider` already
+ * emits on `[data-color-scheme]` so this rule is theme-aware and does not
+ * hardcode any color — it uses exactly the same acrylic background and primary
+ * text color that `MuiOutlinedInput` uses in normal (non-autofilled) state.
+ *
+ * The four pseudo-class variants are needed because Chromium re-applies the
+ * autofill style on hover, focus, and active, not just on initial fill.
+ */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  box-shadow: 0 0 0 1000px var(--oxygen-palette-background-acrylic) inset !important;
+  -webkit-text-fill-color: var(--oxygen-palette-text-primary) !important;
+  /* Preserve the transition Oxygen UI sets on the input border/background */
+  transition: background-color 0s ease-in-out 0s;
+}

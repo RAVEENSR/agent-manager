@@ -286,7 +286,7 @@ export function EnvironmentViewPage() {
           {agentIdEnabled && (
           <Stack spacing={1.5}>
             <Typography variant="overline" color="text.secondary">
-              Thunder Id
+              Identity Providers
             </Typography>
             {isLoadingProviders ? (
               <Stack spacing={1}>

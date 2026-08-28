@@ -44,6 +44,15 @@ const (
 // -----------------------------------------------------------------------------
 type ComponentType string
 
+// DefaultProjectTypeName is the (Cluster)ProjectType every project created by
+// agent-manager references. OpenChoreo 1.2.0+ requires spec.type.
+//
+// The reference is deliberately to the NAMESPACED ProjectType rather than the
+// cluster-scoped ClusterProjectType: a cluster-wide type is shared by every
+// tenant in the cluster, which is not acceptable in a multi-tenant deployment.
+// Each organization's namespace carries its own ProjectType of this name.
+const DefaultProjectTypeName = "default"
+
 const (
 	ComponentTypeInternalAgentAPI ComponentType = "proxy/agent-api"
 	ComponentTypeExternalAgentAPI ComponentType = "proxy/external-agent-api"

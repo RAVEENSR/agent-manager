@@ -155,6 +155,15 @@ jobs:
           TARGET_RELEASE: ${{ inputs.target_version }}
         shell: bash
 
+      - name: Update start.sh
+        run: |
+          bash .github/scripts/update-install-helpers.sh \
+            "$TARGET_RELEASE" \
+            "./deployments/quick-start/start.sh"
+        env:
+          TARGET_RELEASE: ${{ inputs.target_version }}
+        shell: bash
+
       - name: Commit version updates
         id: commit-changes
         run: |
@@ -450,7 +459,7 @@ jobs:
         package-charts,
       ]
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 130
     permissions:
       contents: read
       checks: write
@@ -482,6 +491,7 @@ jobs:
           sudo install /tmp/yq /usr/local/bin/yq
 
       - name: Install platform
+        id: install-platform
         env:
           VERSION: ${{ inputs.target_version }}
         run: |
@@ -499,6 +509,15 @@ jobs:
           cd test/e2e && go run github.com/onsi/ginkgo/v2/ginkgo -v --procs=2 --timeout 70m \
             --poll-progress-after=600s --keep-going --junit-report=report.xml \
             ./tests/... 2>&1 | tee e2e-output.log
+
+      - name: Run security conformance tests
+        if: ${{ !cancelled() && steps.install-platform.outcome == 'success' }}
+        env:
+          SECURITY_PROBE_REPOSITORY_URL: ${{ format('{0}/{1}', github.server_url, github.repository) }}
+          SECURITY_PROBE_REPOSITORY_BRANCH: amp/v${{ inputs.target_version }}
+        run: |
+          set -o pipefail
+          make security-test-live 2>&1 | tee test/e2e/security-output.log
 
       - name: Dump pod logs on failure
         if: failure()
@@ -530,12 +549,22 @@ jobs:
           path: test/e2e/report.xml
           reporter: java-junit
 
+      - name: Publish security test results
+        if: ${{ always() && hashFiles('test/e2e/security-report.xml') != '' }}
+        uses: dorny/test-reporter@6e6a65b7a0bd2c9197df7d0ae36ac5cee784230c # v2.0.0
+        with:
+          name: Release Security Conformance Results
+          path: test/e2e/security-report.xml
+          reporter: java-junit
+
       - name: Upload test logs
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: e2e-test-logs
-          path: test/e2e/e2e-output.log
+          path: |
+            test/e2e/e2e-output.log
+            test/e2e/security-output.log
           retention-days: 7
 
   create-release:
@@ -550,7 +579,6 @@ jobs:
         package-charts,
         build-amctl,
       ]
-    if: ${{ !contains(inputs.target_version, '-rc') }}
     runs-on:
       - codebuild-wso2_agent-manager-${{ github.run_id }}-${{ github.run_attempt }}
     permissions:
@@ -602,10 +630,14 @@ jobs:
             echo "Prebuilt \`amctl\` binaries (Linux, macOS, Windows) and \`checksums.txt\` are attached to this release."
 
             echo ""
-            echo "### VM install bundle"
-            echo "\`amp-vm-bundle-${VERSION}.tar.gz\` and \`bootstrap.sh\` are attached for the one-command VM install:"
+            echo "### Install bundle"
+            echo "\`wso2-agent-manager-${VERSION}.tar.gz\` bundles both the VM and quick-start installers. \`bootstrap.sh\` and \`start.sh\` are also attached standalone as the one-command entry points:"
             echo '```'
+            echo "# VM install"
             echo "curl -fsSL https://github.com/${REGISTRY_ORG}/agent-manager/releases/download/amp/v${VERSION}/bootstrap.sh | sudo bash -s -- simple --host <PUBLIC_IP> --version ${VERSION}"
+            echo ""
+            echo "# Quick-start (local dev container)"
+            echo "curl -fsSL https://github.com/${REGISTRY_ORG}/agent-manager/releases/download/amp/v${VERSION}/start.sh -o start.sh && chmod +x start.sh && ./start.sh"
             echo '```'
           } > /tmp/release-body.md
 
@@ -624,7 +656,7 @@ jobs:
           name: amctl-dist
           path: dist/
 
-      - name: Package VM install bundle
+      - name: Package install bundle
         run: |
           bash .github/scripts/build-vm-bundle.sh \
             "$TARGET_RELEASE" \

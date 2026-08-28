@@ -20,14 +20,34 @@ spec:
         command:
           - sh
           - -c
+        # Workflow parameters are passed as environment variables and never
+        # interpolated into the script body below. Argo substitution is purely
+        # textual, so a parameter spliced into the script would be parsed by this
+        # shell -- quoting the interpolation is not enough, because the value can
+        # contain the quote character itself.
+        env:
+          - name: BRANCH
+            value: '{{ "{{" }}workflow.parameters.branch{{ "}}" }}'
+          - name: REPO
+            value: '{{ "{{" }}workflow.parameters.git-repo{{ "}}" }}'
+          - name: COMMIT
+            value: '{{ "{{" }}workflow.parameters.commit{{ "}}" }}'
         args:
           - |-
             set -e
 
-            BRANCH={{ "{{" }}workflow.parameters.branch{{ "}}" }}
-            REPO={{ "{{" }}workflow.parameters.git-repo{{ "}}" }}
-            COMMIT={{ "{{" }}workflow.parameters.commit{{ "}}" }}
             GIT_SECRET_PATH="/etc/secrets/git-secret"
+
+            # A leading dash would be read by git as an option rather than a ref,
+            # so reject it before either value reaches a git argv.
+            for revision in "$BRANCH" "$COMMIT"; do
+                case "$revision" in
+                    -*)
+                        echo "Invalid git revision '$revision': must not start with '-'"
+                        exit 1
+                        ;;
+                esac
+            done
 
             if [ -d "$GIT_SECRET_PATH" ] && [ "$(ls -A $GIT_SECRET_PATH)" ]; then
                 # Basic auth (kubernetes.io/basic-auth)
@@ -71,15 +91,17 @@ spec:
 
             if [ -n "$COMMIT" ]; then
                 echo "Cloning specific commit: $COMMIT"
-                git clone --no-checkout --depth 1 "$REPO" /mnt/vol/source
+                git clone --no-checkout --depth 1 -- "$REPO" /mnt/vol/source
                 cd /mnt/vol/source
                 git config --global advice.detachedHead false
                 git fetch --depth 1 origin "$COMMIT"
-                git checkout "$COMMIT"
+                # FETCH_HEAD is what the fetch above just resolved, so the commit
+                # never has to be passed to checkout as a ref argument.
+                git checkout FETCH_HEAD
                 echo -n "$COMMIT" | cut -c1-8 > /tmp/git-revision.txt
             else
                 echo "Cloning branch: $BRANCH with latest commit"
-                git clone --single-branch --branch $BRANCH --depth 1 "$REPO" /mnt/vol/source
+                git clone --single-branch --branch "$BRANCH" --depth 1 -- "$REPO" /mnt/vol/source
                 cd /mnt/vol/source
                 COMMIT_SHA=$(git rev-parse HEAD)
                 echo -n "$COMMIT_SHA" | cut -c1-8 > /tmp/git-revision.txt

@@ -1,4 +1,4 @@
-.PHONY: help setup setup-colima setup-k3d setup-openchoreo setup-default-env-thunder setup-sandbox setup-gvisor setup-kata setup-platform setup-gateway setup-console-local setup-console-local-force setup-amp teardown-amp reset-amp dev-up dev-down dev-restart dev-rebuild dev-logs dev-migrate openchoreo-up openchoreo-down openchoreo-status thunder-up thunder-down thunder-restart thunder-reset teardown db-connect db-logs service-logs service-shell console-logs port-forward stop-port-forward gen-eval-artifacts gen-instrumentation-contract check-contract-drift check-matrix-manifest e2e-test
+.PHONY: help setup setup-colima setup-k3d setup-openchoreo setup-default-env-thunder setup-sandbox setup-gvisor setup-kata setup-platform setup-gateway setup-console-local setup-console-local-force setup-amp teardown-amp reset-amp dev-up dev-down dev-restart dev-rebuild dev-logs dev-migrate openchoreo-up openchoreo-down openchoreo-status thunder-up thunder-down thunder-restart thunder-reset teardown db-connect db-logs service-logs service-shell console-logs port-forward stop-port-forward gen-eval-artifacts gen-instrumentation-contract check-contract-drift check-matrix-manifest e2e-test security-test security-test-static security-test-live
 
 # Absolute path to the console directory on the host. Passed to docker-compose
 # so the container mounts and builds at the same path, keeping rush/pnpm
@@ -63,6 +63,11 @@ help:
 	@echo "  make setup-ai-gateway   - Install AI Gateway (needed for LLM proxy tests)"
 	@echo "  make e2e-test           - Run E2E tests (cluster must be running)"
 	@echo ""
+	@echo "🔒 Security Tests:"
+	@echo "  make security-test         - Run all security tests (static + live)"
+	@echo "  make security-test-static  - Route-table authz invariants (no cluster needed)"
+	@echo "  make security-test-live    - Security suites against a running deployment"
+	@echo ""
 	@echo "🧹 Cleanup:"
 	@echo "  make reset-amp          - Fast reset: teardown-amp + setup-amp (OpenChoreo base preserved)"
 	@echo "  make teardown-amp       - Remove AMP layer only (extensions, platform, gateways, env-Thunders)"
@@ -82,6 +87,7 @@ setup: setup-colima setup-k3d setup-openchoreo setup-platform setup-sandbox setu
 	@echo ""
 	@echo "   Console:                 http://localhost:3000"
 	@echo "   API:                     http://localhost:8080"
+	@bash deployments/scripts/print-admin-credentials.sh http://localhost:3000 amp-thunder || true
 	@echo ""
 	@echo "Run 'make stop-port-forward' to stop port-forwards"
 	@echo "Run 'make port-forward' to restart in a dedicated terminal"
@@ -109,6 +115,7 @@ setup-amp: setup-console-local
 	@echo "✅ AMP layer ready!"
 	@echo "   Console: http://localhost:3000"
 	@echo "   API:     http://localhost:9000"
+	@bash deployments/scripts/print-admin-credentials.sh http://localhost:3000 amp-thunder || true
 
 # Air recompiles the Go service on a fresh container start, so :9000 lags
 # `docker compose up` by up to a couple of minutes. Steps that call the AMS API
@@ -135,13 +142,14 @@ setup-openchoreo:
 # migrated (store_via_ams needs it) — hence after dev-migrate, not in setup-openchoreo.sh.
 setup-default-env-thunder:
 	@ENV_NAME=default DISPLAY_NAME="Default" ORG_NAME=default \
+	  THUNDER_HANDLE=default-idp \
 	  WAIT_TIMEOUT=300s \
 	  AMP_API_URL="http://localhost:9000/api/v1" \
 	  bash deployments/scripts/add-environment-thunder.sh \
 	  && echo "✅ Default environment Thunder ID instance provisioned" \
 	  || { \
 	    echo "⚠️  Default-env Thunder provisioning failed — continuing with remaining setup steps."; \
-	    echo "    Re-run manually: ENV_NAME=default DISPLAY_NAME=Default ORG_NAME=default \\"; \
+	    echo "    Re-run manually: ENV_NAME=default DISPLAY_NAME=Default ORG_NAME=default THUNDER_HANDLE=default-idp \\"; \
 	    echo "      AMP_API_URL=http://localhost:9000/api/v1 \\"; \
 	    echo "      bash deployments/scripts/add-environment-thunder.sh"; \
 	  }
@@ -278,7 +286,8 @@ thunder-up:
 	@helm dependency update deployments/helm-charts/wso2-amp-thunder-extension
 	@helm upgrade --install amp-thunder-extension deployments/helm-charts/wso2-amp-thunder-extension \
 		--namespace amp-thunder --create-namespace \
-		--set thunder.bootstrap.agentManagerMcpDevBaseUrl=http://localhost:9000
+		--set thunder.bootstrap.agentManagerMcpBaseUrl=http://localhost:9000 \
+		--set thunder.setup.admin.password=admin
 	@echo "⏳ Waiting for Platform Thunder deployment..."
 	@kubectl rollout status deployment -n amp-thunder -l app.kubernetes.io/instance=amp-thunder-extension --timeout=120s 2>/dev/null || true
 	@echo "✅ Platform Thunder is up and running!"
@@ -404,6 +413,65 @@ e2e-test:
 		go run github.com/onsi/ginkgo/v2/ginkgo -v $(GINKGO_PROCS) --timeout 45m --poll-progress-after=600s \
 		--keep-going --junit-report=e2e-report.xml --output-dir=. \
 		$(if $(FOCUS),--focus="$(FOCUS)") $(if $(SUITE),./tests/$(SUITE)/...,./tests/...)
+
+
+# Security tests
+#
+# Two layers, both run by `make security-test`:
+#
+#   security-test-static  Go unit tests over the route table. No cluster needed.
+#   security-test-live    Ginkgo suites against a running deployment.
+#
+# The live suites live in test/e2e/security/ — deliberately NOT under
+# test/e2e/tests/, because `make e2e-test` and the e2e CI job both glob
+# ./tests/... and must not pick them up. They share the e2e framework/ and
+# operations/ packages and run against the same cluster `make e2e-test` needs.
+#
+# Run all:            make security-test
+# Static only:        make security-test-static
+# One live suite:     make security-test SUITE=authz
+# One spec:           make security-test FOCUS="scope matrix"
+# Parallel:           make security-test PROCS=4
+#
+# Serial by default, unlike e2e-test. These specs are individually cheap (one
+# HTTP call each) but every one needs a scope-reduced token from the IDP.
+# Ginkgo parallelism forks N processes with separate memory, so each rebuilds
+# its own token cache — parallelism multiplies token requests against Thunder
+# without buying much wall-clock. Override with PROCS= if that changes.
+SECURITY_GINKGO_PROCS := $(if $(PROCS),--procs=$(PROCS),--procs=1)
+
+security-test: security-test-static security-test-live
+
+# Route-table invariants, all in agent-manager-service/api/route_authz_invariant_test.go:
+#   every route carries a permission check; every declared permission gates
+#   something; permissions are reachable through roles and IDP/E2E scope
+#   catalogs; no handler reads the org from the URL path.
+#
+# ADDING AN INVARIANT? Name it TestSecurityInvariant<Whatever> and it runs here
+# automatically. The suite selects by prefix rather than by a list of names,
+# because a -run regex that matches nothing prints "no tests to run" and exits
+# 0 — a broken list would report success while checking nothing. A self-check
+# in the file enforces both halves of the convention.
+#
+# Env vars mirror scripts/run_unit_tests.sh: the api package loads config at
+# init, so it needs them even though these tests touch neither DB nor OpenChoreo.
+SECURITY_STATIC_TESTS := TestSecurityInvariant
+
+security-test-static:
+	@echo "Running static authorization invariants..."
+	@cd agent-manager-service && \
+		DB_HOST=localhost DB_PORT=5432 DB_USER=unit DB_PASSWORD=unit DB_NAME=unit \
+		OPEN_CHOREO_BASE_URL=http://localhost/api/v1 \
+		ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+		SERVER_PORT=8080 \
+		go test -mod=readonly ./api/ -run '$(SECURITY_STATIC_TESTS)' -v
+
+security-test-live:
+	@echo "Running security tests (cluster must be running)..."
+	@cd test/e2e && set -a && [ -f .env ] && . ./.env; set +a && \
+		go run github.com/onsi/ginkgo/v2/ginkgo -v $(SECURITY_GINKGO_PROCS) --timeout 45m \
+		--poll-progress-after=300s --keep-going --junit-report=security-report.xml --output-dir=. \
+		$(if $(FOCUS),--focus="$(FOCUS)") $(if $(SUITE),./security/$(SUITE)/...,./security/...)
 
 
 # Cleanup

@@ -227,7 +227,7 @@ func (e *monitorExecutor) resolveLLMProxyConfig(ctx context.Context, monitor *mo
 		return "", "", "", fmt.Errorf("monitor LLM mapping for monitor %s has no secret KV path — was it provisioned correctly?", monitor.ID)
 	}
 
-	resolvedURL, err := e.resolveProxyURL(ctx, monitor.OUID, monitor.EnvironmentID, mapping.LLMProxy)
+	resolvedURL, err := e.resolveInternalProxyURL(ctx, monitor.OUID, monitor.EnvironmentID, mapping.LLMProxy)
 	if err != nil {
 		return "", "", "", fmt.Errorf("failed to resolve proxy URL: %w", err)
 	}
@@ -241,12 +241,13 @@ func (e *monitorExecutor) resolveLLMProxyConfig(ctx context.Context, monitor *mo
 	return mapping.SecretKVPath, resolvedURL, templateHandle, nil
 }
 
-// resolveProxyURL derives the proxy base URL from the preloaded LLMProxy and the gateway
+// resolveInternalProxyURL derives the proxy base URL from the preloaded LLMProxy and the gateway
 // the proxy is actually deployed to in this environment. Anchoring matters here more than
 // anywhere else: this runs on every scheduled monitor execution, on resources nobody
 // touched, so re-selecting from the environment would break every pre-existing monitor
-// the moment a second egress gateway appears.
-func (e *monitorExecutor) resolveProxyURL(ctx context.Context, ouID, environmentID string, proxy *models.LLMProxy) (string, error) {
+// the moment a second egress gateway appears. The consumer is the in-cluster evaluation job,
+// so the address is the gateway's internal one, not its vhost.
+func (e *monitorExecutor) resolveInternalProxyURL(ctx context.Context, ouID, environmentID string, proxy *models.LLMProxy) (string, error) {
 	_ = ctx
 	if proxy == nil {
 		return "", fmt.Errorf("LLM proxy not preloaded for mapping")
@@ -268,7 +269,7 @@ func (e *monitorExecutor) resolveProxyURL(ctx context.Context, ouID, environment
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve gateway for environment %s: %w", environmentID, err)
 	}
-	return buildProxyURL(gateway, proxy.Configuration.Context), nil
+	return buildInternalProxyURL(gateway, proxy.Configuration.Context)
 }
 
 // buildWorkflowRunRequest constructs the workflow run request for a monitor.

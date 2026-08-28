@@ -98,6 +98,42 @@ func NewExternalAgentRequest(name, description string) CreateAgentRequest {
 	}
 }
 
+// NewSecurityProbeAgentRequest returns the deterministic, non-LLM runtime
+// fixture used by security/runtime. Its OpenAPI surface accepts only named
+// probes; it is intentionally not a general-purpose command or URL executor.
+func NewSecurityProbeAgentRequest(cfg *Config, name string) CreateAgentRequest {
+	autoInstr := false
+	return CreateAgentRequest{
+		Name:        name,
+		DisplayName: name,
+		Description: "Disposable deterministic agent for sandbox and AgentID security tests",
+		Provisioning: Provisioning{
+			Type: "internal",
+			Repository: &Repository{
+				URL:     cfg.SecurityProbeRepository,
+				Branch:  cfg.SecurityProbeBranch,
+				AppPath: cfg.SecurityProbeAppPath,
+			},
+		},
+		AgentType: AgentType{Type: "agent-api", SubType: "custom-api"},
+		Build: &BuildConfig{
+			Type: "buildpack",
+			Buildpack: &BuildpackConfig{
+				Language:        "python",
+				LanguageVersion: "3.11",
+				RunCommand:      "python main.py",
+			},
+		},
+		Configurations: &Configurations{EnableAutoInstrumentation: &autoInstr},
+		InputInterface: &InputInterface{
+			Type:     "HTTP",
+			Port:     8000,
+			BasePath: "/",
+			Schema:   &InputInterfaceSchema{Path: "/openapi.yaml"},
+		},
+	}
+}
+
 // NewAgentFromKindRequest returns a request to create an agent from a published
 // catalog kind. The agent reuses the kind's pre-built image, so no build step
 // is required. Runtime configuration (e.g. OPENAI_API_KEY) must be supplied via

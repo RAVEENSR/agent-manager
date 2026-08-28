@@ -21,6 +21,32 @@ import type { AgentBuildOptions } from "@agent-management-platform/types";
 type InstrumentationVersionEntry =
   AgentBuildOptions["instrumentation"]["versions"][number];
 
+/** The agent fields these helpers read. Structural so callers can pass an
+ *  AgentResponse without importing its full type. */
+type AgentWithBuild = { build?: { type?: string } | null } | null | undefined;
+
+/**
+ * Buildpack language of an agent ("python", "ballerina", ...), or undefined for
+ * Docker agents and agents whose build is not yet known.
+ *
+ * Kind-based agents have no build workflow, so the backend reconstructs `build`
+ * from the component's language labels — this reads the same field either way.
+ */
+export function buildpackLanguage(agent: AgentWithBuild): string | undefined {
+  const build = agent?.build;
+  if (!build || build.type !== "buildpack") return undefined;
+  return (build as { buildpack?: { language?: string } }).buildpack?.language;
+}
+
+/**
+ * Languages the platform can auto-instrument. Both are gated by the same
+ * `enableAutoInstrumentation` flag server-side (see buildTraitEnvConfigs), so both
+ * should be offered the toggle. Docker agents have no instrumentation trait at all.
+ */
+export function isInstrumentableLanguage(language?: string): boolean {
+  return language === "python" || language === "ballerina";
+}
+
 /**
  * Collapse a Python runtime version to its bare `major.minor` form
  * ("3.11.4" -> "3.11"), matching the shape the instrumentation catalog uses.

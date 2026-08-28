@@ -16,6 +16,7 @@
  * under the License.
  */
 
+export * from "./AgentTypeChips";
 export * from "./BuildLogs";
 export * from "./BuildPanel";
 export * from "./BuildSteps";
@@ -41,6 +42,10 @@ export * from "./EntityHeader";
 export * from "./EditFormSkeleton";
 export * from "./ListingSkeletonRows";
 export * from "./ResilienceTimeoutFields";
+export {
+  RestrictedAction,
+  type RestrictedActionProps,
+} from "./RestrictedAction/RestrictedAction";
 export {
   PolicyListSection,
   type PolicyListSectionProps,

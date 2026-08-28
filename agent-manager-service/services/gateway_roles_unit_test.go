@@ -46,8 +46,7 @@ func newGateway(t *testing.T, role string, active bool) *models.Gateway {
 		Properties:  map[string]interface{}{},
 		Manifest:    map[string]interface{}{},
 		Vhost:       "vhost-" + id.String() + ".example.com",
-		// Seeded so internal-URL consumers resolve the real address instead of logging the
-		// missing-runtimeUrl ERROR and falling back to the vhost.
+		// Seeded so internal-URL consumers resolve a real address instead of failing closed.
 		RuntimeURL:               "http://gateway-" + id.String() + ".acme-dev:22893",
 		IsCritical:               false,
 		GatewayFunctionalityType: role,

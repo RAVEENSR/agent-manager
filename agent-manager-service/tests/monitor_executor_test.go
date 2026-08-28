@@ -323,7 +323,7 @@ func TestExecuteMonitorRun_LLMCredentials(t *testing.T) {
 	gdb := db.DB(context.Background())
 
 	// Seed an LLMProxy row — Handle is a join-derived field so it is left empty here;
-	// buildProxyURL only needs Configuration.Context from this row.
+	// buildPublicProxyURL only needs Configuration.Context from this row.
 	// session_replication_role disables FK triggers so we don't need to seed artifacts/llm_providers.
 	contextPath := "/test-proxy-ctx"
 	proxyUUID := uuid.New()
@@ -366,6 +366,7 @@ func TestExecuteMonitorRun_LLMCredentials(t *testing.T) {
 		Name:                     "test-gateway-" + gwUUID.String()[:8],
 		DisplayName:              "Test Gateway",
 		Vhost:                    "https://gw.example.com",
+		RuntimeURL:               "http://api-platform-acme-dev-gw-gateway-gateway-runtime.acme-dev:22893",
 		IsActive:                 true,
 		Properties:               map[string]interface{}{},
 		GatewayFunctionalityType: "both",
@@ -410,12 +411,10 @@ func TestExecuteMonitorRun_LLMCredentials(t *testing.T) {
 	// Secret path comes from the persisted SecretReference remoteRef (not a computed KV path).
 	assert.Equal(t, expectedSecretPath, evalParams["llmProxySecretPath"], "llmProxySecretPath should be the SecretReference remoteRef key")
 
-	// Proxy URL is the gateway vhost + context path. buildProxyURL returns the gateway's
-	// vhost; in-cluster callers reach it via the CoreDNS *.gateway.localhost rewrite to the
-	// k3d host, and the gateway routes by vhost Host header into the per-env api-platform
-	// gateway (see services/agent_configuration_service.go:buildProxyURL).
-	expectedProxyURL := gw.Vhost + contextPath
-	assert.Equal(t, expectedProxyURL, evalParams["llmApiBase"], "llmApiBase should be the gateway vhost + proxy context path")
+	// The evaluation job runs in-cluster, so it gets the gateway's runtime address, not the
+	// public vhost — its NetworkPolicy only allows egress to the gateway namespace on 22893.
+	expectedProxyURL := gw.RuntimeURL + contextPath
+	assert.Equal(t, expectedProxyURL, evalParams["llmApiBase"], "llmApiBase should be the gateway runtime URL + proxy context path")
 }
 
 // TestExecuteMonitorRun_NilEvaluatorsReturnsError verifies that calling ExecuteMonitorRun

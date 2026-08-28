@@ -580,9 +580,9 @@ export const SecurityConfigSections = forwardRef<SecurityConfigHandle, SecurityC
           </Form.Stack>
         </Form.Section>
         <Form.Section>
-          <Form.Header>Gateway Timeout</Form.Header>
+          <Form.Header>Request Timeout</Form.Header>
           <Form.Subheader>
-            Max duration the gateway keeps a response open between this agent and the client
+            Maximum duration an active connection can stay open between the agent and client
           </Form.Subheader>
           <Grid container spacing={2}>
             <Grid size={{ xs: 12, sm: 6 }}>

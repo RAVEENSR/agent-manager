@@ -123,7 +123,7 @@ func (c *websocketController) Connect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Authenticate gateway using API key
-	gateway, err := c.gatewayService.VerifyToken(apiKey)
+	gateway, err := c.gatewayService.VerifyToken(ctx, apiKey)
 	if err != nil {
 		log.Warn("WebSocket authentication failed", "ip", clientIP, "error", err)
 		http.Error(w, "Invalid or expired API key", http.StatusUnauthorized)

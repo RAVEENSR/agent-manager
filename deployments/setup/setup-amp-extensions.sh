@@ -70,11 +70,17 @@ install_thunder_extension() {
     fi
 
     # The dev stack runs amp-api on a published host port rather than behind the
-    # gateway, so register that origin as a second MCP resource identifier too —
-    # Thunder matches the authorize request's `resource` value exactly.
+    # gateway, so override the MCP resource identifier to that origin — Thunder
+    # matches the authorize request's `resource` value exactly, and this dev
+    # stack never serves the chart's own k3d-gateway default at all.
+    # thunder.setup.admin.password fixes the console admin login at "admin" for
+    # local dev convenience — the chart's own default (unset) would generate a
+    # random one instead, which is what production wants but is annoying to
+    # look up every time on a machine only you can reach anyway.
     helm upgrade --install amp-thunder-extension "${SCRIPT_DIR}/../helm-charts/wso2-amp-thunder-extension" \
         --namespace amp-thunder --create-namespace \
-        --set thunder.bootstrap.agentManagerMcpDevBaseUrl=http://localhost:9000
+        --set thunder.bootstrap.agentManagerMcpBaseUrl=http://localhost:9000 \
+        --set thunder.setup.admin.password=admin
     echo "✅ AMP Thunder Extension installed/upgraded successfully"
 }
 

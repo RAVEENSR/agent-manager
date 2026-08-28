@@ -249,7 +249,7 @@ The operations below emit a record describing what actually changed, not just th
 
 Two of these carry detail worth calling out:
 
-- **`agent:deploy` records the target environment and `isProduction`.** The route is gated by `agent:deploy-non-production` wherever the agent actually lands, so the permission cannot tell a sandbox push from a production one — only the record can. `agent:promote` records both ends of the move but not `isProduction`, because deriving it there would add an OpenChoreo round-trip to the promotion path; the environment name plus the org's environment list answers the same question.
+- **`agent:deploy` and `agent:promote` both record the target environment and `isProduction`.** The route declares only the tier floor whatever the agent actually lands on, so the declared permission cannot tell a sandbox push from a production one — only the record can. Both flags come free: the environment-tier check (`requireEnvTier`) has already resolved the environment by the time the record is opened. `agent:promote` records both ends of the move as well.
 - **`role:grant-permission` records the granted scopes in full.** Scope strings are identifiers, not secrets, and "alice granted SRE deploy-production" is the question the event exists to answer.
 
 ## Not yet covered

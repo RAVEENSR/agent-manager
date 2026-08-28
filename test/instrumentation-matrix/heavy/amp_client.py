@@ -66,7 +66,7 @@ _TOKEN_REFRESH_SKEW_S = 30
 _TOKEN_SCOPES = (
     "amp:project:create amp:project:read amp:project:delete "
     "amp:agent:create amp:agent:read amp:agent:delete amp:agent:build "
-    "amp:agent:deploy-non-production amp:agent:api-key-manage "
+    "amp:agent:env-non-production amp:agent:api-key-manage "
     "amp:observability:trace-read"
 )
 

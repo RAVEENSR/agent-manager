@@ -100,13 +100,23 @@ spec:
             - name: API_KEY_VALUE
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.agentManagerService.config.apiKey.existingSecret | default (include "agent-management-platform.agentManagerService.fullname" .) }}
+                  {{- if .Values.agentManagerService.config.apiKey.existingSecret }}
+                  name: {{ .Values.agentManagerService.config.apiKey.existingSecret }}
                   key: {{ .Values.agentManagerService.config.apiKey.existingSecretKey | default "api-key" }}
+                  {{- else }}
+                  name: {{ include "agent-management-platform.agentManagerService.fullname" . }}
+                  key: api-key
+                  {{- end }}
             - name: GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.agentManagerService.config.github.existingSecret | default (include "agent-management-platform.agentManagerService.fullname" .) }}
+                  {{- if .Values.agentManagerService.config.github.existingSecret }}
+                  name: {{ .Values.agentManagerService.config.github.existingSecret }}
                   key: {{ .Values.agentManagerService.config.github.existingSecretKey | default "github-token" }}
+                  {{- else }}
+                  name: {{ include "agent-management-platform.agentManagerService.fullname" . }}
+                  key: github-token
+                  {{- end }}
             {{- if or .Values.agentManagerService.config.openbao.token .Values.agentManagerService.config.openbao.existingSecret }}
             - name: OPENBAO_TOKEN
               valueFrom:
@@ -134,13 +144,23 @@ spec:
             - name: ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.agentManagerService.config.encryptionKey.existingSecret | default (include "agent-management-platform.agentManagerService.fullname" .) }}
+                  {{- if .Values.agentManagerService.config.encryptionKey.existingSecret }}
+                  name: {{ .Values.agentManagerService.config.encryptionKey.existingSecret }}
                   key: {{ .Values.agentManagerService.config.encryptionKey.existingSecretKey | default "encryption-key" }}
+                  {{- else }}
+                  name: {{ include "agent-management-platform.agentManagerService.fullname" . }}
+                  key: encryption-key
+                  {{- end }}
             - name: THUNDER_ASK_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.agentManagerService.config.thunderAskSecret.existingSecret | default (include "agent-management-platform.agentManagerService.fullname" .) }}
+                  {{- if .Values.agentManagerService.config.thunderAskSecret.existingSecret }}
+                  name: {{ .Values.agentManagerService.config.thunderAskSecret.existingSecret }}
                   key: {{ .Values.agentManagerService.config.thunderAskSecret.existingSecretKey | default "thunder-ask-secret" }}
+                  {{- else }}
+                  name: {{ include "agent-management-platform.agentManagerService.fullname" . }}
+                  key: thunder-ask-secret
+                  {{- end }}
             {{- if or .Values.agentManagerService.config.thunder.clientSecret .Values.agentManagerService.config.thunder.existingSecret }}
             - name: THUNDER_CLIENT_SECRET
               {{- if .Values.agentManagerService.config.thunder.existingSecret }}

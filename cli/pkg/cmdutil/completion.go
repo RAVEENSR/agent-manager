@@ -313,6 +313,47 @@ func CompleteLLMProviderTemplates(cmd *cobra.Command, f *Factory) []string {
 	return out
 }
 
+// CompleteGateways returns sorted gateway names in the resolved org, each
+// annotated with its UUID and placement role. Org resolution follows
+// ResolveOrgProject(cmd, true, false). Returns nil if org cannot be resolved or on
+// any API error.
+//
+// Status is not filtered: the server's placement candidate set is not
+// liveness-filtered, so completing only ACTIVE gateways would hide values the
+// server accepts.
+func CompleteGateways(cmd *cobra.Command, f *Factory) []string {
+	const op = "CompleteGateways"
+	org, _, err := f.ResolveOrgProject(cmd, true, false)
+	if err != nil {
+		logCompletionErr(op, nil, err)
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(cmd.Context(), completionTimeout)
+	defer cancel()
+
+	client, err := f.AgentManager(ctx)
+	if err != nil {
+		logCompletionErr(op, map[string]string{"org": org}, err)
+		return nil
+	}
+	// A partial result is kept: paging the whole org can outrun completionTimeout,
+	// and the gateways already gathered complete better than an empty list.
+	gateways, err := ListAllGateways(ctx, client, org)
+	if err != nil {
+		logCompletionErr(op, map[string]string{"org": org}, err)
+		if len(gateways) == 0 {
+			return nil
+		}
+	}
+	out := make([]string, 0, len(gateways))
+	for _, g := range gateways {
+		out = append(out, fmt.Sprintf("%s\t%s (%s)", g.Name, g.Uuid, g.GatewayType))
+	}
+	sort.Strings(out)
+	return out
+}
+
 // CompleteOrgs returns sorted organization names. Returns nil on any error
 // (no instance, network, server). Times out at 2s.
 func CompleteOrgs(cmd *cobra.Command, f *Factory) []string {

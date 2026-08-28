@@ -30,7 +30,7 @@ jobs:
     # Bumped from 60 to accommodate the reduced test parallelism below: with
     # --procs=2 (was -p, i.e. one proc per vCPU) fewer suites run concurrently,
     # so wall-clock grows even though each suite no longer thrashes on CPU.
-    timeout-minutes: 90
+    timeout-minutes: 130
     steps:
       - name: Clone the code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -52,6 +52,7 @@ jobs:
           sudo install /tmp/yq /usr/local/bin/yq
 
       - name: Install platform
+        id: install-platform
         run: |
           cd deployments/quick-start && VERSION=${{ env.HELM_CHART_VERSION }} bash install.sh
 
@@ -75,6 +76,15 @@ jobs:
           cd test/e2e && go run github.com/onsi/ginkgo/v2/ginkgo -v --procs=2 --timeout 70m \
             --poll-progress-after=600s --keep-going --junit-report=report.xml \
             ./tests/... 2>&1 | tee e2e-output.log
+
+      - name: Run security conformance tests
+        if: ${{ !cancelled() && steps.install-platform.outcome == 'success' }}
+        env:
+          SECURITY_PROBE_REPOSITORY_URL: ${{ format('{0}/{1}', github.server_url, github.repository) }}
+          SECURITY_PROBE_REPOSITORY_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -o pipefail
+          make security-test-live 2>&1 | tee test/e2e/security-output.log
 
       - name: Dump pod logs on failure
         if: failure()
@@ -136,10 +146,20 @@ jobs:
           path: test/e2e/report.xml
           reporter: java-junit
 
+      - name: Publish security test results
+        if: ${{ always() && hashFiles('test/e2e/security-report.xml') != '' }}
+        uses: dorny/test-reporter@6e6a65b7a0bd2c9197df7d0ae36ac5cee784230c # v2.0.0
+        with:
+          name: Security Conformance Results
+          path: test/e2e/security-report.xml
+          reporter: java-junit
+
       - name: Upload test logs
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: e2e-test-logs
-          path: test/e2e/e2e-output.log
+          path: |
+            test/e2e/e2e-output.log
+            test/e2e/security-output.log
           retention-days: 7

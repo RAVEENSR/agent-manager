@@ -142,6 +142,9 @@ func (c *agentConfigurationController) CreateAgentModelConfig(w http.ResponseWri
 		case errors.Is(err, utils.ErrLLMProxyExists):
 			utils.WriteErrorResponse(w, http.StatusConflict, "LLM proxy name collision: another agent in this org already uses the same model-config name")
 			return
+		case errors.Is(err, utils.ErrBuildInProgress):
+			utils.WriteErrorResponse(w, http.StatusConflict, "A build is already in progress for this agent; try again once it finishes")
+			return
 		default:
 			log.Error("CreateAgentModelConfig: failed to create configuration", "error", err)
 			utils.WriteErrorResponse(w, http.StatusInternalServerError, "Failed to create agent model configuration")
@@ -288,6 +291,9 @@ func (c *agentConfigurationController) UpdateAgentModelConfig(w http.ResponseWri
 		case errors.Is(err, utils.ErrAgentConfigNotFound):
 			utils.WriteErrorResponse(w, http.StatusNotFound, "Configuration not found")
 			return
+		case errors.Is(err, utils.ErrAgentNotFound):
+			utils.WriteErrorResponse(w, http.StatusNotFound, "Agent not found")
+			return
 		case errors.Is(err, utils.ErrLLMProviderNotFound):
 			utils.WriteErrorResponse(w, http.StatusNotFound, "LLM provider not found")
 			return
@@ -297,8 +303,17 @@ func (c *agentConfigurationController) UpdateAgentModelConfig(w http.ResponseWri
 		case errors.Is(err, utils.ErrInvalidInput):
 			utils.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 			return
+		case errors.Is(err, utils.ErrUnauthorized):
+			utils.WriteErrorResponse(w, http.StatusUnauthorized, "Unauthorized access")
+			return
+		case errors.Is(err, utils.ErrForbidden):
+			utils.WriteErrorResponse(w, http.StatusForbidden, "Forbidden")
+			return
 		case errors.Is(err, utils.ErrLLMProxyExists):
 			utils.WriteErrorResponse(w, http.StatusConflict, "LLM proxy name collision: another agent in this org already uses the same model-config name")
+			return
+		case errors.Is(err, utils.ErrBuildInProgress):
+			utils.WriteErrorResponse(w, http.StatusConflict, "A build is already in progress for this agent; try again once it finishes")
 			return
 		default:
 			log.Error("UpdateAgentModelConfig: failed to update configuration", "error", err)
@@ -409,6 +424,9 @@ func (c *agentConfigurationController) CreateAgentMCPConfig(w http.ResponseWrite
 			return
 		case errors.Is(err, utils.ErrForbidden):
 			utils.WriteErrorResponse(w, http.StatusForbidden, "Forbidden")
+			return
+		case errors.Is(err, utils.ErrBuildInProgress):
+			utils.WriteErrorResponse(w, http.StatusConflict, "A build is already in progress for this agent; try again once it finishes")
 			return
 		default:
 			log.Error("CreateAgentMCPConfig: failed to create configuration", "error", err)
@@ -540,11 +558,23 @@ func (c *agentConfigurationController) UpdateAgentMCPConfig(w http.ResponseWrite
 		case errors.Is(err, utils.ErrAgentConfigNotFound):
 			utils.WriteErrorResponse(w, http.StatusNotFound, "Configuration not found")
 			return
+		case errors.Is(err, utils.ErrAgentNotFound):
+			utils.WriteErrorResponse(w, http.StatusNotFound, "Agent not found")
+			return
 		case errors.Is(err, utils.ErrMCPProxyNotFound):
 			utils.WriteErrorResponse(w, http.StatusNotFound, "MCP proxy not found")
 			return
 		case errors.Is(err, utils.ErrInvalidInput):
 			utils.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
+			return
+		case errors.Is(err, utils.ErrUnauthorized):
+			utils.WriteErrorResponse(w, http.StatusUnauthorized, "Unauthorized access")
+			return
+		case errors.Is(err, utils.ErrForbidden):
+			utils.WriteErrorResponse(w, http.StatusForbidden, "Forbidden")
+			return
+		case errors.Is(err, utils.ErrBuildInProgress):
+			utils.WriteErrorResponse(w, http.StatusConflict, "A build is already in progress for this agent; try again once it finishes")
 			return
 		default:
 			log.Error("UpdateAgentMCPConfig: failed to update configuration", "error", err)

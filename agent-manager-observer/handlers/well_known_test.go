@@ -58,8 +58,8 @@ func TestWellKnownOAuthProtectedResource_HappyPath(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if body.Resource != cfg.ServerPublicURL {
-		t.Errorf("expected resource %q, got %q", cfg.ServerPublicURL, body.Resource)
+	if body.Resource != cfg.ServerPublicURL+"/mcp" {
+		t.Errorf("expected resource %q, got %q", cfg.ServerPublicURL+"/mcp", body.Resource)
 	}
 	if len(body.AuthorizationServers) != 1 || body.AuthorizationServers[0] != "https://thunder.example.com" {
 		t.Errorf("expected authorization_servers [https://thunder.example.com], got %v", body.AuthorizationServers)

@@ -46,6 +46,16 @@ export type AuthHooks = {
   userInfo: UserInfo;
   isLoadingUserInfo: boolean;
   isLoadingIsAuthenticated: boolean;
+  /**
+   * True until the access token's payload has settled, one way or the other.
+   *
+   * The token is decoded asynchronously after sign-in, so the claims it carries
+   * — `scope` above all — are absent from userInfo for a beat during which
+   * isLoadingUserInfo is already false. A caller reading a claim needs to tell
+   * that beat apart from a token that genuinely carries nothing, or it acts on
+   * an empty answer and then changes its mind.
+   */
+  isLoadingAccessToken: boolean;
   getToken: () => Promise<string>;
   login: () => void;
   logout: () => Promise<void>;
@@ -65,8 +75,13 @@ export const useAuthHooks = (): AuthHooks => {
 
   const { flattenedProfile } = useUser();
 
-  const [accessTokenPayload, setAccessTokenPayload] =
-    useState<Record<string, unknown> | null>(null);
+  // undefined = the decode has not settled yet; null = it settled with nothing
+  // usable (signed out, no token, or a token that would not decode). Collapsing
+  // the two would make "still loading" and "no claims" the same value, which is
+  // the distinction isLoadingAccessToken exists to keep.
+  const [accessTokenPayload, setAccessTokenPayload] = useState<
+    Record<string, unknown> | null | undefined
+  >(undefined);
 
   const getAccessTokenRef = useRef(getAccessToken);
   getAccessTokenRef.current = getAccessToken;
@@ -78,7 +93,10 @@ export const useAuthHooks = (): AuthHooks => {
     }
     let cancelled = false;
     const tokenPromise = getAccessTokenRef.current?.();
-    if (!tokenPromise) return;
+    if (!tokenPromise) {
+      setAccessTokenPayload(null);
+      return;
+    }
     tokenPromise
       .then((token) => {
         if (cancelled) return;
@@ -135,6 +153,7 @@ export const useAuthHooks = (): AuthHooks => {
     userInfo,
     isLoadingUserInfo: isLoading,
     isLoadingIsAuthenticated: !isInitialized || isLoading,
+    isLoadingAccessToken: accessTokenPayload === undefined,
     getToken: safeGetToken,
     login: customLogin,
     logout: handleLogout,

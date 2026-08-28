@@ -17,6 +17,7 @@
  */
 
 import React, { useMemo } from "react";
+import { format } from "date-fns";
 import {
   Box,
   Button,
@@ -149,22 +150,8 @@ const PerformanceByEvaluatorCard: React.FC<PerformanceByEvaluatorCardProps> = ({
   }, [timeSeriesByEvaluator, evaluatorNames]);
 
   const formatTick = React.useCallback(
-    (epoch: number) => {
-      const date = new Date(epoch);
-      const granularity = timeSeriesByEvaluator?.granularity;
-      if (granularity === "day" || granularity === "week") {
-        return date.toLocaleDateString(undefined, {
-          month: "short",
-          day: "numeric",
-        });
-      }
-      return date.toLocaleTimeString(undefined, {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      });
-    },
-    [timeSeriesByEvaluator?.granularity],
+    (epoch: number) => format(new Date(epoch), "MM/dd HH:mm"),
+    [],
   );
 
   const [hiddenSeries, setHiddenSeries] = React.useState<Set<string>>(

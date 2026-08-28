@@ -17,7 +17,7 @@
  */
 
 import { Box, Form, Typography } from "@wso2/oxygen-ui";
-import { FileCode, Layers } from "@wso2/oxygen-ui-icons-react";
+import { FileCode, BookOpenText } from "@wso2/oxygen-ui-icons-react";
 import { generatePath, useParams } from "react-router-dom";
 import { PageLayout } from "@agent-management-platform/views";
 import { absoluteRouteMap } from "@agent-management-platform/types";
@@ -49,7 +49,7 @@ export const NewAgentSourceOptions = ({ onSelect }: NewAgentSourceOptionsProps) 
             type: "catalog",
             title: "Agent Catalog",
             subheader: "Pick an Agent Kind from Agent Catalog",
-            icon: <Layers size={56} />,
+            icon: <BookOpenText size={56} />,
         },
     ] as const;
 

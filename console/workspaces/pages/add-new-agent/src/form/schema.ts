@@ -48,6 +48,18 @@ export interface MCPProxyFormEntry {
   authenticationType?: AuthenticationType;
 }
 
+// Repository-relative paths (Dockerfile, OpenAPI schema, base path) become
+// directory and file arguments inside the build container, so they are held to
+// the same conservative POSIX subset the backend enforces. appPath spells the
+// same rule out field by field below, for per-rule messages.
+const isBuildPath = (value: string): boolean =>
+  /^\/[A-Za-z0-9._\-/]*$/.test(value) &&
+  !value.includes('..') &&
+  (value === '/' || !value.endsWith('/'));
+
+// Only the host and the owner/repo segments; the backend pins the same shape.
+const gitHubRepoUrlRe = /^https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+(?:\.git)?\/?$/;
+
 // Base fields shared by both flows
 const baseAgentFields = {
   displayName: z
@@ -84,12 +96,42 @@ export const createAgentSchema = z.object({
   // the authoritative gate. nullable for the case where no AMP-provided
   // instrumentation is available for the chosen Python version.
   instrumentationVersion: z.string().trim().nullable().optional(),
+  // The host and the owner/repo character set are pinned because the URL is
+  // handed to git inside the build container; the backend enforces the same rule
+  // (utils.validateRepoDetails), this is only the earlier, friendlier message.
   repositoryUrl: z
     .string()
     .trim()
     .min(1, 'Repository URL is required')
-    .url('Must be a valid URL'),
-  branch: z.string().trim().min(1, 'Branch is required'),
+    .max(2048, 'Repository URL must be at most 2048 characters')
+    .url('Must be a valid URL')
+    .refine((value) => gitHubRepoUrlRe.test(value), {
+      message: 'Must be a GitHub repository URL, e.g. https://github.com/owner/repo',
+    }),
+  // A branch name is an argument to git, so the allowlist covers the characters
+  // real branch names use and nothing else. The second refine carries the ref
+  // rules the character class cannot express, including the leading dash that
+  // git would read as an option instead of a branch.
+  branch: z
+    .string()
+    .trim()
+    .min(1, 'Branch is required')
+    .max(255, 'Branch must be at most 255 characters')
+    .refine((value) => /^[A-Za-z0-9._@+/-]+$/.test(value), {
+      message: 'Branch can only contain letters, numbers, ., _, @, +, - and /',
+    })
+    .refine(
+      (value) =>
+        !value.startsWith('-') &&
+        !value.startsWith('/') &&
+        !value.endsWith('/') &&
+        !value.includes('//') &&
+        !value.includes('..') &&
+        !value.includes('@{') &&
+        !value.endsWith('.') &&
+        !value.endsWith('.lock'),
+      { message: 'Branch is not a valid git branch name' }
+    ),
   appPath: z
     .string()
     .trim()
@@ -119,10 +161,18 @@ export const createAgentSchema = z.object({
     appPath: z.string().trim().min(1),
     repositoryUrl: z.string().url(),
   }).optional(),
+  // runCommand is the container's start command by design -- the buildpack makes
+  // it PID 1 under a shell -- so it is deliberately left unconstrained.
   runCommand: z.string().trim().optional(),
   language: z.string().trim().min(1, 'Language is required'),
   languageVersion: z.string().trim().optional(),
-  dockerfilePath: z.string().trim().optional(),
+  dockerfilePath: z
+    .string()
+    .trim()
+    .refine((value) => value === '' || isBuildPath(value), {
+      message: 'Dockerfile path must start with / and contain only letters, numbers, ., _, - and /',
+    })
+    .optional(),
   interfaceType: z.enum(['DEFAULT', 'CUSTOM']),
   port: z
     .union([z.number(), z.string(), z.undefined()])
@@ -131,8 +181,20 @@ export const createAgentSchema = z.object({
       return typeof val === 'string' ? Number(val) : val;
     })
     .optional(),
-  basePath: z.string().trim().optional(),
-  openApiPath: z.string().trim().optional(),
+  basePath: z
+    .string()
+    .trim()
+    .refine((value) => value === '' || isBuildPath(value), {
+      message: 'Base path must start with / and contain only letters, numbers, ., _, - and /',
+    })
+    .optional(),
+  openApiPath: z
+    .string()
+    .trim()
+    .refine((value) => value === '' || isBuildPath(value), {
+      message: 'OpenAPI path must start with / and contain only letters, numbers, ., _, - and /',
+    })
+    .optional(),
   env: z
     .array(
       z.object({
@@ -252,4 +314,3 @@ export const createAgentSchema = z.object({
 export type ConnectAgentFormValues = z.infer<typeof connectAgentSchema>;
 export type CreateAgentFormValues = z.infer<typeof createAgentSchema>;
 export type AddAgentFormValues = ConnectAgentFormValues | CreateAgentFormValues;
-

@@ -25,7 +25,7 @@ import (
 //			CountByProviderFunc: func(ouID string, providerUUID string) (int, error) {
 //				panic("mock out the CountByProvider method")
 //			},
-//			CreateFunc: func(p *models.LLMProxy, handle string, name string, version string, ouID string) error {
+//			CreateFunc: func(ctx context.Context, p *models.LLMProxy, handle string, name string, version string, ouID string) error {
 //				panic("mock out the Create method")
 //			},
 //			DeleteFunc: func(proxyID string, ouID string) error {
@@ -72,7 +72,7 @@ type LLMProxyRepositoryMock struct {
 	CountByProviderFunc func(ouID string, providerUUID string) (int, error)
 
 	// CreateFunc mocks the Create method.
-	CreateFunc func(p *models.LLMProxy, handle string, name string, version string, ouID string) error
+	CreateFunc func(ctx context.Context, p *models.LLMProxy, handle string, name string, version string, ouID string) error
 
 	// DeleteFunc mocks the Delete method.
 	DeleteFunc func(proxyID string, ouID string) error
@@ -124,6 +124,8 @@ type LLMProxyRepositoryMock struct {
 		}
 		// Create holds details about calls to the Create method.
 		Create []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
 			// P is the p argument value.
 			P *models.LLMProxy
 			// Handle is the handle argument value.
@@ -335,17 +337,19 @@ func (mock *LLMProxyRepositoryMock) CountByProviderCalls() []struct {
 }
 
 // Create calls CreateFunc.
-func (mock *LLMProxyRepositoryMock) Create(p *models.LLMProxy, handle string, name string, version string, ouID string) error {
+func (mock *LLMProxyRepositoryMock) Create(ctx context.Context, p *models.LLMProxy, handle string, name string, version string, ouID string) error {
 	if mock.CreateFunc == nil {
 		panic("LLMProxyRepositoryMock.CreateFunc: method is nil but LLMProxyRepository.Create was just called")
 	}
 	callInfo := struct {
+		Ctx     context.Context
 		P       *models.LLMProxy
 		Handle  string
 		Name    string
 		Version string
 		OuID    string
 	}{
+		Ctx:     ctx,
 		P:       p,
 		Handle:  handle,
 		Name:    name,
@@ -355,7 +359,7 @@ func (mock *LLMProxyRepositoryMock) Create(p *models.LLMProxy, handle string, na
 	mock.lockCreate.Lock()
 	mock.calls.Create = append(mock.calls.Create, callInfo)
 	mock.lockCreate.Unlock()
-	return mock.CreateFunc(p, handle, name, version, ouID)
+	return mock.CreateFunc(ctx, p, handle, name, version, ouID)
 }
 
 // CreateCalls gets all the calls that were made to Create.
@@ -363,6 +367,7 @@ func (mock *LLMProxyRepositoryMock) Create(p *models.LLMProxy, handle string, na
 //
 //	len(mockedLLMProxyRepository.CreateCalls())
 func (mock *LLMProxyRepositoryMock) CreateCalls() []struct {
+	Ctx     context.Context
 	P       *models.LLMProxy
 	Handle  string
 	Name    string
@@ -370,6 +375,7 @@ func (mock *LLMProxyRepositoryMock) CreateCalls() []struct {
 	OuID    string
 } {
 	var calls []struct {
+		Ctx     context.Context
 		P       *models.LLMProxy
 		Handle  string
 		Name    string

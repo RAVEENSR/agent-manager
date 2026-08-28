@@ -22,10 +22,15 @@ import { PageLayout } from "@agent-management-platform/views";
 import {
   useDeleteAgentMCPConfig,
   useDeleteAgentModelConfig,
+  useGetAgent,
+  useGetAgentBuilds,
   useListAgentMCPConfigs,
   useListAgentModelConfigs,
 } from "@agent-management-platform/api-client";
-import { absoluteRouteMap } from "@agent-management-platform/types";
+import {
+  absoluteRouteMap,
+  type BuildResponse,
+} from "@agent-management-platform/types";
 import {
   AgentConfigTableSection,
   type AgentConfigTableLabels,
@@ -52,7 +57,8 @@ const llmLabels: AgentConfigTableLabels = {
   removeTooltip: "Remove LLM configuration",
   removeConfirmation: () =>
     "This will remove the LLM configuration and its environment variable mappings from the agent. The catalog service itself will not be affected.",
-  removeAriaLabel: (config) => `Remove configuration ${config.name || config.uuid}`,
+  removeAriaLabel: (config) =>
+    `Remove configuration ${config.name || config.uuid}`,
 };
 
 const mcpLabels: AgentConfigTableLabels = {
@@ -72,6 +78,14 @@ const mcpLabels: AgentConfigTableLabels = {
   removeAriaLabel: (config) => `Remove ${config.name}`,
 };
 
+// A build only yields a runnable image in these two states; the API reports
+// success under both names.
+const isBuildComplete = (build: BuildResponse) =>
+  build.status === "Completed" || build.status === "Succeeded";
+
+const NO_COMPLETED_BUILD_REASON =
+  "Complete a build for this agent before adding configurations.";
+
 type TabPanelProps = {
   value: number;
   index: number;
@@ -89,7 +103,9 @@ function TabPanel({ value, index, children }: TabPanelProps) {
 export const ConfigureComponent: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTabIndex = CONFIGURE_TAB_KEYS.indexOf(
-    searchParams.get(CONFIGURE_TAB_PARAM) as (typeof CONFIGURE_TAB_KEYS)[number],
+    searchParams.get(
+      CONFIGURE_TAB_PARAM,
+    ) as (typeof CONFIGURE_TAB_KEYS)[number],
   );
   const tabIndex = requestedTabIndex === -1 ? 0 : requestedTabIndex;
   const handleTabChange = (_: React.SyntheticEvent, index: number) => {
@@ -128,6 +144,41 @@ export const ConfigureComponent: React.FC = () => {
     { orgName: orgId, projName: projectId, agentName: agentId },
     { limit: 1000, offset: 0 },
   );
+  // Adding a configuration is pointless until the agent has an image to run it
+  // against, so the Add buttons stay closed until at least one build has
+  // completed — an agent whose builds have all failed is blocked for the same
+  // reason as one whose only build is still running. Later builds never
+  // re-block: an earlier completed build has already produced an image.
+  //
+  // The gate only applies to agents that build their own image. An external
+  // agent runs somewhere else entirely and a kind-sourced one takes its image
+  // from the published kind, so neither has a build of its own to wait for —
+  // gating them would strand their configuration behind a build they cannot
+  // start.
+  //
+  // The gate fails open, deliberately. It is a hint, not an authorization check:
+  // nothing server-side refuses a configuration for an agent with no build, and
+  // a configuration added early is a deletable row, not damage. So while either
+  // query is in flight — or if the agent lookup fails outright — the buttons
+  // stay enabled rather than telling every visitor to "complete a build" for an
+  // agent that is exempt, already built, or merely slow to load.
+  const { data: agent } = useGetAgent({
+    orgName: orgId,
+    projName: projectId,
+    agentName: agentId,
+  });
+  const buildsOwnImage =
+    !!agent && agent.provisioning?.type !== "external" && !agent.kindName;
+
+  const { data: buildsData, isLoading: isLoadingBuilds } = useGetAgentBuilds({
+    orgName: orgId,
+    projName: projectId,
+    agentName: agentId,
+  });
+  const builds = useMemo(() => buildsData?.builds ?? [], [buildsData]);
+  const hasNoCompletedBuild =
+    buildsOwnImage && !isLoadingBuilds && !builds.some(isBuildComplete);
+
   const { mutate: deleteLLMConfig, isPending: isRemovingLLM } =
     useDeleteAgentModelConfig();
   const { mutate: deleteMCPConfig, isPending: isRemovingMCP } =
@@ -193,6 +244,8 @@ export const ConfigureComponent: React.FC = () => {
             getViewPath={getLlmViewPath}
             isRemoving={isRemovingLLM}
             showTitle={false}
+            addDisabled={hasNoCompletedBuild}
+            addDisabledReason={NO_COMPLETED_BUILD_REASON}
             onRemove={(configId) =>
               deleteLLMConfig({
                 ...deleteParams,
@@ -212,6 +265,8 @@ export const ConfigureComponent: React.FC = () => {
             getViewPath={getMcpViewPath}
             isRemoving={isRemovingMCP}
             showTitle={false}
+            addDisabled={hasNoCompletedBuild}
+            addDisabledReason={NO_COMPLETED_BUILD_REASON}
             onRemove={(configId) =>
               deleteMCPConfig({
                 ...deleteParams,

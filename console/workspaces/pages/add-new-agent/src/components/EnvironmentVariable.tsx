@@ -84,8 +84,10 @@ export const EnvironmentVariable = ({
   const handleEnvFileParsed = (entries: { key: string; value: string }[]) => {
     setFormData((prev) => {
       const nextEnv = [...(prev.env || [])].filter((e) => e.key || e.value);
-      for (const { key, value } of entries) {
-        if (lockedKeys.has(key)) continue;
+      for (const rawEntry of entries) {
+        const key = rawEntry.key.replace(/\s/g, '_');
+        const value = rawEntry.value;
+        if (lockedKeys.has(key) || kindSecretKeys.has(key)) continue;
         const existingIndex = nextEnv.findIndex((e) => e.key === key);
         if (existingIndex !== -1) {
           nextEnv[existingIndex] = { ...nextEnv[existingIndex], key, value };
@@ -100,12 +102,9 @@ export const EnvironmentVariable = ({
   return (
     <Card variant="outlined">
       <CardContent>
-        <Box display="flex" flexDirection="row" alignItems="center" justifyContent="space-between" gap={1}>
-          <Typography variant="h5">
-            {hideAdd ? "Environment Variables" : "Environment Variables (Optional)"}
-          </Typography>
-          {!hideAdd && <EnvFileUploadButton onParsed={handleEnvFileParsed} />}
-        </Box>
+        <Typography variant="h5">
+          {hideAdd ? "Environment Variables" : "Environment Variables (Optional)"}
+        </Typography>
         <Box display="flex" flexDirection="column" py={2} gap={2}>
           {envVariables.map((item, index) => {
             const siblingKeys = new Set(
@@ -129,6 +128,7 @@ export const EnvironmentVariable = ({
                 valueLabel={isKindSecret ? "Value (uses kind default unless edited)" : undefined}
                 onKeyChange={(value) => handleChange(index, 'key', value)}
                 onValueChange={(value) => handleChange(index, 'value', value)}
+                onBulkPaste={isLocked ? undefined : handleEnvFileParsed}
                 onSensitiveChange={isKindSecret ? undefined : (value: boolean) => handleChange(index, 'isSensitive', value)}
                 onRemove={isLocked ? () => {} : () => handleRemove(index)}
                 keyDisabled={isLocked}
@@ -138,16 +138,24 @@ export const EnvironmentVariable = ({
           })}
         </Box>
         {!hideAdd && (
-          <Button
-            startIcon={<Add fontSize="small" />}
-            disabled={isOneEmpty}
-            variant="outlined"
-            color="primary"
-            size="small"
-            onClick={handleAdd}
-          >
-            Add
-          </Button>
+          <Box display="flex" flexDirection="row" alignItems="center" gap={1.5} flexWrap="wrap">
+            <Button
+              startIcon={<Add fontSize="small" />}
+              disabled={isOneEmpty}
+              variant="outlined"
+              color="primary"
+              size="small"
+              onClick={handleAdd}
+            >
+              Add
+            </Button>
+            <Box display="flex" flexDirection="column" alignItems="flex-start">
+              <EnvFileUploadButton onParsed={handleEnvFileParsed} />
+            </Box>
+            <Typography variant="caption" color="text.secondary">
+              or paste .env text into a Key field above
+            </Typography>
+          </Box>
         )}
       </CardContent>
     </Card>

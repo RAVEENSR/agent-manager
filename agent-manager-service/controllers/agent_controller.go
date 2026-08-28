@@ -88,6 +88,12 @@ func handleCommonErrors(w http.ResponseWriter, err error, fallbackMsg string) {
 	// version that can't be written as a label) is still a client-side problem —
 	// report it as a 400 naming the offending value instead of letting it reach
 	// the generic 500 fallback.
+	//
+	// Keep this FIRST: a ValidationError may also match a classification
+	// sentinel (utils.NewInvalidInputError sets ErrInvalidInput), and the
+	// sentinel cases below relabel the response with a generic bucket message.
+	// Moving this case down silently replaces every such error's own
+	// user-facing Message with "Invalid input provided".
 	case utils.IsValidationError(err) != nil:
 		utils.WriteValidationErrorResponse(w, err)
 
@@ -130,6 +136,9 @@ func handleCommonErrors(w http.ResponseWriter, err error, fallbackMsg string) {
 	case errors.Is(err, utils.ErrAgentAlreadyExists):
 		utils.WriteErrorResponseWithReason(w, http.StatusConflict,
 			"Agent already exists", err.Error(), utils.ErrCodeAgentAlreadyExists)
+	case errors.Is(err, utils.ErrOrphanedAgentConfigsExist):
+		utils.WriteErrorResponseWithReason(w, http.StatusConflict,
+			"Configurations from a deleted agent with this name still exist", err.Error(), utils.ErrCodeConflict)
 	case errors.Is(err, utils.ErrProjectAlreadyExists):
 		utils.WriteErrorResponseWithReason(w, http.StatusConflict,
 			"Project already exists", err.Error(), utils.ErrCodeProjectAlreadyExists)
@@ -348,7 +357,7 @@ func (c *agentController) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		ProjectName:    projName,
 		Provisioning:   payload.Provisioning,
 		AgentType:      agentType,
-		Configurations: payload.Configurations,
+		Configurations: utils.RedactSecretConfigValues(payload.Configurations),
 		Build:          payload.Build,
 		CreatedAt:      time.Now(),
 	}
@@ -513,13 +522,20 @@ func (c *agentController) BuildAgent(w http.ResponseWriter, r *http.Request) {
 	if commitId == "" {
 		log.Debug("BuildAgent: commitId not provided, using latest commit")
 	}
+	if err := utils.ValidateGitCommitID(commitId); err != nil {
+		log.Debug("BuildAgent: invalid commitId", "error", err)
+		utils.WriteValidationErrorResponse(w, err)
+		return
+	}
 	build, err := c.agentService.BuildAgent(ctx, ouID, projName, agentName, commitId)
 	if err != nil {
 		log.Error("BuildAgent: failed to build agent", "error", err)
 		handleCommonErrors(w, err, "Failed to build agent")
 		return
 	}
-	utils.WriteSuccessResponse(w, http.StatusAccepted, build)
+
+	buildResponse := utils.ConvertToBuildResponse(build)
+	utils.WriteSuccessResponse(w, http.StatusAccepted, buildResponse)
 }
 
 func (c *agentController) DeployAgent(w http.ResponseWriter, r *http.Request) {

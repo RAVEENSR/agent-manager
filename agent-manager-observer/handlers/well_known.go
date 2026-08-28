@@ -19,6 +19,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/wso2/agent-manager/agent-manager-observer/config"
 	"github.com/wso2/agent-manager/agent-manager-observer/middleware/logger"
@@ -52,7 +53,7 @@ func RegisterWellKnownRoutes(mux *http.ServeMux, cfg config.AuthConfig) {
 		}
 
 		body := protectedResourceMetadata{
-			Resource:               cfg.ServerPublicURL,
+			Resource:               strings.TrimSuffix(cfg.ServerPublicURL, "/") + "/mcp",
 			AuthorizationServers:   cfg.AuthorizationServers,
 			BearerMethodsSupported: []string{"header"},
 			ScopesSupported:        cfg.ScopesSupported,

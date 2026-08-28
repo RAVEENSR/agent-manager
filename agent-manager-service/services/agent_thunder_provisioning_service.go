@@ -851,8 +851,16 @@ func (s *agentThunderProvisioningService) recordFailure(ctx context.Context, bin
 	attemptsSoFar := binding.AttemptCount + 1
 	exhausted := attemptsSoFar >= maxProvisionAttempts
 
+	// Full cause goes to the log; LastError below is sanitized for the UI.
+	s.logger.Error("Agent thunder provisioning attempt failed",
+		"ouID", binding.OUID, "projectName", binding.ProjectName, "bindingID", binding.ID,
+		"agentName", binding.AgentName, "envName", binding.EnvironmentName,
+		"attempt", attemptsSoFar, "exhausted", exhausted, "error", cause)
+
 	update := repositories.AgentThunderAttemptUpdate{
-		LastError: cause.Error(),
+		// The Overview UI renders LastError verbatim, so it must never carry
+		// cause's raw text (e.g. a SQLSTATE) — see userFacingProvisioningError.
+		LastError: userFacingProvisioningError(cause),
 	}
 	if resolvedAgentID != "" {
 		update.ThunderAgentID = &resolvedAgentID
@@ -885,6 +893,22 @@ func (s *agentThunderProvisioningService) recordFailure(ctx context.Context, bin
 
 	if err := s.repo.UpdateAfterAttempt(ctx, binding.ID, update); err != nil {
 		s.logger.Error("Failed to record agent thunder provisioning failure", "bindingID", binding.ID, "error", err)
+	}
+}
+
+// userFacingProvisioningError maps a provisioning failure to a short, fixed,
+// end-user-safe message — cause may wrap arbitrary internal detail (Thunder,
+// OpenChoreo, the secret manager, even a raw DB error) that must never reach
+// the UI. The two Thunder sentinels get distinct messages since they call for
+// different remediation; everything else collapses to one generic message.
+func userFacingProvisioningError(cause error) string {
+	switch {
+	case errors.Is(cause, thundersvc.ErrThunderNotProvisioned):
+		return "Identity provider is not set up for this environment yet."
+	case errors.Is(cause, thundersvc.ErrThunderUnreachable):
+		return "Identity provider is temporarily unreachable. Please retry."
+	default:
+		return "Identity provisioning failed. Please retry."
 	}
 }
 

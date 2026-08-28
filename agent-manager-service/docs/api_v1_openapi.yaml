@@ -5714,7 +5714,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /orgs/{orgName}/llm-providers/{id}:
+  /orgs/{orgName}/llm-providers/{providerId}:
     parameters:
       - name: orgName
         in: path
@@ -5722,7 +5722,7 @@ paths:
         description: Organization name/handle
         schema:
           type: string
-      - name: id
+      - name: providerId
         in: path
         required: true
         description: Provider UUID
@@ -5815,7 +5815,12 @@ paths:
       tags:
         - LLM Providers
       summary: Delete LLM provider
-      description: Delete an LLM provider
+      description: |
+        Delete an LLM provider.
+
+        The provider is undeployed from every gateway it is deployed to before it is
+        removed. Deletion is refused with a 409 while anything still references the
+        provider — an LLM proxy, or an agent's LLM configuration.
       operationId: deleteLLMProvider
       responses:
         "204":
@@ -5832,8 +5837,22 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Caller lacks the llm-provider:delete permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Provider not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: |
+            Provider still has dependents (LLM proxies or agent LLM configurations),
+            or undeploying it from its gateways failed. The message names the blocker.
           content:
             application/json:
               schema:
@@ -5845,7 +5864,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /orgs/{orgName}/llm-providers/{id}/catalog:
+  /orgs/{orgName}/llm-providers/{providerId}/catalog:
     parameters:
       - name: orgName
         in: path
@@ -5853,7 +5872,7 @@ paths:
         description: Organization name/handle
         schema:
           type: string
-      - name: id
+      - name: providerId
         in: path
         required: true
         description: Provider UUID
@@ -5911,7 +5930,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /orgs/{orgName}/llm-providers/{id}/llm-proxies:
+  /orgs/{orgName}/llm-providers/{providerId}/llm-proxies:
     parameters:
       - name: orgName
         in: path
@@ -5919,7 +5938,7 @@ paths:
         description: Organization name/handle
         schema:
           type: string
-      - name: id
+      - name: providerId
         in: path
         required: true
         description: Provider UUID
@@ -5982,7 +6001,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /orgs/{orgName}/llm-providers/{id}/consumers:
+  /orgs/{orgName}/llm-providers/{providerId}/consumers:
     parameters:
       - name: orgName
         in: path
@@ -5990,7 +6009,7 @@ paths:
         description: Organization name/handle
         schema:
           type: string
-      - name: id
+      - name: providerId
         in: path
         required: true
         description: Provider UUID or handle
@@ -6754,7 +6773,7 @@ paths:
   # LLM DEPLOYMENT ENDPOINTS
   # ============================================
 
-  /orgs/{orgName}/llm-providers/{id}/deployments:
+  /orgs/{orgName}/llm-providers/{providerId}/deployments:
     parameters:
       - name: orgName
         in: path
@@ -6762,7 +6781,7 @@ paths:
         description: Organization name/handle
         schema:
           type: string
-      - name: id
+      - name: providerId
         in: path
         required: true
         description: Provider UUID
@@ -6868,7 +6887,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /orgs/{orgName}/llm-providers/{id}/deployments/undeploy:
+  /orgs/{orgName}/llm-providers/{providerId}/deployments/undeploy:
     parameters:
       - name: orgName
         in: path
@@ -6876,7 +6895,7 @@ paths:
         description: Organization name/handle
         schema:
           type: string
-      - name: id
+      - name: providerId
         in: path
         required: true
         description: Provider UUID
@@ -6944,7 +6963,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /orgs/{orgName}/llm-providers/{id}/deployments/restore:
+  /orgs/{orgName}/llm-providers/{providerId}/deployments/restore:
     parameters:
       - name: orgName
         in: path
@@ -6952,7 +6971,7 @@ paths:
         description: Organization name/handle
         schema:
           type: string
-      - name: id
+      - name: providerId
         in: path
         required: true
         description: Provider UUID
@@ -7016,7 +7035,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /orgs/{orgName}/llm-providers/{id}/deployments/{deploymentId}:
+  /orgs/{orgName}/llm-providers/{providerId}/deployments/{deploymentId}:
     parameters:
       - name: orgName
         in: path
@@ -7024,7 +7043,7 @@ paths:
         description: Organization name/handle
         schema:
           type: string
-      - name: id
+      - name: providerId
         in: path
         required: true
         description: Provider UUID
@@ -10988,7 +11007,7 @@ components:
   schemas:
     MCPProxyScopeRequest:
       type: object
-      required: [action, tools]
+      required: [action]
       properties:
         action:
           type: string
@@ -11000,10 +11019,12 @@ components:
           example: Read access to repository tools
         tools:
           type: array
-          minItems: 1
           items:
             type: string
-          description: MCP tool names this scope authorizes.
+          description: >-
+            MCP tool names this scope authorizes. May be omitted or empty to declare a
+            scope before binding it to any tool; such a scope is grantable to roles but
+            enforced on no tool.
     MCPProxyScopeUpdateRequest:
       type: object
       properties:
@@ -11011,9 +11032,11 @@ components:
           type: string
         tools:
           type: array
-          minItems: 1
           items:
             type: string
+          description: >-
+            Replaces the scope's tool list. Omit to leave it unchanged; send an empty
+            array to unbind the scope from every tool.
     MCPProxyScopeResponse:
       type: object
       required: [action, scope, tools]
@@ -11472,6 +11495,9 @@ components:
         dockerfilePath:
           type: string
           description: Path to the Dockerfile relative to the app path (e.g. "Dockerfile" or "docker/Dockerfile")
+          pattern: "^/[A-Za-z0-9._\\-/]*$"
+          maxLength: 1024
+          example: "/Dockerfile"
 
     BuildpackBuild:
       type: object
@@ -12002,6 +12028,11 @@ components:
         - limit
         - offset
     # Repository Configuration
+    # The patterns below document the contract; they are not what enforces it.
+    # This service has no OpenAPI request-validation middleware, so every rule
+    # here is also implemented in Go (agent-manager-service/utils/utils.go). These
+    # values become arguments to git and to the container build inside the build
+    # pod, so keep the two in step when changing either.
     RepositoryConfig:
       type: object
       description: Git repository configuration
@@ -12014,13 +12045,20 @@ components:
         url:
           type: string
           description: URL of the git repository
+          pattern: "^https://github\\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(?:\\.git)?/?$"
+          maxLength: 2048
+          example: "https://github.com/wso2/agent-manager"
         branch:
           type: string
           description: Branch to use
+          pattern: "^[A-Za-z0-9._@+/-]+$"
+          maxLength: 255
+          example: "main"
         appPath:
           type: string
           description: Path within the repository where the source code resides
-          pattern: "^/.*"
+          pattern: "^/[A-Za-z0-9._\\-/]*$"
+          maxLength: 1024
           example: "/my-agent"
         secretRef:
           type: string
@@ -14479,11 +14517,10 @@ components:
             DNS-label-safe handle (lowercase alphanumeric with hyphens, no
             leading/trailing hyphen) that replaces "<org>-<env>" in
             "<handle>.<baseDomain>". Must be globally unique across
-            all orgs/environments, and at least 10 characters (matching what
-            the server itself generates — anything shorter is trivially
-            guessable). Omit to auto-generate a 10-character handle.
+            all orgs/environments, and at least 3 characters. Omit to
+            auto-generate a 10-character handle.
           pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
-          minLength: 10
+          minLength: 3
           maxLength: 63
           example: x7f2q9kzab
 
@@ -14499,7 +14536,7 @@ components:
         handle:
           type: string
           pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
-          minLength: 10
+          minLength: 3
           maxLength: 63
           example: x7f2q9kzab
 
@@ -18492,7 +18529,7 @@ components:
           example: 9c1b7a44-3e2f-4d8a-b1c5-6a9f0e2d7c81
         lastError:
           type: string
-          description: Most recent provisioning error, if the last attempt failed
+          description: Short, user-safe reason the last provisioning attempt failed (never raw upstream/database error text)
         requestedBy:
           type: string
           description: Who requested this binding, kept for audit purposes only

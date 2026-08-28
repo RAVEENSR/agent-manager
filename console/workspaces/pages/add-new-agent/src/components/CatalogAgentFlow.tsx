@@ -17,11 +17,26 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Form, MenuItem, Select, SelectChangeEvent, Skeleton } from "@wso2/oxygen-ui";
+import {
+  Alert,
+  Checkbox,
+  Form,
+  FormControlLabel,
+  MenuItem,
+  Select,
+  SelectChangeEvent,
+  Skeleton,
+  Typography,
+} from "@wso2/oxygen-ui";
 import { PageLayout, useFormValidation } from "@agent-management-platform/views";
 import { generatePath, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { absoluteRouteMap, type AgentKindVersionResponse, OrgProjPathParams } from "@agent-management-platform/types";
-import { useCreateAgent, useGetAgentKind, useGetDeploymentPipeline } from "@agent-management-platform/api-client";
+import {
+  useCreateAgent,
+  useGetAgent,
+  useGetAgentKind,
+  useGetDeploymentPipeline,
+} from "@agent-management-platform/api-client";
 import { createAgentSchema, type CreateAgentFormValues, type LLMProviderFormEntry, type MCPProxyFormEntry } from "../form/schema";
 import { CreateButtons } from "./CreateButtons";
 import {
@@ -53,6 +68,23 @@ export const CatalogAgentFlow: React.FC = () => {
     orgName: orgId,
     kindName: kindId ?? "",
   });
+
+  // Whether auto-instrumentation applies at all depends on the kind's source language,
+  // which the kind itself does not carry. Read it off the source agent — which cannot be
+  // deleted while the kind exists (DeleteAgent refuses with ErrAgentIsKindSource), so it
+  // is always resolvable. The query stays disabled until the kind has loaded.
+  const { data: sourceAgent } = useGetAgent({
+    orgName: orgId,
+    projName: kind?.projectName,
+    agentName: kind?.agentName,
+  });
+  const sourceLanguage =
+    sourceAgent?.build?.type === "buildpack"
+      ? (sourceAgent.build as { buildpack?: { language?: string } }).buildpack?.language
+      : undefined;
+  // Docker-based kinds have no instrumentation trait for the flag to gate, so no toggle.
+  const isInstrumentableKind =
+    sourceLanguage === "python" || sourceLanguage === "ballerina";
 
   const sortedVersions = useMemo(
     () =>
@@ -290,6 +322,37 @@ export const CatalogAgentFlow: React.FC = () => {
                   ))}
                 </Select>
               </Form.ElementWrapper>
+            </Form.Stack>
+          </Form.Section>
+        )}
+
+        {/* Auto-instrumentation defaults on for every agent the platform can instrument.
+            A kind whose source is already instrumented in its own code would be traced
+            twice, so the choice is offered before the agent is created and auto-deployed
+            rather than only afterwards. */}
+        {isInstrumentableKind && (
+          <Form.Section>
+            <Form.Subheader>Tracing - Instrumentation</Form.Subheader>
+            <Form.Stack spacing={1}>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={formData.enableAutoInstrumentation ?? true}
+                    onChange={(e) =>
+                      setFormData((prev) => ({
+                        ...prev,
+                        enableAutoInstrumentation: e.target.checked,
+                      }))
+                    }
+                  />
+                }
+                label="Enable auto instrumentation"
+              />
+              <Typography variant="body2" color="text.secondary">
+                Adds OTEL tracing automatically. Turn this off if the agent kind is
+                already instrumented in its own code, which would otherwise produce
+                duplicate traces. You can change this per environment when deploying.
+              </Typography>
             </Form.Stack>
           </Form.Section>
         )}

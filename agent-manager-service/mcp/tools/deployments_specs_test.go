@@ -54,7 +54,7 @@ func deploymentToolSpecs() []toolTestSpec {
 		{
 			name:                "deploy_agent",
 			toolset:             "deployment",
-			permissions:         []rbac.Permission{rbac.AgentDeployNonProduction},
+			permissions:         []rbac.Permission{rbac.AgentEnvNonProduction},
 			descriptionKeywords: []string{"deploy"},
 			descriptionMinLen:   20,
 			requiredParams:      []string{"project_name", "agent_name", "image_id"},
@@ -84,7 +84,7 @@ func deploymentToolSpecs() []toolTestSpec {
 		{
 			name:                "update_deployment_state",
 			toolset:             "deployment",
-			permissions:         []rbac.Permission{rbac.AgentSuspend},
+			permissions:         []rbac.Permission{rbac.AgentSuspend, rbac.AgentEnvNonProduction},
 			descriptionKeywords: []string{"deployment", "state"},
 			descriptionMinLen:   20,
 			requiredParams: []string{

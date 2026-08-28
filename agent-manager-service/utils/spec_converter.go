@@ -553,13 +553,7 @@ func ConvertModelToSpecUpstreamConfig(config models.UpstreamConfig) spec.Upstrea
 			Ref: stringToPtr(config.Main.Ref),
 		}
 		if config.Main.Auth != nil {
-			// Mask credential value in API responses for security
-			maskedValue := "***REDACTED***"
-			main.Auth = &spec.UpstreamAuth{
-				Type:   *config.Main.Auth.Type,
-				Header: config.Main.Auth.Header,
-				Value:  &maskedValue,
-			}
+			main.Auth = maskedSpecUpstreamAuth(config.Main.Auth)
 		}
 		specConfig.Main = &main
 	}
@@ -570,18 +564,25 @@ func ConvertModelToSpecUpstreamConfig(config models.UpstreamConfig) spec.Upstrea
 			Ref: stringToPtr(config.Sandbox.Ref),
 		}
 		if config.Sandbox.Auth != nil {
-			// Mask credential value in API responses for security
-			maskedValue := "***REDACTED***"
-			sandbox.Auth = &spec.UpstreamAuth{
-				Type:   *config.Sandbox.Auth.Type,
-				Header: config.Main.Auth.Header,
-				Value:  &maskedValue,
-			}
+			sandbox.Auth = maskedSpecUpstreamAuth(config.Sandbox.Auth)
 		}
 		specConfig.Sandbox = &sandbox
 	}
 
 	return specConfig
+}
+
+// maskedSpecUpstreamAuth converts an upstream auth block for a response, replacing
+// the credential with a fixed mask. Both endpoints share it: the sandbox branch used
+// to read its header from config.Main.Auth, which panics for a provider that has a
+// sandbox credential and no main one.
+func maskedSpecUpstreamAuth(auth *models.UpstreamAuth) *spec.UpstreamAuth {
+	masked := redactedMarker
+	return &spec.UpstreamAuth{
+		Type:   StrPointerAsStr(auth.Type, ""),
+		Header: auth.Header,
+		Value:  &masked,
+	}
 }
 
 // ConvertSpecToModelLLMAccessControl converts spec to model LLMAccessControl

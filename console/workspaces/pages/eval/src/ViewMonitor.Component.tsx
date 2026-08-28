@@ -17,17 +17,20 @@
  */
 
 import React, { useCallback, useMemo, useState } from "react";
-import { formatTraceWindow, PageLayout } from "@agent-management-platform/views";
+import {
+  formatTraceWindow,
+  PageLayout,
+  TimeRangeSelector,
+  useTimeRangeParams,
+} from "@agent-management-platform/views";
 import {
   Button,
   Chip,
   CircularProgress,
   Grid,
   IconButton,
-  InputAdornment,
   Menu,
   MenuItem,
-  Select,
   Skeleton,
   Stack,
   Typography,
@@ -132,6 +135,13 @@ export const ViewMonitorComponent: React.FC = () => {
     [agentId, envId, handleCloseCompareMenu, monitorId, navigate, orgId, projectId],
   );
 
+  const {
+    customStartTime,
+    customEndTime,
+    hasCustomRange,
+    handleCustomRangeApply,
+  } = useTimeRangeParams(searchParams, setSearchParams);
+
   const timeRange = useMemo(
     () =>
       (searchParams.get("timeRange") as TraceListTimeRange) ||
@@ -140,18 +150,22 @@ export const ViewMonitorComponent: React.FC = () => {
   );
 
   const handleTimeRangeChange = React.useCallback(
-    (value: TraceListTimeRange) => {
+    (value: string) => {
       const next = new URLSearchParams(searchParams);
       next.set("timeRange", value);
+      next.delete("startTime");
+      next.delete("endTime");
       setSearchParams(next, { replace: true });
     },
     [searchParams, setSearchParams],
   );
   const timeRangeLabel = useMemo(
     () =>
-      MONITOR_TIME_RANGE_OPTIONS.find((o) => o.value === timeRange)?.label ??
-      "Selected period",
-    [timeRange],
+      hasCustomRange && customStartTime && customEndTime
+        ? formatTraceWindow(customStartTime, customEndTime)
+        : (MONITOR_TIME_RANGE_OPTIONS.find((o) => o.value === timeRange)?.label ??
+          "Selected period"),
+    [hasCustomRange, customStartTime, customEndTime, timeRange],
   );
   const commonParams = useMemo(
     () => ({
@@ -172,13 +186,23 @@ export const ViewMonitorComponent: React.FC = () => {
 
   const isPastMonitor = monitorData?.type === "past";
 
-  const scoreQueryParams = useMemo(
-    () =>
-      isPastMonitor && monitorData?.traceStart && monitorData?.traceEnd
-        ? { startTime: monitorData.traceStart, endTime: monitorData.traceEnd }
-        : { timeRange },
-    [isPastMonitor, monitorData?.traceStart, monitorData?.traceEnd, timeRange],
-  );
+  const scoreQueryParams = useMemo(() => {
+    if (isPastMonitor && monitorData?.traceStart && monitorData?.traceEnd) {
+      return { startTime: monitorData.traceStart, endTime: monitorData.traceEnd };
+    }
+    if (hasCustomRange && customStartTime && customEndTime) {
+      return { startTime: customStartTime, endTime: customEndTime };
+    }
+    return { timeRange };
+  }, [
+    isPastMonitor,
+    monitorData?.traceStart,
+    monitorData?.traceEnd,
+    hasCustomRange,
+    customStartTime,
+    customEndTime,
+    timeRange,
+  ]);
 
   const {
     data: scoresMain,
@@ -428,28 +452,14 @@ export const ViewMonitorComponent: React.FC = () => {
                     </Stack>
                   )
                 ) : (
-                  <Select
-                    size="small"
-                    variant="outlined"
-                    value={timeRange}
-                    onChange={(e) =>
-                      handleTimeRangeChange(
-                        e.target.value as TraceListTimeRange,
-                      )
-                    }
-                    startAdornment={
-                      <InputAdornment position="start">
-                        <Clock size={16} />
-                      </InputAdornment>
-                    }
-                    sx={{ minWidth: 140 }}
-                  >
-                    {MONITOR_TIME_RANGE_OPTIONS.map((opt) => (
-                      <MenuItem key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </MenuItem>
-                    ))}
-                  </Select>
+                  <TimeRangeSelector
+                    preset={timeRange}
+                    customStart={customStartTime}
+                    customEnd={customEndTime}
+                    options={MONITOR_TIME_RANGE_OPTIONS}
+                    onPresetChange={handleTimeRangeChange}
+                    onCustomRangeApply={handleCustomRangeApply}
+                  />
                 )}
                 <Button
                   size="small"
@@ -582,9 +592,19 @@ export const ViewMonitorComponent: React.FC = () => {
                     timeRange={timeRange}
                     environmentId={monitorData?.environmentName}
                     traceStart={
-                      isPastMonitor ? monitorData?.traceStart : undefined
+                      isPastMonitor
+                        ? monitorData?.traceStart
+                        : hasCustomRange
+                          ? customStartTime
+                          : undefined
                     }
-                    traceEnd={isPastMonitor ? monitorData?.traceEnd : undefined}
+                    traceEnd={
+                      isPastMonitor
+                        ? monitorData?.traceEnd
+                        : hasCustomRange
+                          ? customEndTime
+                          : undefined
+                    }
                   />
                   {(hasAgentLevel || hasLlmLevel) && (
                     <Grid container spacing={3}>

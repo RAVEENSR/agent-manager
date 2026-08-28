@@ -1,7 +1,7 @@
 import React from "react";
 import { Avatar, Box, Divider, Form, formatRelativeTime, Tooltip, Typography } from "@wso2/oxygen-ui";
 import { Link } from "react-router-dom";
-import { Layers, Tag, Clock as TimerOutlined } from "@wso2/oxygen-ui-icons-react";
+import { BookOpenText, Tag, Clock as TimerOutlined } from "@wso2/oxygen-ui-icons-react";
 import type { AgentKindResponse } from "@agent-management-platform/types";
 
 export const CARD_HEIGHT = 116;
@@ -44,7 +44,7 @@ export const CatalogKindCard: React.FC<CatalogKindCardProps> = ({ item, viewPath
                             flexShrink: 0,
                         }}
                     >
-                        <Layers size={26} />
+                        <BookOpenText size={26} />
                     </Avatar>
                     <Box sx={{ flex: 1, minWidth: 0 }}>
                         <Tooltip title={item.displayName} placement="top-start">

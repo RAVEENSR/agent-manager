@@ -609,34 +609,41 @@ var thunderHandlePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 // embeds the handle as-is into "<handle>.<baseDomain>").
 const maxThunderHandleLen = 63
 
-// minThunderHandleLen matches generatedThunderHandleLen — a caller-supplied
-// handle shorter than what AMS itself would generate is too easy to guess and
-// defeats the point of the feature, so it's a hard floor, not just UI advice.
-const minThunderHandleLen = generatedThunderHandleLen
+// minThunderHandleLen is the hard floor on a caller-supplied handle, not just
+// UI advice — enforced server-side regardless of what any client sends.
+const minThunderHandleLen = 3
 
-// reservedThunderHandles blocks labels that identify a real platform component,
-// namespace, or Kubernetes-reserved name — allowing a handle to equal one risks
-// hijacking or confusion once that component sits at the same hostname level
-// (<handle>.<baseDomain>). Mirrored on the console side by
-// environmentSchema.ts's RESTRICTED_THUNDER_HANDLES; keep both in sync.
-//
-// Every entry here must be >= minThunderHandleLen characters, or it can never
-// actually be submitted as a handle and the check is dead code (the platform's
-// own fixed subdomains — console, api, thunder, observer, gateway, cp, agents —
-// are all short enough that this length floor alone already keeps a handle
-// from ever colliding with one of them; they don't need their own entries).
+// reservedThunderHandles blocks labels that identify a real platform component
+// or namespace — allowing a handle to equal one risks hijacking or confusion
+// once that component sits at the same hostname level (<handle>.<baseDomain>).
+// Covers every fixed subdomain across all deployment flavors (VM, k3d/quick-start,
+// docker-compose, the custom-domain guide, and the AI Gateway setup target), since
+// several services go by different names depending on flavor. Mirrored on the
+// console side by environmentSchema.ts's RESTRICTED_THUNDER_HANDLES; keep both in sync.
 var reservedThunderHandles = map[string]bool{
-	"kubernetes":      true,
-	"kube-system":     true,
-	"kube-public":     true,
-	"kube-node-lease": true,
-	"openchoreo":      true,
-	"opensearch":      true,
-	"prometheus":      true,
-	"otel-collector":  true,
-	"fluent-bit":      true,
-	"agent-manager":   true,
-	"observability":   true,
+	"kubernetes":           true,
+	"kube-system":          true,
+	"kube-public":          true,
+	"kube-node-lease":      true,
+	"openchoreo":           true,
+	"opensearch":           true,
+	"prometheus":           true,
+	"otel-collector":       true,
+	"fluent-bit":           true,
+	"agent-manager":        true,
+	"observability":        true,
+	"console":              true,
+	"api":                  true,
+	"api-amp":              true,
+	"thunder":              true,
+	"observer":             true,
+	"traces":               true,
+	"gateway":              true,
+	"api-platform-gateway": true,
+	"ai-gateway":           true,
+	"otel":                 true,
+	"cp":                   true,
+	"agents":               true,
 }
 
 // validateThunderHandle checks handle's format. It does not check uniqueness —

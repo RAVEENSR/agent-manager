@@ -79,8 +79,13 @@ spec:
             - name: API_KEY_VALUE
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.agentManagerService.config.apiKey.existingSecret | default (include "agent-management-platform.agentManagerService.fullname" .) }}
+                  {{- if .Values.agentManagerService.config.apiKey.existingSecret }}
+                  name: {{ .Values.agentManagerService.config.apiKey.existingSecret }}
                   key: {{ .Values.agentManagerService.config.apiKey.existingSecretKey | default "api-key" }}
+                  {{- else }}
+                  name: {{ include "agent-management-platform.agentManagerService.fullname" . }}
+                  key: api-key
+                  {{- end }}
             - name: IS_LOCAL_DEV_ENV
               value: "true"
             - name: LOG_LEVEL

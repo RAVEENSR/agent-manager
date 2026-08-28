@@ -17,6 +17,7 @@
 package repositories
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -25,6 +26,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
@@ -42,6 +44,14 @@ type LLMProviderRepository interface {
 	Update(p *models.LLMProvider, providerID string, orgUUID string) error
 	Delete(providerID, orgUUID string) error
 	Exists(providerID, orgUUID string) (bool, error)
+	HasAssociatedProxies(ctx context.Context, providerUUID uuid.UUID) (bool, error)
+	MarkDeleting(providerUUID uuid.UUID) (bool, error)
+	ClearDeleting(providerUUID uuid.UUID) error
+	// IsDeletingForUpdate reports whether the provider is mid-delete, locking its row
+	// for the lifetime of tx. Must be called inside the same transaction that then
+	// inserts the dependent row (e.g. a proxy), so the check and the insert are
+	// atomic with MarkDeleting's row-locking UPDATE — see LLMProxyRepo.Create.
+	IsDeletingForUpdate(ctx context.Context, tx *gorm.DB, providerUUID uuid.UUID) (bool, error)
 }
 
 // LLMProviderRepo implements LLMProviderRepository using GORM
@@ -222,6 +232,65 @@ func (r *LLMProviderRepo) Update(p *models.LLMProvider, providerID string, orgUU
 		slog.Info("LLMProviderRepo.Update: completed successfully", "handle", providerID, "rowsAffected", result.RowsAffected)
 		return nil
 	})
+}
+
+// HasAssociatedProxies reports whether any LLM proxy still references the given provider.
+func (r *LLMProviderRepo) HasAssociatedProxies(ctx context.Context, providerUUID uuid.UUID) (bool, error) {
+	var count int64
+	if err := r.db.WithContext(ctx).Table("llm_proxies").Where("provider_uuid = ?", providerUUID).Count(&count).Error; err != nil {
+		slog.Error("LLMProviderRepo.HasAssociatedProxies: failed to count associated proxies", "providerUUID", providerUUID, "error", err)
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// IsDeletingForUpdate reports whether the provider is mid-delete, taking a row lock
+// on it for the lifetime of tx — see the interface doc comment for why this must run
+// inside the same transaction as the dependent insert it guards.
+func (r *LLMProviderRepo) IsDeletingForUpdate(ctx context.Context, tx *gorm.DB, providerUUID uuid.UUID) (bool, error) {
+	var provider models.LLMProvider
+	err := tx.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE", Table: clause.Table{Name: "llm_providers"}}).
+		Select("status").
+		Where("uuid = ?", providerUUID).
+		Take(&provider).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, utils.ErrLLMProviderNotFound
+		}
+		slog.Error("LLMProviderRepo.IsDeletingForUpdate: failed to lock provider row", "providerUUID", providerUUID, "error", err)
+		return false, err
+	}
+	return provider.Status == models.LLMProviderStatusDeleting, nil
+}
+
+// MarkDeleting atomically flags the provider as having a delete in progress, so a
+// concurrent proxy creation can observe it and be rejected before it races the
+// undeploy/delete sequence. Returns false (no error) if the provider was already
+// marked deleting, letting the caller reject the second concurrent Delete as a conflict
+// instead of undeploying twice.
+func (r *LLMProviderRepo) MarkDeleting(providerUUID uuid.UUID) (bool, error) {
+	result := r.db.Model(&models.LLMProvider{}).
+		Where("uuid = ? AND status != ?", providerUUID, models.LLMProviderStatusDeleting).
+		Update("status", models.LLMProviderStatusDeleting)
+	if result.Error != nil {
+		slog.Error("LLMProviderRepo.MarkDeleting: failed to mark provider deleting", "providerUUID", providerUUID, "error", result.Error)
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
+// ClearDeleting reverts the deleting flag set by MarkDeleting. Called when a Delete
+// attempt bails out before removing the provider row, so the provider becomes
+// available again for new proxies.
+func (r *LLMProviderRepo) ClearDeleting(providerUUID uuid.UUID) error {
+	if err := r.db.Model(&models.LLMProvider{}).
+		Where("uuid = ? AND status = ?", providerUUID, models.LLMProviderStatusDeleting).
+		Update("status", models.StatusCreated).Error; err != nil {
+		slog.Error("LLMProviderRepo.ClearDeleting: failed to clear deleting flag", "providerUUID", providerUUID, "error", err)
+		return err
+	}
+	return nil
 }
 
 // Delete removes an LLM provider

@@ -140,6 +140,43 @@ create_action() {
   exit 1
 }
 
+# delete_action_if_present retires an action a released version of the platform
+# registered and this one no longer enforces. It exists because the console's
+# role editor lists assignable permissions from Thunder's own action tree (see
+# ListAMPPermissions in clients/thundersvc/identity_client.go), not from the
+# service's catalog: an action left behind after a rename keeps offering an admin
+# a scope that grants nothing, and the role they build with it silently does less
+# than it says.
+#
+# Absence is success, so re-running this script is safe and so is running it
+# against a fresh Thunder that never had the action.
+delete_action_if_present() {
+  local rs_id="$1" res_id="$2" handle="$3"
+  local response http_code body action_id
+
+  # limit is explicit because the endpoint paginates and the default page size is
+  # Thunder's to choose; one page well above any resource's action count keeps
+  # this a single call.
+  response=$(api_call GET "/resource-servers/${rs_id}/resources/${res_id}/actions?limit=200")
+  http_code="${response: -3}"; body="${response%???}"
+  [[ "$http_code" == "404" ]] && return 0
+  [[ "$http_code" != "200" ]] && { log_error "Failed to list actions on resource ${res_id} (HTTP $http_code): $body"; exit 1; }
+
+  action_id=$(echo "$body" | jq -r --arg h "$handle" '.actions[]? | select(.handle == $h) | .id')
+  [[ -z "$action_id" ]] && return 0
+
+  response=$(api_call DELETE "/resource-servers/${rs_id}/resources/${res_id}/actions/${action_id}")
+  http_code="${response: -3}"; body="${response%???}"
+  case "$http_code" in
+    200|204|404)
+      log_success "Retired deprecated action '${handle}'"
+      return 0
+      ;;
+  esac
+  log_error "Failed to delete deprecated action '${handle}' on resource ${res_id} (HTTP $http_code): $body"
+  exit 1
+}
+
 # ---------------------------------------------------------------------------
 # Helper: register the amp permission tree under a resource server
 # Usage: register_amp_permissions <rs_id> <mode> [parent_res_id]
@@ -293,17 +330,25 @@ register_amp_permissions() {
     create_action "$rs_id" "$r_eval"         "Update"                 "update"                 "Update a custom evaluator"
     create_action "$rs_id" "$r_eval"         "Delete"                 "delete"                 "Delete a custom evaluator"
 
+    # The environment tier replaced three actions: promote and the two
+    # deploy-<tier> grants became env-non-production and env-production, which
+    # gate deploy, promote AND deployment-state changes on where the action
+    # lands. The old handles are retired before the new ones are created so an
+    # installation upgraded by re-running this script stops offering them.
+    delete_action_if_present "$rs_id" "$r_agent" "promote"
+    delete_action_if_present "$rs_id" "$r_agent" "deploy-non-production"
+    delete_action_if_present "$rs_id" "$r_agent" "deploy-production"
+
     # agent actions  → amp:agent:<action>
     create_action "$rs_id" "$r_agent"        "Create"                 "create"                 "Create an agent"
     create_action "$rs_id" "$r_agent"        "Read"                   "read"                   "View agent details, builds, deployments, and configs"
     create_action "$rs_id" "$r_agent"        "Update"                 "update"                 "Update agent configuration and resource configs"
     create_action "$rs_id" "$r_agent"        "Delete"                 "delete"                 "Delete an agent"
     create_action "$rs_id" "$r_agent"        "Build"                  "build"                  "Trigger an agent build"
-    create_action "$rs_id" "$r_agent"        "Promote"                "promote"                "Promote an agent deployment across environments"
     create_action "$rs_id" "$r_agent"        "Rollback"               "rollback"               "Rollback an agent deployment"
     create_action "$rs_id" "$r_agent"        "Suspend"                "suspend"                "Suspend or stop an agent deployment"
-    create_action "$rs_id" "$r_agent"        "Deploy Non-Production"  "deploy-non-production"  "Deploy an agent to a non-production environment"
-    create_action "$rs_id" "$r_agent"        "Deploy Production"      "deploy-production"      "Deploy an agent to a production environment"
+    create_action "$rs_id" "$r_agent"        "Act on Non-Production Environments" "env-non-production" "Deploy, promote, or suspend an agent in a non-production environment"
+    create_action "$rs_id" "$r_agent"        "Act on Production Environments"     "env-production"     "Deploy, promote, or suspend an agent in an environment flagged isProduction"
     create_action "$rs_id" "$r_agent"        "Manage Token"           "token-manage"           "Generate agent tokens"
     create_action "$rs_id" "$r_agent"        "Manage API Key"         "api-key-manage"         "Create, update, and delete agent API keys"
 
@@ -417,7 +462,7 @@ log_success "Default OU ID: $DEFAULT_OU_ID"
 # 1. Resource server
 # ===========================================================================
 log_info "Creating 'amp' resource server..."
-RS_ID=$(create_or_get_rs "Agent Manager API" "amp" "amp" "Agent Manager platform permissions" "$DEFAULT_OU_ID")
+RS_ID=$(create_or_get_rs "Agent Manager API" "amp" "urn:wso2:amp" "Agent Manager platform permissions" "$DEFAULT_OU_ID")
 log_info "Resource server ready (id: $RS_ID)"
 
 # ===========================================================================

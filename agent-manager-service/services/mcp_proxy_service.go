@@ -996,6 +996,9 @@ func sanitizeMCPUpstreamAuthForResponse(auth *models.UpstreamAuth) *models.Upstr
 	}
 	sanitized := *auth
 	sanitized.Value = nil
+	// SecretRef is the AES-256-GCM ciphertext of the same credential and is not
+	// declared on the spec's UpstreamAuth, so it must not reach a response body.
+	sanitized.SecretRef = nil
 	return &sanitized
 }
 

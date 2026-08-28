@@ -51,7 +51,7 @@ assert_env() {
 # Defaults must stay byte-identical to the pre-derivation literals, so that
 # existing installs and quick-start (which passes no overrides) are unaffected.
 assert_env "default audience keeps the k3d resource entry" \
-  KEY_MANAGER_AUDIENCE "urn:wso2:amp,amp-api-client,am-obs-mcp,http://traces.amp.localhost:11080/"
+  KEY_MANAGER_AUDIENCE "urn:wso2:amp,amp-api-client,am-obs-mcp,http://traces.amp.localhost:11080/mcp"
 assert_env "default authorization servers fall back to the default issuer" \
   OAUTH_AUTHORIZATION_SERVERS "http://thunder.amp.localhost:8080"
 
@@ -67,26 +67,27 @@ assert_env "explicit authorization servers win over the issuer" \
   --set amObserver.oauth.authorizationServers=https://as.example.com
 
 # publicUrl carries the RFC 8707 resource identifier MCP tokens are minted with,
-# so it must reach the audience list with exactly one trailing slash.
+# so it must reach the audience list with "/mcp" appended and no trailing slash
+# (per the MCP spec's canonical-URI guidance).
 assert_env "publicUrl override is appended to the audience" \
-  KEY_MANAGER_AUDIENCE "urn:wso2:amp,amp-api-client,am-obs-mcp,https://traces.example.com/" \
+  KEY_MANAGER_AUDIENCE "urn:wso2:amp,amp-api-client,am-obs-mcp,https://traces.example.com/mcp" \
   --set amObserver.publicUrl=https://traces.example.com
 assert_env "a publicUrl that already ends in a slash is not doubled" \
-  KEY_MANAGER_AUDIENCE "urn:wso2:amp,amp-api-client,am-obs-mcp,https://traces.example.com/" \
+  KEY_MANAGER_AUDIENCE "urn:wso2:amp,amp-api-client,am-obs-mcp,https://traces.example.com/mcp" \
   --set amObserver.publicUrl=https://traces.example.com/
 assert_env "an audience that already lists the resource gains no duplicate" \
-  KEY_MANAGER_AUDIENCE "amp,https://traces.example.com/" \
+  KEY_MANAGER_AUDIENCE "amp,https://traces.example.com/mcp" \
   --set amObserver.publicUrl=https://traces.example.com \
-  --set 'amObserver.auth.audience=amp\,https://traces.example.com/'
+  --set 'amObserver.auth.audience=amp\,https://traces.example.com/mcp'
 assert_env "whitespace in the audience does not defeat the duplicate check" \
-  KEY_MANAGER_AUDIENCE "amp,https://traces.example.com/" \
+  KEY_MANAGER_AUDIENCE "amp,https://traces.example.com/mcp" \
   --set amObserver.publicUrl=https://traces.example.com \
-  --set 'amObserver.auth.audience=amp\, https://traces.example.com/'
+  --set 'amObserver.auth.audience=amp\, https://traces.example.com/mcp'
 assert_env "an empty publicUrl appends nothing and leaves no trailing comma" \
   KEY_MANAGER_AUDIENCE "urn:wso2:amp,amp-api-client,am-obs-mcp" \
   --set-string amObserver.publicUrl=
 assert_env "a stray comma in the audience does not produce an empty entry" \
-  KEY_MANAGER_AUDIENCE "amp,https://traces.example.com/" \
+  KEY_MANAGER_AUDIENCE "amp,https://traces.example.com/mcp" \
   --set amObserver.publicUrl=https://traces.example.com \
   --set 'amObserver.auth.audience=amp\,'
 

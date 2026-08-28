@@ -203,6 +203,36 @@ type AgentListResponse struct {
 	Offset int             `json:"offset"`
 }
 
+type AgentIdentityEnvironmentView struct {
+	EnvironmentName  string `json:"environmentName"`
+	ProvisioningType string `json:"provisioningType"`
+	Status           string `json:"status"`
+	AgentID          string `json:"agentId,omitempty"`
+	ClientID         string `json:"clientId,omitempty"`
+	LastError        string `json:"lastError,omitempty"`
+	RequestedBy      string `json:"requestedBy,omitempty"`
+}
+
+type AgentIdentityActionRequest struct {
+	Environment string `json:"environment"`
+}
+
+type AgentRegenerateSecretResponse struct {
+	EnvironmentName        string `json:"environmentName"`
+	ProvisioningType       string `json:"provisioningType"`
+	ClientID               string `json:"clientId"`
+	ClientSecret           string `json:"clientSecret"`
+	Status                 string `json:"status"`
+	WorkloadRefreshWarning string `json:"workloadRefreshWarning,omitempty"`
+}
+
+type AgentRevokeSecretResponse struct {
+	EnvironmentName        string `json:"environmentName"`
+	ClientID               string `json:"clientId"`
+	Status                 string `json:"status"`
+	WorkloadRefreshWarning string `json:"workloadRefreshWarning,omitempty"`
+}
+
 // ---------------------------------------------------------------------------
 // Agent Catalog / Kinds
 // ---------------------------------------------------------------------------
@@ -315,6 +345,20 @@ type EnvironmentResponse struct {
 // EnvironmentListResponse is a JSON array of Environment objects.
 // The API returns a bare array, not an envelope.
 type EnvironmentListResponse []EnvironmentResponse
+
+type ThunderInstanceResponse struct {
+	EnvName      string `json:"envName"`
+	DisplayName  string `json:"displayName"`
+	IsProduction bool   `json:"isProduction"`
+	IssuerURL    string `json:"issuerUrl"`
+	TokenURL     string `json:"tokenUrl"`
+	JWKSURL      string `json:"jwksUrl"`
+	Namespace    string `json:"namespace"`
+}
+
+type ThunderInstanceListResponse struct {
+	ThunderInstances []ThunderInstanceResponse `json:"thunderInstances"`
+}
 
 // ---------------------------------------------------------------------------
 // Gateway
@@ -524,9 +568,14 @@ type SecurityAPIKey struct {
 	In      string `json:"in"`
 }
 
+type SecurityIdentity struct {
+	Enabled bool `json:"enabled"`
+}
+
 type SecurityConfig struct {
-	Enabled bool            `json:"enabled"`
-	APIKey  *SecurityAPIKey `json:"apiKey,omitempty"`
+	Enabled  bool              `json:"enabled"`
+	APIKey   *SecurityAPIKey   `json:"apiKey,omitempty"`
+	Identity *SecurityIdentity `json:"identity,omitempty"`
 }
 
 type LLMAccessControl struct {
@@ -693,6 +742,90 @@ type MCPProxyListItem struct {
 type MCPProxyListResponse struct {
 	Count int                `json:"count"`
 	List  []MCPProxyListItem `json:"list"`
+}
+
+type MCPProxyScopeRequest struct {
+	Action      string   `json:"action"`
+	Description string   `json:"description,omitempty"`
+	Tools       []string `json:"tools"`
+}
+
+type MCPProxyScopeResponse struct {
+	Action      string   `json:"action"`
+	Scope       string   `json:"scope"`
+	Description string   `json:"description,omitempty"`
+	Tools       []string `json:"tools"`
+}
+
+type AgentIdentityRoleRequest struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Scopes      []string `json:"scopes,omitempty"`
+}
+
+type AgentIdentityRoleResponse struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type AgentIdentityAssignment struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+}
+
+type AgentIdentityAssignmentsRequest struct {
+	Assignments []AgentIdentityAssignment `json:"assignments"`
+}
+
+type AgentIdentityRoleAssignmentsResponse struct {
+	Agents []AgentIdentityAssignment `json:"agents"`
+}
+
+type AgentIdentityAgent struct {
+	AgentName      string `json:"agentName"`
+	ProjectName    string `json:"projectName"`
+	Status         string `json:"status"`
+	ThunderAgentID string `json:"thunderAgentId,omitempty"`
+}
+
+type AgentIdentityAgentListResponse struct {
+	Agents []AgentIdentityAgent `json:"agents"`
+}
+
+type SecurityRuntimeProbeResponse struct {
+	NonRoot                    bool `json:"non_root"`
+	RootFilesystemReadOnly     bool `json:"root_filesystem_read_only"`
+	TmpWritable                bool `json:"tmp_writable"`
+	ServiceAccountTokenPresent bool `json:"service_account_token_present"`
+	EffectiveCapabilitiesDrop  bool `json:"effective_capabilities_dropped"`
+	NoNewPrivileges            bool `json:"no_new_privileges"`
+	SeccompEnabled             bool `json:"seccomp_enabled"`
+}
+
+type SecurityNetworkProbeResponse struct {
+	Target     string `json:"target"`
+	Outcome    string `json:"outcome"`
+	Evidence   string `json:"evidence"`
+	HTTPStatus *int   `json:"http_status"`
+}
+
+type SecurityIdentityProbeResponse struct {
+	Configured      bool     `json:"configured"`
+	TokenMinted     bool     `json:"token_minted"`
+	StatusCode      *int     `json:"status_code"`
+	RequestedScopes []string `json:"requested_scopes"`
+	GrantedScopes   []string `json:"granted_scopes"`
+	OAuthError      string   `json:"oauth_error"`
+}
+
+type SecurityMCPProbeResponse struct {
+	Tool           string `json:"tool"`
+	Phase          string `json:"phase"`
+	TokenMinted    bool   `json:"token_minted"`
+	HTTPStatus     *int   `json:"http_status"`
+	Authorized     bool   `json:"authorized"`
+	ResultReceived bool   `json:"result_received"`
+	Error          string `json:"error"`
 }
 
 // MCPServerInfoFetchRequest is the body for the discover/fetch-server-info endpoint.

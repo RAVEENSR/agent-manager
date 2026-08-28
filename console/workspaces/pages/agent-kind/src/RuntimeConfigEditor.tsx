@@ -20,6 +20,7 @@ import React, { useRef } from "react";
 import {
     Box,
     Button,
+    Divider,
     FormControlLabel,
     IconButton,
     Stack,
@@ -29,7 +30,9 @@ import {
 import { Plus, Trash } from "@wso2/oxygen-ui-icons-react";
 import {
     EnvFileUploadButton,
+    MAX_FILE_SIZE,
     TextInput,
+    parseEnvFileContent,
     type ParsedEnvEntry,
 } from "@agent-management-platform/views";
 
@@ -71,6 +74,7 @@ export const createRuntimeConfigRow = (
     isSecret: false,
     isMandatory: false,
     defaultValue: "",
+    description: "",
     ...overrides,
 });
 
@@ -80,6 +84,7 @@ export interface RuntimeConfigRow {
     isSecret: boolean;
     isMandatory?: boolean;
     defaultValue?: string;
+    description?: string;
 }
 
 export interface RuntimeConfigEditorProps {
@@ -98,6 +103,12 @@ interface ConfigRowProps {
     onUpdate: <K extends keyof RuntimeConfigRow>(field: K, value: RuntimeConfigRow[K]) => void;
     onUpdateMany: (updates: Partial<RuntimeConfigRow>) => void;
     onRemove: () => void;
+    /**
+     * Called instead of onUpdateMany when the pasted clipboard text contains
+     * multiple "KEY=VALUE" lines (e.g. the full contents of a .env file), so
+     * the caller can split it into multiple rows.
+     */
+    onBulkPaste: (entries: ParsedEnvEntry[]) => void;
 }
 
 const ConfigRow: React.FC<ConfigRowProps> = ({
@@ -108,99 +119,136 @@ const ConfigRow: React.FC<ConfigRowProps> = ({
     onUpdate,
     onUpdateMany,
     onRemove,
+    onBulkPaste,
 }) => (
-    <Stack key={row.id} direction="row" spacing={1} alignItems="top" justifyContent="flex-start">
-        <Box sx={{ width: 180 }}>
-            {readonlyKey ? (
-                <Typography variant="body2" fontWeight={600}>{row.key}</Typography>
-            ) : (
-                <>
-                    <TextInput
-                        placeholder="Key"
-                        value={row.key}
-                        onChange={(e) => onUpdate("key", e.target.value.replace(/\s/g, "_"))}
-                        onPaste={(e) => {
-                            const pasted = e.clipboardData.getData("text");
-                            const equalsIdx = pasted.indexOf("=");
-                            if (equalsIdx === -1) return;
-                            const pastedKey = pasted.slice(0, equalsIdx).trim();
-                            const pastedValue = stripQuotes(pasted.slice(equalsIdx + 1).trim());
-                            if (!pastedKey) return;
-                            e.preventDefault();
-                            onUpdateMany({
-                                key: pastedKey.replace(/\s/g, "_"),
-                                defaultValue: pastedValue,
-                            });
-                        }}
-                        fullWidth
-                        size="small"
-                        error={!!keyError}
-                    />
-                    {keyError && (
-                        <Typography variant="caption" color="error.main">
-                            {keyError}
-                        </Typography>
-                    )}
-                </>
-            )}
-        </Box>
+    <Stack key={row.id} spacing={0.5}>
+        <Stack direction="row" spacing={1} alignItems="top" justifyContent="flex-start">
+            <Box sx={{ width: 180 }}>
+                {readonlyKey ? (
+                    <Typography variant="body2" fontWeight={600}>{row.key}</Typography>
+                ) : (
+                    <>
+                        <TextInput
+                            placeholder="Key"
+                            value={row.key}
+                            onChange={(e) => onUpdate("key", e.target.value.replace(/\s/g, "_"))}
+                            onPaste={(e) => {
+                                const pasted = e.clipboardData.getData("text");
 
-        <Box sx={{ width: 180 }}>
-            {/* readonlyKey means this row came from an already-published version: its
-             * defaultValue is whatever the backend returned, which for a secret item is
-             * a placeholder that only signals whether a default exists, never the real
-             * value. A fresh "Create new version" row (readonlyKey unset) still gets a
-             * normal, fully-editable field so authors can type a real secret default. */}
-            <TextInput
-                placeholder={
-                    readonlyKey && row.isSecret
-                        ? (row.defaultValue ? "•••••••• (hidden)" : "Not set")
-                        : "Default value"
-                }
-                value={readonlyKey && row.isSecret ? "" : (row.defaultValue ?? "")}
-                onChange={(e) => onUpdate("defaultValue", e.target.value)}
-                fullWidth
-                size="small"
-                disabled={readonlyKey && row.isSecret}
-                type={row.isSecret && !readonlyKey ? "password" : "text"}
-                showPasswordToggle={row.isSecret && !readonlyKey}
-            />
-        </Box>
-        <Box display="flex" flexDirection="row" flexGrow={1} alignItems="start" pl={2} pt={0.5} gap={1}>
-            <FormControlLabel
-                control={
-                    <Switch
-                        size="small"
-                        checked={row.isMandatory ?? false}
-                        onChange={(_, checked) => onUpdate("isMandatory", checked)}
-                    />
-                }
-                label="Mandatory"
-                sx={{ mr: 0, minWidth: 105 }}
-            />
-            <FormControlLabel
-                control={
-                    <Switch
-                        size="small"
-                        checked={row.isSecret}
-                        onChange={(_, checked) => onUpdate("isSecret", checked)}
-                    />
-                }
-                label="Secret"
-                sx={{ mr: 0, minWidth: 80 }}
-            />
-            {!readonlyKey && (
-                <IconButton
+                                // A paste this large is almost certainly the wrong clipboard
+                                // contents (e.g. an entire log file), not a real .env list —
+                                // let the browser's default paste handle it instead of
+                                // splitting it into countless rows.
+                                if (pasted.length > MAX_FILE_SIZE) return;
+
+                                // Pasting one or more "KEY=VALUE" lines (including the full
+                                // contents of a .env file) parses through the same helper as
+                                // the upload path, so a single entry with a leading/trailing
+                                // comment line isn't corrupted by the raw-text fallback below.
+                                const bulkEntries = parseEnvFileContent(pasted);
+                                if (bulkEntries.length > 1) {
+                                    e.preventDefault();
+                                    onBulkPaste(bulkEntries);
+                                    return;
+                                }
+                                if (bulkEntries.length === 1) {
+                                    e.preventDefault();
+                                    onUpdateMany({
+                                        key: bulkEntries[0].key.replace(/\s/g, "_"),
+                                        defaultValue: bulkEntries[0].value,
+                                    });
+                                    return;
+                                }
+
+                                const equalsIdx = pasted.indexOf("=");
+                                if (equalsIdx === -1) return;
+                                const pastedKey = pasted.slice(0, equalsIdx).trim();
+                                const pastedValue = stripQuotes(pasted.slice(equalsIdx + 1).trim());
+                                if (!pastedKey) return;
+                                e.preventDefault();
+                                onUpdateMany({
+                                    key: pastedKey.replace(/\s/g, "_"),
+                                    defaultValue: pastedValue,
+                                });
+                            }}
+                            fullWidth
+                            size="small"
+                            error={!!keyError}
+                        />
+                        {keyError && (
+                            <Typography variant="caption" color="error.main">
+                                {keyError}
+                            </Typography>
+                        )}
+                    </>
+                )}
+            </Box>
+
+            <Box sx={{ width: 180 }}>
+                {/* readonlyKey means this row came from an already-published version: its
+                 * defaultValue is whatever the backend returned, which for a secret item is
+                 * a placeholder that only signals whether a default exists, never the real
+                 * value. A fresh "Create new version" row (readonlyKey unset) still gets a
+                 * normal, fully-editable field so authors can type a real secret default. */}
+                <TextInput
+                    placeholder={
+                        readonlyKey && row.isSecret
+                            ? (row.defaultValue ? "•••••••• (hidden)" : "Not set")
+                            : "Default value"
+                    }
+                    value={readonlyKey && row.isSecret ? "" : (row.defaultValue ?? "")}
+                    onChange={(e) => onUpdate("defaultValue", e.target.value)}
+                    fullWidth
                     size="small"
-                    onClick={onRemove}
-                    disabled={!canRemove}
-                    aria-label="Remove row"
-                    color="error"
-                >
-                    <Trash size={16} />
-                </IconButton>
-            )}
-        </Box>
+                    disabled={readonlyKey && row.isSecret}
+                    type={row.isSecret && !readonlyKey ? "password" : "text"}
+                    showPasswordToggle={row.isSecret && !readonlyKey}
+                />
+            </Box>
+            <Box display="flex" flexDirection="row" flexGrow={1} alignItems="start" pl={2} pt={0.5} gap={1}>
+                <FormControlLabel
+                    control={
+                        <Switch
+                            size="small"
+                            checked={row.isMandatory ?? false}
+                            onChange={(_, checked) => onUpdate("isMandatory", checked)}
+                        />
+                    }
+                    label="Mandatory"
+                    sx={{ mr: 0, minWidth: 105 }}
+                />
+                <FormControlLabel
+                    control={
+                        <Switch
+                            size="small"
+                            checked={row.isSecret}
+                            onChange={(_, checked) => onUpdate("isSecret", checked)}
+                        />
+                    }
+                    label="Secret"
+                    sx={{ mr: 0, minWidth: 80 }}
+                />
+                {!readonlyKey && (
+                    <IconButton
+                        size="small"
+                        onClick={onRemove}
+                        disabled={!canRemove}
+                        aria-label="Remove row"
+                        color="error"
+                    >
+                        <Trash size={16} />
+                    </IconButton>
+                )}
+            </Box>
+        </Stack>
+        <TextInput
+            label="Description"
+            placeholder="Optional"
+            value={row.description ?? ""}
+            onChange={(e) => onUpdate("description", e.target.value)}
+            fullWidth
+            size="small"
+        />
     </Stack>
 );
 
@@ -255,7 +303,9 @@ export const RuntimeConfigEditor: React.FC<RuntimeConfigEditorProps> = ({
             if (trimmedKey) indexByKey.set(trimmedKey, i);
         });
 
-        for (const { key, value } of entries) {
+        for (const rawEntry of entries) {
+            const key = rawEntry.key.replace(/\s/g, "_");
+            const value = rawEntry.value;
             const existingIndex = indexByKey.get(key);
             if (existingIndex !== undefined) {
                 next[existingIndex] = { ...next[existingIndex], defaultValue: value };
@@ -269,7 +319,7 @@ export const RuntimeConfigEditor: React.FC<RuntimeConfigEditorProps> = ({
     };
 
     return (
-        <Stack spacing={1} pt={1}>
+        <Stack spacing={1.5} pt={1} divider={<Divider />}>
             {rows.map((row, i) => (
                 <ConfigRow
                     key={row.id}
@@ -280,16 +330,20 @@ export const RuntimeConfigEditor: React.FC<RuntimeConfigEditorProps> = ({
                     onUpdate={(field, value) => updateRow(i, field, value)}
                     onUpdateMany={(updates) => updateRowMany(i, updates)}
                     onRemove={() => removeRow(i)}
+                    onBulkPaste={handleEnvFileParsed}
                 />
             ))}
             {!readonlyKey && (
-                <Box display="flex" flexDirection="row" gap={1} alignItems="flex-start">
+                <Box display="flex" flexDirection="row" gap={1.5} alignItems="center" flexWrap="wrap">
                     <Button size="small" variant="outlined" startIcon={<Plus />} onClick={addRow} disabled={isInvalid}>
                         Add Runtime Key
                     </Button>
                     <Box display="flex" flexDirection="column" alignItems="flex-start">
                         <EnvFileUploadButton onParsed={handleEnvFileParsed} label="Upload .env file" />
                     </Box>
+                    <Typography variant="caption" color="text.secondary">
+                        or paste .env text into a Key field above
+                    </Typography>
                 </Box>
             )}
         </Stack>

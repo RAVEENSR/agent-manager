@@ -47,7 +47,7 @@ interface DeleteEnvironmentDrawerProps {
 }
 
 function buildScript(name: string, token: string): string {
-  // The remove-environment.sh script deprovisions the environment's Thunder ID
+  // The remove-environment.sh script deprovisions the environment's ThunderID
   // instance, uninstalls its API Platform Gateway helm release, and then deletes
   // the Environment via the Agent Manager API. Pass the version-matched
   // THUNDER_SCRIPT_URL so the chained call fetches the script from the same git

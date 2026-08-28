@@ -23,6 +23,7 @@ import (
 	"github.com/wso2/agent-manager/cli/pkg/cmd/agent"
 	"github.com/wso2/agent-manager/cli/pkg/cmd/api"
 	amcontext "github.com/wso2/agent-manager/cli/pkg/cmd/context"
+	"github.com/wso2/agent-manager/cli/pkg/cmd/gateway"
 	"github.com/wso2/agent-manager/cli/pkg/cmd/llmprovider"
 	"github.com/wso2/agent-manager/cli/pkg/cmd/project"
 	"github.com/wso2/agent-manager/cli/pkg/cmd/skills"
@@ -48,6 +49,7 @@ func NewRootCmd(f *cmdutil.Factory) (*cobra.Command, error) {
 	cmd.AddCommand(agent.NewAgentCmd(f))
 	cmd.AddCommand(api.NewAPICmd(f))
 	cmd.AddCommand(amcontext.NewContextCmd(f))
+	cmd.AddCommand(gateway.NewGatewayCmd(f))
 	cmd.AddCommand(llmprovider.NewLLMProviderCmd(f))
 	cmd.AddCommand(project.NewProjectCmd(f))
 	cmd.AddCommand(NewVersionCmd())

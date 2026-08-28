@@ -19,7 +19,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"slices"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -124,41 +123,41 @@ func (reg *toolRegistry) authzMiddleware() gomcp.Middleware {
 					return denyResult("organization mismatch: request token is not scoped to the session organization"), nil
 				}
 			}
+			// Both this gate and everything downstream of it — notably the
+			// service layer's environment-tier check — must be decided by the
+			// same scope set. Installing it on ctx here is what makes that true;
+			// reading two sources would let one request be gated on the request
+			// token and tiered on the session token.
+			ctx = withEffectiveScopes(ctx, call)
 			if !config.GetConfig().RBACEnabled {
 				return next(ctx, method, req)
 			}
-			hasScope := scopeChecker(ctx, call)
-			for _, perm := range perms {
-				if !hasScope(perm.Scope()) {
-					recordToolDeny(ctx, call.Params.Name, "missing-scope",
-						audit.RequiredPermissions(perm),
-						audit.Detail("missingScope", perm.Scope()))
-					return denyResult(fmt.Sprintf("insufficient permissions: this tool requires the %s scope", perm.Scope())), nil
-				}
+			if missing, short := jwtassertion.FirstMissingScope(ctx, perms...); short {
+				recordToolDeny(ctx, call.Params.Name, "missing-scope",
+					audit.RequiredPermissions(missing),
+					audit.Detail("missingScope", missing.Scope()))
+				return denyResult(fmt.Sprintf("insufficient permissions: this tool requires the %s scope", missing.Scope())), nil
 			}
 			return next(ctx, method, req)
 		}
 	}
 }
 
-// scopeChecker returns a function that reports whether a given scope is
-// present for the current request. It prefers the per-request scopes the SDK
-// attaches via call.Extra.TokenInfo (populated by claimsTokenVerifier through
-// auth.RequireBearerToken — see mcp/tokeninfo.go and mcp/setup.go) since those
-// reflect the token that made this specific HTTP request. When Extra.TokenInfo
-// is absent — in-memory transports and tests have no HTTP layer, so it's
-// always nil there — it falls back to the scopes jwtassertion put on the
-// session context.
-func scopeChecker(ctx context.Context, call *gomcp.CallToolRequest) func(scope string) bool {
-	if call.Extra != nil && call.Extra.TokenInfo != nil {
-		scopes := call.Extra.TokenInfo.Scopes
-		return func(scope string) bool {
-			return slices.Contains(scopes, scope)
-		}
+// withEffectiveScopes returns ctx carrying the scope set that decides this
+// request. The per-request scopes the SDK attaches via call.Extra.TokenInfo
+// (populated by claimsTokenVerifier through auth.RequireBearerToken — see
+// mcp/tokeninfo.go and mcp/setup.go) win over the session's, deliberately: they
+// reflect the token that made this specific HTTP request, and a per-request
+// token must not borrow session privileges.
+//
+// When Extra.TokenInfo is absent — in-memory transports have no HTTP layer, so
+// it is always nil there — the session scopes jwtassertion already put on ctx
+// ARE the effective set, and ctx is returned untouched.
+func withEffectiveScopes(ctx context.Context, call *gomcp.CallToolRequest) context.Context {
+	if call.Extra == nil || call.Extra.TokenInfo == nil {
+		return ctx
 	}
-	return func(scope string) bool {
-		return jwtassertion.HasAllScopes(ctx, []string{scope})
-	}
+	return jwtassertion.ContextWithScopeList(ctx, call.Extra.TokenInfo.Scopes)
 }
 
 // sessionOrgMatchesRequest reports whether the organization on the per-request

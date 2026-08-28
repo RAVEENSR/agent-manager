@@ -23,13 +23,20 @@ spec:
         command:
           - sh
           - -c
+        # Workflow parameters arrive as environment variables rather than being
+        # interpolated into the script body: Argo substitution is textual, so a
+        # spliced parameter would be parsed as shell by the interpreter below.
+        env:
+          - name: GIT_REVISION
+            value: '{{ "{{" }}inputs.parameters.git-revision{{ "}}" }}'
+          - name: IMAGE_NAME
+            value: '{{ "{{" }}workflow.parameters.image-name{{ "}}" }}'
+          - name: IMAGE_TAG
+            value: '{{ "{{" }}workflow.parameters.image-tag{{ "}}" }}'
         args:
           - |-
             set -e
 
-            GIT_REVISION={{ "{{" }}inputs.parameters.git-revision{{ "}}" }}
-            IMAGE_NAME={{ "{{" }}workflow.parameters.image-name{{ "}}" }}
-            IMAGE_TAG={{ "{{" }}workflow.parameters.image-tag{{ "}}" }}
             SRC_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}-${GIT_REVISION}"
 
             REGISTRY_ENDPOINT="{{ include "openchoreo-workflow-plane.registryEndpoint" . }}"
@@ -47,12 +54,12 @@ spec:
 
             podman load -i /mnt/vol/app-image.tar
 
-            podman tag $SRC_IMAGE $REGISTRY_ENDPOINT/$SRC_IMAGE
+            podman tag "$SRC_IMAGE" "$REGISTRY_ENDPOINT/$SRC_IMAGE"
 
             if [ -f "$AUTH_FILE" ]; then
-              podman push --tls-verify={{ .Values.global.defaultResources.registry.tlsVerify }} --authfile "$AUTH_FILE" $REGISTRY_ENDPOINT/$SRC_IMAGE
+              podman push --tls-verify={{ .Values.global.defaultResources.registry.tlsVerify }} --authfile "$AUTH_FILE" "$REGISTRY_ENDPOINT/$SRC_IMAGE"
             else
-              podman push --tls-verify={{ .Values.global.defaultResources.registry.tlsVerify }} $REGISTRY_ENDPOINT/$SRC_IMAGE
+              podman push --tls-verify={{ .Values.global.defaultResources.registry.tlsVerify }} "$REGISTRY_ENDPOINT/$SRC_IMAGE"
             fi
 
             echo -n "$REGISTRY_ENDPOINT/$SRC_IMAGE" > /tmp/image.txt

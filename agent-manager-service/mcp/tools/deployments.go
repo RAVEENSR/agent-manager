@@ -102,7 +102,7 @@ func (t *Toolsets) registerDeploymentTools(server *gomcp.Server, reg *toolRegist
 				"secret_ref":   stringProperty("Optional. Reference to existing secret."),
 			}, []string{"key"})),
 		}, []string{"project_name", "agent_name", "image_id"}),
-	}, audit.ActionAgentDeploy, deployAgent(t.DeploymentToolset), rbac.AgentDeployNonProduction)
+	}, audit.ActionAgentDeploy, deployAgent(t.DeploymentToolset), rbac.AgentEnvNonProduction)
 
 	addTool(reg, server, &gomcp.Tool{
 		Name: "update_deployment_state",
@@ -114,7 +114,7 @@ func (t *Toolsets) registerDeploymentTools(server *gomcp.Server, reg *toolRegist
 			"environment":  stringProperty("Required. Environment name. Use list_environments to discover valid names."),
 			"state":        enumProperty("Required. Desired deployment action for the selected environment.", []string{"redeploy", "undeploy"}),
 		}, []string{"project_name", "agent_name", "environment", "state"}),
-	}, audit.ActionAgentChangeDeploymentState, updateDeploymentState(t.DeploymentToolset), rbac.AgentSuspend)
+	}, audit.ActionAgentChangeDeploymentState, updateDeploymentState(t.DeploymentToolset), rbac.AgentSuspend, rbac.AgentEnvNonProduction)
 }
 
 func listDeployments(handler DeploymentToolsetHandler) func(context.Context, *gomcp.CallToolRequest, listDeploymentsInput) (*gomcp.CallToolResult, any, error) {

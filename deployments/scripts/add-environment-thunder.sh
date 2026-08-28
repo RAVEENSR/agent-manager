@@ -395,7 +395,7 @@ register_thunder_url() {
       ;;
     400)
       echo "❌ Thunder url handle '${handle}' was rejected as invalid by agent-manager-service." >&2
-      echo "   Must be lowercase alphanumeric with hyphens (no leading/trailing hyphen), 10-63 chars." >&2
+      echo "   Must be lowercase alphanumeric with hyphens (no leading/trailing hyphen), 3-63 chars." >&2
       ;;
     *)
       echo "⚠️  Could not register the thunder url handle in agent-manager-service (HTTP ${http_code})." >&2
@@ -723,9 +723,9 @@ main() {
     # Length bounds mirror agent-manager-service's minThunderHandleLen/
     # maxThunderHandleLen — checked here too so a bad length fails fast
     # locally instead of a round trip that only fails at the 400 above.
-    if ! validate_name "$requested_handle" || [ "${#requested_handle}" -lt 10 ] || [ "${#requested_handle}" -gt 63 ]; then
+    if ! validate_name "$requested_handle" || [ "${#requested_handle}" -lt 3 ] || [ "${#requested_handle}" -gt 63 ]; then
       echo "❌ Invalid THUNDER_HANDLE '${requested_handle}'"
-      echo "   Must be lowercase alphanumeric with hyphens (no leading/trailing hyphen), 10-63 chars."
+      echo "   Must be lowercase alphanumeric with hyphens (no leading/trailing hyphen), 3-63 chars."
       exit 1
     fi
   fi

@@ -21,6 +21,7 @@ import {
   Box,
   Button,
   CircularProgress,
+  Divider,
   Form,
   MenuItem,
   Select,
@@ -40,9 +41,15 @@ import {
   DEFAULT_TOKEN_EXPIRY,
   useSnackBar,
 } from "@agent-management-platform/views";
-import { useConfirmationDialog } from "@agent-management-platform/shared-component";
+import {
+  ALLOWED,
+  RestrictedAction,
+  useAgentEnvironmentAccess,
+  useConfirmationDialog,
+} from "@agent-management-platform/shared-component";
 import {
   extractServerErrorMessage,
+  MAX_SNACKBAR_REASON_LENGTH,
   useAgentBuildOptions,
   useDeployAgent,
   useGetAgentConfigurations,
@@ -52,11 +59,16 @@ import {
 } from "@agent-management-platform/api-client";
 import type {
   EnvironmentVariable,
-  FileMount,
   UpdateAgentDeploySettingsRequest,
 } from "@agent-management-platform/types";
 import { compatibleInstrumentationVersions, pickInstrumentationVersion } from "../utils/instrumentation";
-import { excludeSystemVars, sortSystemLast } from "../utils/envVars";
+import { isStoredSecret, sortSystemLast, toSubmittableEnv } from "../utils/envVars";
+import {
+  type FileMountRow,
+  newFileMountRow,
+  seedFileMountRows,
+  toFileMount,
+} from "../utils/fileMounts";
 import { SecurityConfigSections, type SecurityConfigHandle } from "./SecurityConfigSections";
 
 export interface EditDeployConfigDrawerProps {
@@ -76,10 +88,12 @@ export interface EditDeployConfigDrawerProps {
   mode: "update" | "deploy";
   /** Required when mode === "deploy". */
   imageId?: string;
-  // Tracing/instrumentation context — supplied by DeployCard for deployed Python agents so the
-  // "Tracing - Instrumentation" section can render. Omitted by BuildCard (initial deploy) and
-  // non-Python agents, which hides the section entirely.
+  // Tracing/instrumentation context — supplied by DeployCard for deployed agents so the
+  // "Tracing - Instrumentation" section can render, and whether the Python-only
+  // instrumentation version selector is offered within it. Both omitted for Docker
+  // agents, which have no instrumentation trait and so get no section at all.
   isPythonBuildpack?: boolean;
+  isBallerinaBuildpack?: boolean;
   agentPythonVersion?: string;
   // When true (API agents, update mode), the CORS + Endpoint Authentication sections render at the
   // top of the drawer. Omitted by BuildCard (initial deploy) and non-API agents.
@@ -97,6 +111,7 @@ export function EditDeployConfigDrawer({
   title,
   mode,
   isPythonBuildpack,
+  isBallerinaBuildpack,
   agentPythonVersion,
   isApiAgent,
 }: EditDeployConfigDrawerProps) {
@@ -106,6 +121,14 @@ export function EditDeployConfigDrawer({
   // CORS + Endpoint Authentication live in a child component that owns its own state; we collect
   // its payload on Apply via the imperative handle.
   const showSecurity = mode === "update" && !!isApiAgent;
+
+  // In deploy mode this drawer's Apply calls the deploy route, which is gated on
+  // the target environment's tier. The buttons that open it are gated too, but
+  // the drawer also opens straight from a ?deployPanel=open link, so the control
+  // that actually deploys carries the check as well.
+  const environmentAccess = useAgentEnvironmentAccess(orgName);
+  const deployAccess =
+    mode === "deploy" ? environmentAccess(environment) : ALLOWED;
   const securityRef = useRef<SecurityConfigHandle>(null);
   const [securityValid, setSecurityValid] = useState(true);
 
@@ -115,10 +138,14 @@ export function EditDeployConfigDrawer({
   );
 
   const [env, setEnv] = useState<EnvironmentVariable[]>([]);
-  const [files, setFiles] = useState<FileMount[]>([]);
+  const [files, setFiles] = useState<FileMountRow[]>([]);
 
-  // Tracing section (mode === "update" && Python agent only).
-  const showTracing = mode === "update" && !!isPythonBuildpack;
+  // Tracing section: the environment card's drawer only. Offered for every language the
+  // backend can instrument — Python and Ballerina alike, which is what makes it reachable
+  // for kind-based agents. The version selector below stays Python-only: the
+  // instrumentation image tags encode the Python minor (e.g. 0.4.1-python3.11).
+  const showTracing =
+    mode === "update" && (!!isPythonBuildpack || !!isBallerinaBuildpack);
   const [tracingEnabled, setTracingEnabled] = useState(false);
   const [instrumentationVersion, setInstrumentationVersion] = useState<string>("");
   const [versionDirty, setVersionDirty] = useState(false);
@@ -152,7 +179,7 @@ export function EditDeployConfigDrawer({
         isSystem: e.isSystem,
       }),
     ) ?? []));
-    setFiles(cfg?.files ?? []);
+    setFiles(seedFileMountRows(cfg?.files));
     setTracingEnabled(configurations.enableAutoInstrumentation ?? false);
     setInstrumentationVersion("");
     setVersionDirty(false);
@@ -163,7 +190,7 @@ export function EditDeployConfigDrawer({
   // Seed the version selector for display once the catalog has loaded; re-seed while the current
   // value is not compatible (self-corrects a stale seed without clobbering a valid user choice).
   useEffect(() => {
-    if (!open || !showTracing || !buildOptions) return;
+    if (!open || !isPythonBuildpack || !buildOptions) return;
     if (versionInCompatibleSet) return;
     setInstrumentationVersion(
       pickInstrumentationVersion(
@@ -173,7 +200,7 @@ export function EditDeployConfigDrawer({
       ),
     );
   }, [
-    open, showTracing, buildOptions, compatibleInstrumentation, configurations,
+    open, isPythonBuildpack, buildOptions, compatibleInstrumentation, configurations,
     versionInCompatibleSet,
   ]);
 
@@ -185,16 +212,10 @@ export function EditDeployConfigDrawer({
   const isPending = isDeploying || isUpdating || isUpdatingSettings;
 
   const handleSave = useCallback(() => {
-    const validEnv = excludeSystemVars(env).map(
-      ({ key, value, isSensitive, secretRef }) => {
-        // Preserve secretRef for secrets the user did not edit
-        if (isSensitive && secretRef && !value) {
-          return { key, isSensitive, secretRef } as EnvironmentVariable;
-        }
-        return { key, value, isSensitive };
-      },
-    );
-    const validFiles = files.filter((f) => f.key && f.mountPath);
+    const validEnv = toSubmittableEnv(env);
+    const validFiles = files
+      .filter((f) => f.key && f.mountPath)
+      .map(toFileMount);
 
     if (mode === "update") {
       if (showSecurity && securityRef.current && !securityRef.current.validate()) {
@@ -219,7 +240,8 @@ export function EditDeployConfigDrawer({
         ...(showSecurity && securityRef.current ? securityRef.current.buildBody() : {}),
         ...(showTracing && {
           enableAutoInstrumentation: tracingEnabled,
-          ...(tracingEnabled && versionDirty && versionInCompatibleSet && instrumentationVersion
+          ...(isPythonBuildpack && tracingEnabled && versionDirty && versionInCompatibleSet
+            && instrumentationVersion
             ? { instrumentationVersion }
             : {}),
         }),
@@ -254,7 +276,7 @@ export function EditDeployConfigDrawer({
   }, [
     mode, env, files, environment, imageId, orgName, projName, agentName,
     showSecurity, showTracing, tracingEnabled, instrumentationVersion, versionDirty,
-    versionInCompatibleSet,
+    versionInCompatibleSet, isPythonBuildpack,
     deployAgent, updateConfigs, updateDeploySettings, onClose, pushSnackBar,
   ]);
 
@@ -288,7 +310,9 @@ export function EditDeployConfigDrawer({
         // confirmation), so it needs its own error snackbar here.
         onError: (error: unknown) => {
           pushSnackBar({
-            message: extractServerErrorMessage(error) ?? "Failed to regenerate tracing token",
+            message:
+              extractServerErrorMessage(error, { maxReasonLength: MAX_SNACKBAR_REASON_LENGTH }) ??
+              "Failed to regenerate tracing token",
             type: "error",
           });
         },
@@ -339,7 +363,7 @@ export function EditDeployConfigDrawer({
 
   // ── File handlers ─────────────────────────────────────────────────────────
   const handleAddFile = useCallback(() => {
-    setFiles((prev) => [{ key: "", mountPath: "", value: "" }, ...prev]);
+    setFiles((prev) => [newFileMountRow(), ...prev]);
   }, []);
 
   const handleFileChange = useCallback(
@@ -386,7 +410,7 @@ export function EditDeployConfigDrawer({
                   />
                 </Stack>
 
-                {tracingEnabled && (
+                {tracingEnabled && isPythonBuildpack && (
                   <Stack direction="row" justifyContent="space-between" alignItems="center">
                     <Typography variant="body2">Instrumentation Version</Typography>
                     {compatibleInstrumentation.length === 0 && buildOptions ? (
@@ -479,7 +503,7 @@ export function EditDeployConfigDrawer({
                     keyValue={item.key}
                     valueValue={item.value}
                     isSensitive={item.isSensitive ?? false}
-                    isExistingSecret={!!(item.secretRef && item.isSensitive)}
+                    isExistingSecret={isStoredSecret(item)}
                     isSystem={item.isSystem}
                     onKeyChange={(v) => handleEnvChange(index, "key", v)}
                     onValueChange={(v) => handleEnvChange(index, "value", v)}
@@ -499,7 +523,7 @@ export function EditDeployConfigDrawer({
                 variant="outlined"
                 startIcon={<Plus size={14} />}
                 onClick={handleAddFile}
-                disabled={isPending}
+                disabled={isPending || !seededRef.current}
               >
                 Add
               </Button>
@@ -509,11 +533,10 @@ export function EditDeployConfigDrawer({
                 No file mounts. Click Add to define them.
               </Typography>
             ) : (
-              <Stack spacing={1}>
+              <Stack spacing={1} divider={<Divider />}>
                 {files.map((file, index) => (
                   <FileMountEditor
-                    key={index}
-                    index={index}
+                    key={file.id}
                     keyValue={file.key}
                     mountPathValue={file.mountPath}
                     contentValue={file.value}
@@ -531,15 +554,19 @@ export function EditDeployConfigDrawer({
             <Button variant="outlined" onClick={onClose} disabled={isPending}>
               Cancel
             </Button>
-            <Button
-              variant="contained"
-              color="primary"
-              onClick={handleSave}
-              disabled={isPending || isRegenerating || (showSecurity && !securityValid)}
-              startIcon={isPending ? <CircularProgress size={16} /> : undefined}
-            >
-              {isPending ? "Applying..." : mode === "deploy" ? "Apply & Deploy" : "Apply"}
-            </Button>
+            <RestrictedAction decision={deployAccess}>
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={handleSave}
+                disabled={
+                  isPending || isRegenerating || (showSecurity && !securityValid)
+                }
+                startIcon={isPending ? <CircularProgress size={16} /> : undefined}
+              >
+                {isPending ? "Applying..." : mode === "deploy" ? "Apply & Deploy" : "Apply"}
+              </Button>
+            </RestrictedAction>
           </Box>
         </Form.Stack>
       </DrawerContent>
