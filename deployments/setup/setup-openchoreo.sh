@@ -265,7 +265,6 @@ install_observability_plane() {
 
     echo "   This may take up to 15 minutes..."
     kubectl apply -f ${PROJECT_ROOT}/deployments/values/oc-collector-configmap.yaml -n openchoreo-observability-plane
-    kubectl apply -f ${PROJECT_ROOT}/deployments/values/otel-collector-metrics-scrape.yaml -n openchoreo-observability-plane
     # Apply CRDs before the upgrade (helm upgrade skips crds/). No-op on first install.
     sync_chart_crds openchoreo-observability-plane
     helm upgrade --install openchoreo-observability-plane oci://ghcr.io/openchoreo/helm-charts/openchoreo-observability-plane \
