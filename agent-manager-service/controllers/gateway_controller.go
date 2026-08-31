@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/audit"
