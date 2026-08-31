@@ -273,12 +273,26 @@ func buildInternalAgentFromSourceComponentRequestBody(namespaceName, projectName
 			AutoDeploy: &autoDeploy,
 			Parameters: &parameters,
 			Workflow: &gen.ComponentWorkflowConfig{
+				Kind:       &componentWorkflowKind,
 				Name:       componentWorkflowName,
 				Parameters: &componentWorkflowParameters,
 			},
 		},
 	}, nil
 }
+
+// componentWorkflowKind is the kind recorded on a Component's workflow reference.
+//
+// The namespaced Workflow is used rather than the cluster-scoped ClusterWorkflow:
+// a ClusterWorkflow pins workflowPlaneRef to the single cluster-wide
+// ClusterWorkflowPlane, so its builds always run on that one plane. A namespaced
+// Workflow resolves the WorkflowPlane inside the organization's own namespace,
+// which is what lets an org build on the data centre it actually belongs to.
+//
+// Recorded on the Component so each agent keeps the kind it was created with:
+// builds.go reads this and only falls back to ClusterWorkflow when it is unset,
+// which is the case for agents created before this change.
+var componentWorkflowKind = gen.ComponentWorkflowConfigKindWorkflow
 
 func getOpenChoreoComponentType(provisioningType string, agentType string) (string, error) {
 	if provisioningType == string(utils.ExternalAgent) {
