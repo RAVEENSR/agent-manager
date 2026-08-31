@@ -70,6 +70,19 @@ func (c *openChoreoClient) EnsureProjectReleaseBinding(ctx context.Context, ouID
 				ProjectName string `json:"projectName"`
 			}{ProjectName: projectName},
 			Environment: environmentName,
+			// The project type merges these labels onto the cell namespace it
+			// creates, which is where this project's pods run. The organization's
+			// UUID goes there because nothing on a pod identifies an
+			// organization and nothing downstream can derive it: the namespace
+			// name is a hash of the UUID, and the renderer copies only its own
+			// fixed label set onto workloads. Without this, compute measured in
+			// this namespace is attributable to a project and a component but to
+			// no customer.
+			EnvironmentConfigs: &map[string]interface{}{
+				"namespaceLabels": map[string]string{
+					string(LabelKeyOrgUUID): ouID,
+				},
+			},
 		},
 	}
 
