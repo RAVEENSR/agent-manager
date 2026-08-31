@@ -83,6 +83,29 @@ func TestEnsureProjectReleaseBinding_CreatesBinding(t *testing.T) {
 	assert.Nil(t, gotBody.Spec.ProjectRelease)
 }
 
+// The organization's UUID has to reach the binding, because the project type
+// merges these labels onto the cell namespace and that is the only place usage
+// measured from pod metrics can be attributed to an organization. A missing
+// label breaks nothing at create time -- it yields pods that meter correctly and
+// bill to no customer -- so it is asserted rather than left to inspection.
+func TestEnsureProjectReleaseBinding_StampsOrgUUIDOnCellNamespace(t *testing.T) {
+	var gotBody gen.ProjectReleaseBinding
+	srv := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.WriteHeader(http.StatusCreated)
+		require.NoError(t, json.NewEncoder(w).Encode(gotBody))
+	}))
+
+	const ouID = "019eafc8-0f23-7974-9119-d762c59c83a1"
+	require.NoError(t, srv.EnsureProjectReleaseBinding(context.Background(), ouID, "my-project", "dev"))
+
+	require.NotNil(t, gotBody.Spec)
+	require.NotNil(t, gotBody.Spec.EnvironmentConfigs)
+	nsLabels, ok := (*gotBody.Spec.EnvironmentConfigs)["namespaceLabels"].(map[string]interface{})
+	require.True(t, ok, "namespaceLabels missing: %#v", *gotBody.Spec.EnvironmentConfigs)
+	assert.Equal(t, ouID, nsLabels[string(LabelKeyOrgUUID)])
+}
+
 func TestEnsureProjectReleaseBinding_ExistingBindingIsSuccess(t *testing.T) {
 	srv := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
