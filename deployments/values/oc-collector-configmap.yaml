@@ -20,11 +20,13 @@ data:
         endpoint: 0.0.0.0:8889
         resource_to_telemetry_conversion:
           enabled: true
-        # Longer than the hour the meter reads. The exporter forgets a series it
-        # has not seen for metric_expiration (5m by default), so a tenant idle
-        # for longer than that would have its counter restart from zero
-        # mid-window and lose everything counted before the gap.
-        metric_expiration: 2h
+        # Comfortably longer than the hour the meter reads, and no longer. The
+        # exporter forgets a series it has not seen for metric_expiration (5m by
+        # default), so a tenant idle beyond that would have its counter restart
+        # from zero mid-window. Every retained series costs memory on a
+        # collector that ships with a 200Mi limit, so this buys the margin the
+        # read window needs rather than the largest number that would work.
+        metric_expiration: 90m
       opensearch:
         http:
           auth:

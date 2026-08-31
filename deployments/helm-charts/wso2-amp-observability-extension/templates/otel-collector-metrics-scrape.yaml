@@ -2,14 +2,19 @@
 #
 # The collector's own Service belongs to the OpenChoreo traces chart and exposes
 # only the ingest ports, so this adds a second Service for the Prometheus
-# exporter on 8889 rather than modifying a chart we do not own. 8889 is not
-# declared as a containerPort — it does not need to be for a Service to route to
-# it — which is why the port is given numerically.
+# exporter rather than modifying a chart we do not own. The port is given
+# numerically because it is not declared as a containerPort — it does not need
+# to be for a Service to route to it.
+#
+# This lives in the chart rather than as a manifest applied by the local setup
+# script, because the production install uses helm directly and would never run
+# that script. A counter nothing scrapes reads zero forever and looks healthy
+# doing it.
 apiVersion: v1
 kind: Service
 metadata:
   name: amp-otel-collector-metrics
-  namespace: openchoreo-observability-plane
+  namespace: {{ .Release.Namespace }}
   labels:
     app.kubernetes.io/name: amp-otel-collector-metrics
 spec:
@@ -17,8 +22,8 @@ spec:
     app.kubernetes.io/name: opentelemetry-collector
   ports:
     - name: metrics
-      port: 8889
-      targetPort: 8889
+      port: {{ .Values.otelCollector.metricsPort }}
+      targetPort: {{ .Values.otelCollector.metricsPort }}
       protocol: TCP
 ---
 # The observability-plane Prometheus selects ServiceMonitors with an empty
@@ -29,7 +34,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: amp-otel-collector-metrics
-  namespace: openchoreo-observability-plane
+  namespace: {{ .Release.Namespace }}
 spec:
   selector:
     matchLabels:
