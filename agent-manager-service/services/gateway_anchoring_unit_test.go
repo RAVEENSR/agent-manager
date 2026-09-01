@@ -39,7 +39,7 @@ import (
 //     directly. RedeployMCPProxy is a one-line wrapper around it, so the three scope
 //     mutation call sites (create/update/delete) funnel through this exact same resolve
 //     and are not re-tested separately.
-//   - site 3 (resolveInternalProxyURL, monitor_executor.go): the unexported method on a bare
+//   - site 3 (resolveProxyURL, monitor_executor.go): the unexported method on a bare
 //     &monitorExecutor{} literal, per the brief's shape.
 //   - site 5 (resolveMonitorGateway, monitor_manager.go): the unexported method on a bare
 //     &monitorManagerService{} literal. The same helper backs both the monitor-create and
@@ -184,27 +184,11 @@ func TestAnchoring_MonitorRunAgainstDeployedProxy(t *testing.T) {
 				},
 			},
 		}
-		url, err := exec.resolveInternalProxyURL(context.Background(), "org", env.String(), proxy)
+		url, err := exec.resolveProxyURL(context.Background(), "org", env.String(), proxy)
 		require.NoError(t, err)
-		// Runtime URLs are per-gateway in the fixture, so asserting this one rules out the
-		// other gateway. The monitor's evaluation job runs in-cluster and gets the runtime
-		// address verbatim — no scheme defaulting, and never the public vhost.
-		require.Equal(t, both.RuntimeURL, url)
-	})
-
-	t.Run("fails when the anchored gateway has no runtimeUrl", func(t *testing.T) {
-		unregistered := newGateway(t, models.GatewayRoleBoth, true)
-		unregistered.RuntimeURL = ""
-		exec := &monitorExecutor{
-			gatewayRepo: gatewayFixtureRepo(t, env.String(), []*models.Gateway{unregistered}),
-			deploymentRepo: &repomocks.DeploymentRepositoryMock{
-				GetDeployedGatewaysByProviderFunc: func(uuid.UUID, string) ([]string, error) {
-					return []string{unregistered.UUID.String()}, nil
-				},
-			},
-		}
-		_, err := exec.resolveInternalProxyURL(context.Background(), "org", env.String(), proxy)
-		require.ErrorIs(t, err, errGatewayRuntimeURLUnregistered)
+		// Vhosts are per-gateway in the fixture, so asserting this one rules out the
+		// other gateway. A bare vhost gets the default HTTPS scheme.
+		require.Equal(t, "https://"+both.Vhost, url)
 	})
 
 	t.Run("ambiguity fires only with no deployment", func(t *testing.T) {
@@ -216,7 +200,7 @@ func TestAnchoring_MonitorRunAgainstDeployedProxy(t *testing.T) {
 				},
 			},
 		}
-		_, err := exec.resolveInternalProxyURL(context.Background(), "org", env.String(), proxy)
+		_, err := exec.resolveProxyURL(context.Background(), "org", env.String(), proxy)
 		require.ErrorIs(t, err, errAmbiguousEgressGateway)
 	})
 }
