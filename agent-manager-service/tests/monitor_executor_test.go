@@ -366,7 +366,6 @@ func TestExecuteMonitorRun_LLMCredentials(t *testing.T) {
 		Name:                     "test-gateway-" + gwUUID.String()[:8],
 		DisplayName:              "Test Gateway",
 		Vhost:                    "https://gw.example.com",
-		RuntimeURL:               "http://api-platform-acme-dev-gw-gateway-gateway-runtime.acme-dev:22893",
 		IsActive:                 true,
 		Properties:               map[string]interface{}{},
 		GatewayFunctionalityType: "both",
@@ -411,10 +410,10 @@ func TestExecuteMonitorRun_LLMCredentials(t *testing.T) {
 	// Secret path comes from the persisted SecretReference remoteRef (not a computed KV path).
 	assert.Equal(t, expectedSecretPath, evalParams["llmProxySecretPath"], "llmProxySecretPath should be the SecretReference remoteRef key")
 
-	// The evaluation job runs in-cluster, so it gets the gateway's runtime address, not the
-	// public vhost — its NetworkPolicy only allows egress to the gateway namespace on 22893.
-	expectedProxyURL := gw.RuntimeURL + contextPath
-	assert.Equal(t, expectedProxyURL, evalParams["llmApiBase"], "llmApiBase should be the gateway runtime URL + proxy context path")
+	// Cloud evaluation jobs run in a separate workflow-plane cluster, so they use the
+	// gateway's public vhost rather than its cluster-local runtime URL.
+	expectedProxyURL := gw.Vhost + contextPath
+	assert.Equal(t, expectedProxyURL, evalParams["llmApiBase"], "llmApiBase should be the gateway vhost + proxy context path")
 }
 
 // TestExecuteMonitorRun_NilEvaluatorsReturnsError verifies that calling ExecuteMonitorRun
