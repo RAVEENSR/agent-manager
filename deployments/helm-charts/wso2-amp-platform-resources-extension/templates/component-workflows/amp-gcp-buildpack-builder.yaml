@@ -165,14 +165,18 @@ spec:
       # ${metadata.labels['openchoreo.dev/component-uid']} does not resolve here.
       # Names are unique within a namespace, but a rename splits the series.
       #
-      # app.kubernetes.io/component separates these from evaluation pods, which
-      # share the workflows-<org> namespace. Both keys must stay in the
-      # kube-state-metrics allowlist in observability-metrics-prometheus.yaml.
+      # amp.wso2.com/workload is what separates build pods from evaluation pods
+      # for metering; they share the workflows-<org> namespace and are otherwise
+      # identical on kube_pod_labels. It is the key the exporter's allowlist
+      # admits, and the only one the metering service reads.
       podMetadata:
         labels:
           openchoreo.dev/namespace: ${metadata.namespaceName}
           openchoreo.dev/project: ${metadata.labels['openchoreo.dev/project']}
           openchoreo.dev/component: ${metadata.labels['openchoreo.dev/component']}
+          amp.wso2.com/workload: build
+          # Convention only: not in the exporter allowlist and selected by
+          # nothing, so it is not a metering signal despite the name.
           app.kubernetes.io/component: build
       ttlStrategy:
           secondsAfterCompletion: 86400  # Deletes 1 day after it finishes (success or failure)
