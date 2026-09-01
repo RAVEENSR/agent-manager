@@ -23,6 +23,11 @@ spec:
       # app.kubernetes.io/component there would also export it for every platform
       # pod that happens to follow the same convention, which is a lot of them.
       amp.wso2.com/workload: evaluation
+      # The organisation's billing identifier, without which an evaluation run
+      # is measurable but chargeable to nobody. Passed in as a parameter because
+      # this is an Argo template: the OpenChoreo Workflow that invokes it has the
+      # value in its substitution context, this does not.
+      cloud.wso2.com/orguuid: '{{ "{{" }}workflow.parameters.org-uuid{{ "}}" }}'
       # Tenant identity for usage attribution. kube-state-metrics exports pod
       # labels on kube_pod_labels only, and only the keys in its allowlist, so
       # these four are what makes an evaluation run attributable to a tenant.
@@ -34,6 +39,7 @@ spec:
     parameters:
       - name: monitor-name
       - name: organization
+      - name: org-uuid
       - name: project
       - name: agent
       - name: environment

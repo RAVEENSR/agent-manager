@@ -148,6 +148,15 @@ spec:
             value: ${parameters.monitor.name}
           - name: organization
             value: ${parameters.organization}
+          # The organisation's billing identifier, read off the workflow run.
+          # This is where it is reachable: the run carries it as a label, and the
+          # Argo template this invokes has no substitution context of its own --
+          # which is why it travels as a parameter rather than being read there.
+          #
+          # It is the identifier and not the namespace name above because the
+          # collector requires a UUID, and that name is a hash of one.
+          - name: org-uuid
+            value: ${metadata.labels['cloud.wso2.com/orguuid']}
           - name: project
             value: ${parameters.project}
           - name: agent
