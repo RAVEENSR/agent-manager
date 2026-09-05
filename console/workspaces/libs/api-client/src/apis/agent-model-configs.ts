@@ -234,7 +234,7 @@ export function normalizeAgentModelConfigResponse(
                   ? {
                       type: "apikey",
                       in: "header",
-                      name: "Authorization",
+                      name: "api-key",
                       value: mapping.llmProxy.apiKey,
                     }
                   : undefined,
