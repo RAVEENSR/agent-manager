@@ -793,13 +793,14 @@ type AgentIdentityAgentListResponse struct {
 }
 
 type SecurityRuntimeProbeResponse struct {
-	NonRoot                    bool `json:"non_root"`
-	RootFilesystemReadOnly     bool `json:"root_filesystem_read_only"`
-	TmpWritable                bool `json:"tmp_writable"`
-	ServiceAccountTokenPresent bool `json:"service_account_token_present"`
-	EffectiveCapabilitiesDrop  bool `json:"effective_capabilities_dropped"`
-	NoNewPrivileges            bool `json:"no_new_privileges"`
-	SeccompEnabled             bool `json:"seccomp_enabled"`
+	NonRoot                    bool   `json:"non_root"`
+	RootFilesystemReadOnly     bool   `json:"root_filesystem_read_only"`
+	TmpWritable                bool   `json:"tmp_writable"`
+	ServiceAccountTokenPresent bool   `json:"service_account_token_present"`
+	EffectiveCapabilitiesDrop  bool   `json:"effective_capabilities_dropped"`
+	NoNewPrivileges            bool   `json:"no_new_privileges"`
+	NoNewPrivilegesEvidence    string `json:"no_new_privileges_evidence"`
+	SeccompEnabled             bool   `json:"seccomp_enabled"`
 }
 
 type SecurityNetworkProbeResponse struct {
