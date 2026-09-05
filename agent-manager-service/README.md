@@ -42,7 +42,7 @@ agent-manager-service/
 
 ## Prerequisites
 
-- **Go**: Version 1.25.0 or later
+- **Go**: Version 1.26.0 or later
 - **PostgreSQL**: Version 12 or later
 - **Make**: For build automation
 - **air** go install github.com/air-verse/air@v1.67.1

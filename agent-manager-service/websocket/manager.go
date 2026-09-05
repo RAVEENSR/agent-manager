@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"log/slog"
 	"sync"
 	"time"
@@ -138,8 +137,8 @@ func (m *Manager) Register(gatewayID string, transport Transport, authToken stri
 			}
 		}
 		_ = old.Close(1000, "superseded by new connection")
-		log.Printf("[INFO] Evicted superseded connection: gatewayID=%s connectionID=%s",
-			gatewayID, old.ConnectionID)
+		slog.Info("Evicted superseded connection",
+			"gatewayID", gatewayID, "connectionID", old.ConnectionID)
 	}
 
 	m.wg.Add(1)
@@ -160,11 +159,12 @@ func (m *Manager) Register(gatewayID string, transport Transport, authToken stri
 	}
 
 	if len(evicted) > 0 {
-		log.Printf("[INFO] Gateway reconnected (evicted %d stale connection(s)): gatewayID=%s connectionID=%s totalConnections=%d",
-			len(evicted), gatewayID, connectionID, m.GetConnectionCount())
+		slog.Info("Gateway reconnected",
+			"evictedConnections", len(evicted), "gatewayID", gatewayID, "connectionID", connectionID,
+			"totalConnections", m.GetConnectionCount())
 	} else {
-		log.Printf("[INFO] Gateway connected: gatewayID=%s connectionID=%s totalConnections=%d",
-			gatewayID, connectionID, m.GetConnectionCount())
+		slog.Info("Gateway connected",
+			"gatewayID", gatewayID, "connectionID", connectionID, "totalConnections", m.GetConnectionCount())
 	}
 
 	return conn, nil
@@ -262,13 +262,16 @@ func (m *Manager) Unregister(gatewayID, connectionID string) {
 
 	// Close the connection outside the lock — Close involves I/O and must not
 	// block other Register/Unregister callers.
+	// Warn, not Debug: a close that returns an error is not routine, and the
+	// shipped default log level is INFO — at Debug this signal would never
+	// reach production logs.
 	if err := removed.Close(1000, "normal closure"); err != nil {
-		log.Printf("[DEBUG] Connection close returned error: gatewayID=%s connectionID=%s error=%v",
-			gatewayID, connectionID, err)
+		slog.Warn("Connection close returned error",
+			"gatewayID", gatewayID, "connectionID", connectionID, "error", err)
 	}
 
-	log.Printf("[INFO] Gateway disconnected: gatewayID=%s connectionID=%s totalConnections=%d",
-		gatewayID, connectionID, m.GetConnectionCount())
+	slog.Info("Gateway disconnected",
+		"gatewayID", gatewayID, "connectionID", connectionID, "totalConnections", m.GetConnectionCount())
 }
 
 // GetConnections retrieves all connections for a specific gateway ID.
@@ -325,15 +328,16 @@ func (m *Manager) monitorHeartbeat(conn *Connection) {
 			}
 
 			if time.Since(conn.GetLastHeartbeat()) > m.heartbeatTimeout {
-				log.Printf("[WARN] Heartbeat timeout detected: gatewayID=%s connectionID=%s lastHeartbeat=%v",
-					conn.GatewayID, conn.ConnectionID, conn.GetLastHeartbeat())
+				slog.Warn("Heartbeat timeout detected",
+					"gatewayID", conn.GatewayID, "connectionID", conn.ConnectionID,
+					"lastHeartbeat", conn.GetLastHeartbeat())
 				m.Unregister(conn.GatewayID, conn.ConnectionID)
 				return
 			}
 
 			if err := conn.SendPing(); err != nil {
-				log.Printf("[ERROR] Failed to send ping: gatewayID=%s connectionID=%s error=%v",
-					conn.GatewayID, conn.ConnectionID, err)
+				slog.Error("Failed to send ping",
+					"gatewayID", conn.GatewayID, "connectionID", conn.ConnectionID, "error", err)
 				m.Unregister(conn.GatewayID, conn.ConnectionID)
 				return
 			}
@@ -344,7 +348,7 @@ func (m *Manager) monitorHeartbeat(conn *Connection) {
 // Shutdown gracefully closes all connections and stops heartbeat monitoring.
 // Waits for all connection handler goroutines to exit before returning.
 func (m *Manager) Shutdown() {
-	log.Println("[INFO] Shutting down WebSocket manager...")
+	slog.Info("Shutting down WebSocket manager")
 
 	m.shutdownFn()
 
@@ -353,8 +357,8 @@ func (m *Manager) Shutdown() {
 		conns := value.([]*Connection)
 		for _, conn := range conns {
 			if err := conn.Close(1000, "server shutdown"); err != nil {
-				log.Printf("[DEBUG] Connection close returned error during shutdown: gatewayID=%s connectionID=%s error=%v",
-					gatewayID, conn.ConnectionID, err)
+				slog.Warn("Connection close returned error during shutdown",
+					"gatewayID", gatewayID, "connectionID", conn.ConnectionID, "error", err)
 			}
 		}
 		return true
@@ -362,5 +366,5 @@ func (m *Manager) Shutdown() {
 
 	m.wg.Wait()
 
-	log.Println("[INFO] WebSocket manager shutdown complete")
+	slog.Info("WebSocket manager shutdown complete")
 }

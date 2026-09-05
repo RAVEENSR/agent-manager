@@ -122,11 +122,18 @@ echo "🚀 Starting Agent Manager platform services..."
 # (e.g. CI heavy tier skips the console). Unset = all services (local default).
 # Split on whitespace into an array so multiple services work without exposing
 # the value to glob expansion.
+#
+# --build is required, not an optimisation: plain `up -d` builds an image only
+# when none exists, so an image left over from an earlier checkout is reused
+# even after its Dockerfile changed. That silently runs a stale toolchain — a
+# pre-1.26 image against a go.mod requiring go >= 1.26.0 fails inside Air with
+# "GOTOOLCHAIN=local", and the only symptom is a health check timing out much
+# later. Layer caching makes the no-change case cost a couple of seconds.
 if [ -n "${COMPOSE_SERVICES:-}" ]; then
     read -r -a compose_services <<< "${COMPOSE_SERVICES}"
-    docker compose -f "$COMPOSE_FILE" up -d "${compose_services[@]}"
+    docker compose -f "$COMPOSE_FILE" up -d --build "${compose_services[@]}"
 else
-    docker compose -f "$COMPOSE_FILE" up -d
+    docker compose -f "$COMPOSE_FILE" up -d --build
 fi
 
 echo ""

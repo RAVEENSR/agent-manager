@@ -204,9 +204,11 @@ setup-console-local-force:
 	@$(MAKE) setup-console-local
 
 # Daily development commands
+# --build: plain `up -d` reuses an image built from an older Dockerfile, silently
+# running a stale toolchain. Cached layers keep the no-change case near-free.
 dev-up: setup-console-local gen-keys
 	@echo "🚀 Starting Agent Manager platform..."
-	@cd deployments && docker compose up -d
+	@cd deployments && docker compose up -d --build
 	@echo "✅ Platform is running!"
 	@echo "   Console: http://localhost:3000"
 	@echo "   API:     http://localhost:8080"
