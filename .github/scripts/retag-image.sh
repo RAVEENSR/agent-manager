@@ -18,7 +18,7 @@ DOCKER="${DOCKER:-docker}"
 "$DOCKER" buildx imagetools create -t "${IMAGE}:${TARGET_TAG}" "${IMAGE}:${SOURCE_TAG}"
 
 digest_of() {
-  "$DOCKER" buildx imagetools inspect --format '{{json .Manifest.Digest}}' "$1"
+  "$DOCKER" buildx imagetools inspect --format '{{.Manifest.Digest}}' "$1"
 }
 
 SOURCE_DIGEST="$(digest_of "${IMAGE}:${SOURCE_TAG}")"
