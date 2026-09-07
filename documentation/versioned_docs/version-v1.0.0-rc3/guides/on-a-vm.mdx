@@ -597,7 +597,7 @@ Three changes are made to the **host** rather than the cluster, and deleting the
 |---|---|---|
 | Loopback aliases for the API and Thunder hosts | `/etc/hosts` | so the installer's own API calls reach the gateway during the install |
 | Raised inotify limits | `/etc/sysctl.d/99-amp-inotify.conf` | k3d exhausts the defaults |
-| An allow rule for `443/tcp` | `ufw` | the TLS listener needs it |
+| An allow rule for `443/tcp` | `ufw`, or `firewalld` when ufw is absent | the TLS listener needs it |
 
 Leaving them in place is harmless, and the loopback aliases are what let you `curl` the API from the VM itself. Remove them only if you want the host back exactly as it was:
 
@@ -605,14 +605,17 @@ Leaving them in place is harmless, and the loopback aliases are what let you `cu
 # loopback aliases (substitute your DOMAIN_BASE)
 sudo sed -i "/^127\.0\.0\.1 \(api\|thunder\)\.amp\.mycompany\.com$/d" /etc/hosts
 
-# raised inotify limits
-sudo rm -f /etc/sysctl.d/99-amp-inotify.conf && sudo sysctl --system >/dev/null
+# stop the raised inotify limits applying at the next boot
+sudo rm -f /etc/sysctl.d/99-amp-inotify.conf
 
-# the firewall rule
+# the firewall rule — whichever the installer used (it prefers ufw)
 sudo ufw delete allow 443/tcp
+sudo firewall-cmd --permanent --remove-port=443/tcp && sudo firewall-cmd --reload
 ```
 
-While the loopback aliases remain, a later `--dry-run` (or a re-install) on the same host prints a `[preflight] note` for those two names, because the local resolver answers them from `/etc/hosts`. It is informational — your public records are unaffected, and any other host answering on loopback is still reported as a DNS problem.
+Deleting the sysctl file does not lower the **running** limits: `sysctl --system` only re-applies what the remaining files declare, so the raised values stay in effect until you reboot. Set them back explicitly if you need them lowered sooner — the installer raises a key only when it is below its floor and does not record the previous value, so recover the original from your own host baseline rather than assuming a default.
+
+While the loopback aliases remain, a later `--dry-run` (or a re-install) on the same host prints a `[preflight] note` for those two names, because the local resolver answers them from `/etc/hosts`. It is informational — your public records are unaffected. An accepted alias suppresses nothing else: any other host answering on loopback, and any host resolving to a non-loopback address that is not this VM, are both still reported as DNS problems.
 
 To remove only the TLS and routing layer while keeping the platform running (for example to re-issue against a different ACME server after a staging run), delete the resources the installer applies in its third phase:
 
