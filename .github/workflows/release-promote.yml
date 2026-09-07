@@ -37,9 +37,6 @@ jobs:
     name: Validate Promotion
     runs-on:
       - codebuild-wso2_agent-manager-${{ github.run_id }}-${{ github.run_attempt }}
-    concurrency:
-      group: release-${{ inputs.target_version }}
-      cancel-in-progress: false
     permissions:
       contents: read
       packages: read
@@ -131,6 +128,9 @@ jobs:
     needs: validate
     runs-on:
       - codebuild-wso2_agent-manager-${{ github.run_id }}-${{ github.run_attempt }}
+    concurrency:
+      group: release-${{ inputs.target_version }}
+      cancel-in-progress: false
     permissions:
       contents: write
     outputs:
