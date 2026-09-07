@@ -12,21 +12,11 @@ if [ -z "$TARGET_VERSION" ]; then
   exit 1
 fi
 
-# Work out which versioned documentation this release should point at.
-#
-# Docs versions are cut per minor line (vX.Y.x) for final releases, and pinned
-# exactly for pre-releases such as v1.0.0-alpha1. No docs version is cut for a
-# release candidate (X.Y.Z-rcN or X.Y.Z-<pre>.rcN) or for a nightly, so those
-# keep whatever the chart defaults to and follow /docs/latest instead.
-if [[ "$TARGET_VERSION" =~ (-|\.)rc[0-9]+$ ]]; then
-  DOCS_VERSION=""
-elif [[ "$TARGET_VERSION" == *-dev* ]]; then
-  DOCS_VERSION=""
-elif [[ "$TARGET_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  DOCS_VERSION="v${TARGET_VERSION%.*}.x"
-else
-  DOCS_VERSION="v$TARGET_VERSION"
-fi
+# Which versioned documentation this release points at. The rule lives in
+# resolve-docs-version.sh so the promotion workflow can pre-flight it; empty
+# means no docs version was cut and the chart keeps /docs/latest.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DOCS_VERSION="$(bash "$SCRIPT_DIR/resolve-docs-version.sh" "$TARGET_VERSION")"
 
 # A release must not ship a console pinned to documentation that was never
 # published, so fail early rather than emitting links that 404. The manifest is

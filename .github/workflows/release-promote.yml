@@ -190,7 +190,8 @@ jobs:
 
       # The source tree predates this workflow, so it has no resolve-source-commit.sh.
       # Tooling runs from the dispatched commit (no ref: = github.sha); the scripts that
-      # stamp the release's own content keep running from the checkout above.
+      # stamp the release's own content keep running from the checkout above, except
+      # update-helm-charts.sh — see the docs-version note on that step.
       - name: Checkout promotion tooling
         uses: actions/checkout@v6
         with:
@@ -250,9 +251,13 @@ jobs:
           echo "✅ Synced documentation/versions.json from main"
         shell: bash
 
+      # From the tooling checkout, not the release tree: the docs-version rule is
+      # policy about the target version, and the rc's frozen copy of it would
+      # decide where this release's console doc links point. The seds still run
+      # against the release tree, which is the working directory.
       - name: Update Helm chart versions
         run: |
-          bash .github/scripts/update-helm-charts.sh "$TARGET_VERSION"
+          bash .promotion-tools/.github/scripts/update-helm-charts.sh "$TARGET_VERSION"
         env:
           TARGET_VERSION: ${{ inputs.target_version }}
         shell: bash

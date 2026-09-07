@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
 # resolve-docs-version.sh — print the documentation version a release points at.
 #
-# Mirrors the branch order in update-helm-charts.sh so the promotion workflow can
-# enforce the same rule *before* it cuts any branches or tags. Keep the two in
-# sync: a divergence means the promotion passes its pre-flight and then fails
-# halfway through, after tags have been pushed.
+# The value is consumed as the path segment after /docs/ (see the console's
+# DOCS_URL in the wso2-agent-manager chart), so it must match a directory in
+# documentation/versioned_docs/version-<docs-version> and an entry in
+# documentation/versions.json exactly. Docs versions are cut per release version,
+# so this is just "v" plus the release version.
 #
-# The two copies do not run from the same commit. This mirror runs from main (the
-# validate job), while update-helm-charts.sh runs from the release candidate's own
-# base commit (the prepare-promotion job) — an arbitrarily old tree. So editing
-# both files in one commit does not make them agree at run time: this file's rule
-# is checked against whatever update-helm-charts.sh said back when the rc was cut.
-# When they disagree, validate passes and the stamp fails after the branch and both
-# tags are pushed, requiring the cleanup runbook in release-promote.yml.
+# Prints nothing (exit 0) for releases that cut no docs version: release
+# candidates and nightlies follow /docs/latest.
 #
-# Prints nothing (exit 0) for releases that cut no docs version.
+# update-helm-charts.sh sources this to stamp the charts, and the promotion
+# workflow's validate job runs it to pre-flight the manifest before it cuts
+# anything.
+#
 # Usage: resolve-docs-version.sh <target-version>
 set -euo pipefail
 
@@ -24,8 +23,6 @@ if [[ "$TARGET_VERSION" =~ (-|\.)rc[0-9]+$ ]]; then
   : # release candidates follow /docs/latest
 elif [[ "$TARGET_VERSION" == *-dev* ]]; then
   : # nightlies follow /docs/latest
-elif [[ "$TARGET_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "v${TARGET_VERSION%.*}.x"
 else
   echo "v$TARGET_VERSION"
 fi
