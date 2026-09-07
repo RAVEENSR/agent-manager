@@ -1,0 +1,288 @@
+name: WSO2 AI Agent Management Platform Release Promotion
+
+# Promotes an existing release to a new version without rebuilding it: images are
+# retagged by digest, and every version-stamped artifact (charts, amctl, install
+# bundle) is regenerated from the source release's own commit. See
+# docs/superpowers/specs/2026-09-07-release-promotion-design.md.
+#
+# The documentation release for the target version must already be merged to main
+# before this runs; the validate job refuses to proceed otherwise.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_version:
+        description: "Existing release to promote from (e.g., 1.0.0-rc3)"
+        required: true
+        type: string
+      target_version:
+        description: "Target release version (e.g., 1.0.0)"
+        required: true
+        type: string
+      create_patch_branch:
+        description: "Create a patch branch (check only for production releases)"
+        required: false
+        default: false
+        type: boolean
+
+run-name: Promote amp/v${{ inputs.source_version }} to amp/v${{ inputs.target_version }}
+
+env:
+  REGISTRY: ghcr.io
+  REGISTRY_ORG: wso2
+  HELM_REGISTRY: oci://ghcr.io/wso2
+
+jobs:
+  validate:
+    name: Validate Promotion
+    runs-on:
+      - codebuild-wso2_agent-manager-${{ github.run_id }}-${{ github.run_attempt }}
+    concurrency:
+      group: release-${{ inputs.target_version }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      docs-version: ${{ steps.docs.outputs.docs-version }}
+    steps:
+      # main, not the source tag: the docs manifest and these scripts must be read
+      # from the current state of the repo, not from the release being promoted.
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Validate version inputs
+        run: |
+          SEMVER='^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'
+          for version in "$SOURCE_VERSION" "$TARGET_VERSION"; do
+            if [[ ! "$version" =~ $SEMVER ]]; then
+              echo "Error: invalid version '$version'. Expected: X.Y.Z or X.Y.Z-<pre-release>"
+              exit 1
+            fi
+          done
+
+          if [ "$SOURCE_VERSION" = "$TARGET_VERSION" ]; then
+            echo "Error: source_version and target_version must differ"
+            exit 1
+          fi
+
+          if ! git rev-parse -q --verify "refs/tags/amp/v${SOURCE_VERSION}" >/dev/null; then
+            echo "Error: source tag amp/v${SOURCE_VERSION} does not exist"
+            exit 1
+          fi
+
+          if git rev-parse -q --verify "refs/tags/amp/v${TARGET_VERSION}" >/dev/null; then
+            echo "Error: target tag amp/v${TARGET_VERSION} already exists"
+            exit 1
+          fi
+
+          echo "✅ Promoting amp/v${SOURCE_VERSION} to amp/v${TARGET_VERSION}"
+        env:
+          SOURCE_VERSION: ${{ inputs.source_version }}
+          TARGET_VERSION: ${{ inputs.target_version }}
+        shell: bash
+
+      - name: Verify documentation version is published
+        id: docs
+        run: |
+          DOCS_VERSION="$(bash .github/scripts/resolve-docs-version.sh "$TARGET_VERSION")"
+          echo "docs-version=$DOCS_VERSION" >> $GITHUB_OUTPUT
+          bash .github/scripts/assert-docs-version-published.sh \
+            "$DOCS_VERSION" \
+            "./documentation/versions.json" \
+            "$TARGET_VERSION"
+        env:
+          TARGET_VERSION: ${{ inputs.target_version }}
+        shell: bash
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify source images exist
+        run: |
+          MISSING=0
+          for name in $(jq -r '.images[].name' .github/release-config.json); do
+            REF="${REGISTRY}/${REGISTRY_ORG}/${name}:v${SOURCE_VERSION}"
+            if docker buildx imagetools inspect "$REF" >/dev/null 2>&1; then
+              echo "✅ $REF"
+            else
+              echo "❌ missing: $REF"
+              MISSING=1
+            fi
+          done
+
+          if [ "$MISSING" -ne 0 ]; then
+            echo "Error: one or more source images are missing; nothing was branched or tagged."
+            exit 1
+          fi
+        env:
+          SOURCE_VERSION: ${{ inputs.source_version }}
+        shell: bash
+
+  prepare-promotion:
+    name: Prepare Promotion
+    needs: validate
+    runs-on:
+      - codebuild-wso2_agent-manager-${{ github.run_id }}-${{ github.run_attempt }}
+    permissions:
+      contents: write
+    outputs:
+      commit-sha: ${{ steps.resolve.outputs.commit-sha }}
+    steps:
+      - name: Checkout source release
+        uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
+          fetch-depth: 0
+          ref: amp/v${{ inputs.source_version }}
+
+      - name: Configure Git
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+        shell: bash
+
+      - name: Resolve unstamped source commit
+        id: resolve
+        run: |
+          COMMIT_SHA="$(bash .github/scripts/resolve-source-commit.sh "$SOURCE_VERSION")"
+          echo "commit-sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
+          echo "✅ Promoting from commit ${COMMIT_SHA:0:7}"
+        env:
+          SOURCE_VERSION: ${{ inputs.source_version }}
+        shell: bash
+
+      - name: Create release branch
+        id: create-branch
+        run: |
+          BRANCH_NAME="amp-${TARGET_VERSION}"
+
+          if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
+            git checkout "$BRANCH_NAME"
+            git reset --hard "$COMMIT_SHA"
+            echo "✅ Reset existing branch to commit ${COMMIT_SHA:0:7}"
+          else
+            git checkout -b "$BRANCH_NAME" "$COMMIT_SHA"
+            echo "✅ Created new branch from commit ${COMMIT_SHA:0:7}"
+          fi
+
+          echo "branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
+        env:
+          TARGET_VERSION: ${{ inputs.target_version }}
+          COMMIT_SHA: ${{ steps.resolve.outputs.commit-sha }}
+        shell: bash
+
+      - name: Create patch branch
+        if: ${{ inputs.create_patch_branch }}
+        run: |
+          MAJOR=$(echo "$TARGET_VERSION" | cut -d. -f1)
+          MINOR=$(echo "$TARGET_VERSION" | cut -d. -f2)
+          PATCH_BRANCH="amp-patch-${MAJOR}.${MINOR}.x"
+
+          if git ls-remote --exit-code --heads origin "$PATCH_BRANCH" >/dev/null; then
+            echo "⏭️ Patch branch $PATCH_BRANCH already exists, skipping creation"
+          else
+            git branch "$PATCH_BRANCH"
+            git push origin "$PATCH_BRANCH"
+            echo "✅ Created patch branch: $PATCH_BRANCH"
+          fi
+        env:
+          TARGET_VERSION: ${{ inputs.target_version }}
+        shell: bash
+
+      # The base commit predates the documentation release for this version, so
+      # update-helm-charts.sh would fail its own manifest check against a stale
+      # versions.json even though validate already confirmed the docs are live.
+      # Only the manifest is synced — versioned_docs/ is deliberately left alone.
+      - name: Sync documentation manifest from main
+        run: |
+          git fetch origin main
+          git checkout origin/main -- documentation/versions.json
+          echo "✅ Synced documentation/versions.json from main"
+        shell: bash
+
+      - name: Update Helm chart versions
+        run: |
+          bash .github/scripts/update-helm-charts.sh "$TARGET_VERSION"
+        env:
+          TARGET_VERSION: ${{ inputs.target_version }}
+        shell: bash
+
+      - name: Update install-helpers.sh
+        run: |
+          bash .github/scripts/update-install-helpers.sh \
+            "$TARGET_VERSION" \
+            "./deployments/quick-start/install-helpers.sh"
+        env:
+          TARGET_VERSION: ${{ inputs.target_version }}
+        shell: bash
+
+      - name: Update start.sh
+        run: |
+          bash .github/scripts/update-install-helpers.sh \
+            "$TARGET_VERSION" \
+            "./deployments/quick-start/start.sh"
+        env:
+          TARGET_VERSION: ${{ inputs.target_version }}
+        shell: bash
+
+      # A promotion that stamped nothing means the placeholders were already
+      # consumed, which resolve-source-commit.sh is supposed to make impossible.
+      - name: Commit version updates
+        run: |
+          git add -A
+
+          if git diff --staged --quiet; then
+            echo "Error: no version changes were produced from commit ${COMMIT_SHA:0:7}."
+            exit 1
+          fi
+
+          echo "Files to be committed:"
+          git diff --staged --name-only
+          git commit -m "chore: update versions for release amp/v${TARGET_VERSION}"
+          echo "✅ Committed version updates"
+        env:
+          TARGET_VERSION: ${{ inputs.target_version }}
+          COMMIT_SHA: ${{ steps.resolve.outputs.commit-sha }}
+        shell: bash
+
+      - name: Create git tag
+        run: |
+          TAG="amp/v${TARGET_VERSION}"
+          git tag -a "$TAG" -m "Release $TAG promoted from amp/v${SOURCE_VERSION} at commit ${COMMIT_SHA:0:7}"
+          git push origin "$TAG"
+          echo "✅ Created and pushed tag: $TAG"
+
+          MAJOR_VERSION=$(echo "$TARGET_VERSION" | cut -d. -f1)
+          MAJOR_TAG="amp/v${MAJOR_VERSION}"
+
+          if git rev-parse "$MAJOR_TAG" >/dev/null 2>&1; then
+            echo "Major tag $MAJOR_TAG already exists, updating..."
+            git tag -d "$MAJOR_TAG" || true
+            git push origin ":refs/tags/$MAJOR_TAG" || true
+          fi
+
+          git tag -a "$MAJOR_TAG" -m "Latest release for major version $MAJOR_VERSION"
+          git push origin "$MAJOR_TAG"
+          echo "✅ Created/updated major version tag: $MAJOR_TAG"
+        env:
+          TARGET_VERSION: ${{ inputs.target_version }}
+          SOURCE_VERSION: ${{ inputs.source_version }}
+          COMMIT_SHA: ${{ steps.resolve.outputs.commit-sha }}
+        shell: bash
+
+      - name: Push branch
+        run: |
+          git push origin "$BRANCH"
+          echo "✅ Pushed branch"
+        env:
+          BRANCH: ${{ steps.create-branch.outputs.branch }}
+        shell: bash
