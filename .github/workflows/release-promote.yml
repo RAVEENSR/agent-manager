@@ -1,0 +1,721 @@
+name: WSO2 AI Agent Management Platform Release Promotion
+
+# Promotes an existing release to a new version without rebuilding it: images are
+# retagged by digest, and every version-stamped artifact (charts, amctl, install
+# bundle) is regenerated from the source release's own commit. See
+# docs/superpowers/specs/2026-09-07-release-promotion-design.md.
+#
+# The documentation release for the target version must already be merged to main
+# before this runs; the validate job refuses to proceed otherwise.
+#
+# Recovering from a mid-way failure
+# ---------------------------------
+# validate hard-fails when amp/v<target> already exists, and prepare-promotion is
+# not idempotent (its `git push origin "$TAG"` is rejected against an existing
+# remote tag; "Create release branch" refuses outright when amp-<target> is
+# already on origin). So a run that failed after prepare-promotion cannot simply
+# be re-dispatched: delete what it created first, from a clone of this repo.
+#
+#   TARGET=1.0.0
+#   MAJOR="${TARGET%%.*}"
+#   git push origin ":refs/tags/amp/v${TARGET}"   # the release tag
+#   git push origin --delete "amp-${TARGET}"      # the release branch
+#   gh release delete "amp/v${TARGET}" --yes      # the draft GitHub release
+#   git ls-remote --tags origin "amp/v${MAJOR}"   # confirm the major tag
+#
+# Check that last one: "Create git tag" deletes and recreates amp/v<major> in a
+# single step, so an abort between the two operations leaves it missing. It
+# cannot point at the wrong release — the recreating push has no `|| true` and
+# git refuses to overwrite a tag without --force — but if it is gone, restore it
+# to the previous release's commit before re-running:
+#
+#   git tag -a "amp/v${MAJOR}" <previous-release-commit> -m "Latest release for major version ${MAJOR}"
+#   git push origin "amp/v${MAJOR}"
+#
+# Leave the retagged images alone: retagging is idempotent by digest.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_version:
+        description: "Existing release to promote from (e.g., 1.0.0-rc3)"
+        required: true
+        type: string
+      target_version:
+        description: "Target release version (e.g., 1.0.0)"
+        required: true
+        type: string
+      create_patch_branch:
+        description: "Create a patch branch (check only for production releases)"
+        required: false
+        default: false
+        type: boolean
+
+run-name: Promote amp/v${{ inputs.source_version }} → amp/v${{ inputs.target_version }}
+
+env:
+  REGISTRY: ghcr.io
+  REGISTRY_ORG: wso2
+  HELM_REGISTRY: oci://ghcr.io/wso2
+
+jobs:
+  validate:
+    name: Validate Promotion
+    runs-on:
+      - codebuild-wso2_agent-manager-${{ github.run_id }}-${{ github.run_attempt }}
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      docs-version: ${{ steps.docs.outputs.docs-version }}
+    steps:
+      # main, not the source tag: the docs manifest and these scripts must be read
+      # from the current state of the repo, not from the release being promoted.
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Validate version inputs
+        run: |
+          SEMVER='^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'
+          for version in "$SOURCE_VERSION" "$TARGET_VERSION"; do
+            if [[ ! "$version" =~ $SEMVER ]]; then
+              echo "Error: invalid version '$version'. Expected: X.Y.Z or X.Y.Z-<pre-release>"
+              exit 1
+            fi
+          done
+
+          if [ "$SOURCE_VERSION" = "$TARGET_VERSION" ]; then
+            echo "Error: source_version and target_version must differ"
+            exit 1
+          fi
+
+          if [[ "$TARGET_VERSION" == *-* ]]; then
+            echo "Error: target_version '$TARGET_VERSION' is a pre-release. Promotion targets a final release (X.Y.Z)."
+            exit 1
+          fi
+
+          if [ "${SOURCE_VERSION%%-*}" != "$TARGET_VERSION" ]; then
+            echo "Error: source_version '$SOURCE_VERSION' is not a pre-release of '$TARGET_VERSION'."
+            echo "Promotion runs within one release line, e.g. ${TARGET_VERSION}-rc1 → ${TARGET_VERSION}."
+            exit 1
+          fi
+
+          if ! git rev-parse -q --verify "refs/tags/amp/v${SOURCE_VERSION}" >/dev/null; then
+            echo "Error: source tag amp/v${SOURCE_VERSION} does not exist"
+            exit 1
+          fi
+
+          if git rev-parse -q --verify "refs/tags/amp/v${TARGET_VERSION}" >/dev/null; then
+            echo "Error: target tag amp/v${TARGET_VERSION} already exists"
+            exit 1
+          fi
+
+          echo "✅ Promoting amp/v${SOURCE_VERSION} to amp/v${TARGET_VERSION}"
+        env:
+          SOURCE_VERSION: ${{ inputs.source_version }}
+          TARGET_VERSION: ${{ inputs.target_version }}
+        shell: bash
+
+      - name: Verify documentation version is published
+        id: docs
+        run: |
+          DOCS_VERSION="$(bash .github/scripts/resolve-docs-version.sh "$TARGET_VERSION")"
+          echo "docs-version=$DOCS_VERSION" >> $GITHUB_OUTPUT
+          bash .github/scripts/assert-docs-version-published.sh \
+            "$DOCS_VERSION" \
+            "./documentation/versions.json" \
+            "$TARGET_VERSION"
+        env:
+          TARGET_VERSION: ${{ inputs.target_version }}
+        shell: bash
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The image list comes from the source tag, not this main checkout: retag-images
+      # reads its config from the release tree, and pre-flighting a different list
+      # would let an image the retag needs go unchecked.
+      - name: Verify source images exist
+        run: |
+          MISSING=0
+          for name in $(git show "amp/v${SOURCE_VERSION}:.github/release-config.json" | jq -r '.images[].name'); do
+            REF="${REGISTRY}/${REGISTRY_ORG}/${name}:v${SOURCE_VERSION}"
+            if INSPECT_ERR="$(docker buildx imagetools inspect "$REF" 2>&1 >/dev/null)"; then
+              echo "✅ $REF"
+            else
+              echo "❌ missing: $REF"
+              echo "$INSPECT_ERR" | sed 's/^/    /'
+              MISSING=1
+            fi
+          done
+
+          if [ "$MISSING" -ne 0 ]; then
+            echo "Error: one or more source images are missing; nothing was branched or tagged."
+            exit 1
+          fi
+        env:
+          SOURCE_VERSION: ${{ inputs.source_version }}
+        shell: bash
+
+  prepare-promotion:
+    name: Prepare Promotion
+    needs: validate
+    runs-on:
+      - codebuild-wso2_agent-manager-${{ github.run_id }}-${{ github.run_attempt }}
+    concurrency:
+      group: release-${{ inputs.target_version }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    outputs:
+      commit-sha: ${{ steps.resolve.outputs.commit-sha }}
+    steps:
+      - name: Checkout source release
+        uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
+          fetch-depth: 0
+          ref: amp/v${{ inputs.source_version }}
+
+      # The source tree predates this workflow, so it has no resolve-source-commit.sh.
+      # Tooling runs from the dispatched commit (no ref: = github.sha); the scripts that
+      # stamp the release's own content keep running from the checkout above.
+      - name: Checkout promotion tooling
+        uses: actions/checkout@v6
+        with:
+          path: .promotion-tools
+
+      # git add -A below would otherwise stage the whole tooling checkout into the
+      # release commit. info/exclude is local to the runner and never committed.
+      - name: Exclude promotion tooling from the release commit
+        run: |
+          echo ".promotion-tools/" >> .git/info/exclude
+        shell: bash
+
+      - name: Configure Git
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+        shell: bash
+
+      - name: Resolve unstamped source commit
+        id: resolve
+        run: |
+          COMMIT_SHA="$(bash .promotion-tools/.github/scripts/resolve-source-commit.sh "$SOURCE_VERSION")"
+          echo "commit-sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
+          echo "✅ Promoting from commit ${COMMIT_SHA:0:7}"
+        env:
+          SOURCE_VERSION: ${{ inputs.source_version }}
+        shell: bash
+
+      - name: Create release branch
+        id: create-branch
+        run: |
+          BRANCH_NAME="amp-${TARGET_VERSION}"
+
+          if git ls-remote --exit-code --heads origin "$BRANCH_NAME" >/dev/null; then
+            echo "Error: branch $BRANCH_NAME already exists on origin, left over from a failed run."
+            echo "Delete it (see the recovery runbook at the top of this workflow) before re-dispatching."
+            exit 1
+          fi
+
+          git checkout -b "$BRANCH_NAME" "$COMMIT_SHA"
+          echo "✅ Created new branch from commit ${COMMIT_SHA:0:7}"
+
+          echo "branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
+        env:
+          TARGET_VERSION: ${{ inputs.target_version }}
+          COMMIT_SHA: ${{ steps.resolve.outputs.commit-sha }}
+        shell: bash
+
+      # The base commit predates the documentation release for this version, so
+      # update-helm-charts.sh would fail its own manifest check against a stale
+      # versions.json even though validate already confirmed the docs are live.
+      # Only the manifest is synced — versioned_docs/ is deliberately left alone.
+      - name: Sync documentation manifest from main
+        run: |
+          git fetch origin main
+          git checkout origin/main -- documentation/versions.json
+          echo "✅ Synced documentation/versions.json from main"
+        shell: bash
+
+      - name: Update Helm chart versions
+        run: |
+          bash .github/scripts/update-helm-charts.sh "$TARGET_VERSION"
+        env:
+          TARGET_VERSION: ${{ inputs.target_version }}
+        shell: bash
+
+      - name: Update install-helpers.sh
+        run: |
+          bash .github/scripts/update-install-helpers.sh \
+            "$TARGET_VERSION" \
+            "./deployments/quick-start/install-helpers.sh"
+        env:
+          TARGET_VERSION: ${{ inputs.target_version }}
+        shell: bash
+
+      - name: Update start.sh
+        run: |
+          bash .github/scripts/update-install-helpers.sh \
+            "$TARGET_VERSION" \
+            "./deployments/quick-start/start.sh"
+        env:
+          TARGET_VERSION: ${{ inputs.target_version }}
+        shell: bash
+
+      # A promotion that stamped nothing means the placeholders were already
+      # consumed, which resolve-source-commit.sh is supposed to make impossible.
+      # versions.json is excluded because the sync above always stages it, which
+      # would otherwise satisfy this check on its own.
+      - name: Commit version updates
+        run: |
+          git add -A
+
+          if git diff --staged --quiet -- . ':(exclude)documentation/versions.json'; then
+            echo "Error: no version changes were produced from commit ${COMMIT_SHA:0:7}."
+            exit 1
+          fi
+
+          echo "Files to be committed:"
+          git diff --staged --name-only
+          git commit -m "chore: update versions for release amp/v${TARGET_VERSION}"
+          echo "✅ Committed version updates"
+        env:
+          TARGET_VERSION: ${{ inputs.target_version }}
+          COMMIT_SHA: ${{ steps.resolve.outputs.commit-sha }}
+        shell: bash
+
+      - name: Create patch branch
+        if: ${{ inputs.create_patch_branch }}
+        run: |
+          MAJOR=$(echo "$TARGET_VERSION" | cut -d. -f1)
+          MINOR=$(echo "$TARGET_VERSION" | cut -d. -f2)
+          PATCH_BRANCH="amp-patch-${MAJOR}.${MINOR}.x"
+
+          if git ls-remote --exit-code --heads origin "$PATCH_BRANCH" >/dev/null; then
+            echo "⏭️ Patch branch $PATCH_BRANCH already exists, skipping creation"
+          else
+            git branch "$PATCH_BRANCH"
+            git push origin "$PATCH_BRANCH"
+            echo "✅ Created patch branch: $PATCH_BRANCH"
+          fi
+        env:
+          TARGET_VERSION: ${{ inputs.target_version }}
+        shell: bash
+
+      - name: Create git tag
+        run: |
+          TAG="amp/v${TARGET_VERSION}"
+          git tag -a "$TAG" -m "Release $TAG promoted from amp/v${SOURCE_VERSION} at commit ${COMMIT_SHA:0:7}"
+          git push origin "$TAG"
+          echo "✅ Created and pushed tag: $TAG"
+
+          MAJOR_VERSION=$(echo "$TARGET_VERSION" | cut -d. -f1)
+          MAJOR_TAG="amp/v${MAJOR_VERSION}"
+
+          if git rev-parse "$MAJOR_TAG" >/dev/null 2>&1; then
+            echo "Major tag $MAJOR_TAG already exists, updating..."
+            git tag -d "$MAJOR_TAG" || true
+            git push origin ":refs/tags/$MAJOR_TAG" || true
+          fi
+
+          git tag -a "$MAJOR_TAG" -m "Latest release for major version $MAJOR_VERSION"
+          git push origin "$MAJOR_TAG"
+          echo "✅ Created/updated major version tag: $MAJOR_TAG"
+        env:
+          TARGET_VERSION: ${{ inputs.target_version }}
+          SOURCE_VERSION: ${{ inputs.source_version }}
+          COMMIT_SHA: ${{ steps.resolve.outputs.commit-sha }}
+        shell: bash
+
+      - name: Push branch
+        run: |
+          git push origin "$BRANCH"
+          echo "✅ Pushed branch"
+        env:
+          BRANCH: ${{ steps.create-branch.outputs.branch }}
+        shell: bash
+
+  load-config:
+    name: Load Release Configuration
+    needs: prepare-promotion
+    runs-on:
+      - codebuild-wso2_agent-manager-${{ github.run_id }}-${{ github.run_attempt }}
+    outputs:
+      images: ${{ steps.set-matrix.outputs.images }}
+      charts: ${{ steps.set-matrix.outputs.charts }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: amp/v${{ inputs.target_version }}
+
+      - name: Load configuration and set matrix
+        id: set-matrix
+        run: |
+          CONFIG_FILE=".github/release-config.json"
+          CHARTS_BASE_PATH=$(jq -r '.config["charts-base-path"]' "$CONFIG_FILE")
+
+          IMAGES=$(jq -c '[.images[] | {name: .name}]' "$CONFIG_FILE")
+
+          CHARTS=$(jq -c --arg base "$CHARTS_BASE_PATH" '[.charts[] | {
+            name: .,
+            path: ($base + "/" + .),
+            "chart-file": ($base + "/" + . + "/Chart.yaml")
+          }]' "$CONFIG_FILE")
+
+          echo "images=$IMAGES" >> $GITHUB_OUTPUT
+          echo "charts=$CHARTS" >> $GITHUB_OUTPUT
+
+          echo "✅ Loaded configuration:"
+          echo "  - Images: $(echo "$IMAGES" | jq '. | length')"
+          echo "  - Charts: $(echo "$CHARTS" | jq '. | length')"
+        shell: bash
+
+  retag-images:
+    name: Retag ${{ matrix.image.name }}
+    needs: load-config
+    runs-on:
+      - codebuild-wso2_agent-manager-${{ github.run_id }}-${{ github.run_attempt }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        image: ${{ fromJson(needs.load-config.outputs.images) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: amp/v${{ inputs.target_version }}
+
+      # The target tag is built from the source release's base commit, which predates
+      # this workflow and so carries no retag-image.sh. Tooling runs from the
+      # dispatched commit (no ref: = github.sha).
+      - name: Checkout promotion tooling
+        uses: actions/checkout@v6
+        with:
+          path: .promotion-tools
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Retag ${{ matrix.image.name }}
+        run: |
+          bash .promotion-tools/.github/scripts/retag-image.sh \
+            "${REGISTRY}/${REGISTRY_ORG}/${IMAGE_NAME}" \
+            "v${SOURCE_VERSION}" \
+            "v${TARGET_VERSION}"
+        env:
+          IMAGE_NAME: ${{ matrix.image.name }}
+          SOURCE_VERSION: ${{ inputs.source_version }}
+          TARGET_VERSION: ${{ inputs.target_version }}
+        shell: bash
+
+  build-amctl:
+    name: Build amctl CLI
+    needs: prepare-promotion
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: amp/v${{ inputs.target_version }}
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v6.1.0
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+
+      - name: Run CLI tests
+        run: cd cli && go test ./...
+
+      - name: Build release artifacts
+        run: |
+          scripts/build-amctl.sh \
+            --version "${{ inputs.target_version }}" \
+            --commit "$(git rev-parse --short HEAD)" \
+            --date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --output-dir dist/
+
+      - name: Upload amctl artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: amctl-dist
+          path: dist/
+          retention-days: 7
+
+  package-charts:
+    name: Package ${{ matrix.chart.name }}
+    needs: [load-config, retag-images]
+    runs-on:
+      - codebuild-wso2_agent-manager-${{ github.run_id }}-${{ github.run_attempt }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        chart: ${{ fromJson(needs.load-config.outputs.charts) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: amp/v${{ inputs.target_version }}
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: "3.14.0"
+
+      - name: Cache Helm chart dependencies
+        id: helm-cache
+        if: hashFiles(format('{0}/Chart.lock', matrix.chart.path)) != ''
+        uses: actions/cache@v5
+        with:
+          path: ${{ matrix.chart.path }}/charts
+          key: helm-charts-${{ hashFiles(format('{0}/Chart.lock', matrix.chart.path)) }}
+
+      - name: Package and push ${{ matrix.chart.name }}
+        run: |
+          bash .github/scripts/package-helm-chart.sh \
+            "$CHART_PATH" \
+            "$TARGET_RELEASE" \
+            "$HELM_REGISTRY" \
+            "$HELM_TOKEN"
+        env:
+          CHART_PATH: ${{ matrix.chart.path }}
+          TARGET_RELEASE: ${{ inputs.target_version }}
+          HELM_REGISTRY: ${{ env.HELM_REGISTRY }}
+          HELM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+
+  e2e:
+    name: E2E
+    needs: [retag-images, package-charts]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 130
+    permissions:
+      contents: read
+      checks: write
+    env:
+      K3D_VERSION: v5.8.3
+      K3D_SHA256: dbaa79a76ace7f4ca230a1ff41dc7d8a5036a8ad0309e9c54f9bf3836dbe853e
+      YQ_VERSION: v4.45.4
+      YQ_SHA256: b96de04645707e14a12f52c37e6266832e03c29e95b9b139cddcae7314466e69
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v6
+        with:
+          ref: amp/v${{ inputs.target_version }}
+
+      - name: Setup Go
+        uses: ./.github/actions/setup-go
+
+      - name: Install k3d
+        run: |
+          curl -fsSL -o /tmp/k3d "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-amd64"
+          echo "${K3D_SHA256}  /tmp/k3d" | sha256sum -c -
+          sudo install /tmp/k3d /usr/local/bin/k3d
+          k3d version
+
+      - name: Install yq
+        run: |
+          curl -fsSL -o /tmp/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          echo "${YQ_SHA256}  /tmp/yq" | sha256sum -c -
+          sudo install /tmp/yq /usr/local/bin/yq
+
+      - name: Install platform
+        id: install-platform
+        env:
+          VERSION: ${{ inputs.target_version }}
+        run: |
+          cd deployments/quick-start && bash install.sh
+
+      - name: Run e2e tests
+        env:
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.INSTRUMENTATION_TEST_OPENAI_API_KEY }}
+          CHART_VERSION: ${{ inputs.target_version }}
+        run: |
+          set -o pipefail
+          cd test/e2e && go run github.com/onsi/ginkgo/v2/ginkgo -v --procs=2 --timeout 70m \
+            --poll-progress-after=600s --keep-going --junit-report=report.xml \
+            ./tests/... 2>&1 | tee e2e-output.log
+
+      - name: Run security conformance tests
+        if: ${{ !cancelled() && steps.install-platform.outcome == 'success' }}
+        env:
+          SECURITY_PROBE_REPOSITORY_URL: ${{ format('{0}/{1}', github.server_url, github.repository) }}
+          SECURITY_PROBE_REPOSITORY_BRANCH: amp/v${{ inputs.target_version }}
+        run: |
+          set -o pipefail
+          make security-test-live 2>&1 | tee test/e2e/security-output.log
+
+      - name: Dump pod logs on failure
+        if: failure()
+        run: |
+          mkdir -p /tmp/pod-logs
+          kubectl logs deployment/amp-api -n wso2-amp --tail=500 --all-containers=true > /tmp/pod-logs/amp-api.txt 2>&1 || true
+          kubectl logs deployment/openchoreo-api -n openchoreo-control-plane --tail=500 --all-containers=true > /tmp/pod-logs/openchoreo-api.txt 2>&1 || true
+          kubectl logs deployment/amp-observer -n openchoreo-observability-plane --tail=500 --all-containers=true > /tmp/pod-logs/amp-observer.txt 2>&1 || true
+          kubectl logs deployment/observer -n openchoreo-observability-plane --tail=500 --all-containers=true > /tmp/pod-logs/observer.txt 2>&1 || true
+          kubectl logs deployment/cluster-agent-workflowplane -n openchoreo-workflow-plane --tail=500 --all-containers=true > /tmp/pod-logs/cluster-agent-workflowplane.txt 2>&1 || true
+          for pod in $(kubectl get pods -n workflows-default --no-headers -o custom-columns=":metadata.name" 2>/dev/null); do
+            kubectl logs "$pod" -n workflows-default --all-containers=true --tail=200 > "/tmp/pod-logs/wf-pod-${pod}.txt" 2>&1 || true
+          done
+          kubectl get workflows -n workflows-default -o yaml > /tmp/pod-logs/argo-workflows-status.txt 2>&1 || true
+
+      - name: Upload pod logs
+        if: failure()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: pod-logs
+          path: /tmp/pod-logs/
+          retention-days: 7
+
+      - name: Publish test results
+        if: always()
+        uses: dorny/test-reporter@6e6a65b7a0bd2c9197df7d0ae36ac5cee784230c # v2.0.0
+        with:
+          name: E2E Test Results (Promotion)
+          path: test/e2e/report.xml
+          reporter: java-junit
+
+      - name: Publish security test results
+        if: ${{ always() && hashFiles('test/e2e/security-report.xml') != '' }}
+        uses: dorny/test-reporter@6e6a65b7a0bd2c9197df7d0ae36ac5cee784230c # v2.0.0
+        with:
+          name: Promotion Security Conformance Results
+          path: test/e2e/security-report.xml
+          reporter: java-junit
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: e2e-test-logs
+          path: |
+            test/e2e/e2e-output.log
+            test/e2e/security-output.log
+          retention-days: 7
+
+  create-release:
+    name: Create Release
+    # E2E is intentionally NOT a dependency here: it runs in parallel and reports
+    # red/green for the same run, but it does not gate the release.
+    needs: [prepare-promotion, retag-images, package-charts, build-amctl]
+    runs-on:
+      - codebuild-wso2_agent-manager-${{ github.run_id }}-${{ github.run_attempt }}
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: amp/v${{ inputs.target_version }}
+
+      - name: Generate release body
+        id: release-body
+        run: |
+          CONFIG_FILE=".github/release-config.json"
+
+          {
+            echo "## Release amp/v${VERSION}"
+            echo ""
+            echo "Promoted from \`amp/v${SOURCE_VERSION}\`. The container images below are the"
+            echo "same images published for \`amp/v${SOURCE_VERSION}\`, retagged by digest."
+            echo ""
+            echo "### Docker Images"
+
+            jq -r '.images[].name' "$CONFIG_FILE" | while read -r name; do
+              echo "- \`${REGISTRY}/${REGISTRY_ORG}/${name}:v${VERSION}\`"
+            done
+
+            jq -r '.["python-instrumentation-provider"][] | .instrumentation_version as $iv | .python_versions[] | "\($iv) \(.)"' "$CONFIG_FILE" | while read -r iv pyver; do
+              echo "- \`${REGISTRY}/${REGISTRY_ORG}/amp-python-instrumentation-provider:${iv}-python${pyver}\`"
+            done
+
+            echo ""
+            echo "### Helm Charts"
+            jq -r '.charts[]' "$CONFIG_FILE" | while read -r chart; do
+              echo "- \`${HELM_REGISTRY}/${chart}:${VERSION}\`"
+            done
+
+            echo ""
+            echo "### CLI (amctl)"
+            echo "Prebuilt \`amctl\` binaries (Linux, macOS, Windows) and \`checksums.txt\` are attached to this release."
+
+            echo ""
+            echo "### Install bundle"
+            echo "\`wso2-agent-manager-${VERSION}.tar.gz\` bundles both the VM and quick-start installers. \`bootstrap.sh\` and \`start.sh\` are also attached standalone as the one-command entry points:"
+            echo '```'
+            echo "# VM install"
+            echo "curl -fsSL https://github.com/${REGISTRY_ORG}/agent-manager/releases/download/amp/v${VERSION}/bootstrap.sh | sudo bash -s -- simple --host <PUBLIC_IP> --version ${VERSION}"
+            echo ""
+            echo "# Quick-start (local dev container)"
+            echo "curl -fsSL https://github.com/${REGISTRY_ORG}/agent-manager/releases/download/amp/v${VERSION}/start.sh -o start.sh && chmod +x start.sh && ./start.sh"
+            echo '```'
+          } > /tmp/release-body.md
+
+          {
+            echo "body<<RELEASE_BODY_EOF"
+            cat /tmp/release-body.md
+            echo "RELEASE_BODY_EOF"
+          } >> $GITHUB_OUTPUT
+        env:
+          VERSION: ${{ inputs.target_version }}
+          SOURCE_VERSION: ${{ inputs.source_version }}
+        shell: bash
+
+      - name: Download amctl artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: amctl-dist
+          path: dist/
+
+      - name: Package install bundle
+        run: |
+          bash .github/scripts/build-vm-bundle.sh \
+            "$TARGET_RELEASE" \
+            dist/
+        env:
+          TARGET_RELEASE: ${{ inputs.target_version }}
+        shell: bash
+
+      - name: Create GitHub release
+        id: create-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: amp/v${{ inputs.target_version }}
+          name: Release amp/v${{ inputs.target_version }}
+          body: ${{ steps.release-body.outputs.body }}
+          draft: true
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
