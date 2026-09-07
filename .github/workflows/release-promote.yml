@@ -7,6 +7,31 @@ name: WSO2 AI Agent Management Platform Release Promotion
 #
 # The documentation release for the target version must already be merged to main
 # before this runs; the validate job refuses to proceed otherwise.
+#
+# Recovering from a mid-way failure
+# ---------------------------------
+# validate hard-fails when amp/v<target> already exists, and prepare-promotion is
+# not idempotent (its `git push origin "$TAG"` is rejected against an existing
+# remote tag). So a run that failed after prepare-promotion cannot simply be
+# re-dispatched: delete what it created first, from a clone of this repo.
+#
+#   TARGET=1.0.0
+#   MAJOR="${TARGET%%.*}"
+#   git push origin ":refs/tags/amp/v${TARGET}"   # the release tag
+#   git push origin --delete "amp-${TARGET}"      # the release branch
+#   gh release delete "amp/v${TARGET}" --yes      # the draft GitHub release
+#   git ls-remote --tags origin "amp/v${MAJOR}"   # confirm the major tag
+#
+# Check that last one: "Create git tag" deletes and recreates amp/v<major> in a
+# single step, so an abort between the two operations leaves it missing. It
+# cannot point at the wrong release — the recreating push has no `|| true` and
+# git refuses to overwrite a tag without --force — but if it is gone, restore it
+# to the previous release's commit before re-running:
+#
+#   git tag -a "amp/v${MAJOR}" <previous-release-commit> -m "Latest release for major version ${MAJOR}"
+#   git push origin "amp/v${MAJOR}"
+#
+# Leave the retagged images alone: retagging is idempotent by digest.
 
 on:
   workflow_dispatch:
@@ -25,7 +50,7 @@ on:
         default: false
         type: boolean
 
-run-name: Promote amp/v${{ inputs.source_version }} to amp/v${{ inputs.target_version }}
+run-name: Promote amp/v${{ inputs.source_version }} → amp/v${{ inputs.target_version }}
 
 env:
   REGISTRY: ghcr.io
@@ -95,6 +120,9 @@ jobs:
           TARGET_VERSION: ${{ inputs.target_version }}
         shell: bash
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -102,15 +130,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The image list comes from the source tag, not this main checkout: retag-images
+      # reads its config from the release tree, and pre-flighting a different list
+      # would let an image the retag needs go unchecked.
       - name: Verify source images exist
         run: |
           MISSING=0
-          for name in $(jq -r '.images[].name' .github/release-config.json); do
+          for name in $(git show "amp/v${SOURCE_VERSION}:.github/release-config.json" | jq -r '.images[].name'); do
             REF="${REGISTRY}/${REGISTRY_ORG}/${name}:v${SOURCE_VERSION}"
-            if docker buildx imagetools inspect "$REF" >/dev/null 2>&1; then
+            if INSPECT_ERR="$(docker buildx imagetools inspect "$REF" 2>&1 >/dev/null)"; then
               echo "✅ $REF"
             else
               echo "❌ missing: $REF"
+              echo "$INSPECT_ERR" | sed 's/^/    /'
               MISSING=1
             fi
           done
@@ -144,6 +176,21 @@ jobs:
           fetch-depth: 0
           ref: amp/v${{ inputs.source_version }}
 
+      # The source tree predates this workflow, so it has no resolve-source-commit.sh.
+      # Tooling runs from the dispatched commit (no ref: = github.sha); the scripts that
+      # stamp the release's own content keep running from the checkout above.
+      - name: Checkout promotion tooling
+        uses: actions/checkout@v6
+        with:
+          path: .promotion-tools
+
+      # git add -A below would otherwise stage the whole tooling checkout into the
+      # release commit. info/exclude is local to the runner and never committed.
+      - name: Exclude promotion tooling from the release commit
+        run: |
+          echo ".promotion-tools/" >> .git/info/exclude
+        shell: bash
+
       - name: Configure Git
         run: |
           git config --local user.email "action@github.com"
@@ -153,7 +200,7 @@ jobs:
       - name: Resolve unstamped source commit
         id: resolve
         run: |
-          COMMIT_SHA="$(bash .github/scripts/resolve-source-commit.sh "$SOURCE_VERSION")"
+          COMMIT_SHA="$(bash .promotion-tools/.github/scripts/resolve-source-commit.sh "$SOURCE_VERSION")"
           echo "commit-sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
           echo "✅ Promoting from commit ${COMMIT_SHA:0:7}"
         env:
@@ -341,6 +388,14 @@ jobs:
         with:
           ref: amp/v${{ inputs.target_version }}
 
+      # The target tag is built from the source release's base commit, which predates
+      # this workflow and so carries no retag-image.sh. Tooling runs from the
+      # dispatched commit (no ref: = github.sha).
+      - name: Checkout promotion tooling
+        uses: actions/checkout@v6
+        with:
+          path: .promotion-tools
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -353,7 +408,7 @@ jobs:
 
       - name: Retag ${{ matrix.image.name }}
         run: |
-          bash .github/scripts/retag-image.sh \
+          bash .promotion-tools/.github/scripts/retag-image.sh \
             "${REGISTRY}/${REGISTRY_ORG}/${IMAGE_NAME}" \
             "v${SOURCE_VERSION}" \
             "v${TARGET_VERSION}"

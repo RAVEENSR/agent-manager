@@ -6,6 +6,14 @@
 # sync: a divergence means the promotion passes its pre-flight and then fails
 # halfway through, after tags have been pushed.
 #
+# The two copies do not run from the same commit. This mirror runs from main (the
+# validate job), while update-helm-charts.sh runs from the release candidate's own
+# base commit (the prepare-promotion job) — an arbitrarily old tree. So editing
+# both files in one commit does not make them agree at run time: this file's rule
+# is checked against whatever update-helm-charts.sh said back when the rc was cut.
+# When they disagree, validate passes and the stamp fails after the branch and both
+# tags are pushed, requiring the cleanup runbook in release-promote.yml.
+#
 # Prints nothing (exit 0) for releases that cut no docs version.
 # Usage: resolve-docs-version.sh <target-version>
 set -euo pipefail
