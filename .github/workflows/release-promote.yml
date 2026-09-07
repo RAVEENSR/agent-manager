@@ -286,3 +286,368 @@ jobs:
         env:
           BRANCH: ${{ steps.create-branch.outputs.branch }}
         shell: bash
+
+  load-config:
+    name: Load Release Configuration
+    needs: prepare-promotion
+    runs-on:
+      - codebuild-wso2_agent-manager-${{ github.run_id }}-${{ github.run_attempt }}
+    outputs:
+      images: ${{ steps.set-matrix.outputs.images }}
+      charts: ${{ steps.set-matrix.outputs.charts }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: amp/v${{ inputs.target_version }}
+
+      - name: Load configuration and set matrix
+        id: set-matrix
+        run: |
+          CONFIG_FILE=".github/release-config.json"
+          CHARTS_BASE_PATH=$(jq -r '.config["charts-base-path"]' "$CONFIG_FILE")
+
+          IMAGES=$(jq -c '[.images[] | {name: .name}]' "$CONFIG_FILE")
+
+          CHARTS=$(jq -c --arg base "$CHARTS_BASE_PATH" '[.charts[] | {
+            name: .,
+            path: ($base + "/" + .),
+            "chart-file": ($base + "/" + . + "/Chart.yaml")
+          }]' "$CONFIG_FILE")
+
+          echo "images=$IMAGES" >> $GITHUB_OUTPUT
+          echo "charts=$CHARTS" >> $GITHUB_OUTPUT
+
+          echo "✅ Loaded configuration:"
+          echo "  - Images: $(echo "$IMAGES" | jq '. | length')"
+          echo "  - Charts: $(echo "$CHARTS" | jq '. | length')"
+        shell: bash
+
+  retag-images:
+    name: Retag ${{ matrix.image.name }}
+    needs: load-config
+    runs-on:
+      - codebuild-wso2_agent-manager-${{ github.run_id }}-${{ github.run_attempt }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        image: ${{ fromJson(needs.load-config.outputs.images) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: amp/v${{ inputs.target_version }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Retag ${{ matrix.image.name }}
+        run: |
+          bash .github/scripts/retag-image.sh \
+            "${REGISTRY}/${REGISTRY_ORG}/${IMAGE_NAME}" \
+            "v${SOURCE_VERSION}" \
+            "v${TARGET_VERSION}"
+        env:
+          IMAGE_NAME: ${{ matrix.image.name }}
+          SOURCE_VERSION: ${{ inputs.source_version }}
+          TARGET_VERSION: ${{ inputs.target_version }}
+        shell: bash
+
+  build-amctl:
+    name: Build amctl CLI
+    needs: prepare-promotion
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: amp/v${{ inputs.target_version }}
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v6.1.0
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+
+      - name: Run CLI tests
+        run: cd cli && go test ./...
+
+      - name: Build release artifacts
+        run: |
+          scripts/build-amctl.sh \
+            --version "${{ inputs.target_version }}" \
+            --commit "$(git rev-parse --short HEAD)" \
+            --date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --output-dir dist/
+
+      - name: Upload amctl artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: amctl-dist
+          path: dist/
+          retention-days: 7
+
+  package-charts:
+    name: Package ${{ matrix.chart.name }}
+    needs: [load-config, retag-images]
+    runs-on:
+      - codebuild-wso2_agent-manager-${{ github.run_id }}-${{ github.run_attempt }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        chart: ${{ fromJson(needs.load-config.outputs.charts) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: amp/v${{ inputs.target_version }}
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: "3.14.0"
+
+      - name: Cache Helm chart dependencies
+        id: helm-cache
+        if: hashFiles(format('{0}/Chart.lock', matrix.chart.path)) != ''
+        uses: actions/cache@v5
+        with:
+          path: ${{ matrix.chart.path }}/charts
+          key: helm-charts-${{ hashFiles(format('{0}/Chart.lock', matrix.chart.path)) }}
+
+      - name: Package and push ${{ matrix.chart.name }}
+        if: hashFiles(matrix.chart.chart-file) != ''
+        run: |
+          bash .github/scripts/package-helm-chart.sh \
+            "$CHART_PATH" \
+            "$TARGET_RELEASE" \
+            "$HELM_REGISTRY" \
+            "$HELM_TOKEN"
+        env:
+          CHART_PATH: ${{ matrix.chart.path }}
+          TARGET_RELEASE: ${{ inputs.target_version }}
+          HELM_REGISTRY: ${{ env.HELM_REGISTRY }}
+          HELM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+
+  e2e:
+    name: E2E
+    needs: [retag-images, package-charts]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 130
+    permissions:
+      contents: read
+      checks: write
+    env:
+      K3D_VERSION: v5.8.3
+      K3D_SHA256: dbaa79a76ace7f4ca230a1ff41dc7d8a5036a8ad0309e9c54f9bf3836dbe853e
+      YQ_VERSION: v4.45.4
+      YQ_SHA256: b96de04645707e14a12f52c37e6266832e03c29e95b9b139cddcae7314466e69
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v6
+        with:
+          ref: amp/v${{ inputs.target_version }}
+
+      - name: Setup Go
+        uses: ./.github/actions/setup-go
+
+      - name: Install k3d
+        run: |
+          curl -fsSL -o /tmp/k3d "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-amd64"
+          echo "${K3D_SHA256}  /tmp/k3d" | sha256sum -c -
+          sudo install /tmp/k3d /usr/local/bin/k3d
+          k3d version
+
+      - name: Install yq
+        run: |
+          curl -fsSL -o /tmp/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          echo "${YQ_SHA256}  /tmp/yq" | sha256sum -c -
+          sudo install /tmp/yq /usr/local/bin/yq
+
+      - name: Install platform
+        id: install-platform
+        env:
+          VERSION: ${{ inputs.target_version }}
+        run: |
+          cd deployments/quick-start && bash install.sh
+
+      - name: Run e2e tests
+        env:
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.INSTRUMENTATION_TEST_OPENAI_API_KEY }}
+          CHART_VERSION: ${{ inputs.target_version }}
+        run: |
+          set -o pipefail
+          cd test/e2e && go run github.com/onsi/ginkgo/v2/ginkgo -v --procs=2 --timeout 70m \
+            --poll-progress-after=600s --keep-going --junit-report=report.xml \
+            ./tests/... 2>&1 | tee e2e-output.log
+
+      - name: Run security conformance tests
+        if: ${{ !cancelled() && steps.install-platform.outcome == 'success' }}
+        env:
+          SECURITY_PROBE_REPOSITORY_URL: ${{ format('{0}/{1}', github.server_url, github.repository) }}
+          SECURITY_PROBE_REPOSITORY_BRANCH: amp/v${{ inputs.target_version }}
+        run: |
+          set -o pipefail
+          make security-test-live 2>&1 | tee test/e2e/security-output.log
+
+      - name: Dump pod logs on failure
+        if: failure()
+        run: |
+          mkdir -p /tmp/pod-logs
+          kubectl logs deployment/amp-api -n wso2-amp --tail=500 --all-containers=true > /tmp/pod-logs/amp-api.txt 2>&1 || true
+          kubectl logs deployment/openchoreo-api -n openchoreo-control-plane --tail=500 --all-containers=true > /tmp/pod-logs/openchoreo-api.txt 2>&1 || true
+          kubectl logs deployment/amp-observer -n openchoreo-observability-plane --tail=500 --all-containers=true > /tmp/pod-logs/amp-observer.txt 2>&1 || true
+          kubectl logs deployment/observer -n openchoreo-observability-plane --tail=500 --all-containers=true > /tmp/pod-logs/observer.txt 2>&1 || true
+          kubectl logs deployment/cluster-agent-workflowplane -n openchoreo-workflow-plane --tail=500 --all-containers=true > /tmp/pod-logs/cluster-agent-workflowplane.txt 2>&1 || true
+          for pod in $(kubectl get pods -n workflows-default --no-headers -o custom-columns=":metadata.name" 2>/dev/null); do
+            kubectl logs "$pod" -n workflows-default --all-containers=true --tail=200 > "/tmp/pod-logs/wf-pod-${pod}.txt" 2>&1 || true
+          done
+          kubectl get workflows -n workflows-default -o yaml > /tmp/pod-logs/argo-workflows-status.txt 2>&1 || true
+
+      - name: Upload pod logs
+        if: failure()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: pod-logs
+          path: /tmp/pod-logs/
+          retention-days: 7
+
+      - name: Publish test results
+        if: always()
+        uses: dorny/test-reporter@6e6a65b7a0bd2c9197df7d0ae36ac5cee784230c # v2.0.0
+        with:
+          name: E2E Test Results (Promotion)
+          path: test/e2e/report.xml
+          reporter: java-junit
+
+      - name: Publish security test results
+        if: ${{ always() && hashFiles('test/e2e/security-report.xml') != '' }}
+        uses: dorny/test-reporter@6e6a65b7a0bd2c9197df7d0ae36ac5cee784230c # v2.0.0
+        with:
+          name: Promotion Security Conformance Results
+          path: test/e2e/security-report.xml
+          reporter: java-junit
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: e2e-test-logs
+          path: |
+            test/e2e/e2e-output.log
+            test/e2e/security-output.log
+          retention-days: 7
+
+  create-release:
+    name: Create Release
+    # E2E is intentionally NOT a dependency here: it runs in parallel and reports
+    # red/green for the same run, but it does not gate the release.
+    needs: [prepare-promotion, retag-images, package-charts, build-amctl]
+    runs-on:
+      - codebuild-wso2_agent-manager-${{ github.run_id }}-${{ github.run_attempt }}
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: amp/v${{ inputs.target_version }}
+
+      - name: Generate release body
+        id: release-body
+        run: |
+          CONFIG_FILE=".github/release-config.json"
+
+          {
+            echo "## Release amp/v${VERSION}"
+            echo ""
+            echo "Promoted from \`amp/v${SOURCE_VERSION}\`. The container images below are the"
+            echo "same images published for \`amp/v${SOURCE_VERSION}\`, retagged by digest."
+            echo ""
+            echo "### Docker Images"
+
+            jq -r '.images[].name' "$CONFIG_FILE" | while read -r name; do
+              echo "- \`${REGISTRY}/${REGISTRY_ORG}/${name}:v${VERSION}\`"
+            done
+
+            jq -r '.["python-instrumentation-provider"][] | .instrumentation_version as $iv | .python_versions[] | "\($iv) \(.)"' "$CONFIG_FILE" | while read -r iv pyver; do
+              echo "- \`${REGISTRY}/${REGISTRY_ORG}/amp-python-instrumentation-provider:${iv}-python${pyver}\`"
+            done
+
+            echo ""
+            echo "### Helm Charts"
+            jq -r '.charts[]' "$CONFIG_FILE" | while read -r chart; do
+              echo "- \`${HELM_REGISTRY}/${chart}:${VERSION}\`"
+            done
+
+            echo ""
+            echo "### CLI (amctl)"
+            echo "Prebuilt \`amctl\` binaries (Linux, macOS, Windows) and \`checksums.txt\` are attached to this release."
+
+            echo ""
+            echo "### Install bundle"
+            echo "\`wso2-agent-manager-${VERSION}.tar.gz\` bundles both the VM and quick-start installers. \`bootstrap.sh\` and \`start.sh\` are also attached standalone as the one-command entry points:"
+            echo '```'
+            echo "# VM install"
+            echo "curl -fsSL https://github.com/${REGISTRY_ORG}/agent-manager/releases/download/amp/v${VERSION}/bootstrap.sh | sudo bash -s -- simple --host <PUBLIC_IP> --version ${VERSION}"
+            echo ""
+            echo "# Quick-start (local dev container)"
+            echo "curl -fsSL https://github.com/${REGISTRY_ORG}/agent-manager/releases/download/amp/v${VERSION}/start.sh -o start.sh && chmod +x start.sh && ./start.sh"
+            echo '```'
+          } > /tmp/release-body.md
+
+          {
+            echo "body<<RELEASE_BODY_EOF"
+            cat /tmp/release-body.md
+            echo "RELEASE_BODY_EOF"
+          } >> $GITHUB_OUTPUT
+        env:
+          VERSION: ${{ inputs.target_version }}
+          SOURCE_VERSION: ${{ inputs.source_version }}
+        shell: bash
+
+      - name: Download amctl artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: amctl-dist
+          path: dist/
+
+      - name: Package install bundle
+        run: |
+          bash .github/scripts/build-vm-bundle.sh \
+            "$TARGET_RELEASE" \
+            dist/
+        env:
+          TARGET_RELEASE: ${{ inputs.target_version }}
+        shell: bash
+
+      - name: Create GitHub release
+        id: create-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: amp/v${{ inputs.target_version }}
+          name: Release amp/v${{ inputs.target_version }}
+          body: ${{ steps.release-body.outputs.body }}
+          draft: true
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
