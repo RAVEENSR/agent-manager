@@ -612,7 +612,7 @@ sudo rm -f /etc/sysctl.d/99-amp-inotify.conf && sudo sysctl --system >/dev/null
 sudo ufw delete allow 443/tcp
 ```
 
-Until the loopback aliases are removed, a later `--dry-run` (or a re-install) on the same host reports those two names as not resolving to this VM, because the local resolver answers them from `/etc/hosts`. That is expected and advisory only — your public records are unaffected.
+While the loopback aliases remain, a later `--dry-run` (or a re-install) on the same host prints a `[preflight] note` for those two names, because the local resolver answers them from `/etc/hosts`. It is informational — your public records are unaffected, and any other host answering on loopback is still reported as a DNS problem.
 
 To remove only the TLS and routing layer while keeping the platform running (for example to re-issue against a different ACME server after a staging run), delete the resources the installer applies in its third phase:
 
