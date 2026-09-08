@@ -229,9 +229,29 @@ _public_ip() {
 # candidate IPs (this VM's local addresses + its public egress IP). Hard-fail in
 # letsencrypt mode (ACME needs correct DNS); advisory otherwise. Populates DNS_ERRORS.
 # shellcheck disable=SC2154  # AMP_HOST_*/AMP_AGENTS_BASE come from the caller's scope.
+# _hosts_file — print the static hosts database. Overridable in tests, like _resolve_host.
+_hosts_file() { cat /etc/hosts 2>/dev/null; }
+
+# _installer_loopback_alias <host> — true only when <host> is one of the two names this
+# installer aliases to loopback AND the alias is actually present in /etc/hosts. Both
+# halves matter: ensure_loopback_alias (install-advanced.sh, install-vm.sh) touches only
+# the API and Thunder hosts, so a loopback answer for any other name is not ours, and a
+# loopback answer for these two without the alias present did not come from us either.
+# Anything that fails either half stays subject to the ordinary mismatch check.
+_installer_loopback_alias() {
+  local host="$1"
+  [[ -n "$host" ]] || return 1
+  [[ "$host" == "${AMP_HOST_API:-}" || "$host" == "${AMP_HOST_THUNDER:-}" ]] || return 1
+  # A comment line cannot match: awk sees '#' as $1, not a 127.* address.
+  _hosts_file | awk -v h="$host" '
+    $1 ~ /^127\./ { for (i = 2; i <= NF; i++) if ($i == h) found = 1 }
+    END { exit !found }'
+}
+
 validate_dns() {
   local -a candidates=("$@")
   DNS_ERRORS=()
+  DNS_NOTES=()
   local host got ip ok e
   # The two probe.* names stand in for the *.agents and *.<gateway> wildcards: they
   # resolve only if the wildcard record exists. Checking $AMP_HOST_GATEWAY on its own
@@ -251,11 +271,28 @@ validate_dns() {
     # them), so a host that partly points elsewhere is caught regardless of order.
     while IFS= read -r ip; do
       [[ -z "$ip" ]] && continue
+      # A loopback answer for a host this installer aliased is its own doing, not a DNS
+      # fault. ensure_loopback_alias points the API and Thunder hosts at 127.0.0.1 in
+      # /etc/hosts so in-install API calls reach the gateway, and nothing removes those
+      # entries afterwards. On a re-install the local stub resolver answers from
+      # /etc/hosts, so those names come back as 127.0.0.1 here and would otherwise be
+      # reported as pointing "not at this VM" — sending the operator to debug DNS that is
+      # in fact correct. It only affects resolution ON this VM; clients elsewhere follow
+      # the public records. Any OTHER loopback answer is a real problem (a stray
+      # /etc/hosts line, or a record genuinely pointing at 127.0.0.1 so no client can
+      # reach the service) and still has to be reported, so it falls through below.
+      if [[ "$ip" == 127.* ]] && _installer_loopback_alias "$host"; then
+        DNS_NOTES+=("$host resolves to ${ip} through a local /etc/hosts alias this installer added; clients off this VM are unaffected")
+        continue
+      fi
       ok=no
       for e in "${candidates[@]}"; do [[ -n "$e" && "$ip" == "$e" ]] && { ok=yes; break; }; done
       [[ "$ok" == yes ]] || DNS_ERRORS+=("$host resolves to '${ip}', not this VM (${candidates[*]})")
     done <<<"$got"
   done
+  if (( ${#DNS_NOTES[@]} )); then
+    printf '[preflight] note: %s\n' "${DNS_NOTES[@]}" >&2
+  fi
   if (( ${#DNS_ERRORS[@]} )); then
     printf '[preflight] DNS issue: %s\n' "${DNS_ERRORS[@]}" >&2
     printf '[preflight] (advisory: certificate issuance uses DNS-01 and needs no inbound; point your DNS — or client /etc/hosts entries — at this VM so clients can reach the services)\n' >&2
