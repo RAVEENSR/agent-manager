@@ -31,6 +31,7 @@ import (
 
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/gen"
 	"github.com/wso2/agent-manager/agent-manager-service/config"
+	"github.com/wso2/agent-manager/agent-manager-service/instrumentation"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
@@ -2609,6 +2610,10 @@ func BuildInstrumentationImage(languageVersion, instrumentationVersion string) (
 // getInstrumentationImage builds the pre-built init-container image reference for
 // the given AMP instrumentation version and the agent's Python runtime version,
 // e.g. ghcr.io/wso2/amp-python-instrumentation-provider:0.3.0-python3.11.
+//
+// The repository comes from the instrumentation catalog so an operator-supplied
+// catalogExtension entry can redirect a version at an internal mirror; a version
+// the catalog does not know falls back to the public default.
 func getInstrumentationImage(languageVersion, instrumentationVersion string) (string, error) {
 	// Trim before splitting so the built tag matches the trimmed major.minor the
 	// service validates against the catalog (normalizePythonMinor also trims);
@@ -2619,7 +2624,8 @@ func getInstrumentationImage(languageVersion, instrumentationVersion string) (st
 		return "", fmt.Errorf("invalid languageVersion format: expected 'major.minor' but got '%s'", languageVersion)
 	}
 	pythonMajorMinor := strings.TrimSpace(parts[0]) + "." + strings.TrimSpace(parts[1])
-	return fmt.Sprintf("%s/%s:%s-python%s", InstrumentationImageRegistry, InstrumentationImageName, instrumentationVersion, pythonMajorMinor), nil
+	repository := instrumentation.ImageRepositoryFor(instrumentationVersion, DefaultInstrumentationImageRepository)
+	return fmt.Sprintf("%s:%s-python%s", repository, instrumentationVersion, pythonMajorMinor), nil
 }
 
 func (c *openChoreoClient) GetComponentEndpoints(ctx context.Context, ouID, projectName, componentName, environment string) (map[string]models.EndpointsResponse, error) {
