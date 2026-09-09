@@ -622,11 +622,39 @@ if k3d cluster list 2>/dev/null | grep -q "${CLUSTER_NAME}"; then
         exit 1
     }
     log_success "Using existing cluster"
+    # k3d writes the node's registries.yaml at creation time only, so a re-run
+    # against an existing cluster cannot add it. That file is the only mechanism
+    # covering images pulled into namespaces OpenChoreo creates later, so say so
+    # rather than letting agent deploys fail with no explanation.
+    if declare -F amp_registry_is_private >/dev/null 2>&1 && amp_registry_is_private; then
+        log_warning "Reusing an existing cluster: its node has no registry credentials."
+        log_warning "Agent image pulls will fail. Delete the cluster and re-run to add them."
+    fi
 else
     log_info "Creating k3d cluster..."
 
     # Create shared directory for OpenChoreo
     mkdir -p /tmp/k3d-shared
+
+    # A private registry needs credentials inside the node: its containerd sees
+    # neither the host's docker config nor a namespace's imagePullSecrets for the
+    # namespaces OpenChoreo creates later. k3d writes registries.config through to
+    # the node's registries.yaml verbatim, so append the auth block there.
+    # Written to a 0600 temp file because it contains the registry token; the
+    # credential still ends up in the node's /etc/rancher/k3s/registries.yaml.
+    if declare -F amp_registry_is_private >/dev/null 2>&1 && amp_registry_is_private; then
+        log_info "Adding registry credentials to the k3d node configuration..."
+        _k3d_config_with_auth="$(mktemp)"
+        chmod 600 "${_k3d_config_with_auth}"
+        if ! { cat "${K3D_CONFIG}"; amp_registries_yaml_fragment; } > "${_k3d_config_with_auth}"; then
+            rm -f "${_k3d_config_with_auth}"
+            log_error "Failed to render the k3d registry credentials"
+            exit 1
+        fi
+        K3D_CONFIG="${_k3d_config_with_auth}"
+        # Remove it as soon as the cluster is up; k3d has copied the content in.
+        trap 'rm -f "${_k3d_config_with_auth:-}"' EXIT
+    fi
 
     # Create k3d cluster
     if k3d cluster create --config "${K3D_CONFIG}"; then
@@ -1508,6 +1536,10 @@ log_step "Step 12/13: Installing WSO2 AMP Thunder Extension"
 
 log_info "Installing WSO2 AMP Thunder Extension..."
 log_info "Gateway API CRDs and Gateway Operator are now available"
+if ! install_registry_credentials; then
+    exit 1
+fi
+
 if ! install_amp_thunder_extension; then
     log_warning "AMP Thunder Extension installation failed (non-fatal)"
     echo "The installation will continue but thunder extension features may not work."
@@ -1604,7 +1636,7 @@ if ! install_default_env_thunder; then
     if [[ -f "${env_thunder_script}" ]]; then
         echo "  bash ${env_thunder_script}"
     else
-        env_thunder_base="https://raw.githubusercontent.com/wso2/agent-manager/amp/v${VERSION}/deployments/scripts"
+        env_thunder_base="${AMP_SCRIPT_BASE_URL:-https://raw.githubusercontent.com/wso2/agent-manager/amp/v${VERSION}/deployments/scripts}"
         echo "  SCRIPT_BASE_URL=${env_thunder_base} \\"
         echo "  bash <(curl -fsSL ${env_thunder_base}/add-environment-thunder.sh)"
     fi

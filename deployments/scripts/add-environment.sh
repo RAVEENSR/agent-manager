@@ -142,7 +142,7 @@ case "$IDP_SKIP_TLS_VERIFY" in
         ;;
 esac
 
-CHART_REF="oci://ghcr.io/wso2/wso2-amp-api-platform-gateway-extension"
+CHART_REF="${CHART_REF:-oci://ghcr.io/wso2/wso2-amp-api-platform-gateway-extension}"
 
 # GATEWAY_CHART: optional path or ref to an alternative chart (e.g. a private OCI registry
 # or a tarball). When unset, the published OCI chart at CHART_REF is used.
@@ -230,6 +230,30 @@ else
   unset _ams_auth_lib_url _ams_auth_lib_tmp
 fi
 
+# Load the shared registry auth helpers (deployments/scripts/lib-registry-auth.sh)
+# so a private-registry environment gets its image pull secret. Optional, unlike
+# the two libs above: a public install needs nothing from it, so a missing or
+# unreachable copy must not block adding an environment. Only fetched when a
+# registry is actually configured, to avoid a pointless network call.
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "$(dirname "${BASH_SOURCE[0]}")/lib-registry-auth.sh" ]; then
+  # shellcheck source=lib-registry-auth.sh
+  source "$(dirname "${BASH_SOURCE[0]}")/lib-registry-auth.sh"
+elif [ -n "${AMP_IMAGE_REGISTRY:-}" ]; then
+  # Deliberately not fetched over the network. This helper handles registry
+  # credentials, so sourcing a copy pulled from a configurable URL would execute
+  # unverified code in the very context that holds them. A private-registry
+  # install runs from the extracted release bundle, where this file sits next to
+  # this script, so require it rather than downloading a substitute.
+  #
+  # Fatal, not a warning: without it amp_create_pull_secret never runs, the
+  # environment comes up with no pull secret in its workflow namespace, and the
+  # first evaluation run fails to pull with nothing pointing back to here.
+  echo "❌ AMP_IMAGE_REGISTRY is set, but lib-registry-auth.sh was not found next" >&2
+  echo "   to this script. Run add-environment.sh from the extracted release" >&2
+  echo "   bundle so the image pull secret can be created in workflows-${ENV_NAME}." >&2
+  exit 1
+fi
+
 echo "=== Adding Environment: ${DISPLAY_NAME} (${ENV_NAME}) ==="
 echo ""
 
@@ -243,6 +267,22 @@ if ! kubectl version > /dev/null 2>&1; then
     echo "     - give your user a context:"
     echo "         sudo k3d kubeconfig merge amp-local --kubeconfig-merge-default --kubeconfig-switch-context"
     exit 1
+fi
+
+# A private-registry environment needs the image pull secret in the namespace
+# OpenChoreo runs THIS environment's evaluation workflows in ("workflows-<env>"),
+# because the evaluation job's pod runs there rather than in the extension
+# chart's release namespace. The chart references the secret but does not create
+# it, so each new environment needs its own copy. Idempotent, and a no-op for a
+# public install.
+if declare -F amp_registry_is_private >/dev/null 2>&1 && amp_registry_is_private; then
+    echo "⏳ Creating image pull secret in workflows-${ENV_NAME}..."
+    if amp_create_pull_secret "workflows-${ENV_NAME}"; then
+        echo "✅ Image pull secret created in workflows-${ENV_NAME}"
+    else
+        echo "❌ Failed to create the image pull secret in workflows-${ENV_NAME}" >&2
+        exit 1
+    fi
 fi
 
 # --- Step 0: Verify Agent Manager is reachable ---

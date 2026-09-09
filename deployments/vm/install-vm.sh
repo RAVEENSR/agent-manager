@@ -2,7 +2,8 @@
 # install-vm.sh — run ON the target VM (with sudo) to install Agent Manager.
 # Usage:
 #   sudo ./install-vm.sh --host <PUBLIC_IP> --version <amp-release> \
-#                        [--email <addr>] [--no-external-gateways]
+#                        [--email <addr>] [--no-external-gateways] \
+#                        [--registry <host/org>] [--registry-credentials <file>]
 #
 # --host: the VM's PUBLIC IPv4 address. Public URLs are derived as
 #   *.amp.<IP>.sslip.io, and a cloud VM usually can't read its own public IP
@@ -10,6 +11,12 @@
 #   SSH in).
 # --version: the amp/v* release to install (e.g. 0.15.0). Required — the charts
 #   and manifests are pulled per-release; there is no sensible default.
+#
+# --registry / --registry-credentials: install from a private image registry
+#   instead of the public default. The credentials file holds
+#   AMP_REGISTRY_USERNAME=... and AMP_REGISTRY_PASSWORD=... and should be mode
+#   600; they are read from the file rather than the command line because argv
+#   is readable by every user on the VM through ps.
 #
 # TLS is always Let's Encrypt, 443-only: certificates issue via the TLS-ALPN-01
 # challenge inside the :443 handshake, so only inbound 443 is required (no port
@@ -39,12 +46,16 @@ log() { printf '\033[0;34m[install-vm]\033[0m %s\n' "$*"; }
 die() { printf '\033[0;31m[install-vm] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 require_value() { [[ -n "${2:-}" && "${2:-}" != --* ]] || die "$1 requires a value"; }
 
+REGISTRY_PREFIX=""
+REGISTRY_CREDENTIALS_FILE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --host) require_value "$1" "${2:-}"; VM_IP="$2"; shift 2 ;;
     --version) require_value "$1" "${2:-}"; AMP_VERSION="$2"; shift 2 ;;
     --email) require_value "$1" "${2:-}"; ACME_EMAIL="$2"; shift 2 ;;
     --no-external-gateways) EXTERNAL_GATEWAYS="false"; shift ;;
+    --registry) require_value "$1" "${2:-}"; REGISTRY_PREFIX="$2"; shift 2 ;;
+    --registry-credentials) require_value "$1" "${2:-}"; REGISTRY_CREDENTIALS_FILE="$2"; shift 2 ;;
     -h|--help) grep '^#' "$0" | grep -v '^#!' | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown flag: $1" ;;
   esac
@@ -52,6 +63,9 @@ done
 
 [[ "$(id -u)" -eq 0 ]] || \
   die "run with sudo — this installs Docker, opens the firewall and creates the cluster: sudo $0 --host <IP> --version <release>"
+if [[ -n "${REGISTRY_CREDENTIALS_FILE:-}" && ! -r "$REGISTRY_CREDENTIALS_FILE" ]]; then
+  die "--registry-credentials file not readable: ${REGISTRY_CREDENTIALS_FILE}"
+fi
 [[ -n "$VM_IP" ]] || die "--host <PUBLIC_IP> is required (the VM's public IPv4 — sslip.io hostnames embed it)"
 [[ "$VM_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || \
   die "--host must be an IPv4 address (got '${VM_IP}')"
@@ -117,6 +131,16 @@ run_install() {
   # install.sh builds chart refs + raw manifest URLs from amp/v${VERSION}; export it
   # only now, after bootstrap, so the piped installers above never saw it.
   export VERSION="$AMP_VERSION"
+
+  # Private-registry handoff: install.sh sources lib-registry-auth.sh, which reads
+  # these. Exported only when given, so a public install sees an unchanged
+  # environment and keeps its existing behaviour exactly.
+  if [[ -n "${REGISTRY_PREFIX:-}" ]]; then
+    export AMP_IMAGE_REGISTRY="$REGISTRY_PREFIX"
+  fi
+  if [[ -n "${REGISTRY_CREDENTIALS_FILE:-}" ]]; then
+    export AMP_REGISTRY_CREDENTIALS_FILE="$REGISTRY_CREDENTIALS_FILE"
+  fi
 
   # Suppress install.sh's localhost completion URLs — they are unreachable on a VM
   # (k3d ports are loopback-bound). This script prints the public sslip.io URLs below.

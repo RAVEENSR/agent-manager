@@ -14,6 +14,23 @@ VERSION="${VERSION:-0.0.0-dev}"
 # Helm chart registry and versions
 HELM_CHART_REGISTRY="${HELM_CHART_REGISTRY:-ghcr.io/wso2}"
 
+# Registry authentication helpers: the single source of truth for the registry
+# host, the pull-secret name and the helm flags a private-registry install
+# needs. Resolved the same two ways as DEPLOYMENTS_DIR in install.sh — one level
+# up in a repo checkout, flat alongside in the dev-container image.
+_amp_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+for _candidate in \
+    "${DEPLOYMENTS_DIR:-}/scripts/lib-registry-auth.sh" \
+    "${_amp_lib_dir}/../scripts/lib-registry-auth.sh" \
+    "${_amp_lib_dir}/scripts/lib-registry-auth.sh"; do
+    if [[ -n "$_candidate" && -f "$_candidate" ]]; then
+        # shellcheck source=../scripts/lib-registry-auth.sh
+        source "$_candidate"
+        break
+    fi
+done
+unset _amp_lib_dir _candidate
+
 # Chart names
 AMP_CHART_NAME="wso2-agent-manager"
 OBSERVABILITY_CHART_NAME="wso2-amp-observability-extension"
@@ -61,6 +78,20 @@ if [[ -z "${GATEWAY_HELM_ARGS+x}" ]]; then
 fi
 if [[ -z "${CP_HELM_ARGS+x}" ]]; then
     CP_HELM_ARGS=()
+fi
+
+# A private-registry install has to tell each chart that runs a first-party
+# image where to pull it from and which pull secret to use. amp_pull_secret_helm_args
+# prints nothing for a public install, so these arrays are left untouched there
+# and every existing helm invocation stays byte-identical.
+if declare -F amp_pull_secret_helm_args >/dev/null 2>&1; then
+    while IFS= read -r _reg_arg; do
+        [[ -n "$_reg_arg" ]] || continue
+        AMP_HELM_ARGS+=("$_reg_arg")
+        OBSERVABILITY_HELM_ARGS+=("$_reg_arg")
+        EVALUATION_HELM_ARGS+=("$_reg_arg")
+    done < <(amp_pull_secret_helm_args)
+    unset _reg_arg
 fi
 
 # Timeouts (in seconds)
@@ -152,6 +183,28 @@ install_amp_helm_chart() {
 # ============================================================================
 
 # Install Agent Management Platform
+# Create the image pull secret in every namespace that runs a first-party image.
+# A no-op for a public install. Called before the first chart install, because a
+# secret that arrives after the pod does still leaves it in ImagePullBackOff.
+#
+# The evaluation job is the reason workflows-default is here: its pod runs in the
+# workflow namespace, not the chart's release namespace.
+install_registry_credentials() {
+    if ! declare -F amp_registry_is_private >/dev/null 2>&1; then
+        return 0
+    fi
+    if ! amp_registry_is_private; then
+        return 0
+    fi
+    log_info "Creating image pull secret for $(amp_registry_host)..."
+    if amp_create_pull_secret "${AMP_NS}" "${OBSERVABILITY_NS}" "workflows-default"; then
+        log_success "Image pull secret created"
+        return 0
+    fi
+    log_error "Failed to create the image pull secret"
+    return 1
+}
+
 install_agent_management_platform() {
     local chart_ref="oci://${HELM_CHART_REGISTRY}/${AMP_CHART_NAME}"
     local chart_version="${VERSION}"
@@ -265,7 +318,7 @@ install_default_env_thunder() {
     if [[ -n "${DEPLOYMENTS_DIR:-}" && -f "${bundled_script}" ]]; then
         script_path="${bundled_script}"
     else
-        local script_url="https://raw.githubusercontent.com/wso2/agent-manager/amp/v${VERSION}/deployments/scripts/add-environment-thunder.sh"
+        local script_url="${AMP_SCRIPT_BASE_URL:-https://raw.githubusercontent.com/wso2/agent-manager/amp/v${VERSION}/deployments/scripts}/add-environment-thunder.sh"
         tmp_script="$(mktemp)"
         if ! curl -fsSL --connect-timeout 30 "${script_url}" -o "${tmp_script}" 2>/dev/null; then
             echo "Failed to download add-environment-thunder.sh from ${script_url}"

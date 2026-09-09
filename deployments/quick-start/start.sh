@@ -13,7 +13,7 @@ set -euo pipefail
 # Stamped to the release version at build time (see .github/scripts/update-install-helpers.sh
 # for the equivalent 0.0.0-dev -> version substitution pattern applied to this file).
 DEFAULT_VERSION="0.0.0-dev"
-IMAGE="${QUICK_START_IMAGE:-ghcr.io/wso2/amp-quick-start}"
+IMAGE="${QUICK_START_IMAGE:-${AMP_IMAGE_REGISTRY:-ghcr.io/wso2}/amp-quick-start}"
 
 log() { printf '\033[0;34m[start]\033[0m %s\n' "$*"; }
 warn() { printf '\033[0;33m[start] WARNING:\033[0m %s\n' "$*" >&2; }
@@ -64,9 +64,53 @@ case "$ARCH" in
   *) warn "Unrecognized architecture '${ARCH}' — the quick-start image is published for amd64/arm64 only" ;;
 esac
 
+# This image is pulled by the HOST's Docker daemon, so it needs credentials of
+# its own: a cluster-side pull secret does not apply, and the cryptic
+# "denied: requested access to the resource is denied" is what a missing login
+# looks like. Kept self-contained rather than sourcing
+# deployments/scripts/lib-registry-auth.sh, because start.sh is fetched and run
+# as a standalone release asset with no siblings on disk.
+REGISTRY_PREFIX="${AMP_IMAGE_REGISTRY:-ghcr.io/wso2}"
+if [[ "$REGISTRY_PREFIX" != "ghcr.io/wso2" ]]; then
+  REGISTRY_HOST="${REGISTRY_PREFIX%%/*}"
+  if [[ -n "${AMP_REGISTRY_USERNAME:-}" && -n "${AMP_REGISTRY_PASSWORD:-}" ]]; then
+    log "Authenticating to ${REGISTRY_HOST}"
+    printf '%s' "$AMP_REGISTRY_PASSWORD" \
+      | docker login "$REGISTRY_HOST" -u "$AMP_REGISTRY_USERNAME" --password-stdin >/dev/null \
+      || die "docker login to ${REGISTRY_HOST} failed. Check AMP_REGISTRY_USERNAME and AMP_REGISTRY_PASSWORD."
+  else
+    log "Using the Docker credentials already on this host for ${REGISTRY_HOST}"
+    log "If the pull is denied, run: docker login ${REGISTRY_HOST}"
+  fi
+fi
+
 log "Starting quick-start dev container (${IMAGE}:v${VERSION})"
 log "Run ./install.sh from the container shell to install the platform (~15-20 minutes)."
+# install.sh runs inside the container and reads these, so a private-registry
+# install has to carry them across. Without this the container defaulted back to
+# the public registry and installed charts with no pull secret at all.
+#
+# A credentials file is mounted read-only rather than passed as environment,
+# because `docker inspect` shows a container's environment to anyone who can
+# reach the daemon.
+DOCKER_ARGS=()
+if [[ "$REGISTRY_PREFIX" != "ghcr.io/wso2" ]]; then
+  DOCKER_ARGS+=(-e "AMP_IMAGE_REGISTRY=${REGISTRY_PREFIX}")
+  if [[ -n "${AMP_REGISTRY_CREDENTIALS_FILE:-}" && -f "${AMP_REGISTRY_CREDENTIALS_FILE}" ]]; then
+    DOCKER_ARGS+=(-v "${AMP_REGISTRY_CREDENTIALS_FILE}:/run/amp-registry.creds:ro"
+                  -e "AMP_REGISTRY_CREDENTIALS_FILE=/run/amp-registry.creds")
+  elif [[ -n "${AMP_REGISTRY_USERNAME:-}" && -n "${AMP_REGISTRY_PASSWORD:-}" ]]; then
+    warn "Passing registry credentials as container environment variables; 'docker inspect' will show them. Set AMP_REGISTRY_CREDENTIALS_FILE to mount a file instead."
+    DOCKER_ARGS+=(-e "AMP_REGISTRY_USERNAME=${AMP_REGISTRY_USERNAME}"
+                  -e "AMP_REGISTRY_PASSWORD=${AMP_REGISTRY_PASSWORD}")
+  fi
+  if [[ "${AMP_REGISTRY_ALLOW_INSECURE:-false}" == "true" ]]; then
+    DOCKER_ARGS+=(-e "AMP_REGISTRY_ALLOW_INSECURE=true")
+  fi
+fi
+
 exec docker run --rm -it --name amp-quick-start \
   -v /var/run/docker.sock:/var/run/docker.sock \
   --network=host \
+  ${DOCKER_ARGS[@]+"${DOCKER_ARGS[@]}"} \
   "${IMAGE}:v${VERSION}"

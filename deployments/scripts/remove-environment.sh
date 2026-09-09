@@ -122,7 +122,22 @@ if [ "${DEPROVISION_THUNDER:-true}" = "true" ]; then
     SCRIPT_BASE_URL="${SCRIPT_BASE_URL:-https://raw.githubusercontent.com/wso2/agent-manager/main/deployments/scripts}"
     THUNDER_SCRIPT_URL="${THUNDER_SCRIPT_URL:-${SCRIPT_BASE_URL}/remove-environment-thunder.sh}"
     script_tmp="$(mktemp)"
-    if curl -fsSL "${THUNDER_SCRIPT_URL}" -o "$script_tmp"; then
+    # Prefer the sibling on disk, as every other script in this directory does:
+    # in a release bundle or a checkout it is right there, and fetching it needs
+    # egress this install may not have. The URL stays the fallback for curl | bash.
+    _local_thunder_script=""
+    if [ -n "${BASH_SOURCE[0]:-}" ]; then
+        _local_thunder_script="$(dirname "${BASH_SOURCE[0]}")/remove-environment-thunder.sh"
+    fi
+    if [ -n "$_local_thunder_script" ] && [ -f "$_local_thunder_script" ]; then
+        cp "$_local_thunder_script" "$script_tmp"
+    else
+        # Non-fatal: the emptiness check below drives the same warning path the
+        # fetch failure used to, so a missing script still degrades rather than
+        # aborting the gateway removal that follows.
+        curl -fsSL "${THUNDER_SCRIPT_URL}" -o "$script_tmp" || true
+    fi
+    if [ -s "$script_tmp" ]; then
       # Forward the API URL and token already validated by this script so the
       # chained cleanup updates the same Agent Manager deployment.
       if ENV_NAME="${ENV_NAME}" ORG_NAME="${ORG_NAME}" SCRIPT_BASE_URL="${SCRIPT_BASE_URL}" \

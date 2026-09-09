@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared cluster environment variables — sourced by all scripts in this directory.
 OPENCHOREO_VERSION="1.2.0"
 CLUSTER_NAME="${CLUSTER_NAME:-openchoreo-local-setup}"

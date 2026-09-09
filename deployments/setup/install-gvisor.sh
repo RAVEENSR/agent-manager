@@ -1,6 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
+# Resolved the same way as install-kata.sh: the RuntimeClass manifest is applied
+# from the sibling k8s/ directory when this script travels with it.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # install-gvisor.sh — Install gVisor (runsc) on a Linux Kubernetes node.
 #
 # Run this script directly on each node you want to use for gVisor agents.
@@ -155,7 +159,13 @@ echo ""
 echo "Next steps — from a machine with kubectl access to your cluster:"
 echo ""
 echo "  1. Apply the RuntimeClass (once per cluster):"
-echo "     kubectl apply -f https://raw.githubusercontent.com/wso2/agent-manager/main/deployments/k8s/gvisor-runtimeclass.yaml"
+if [ -f "$SCRIPT_DIR/../k8s/gvisor-runtimeclass.yaml" ]; then
+    # Point at the copy already on disk: telling the reader to curl a different
+    # one invites a version mismatch with the install they just ran.
+    echo "     kubectl apply -f \"$SCRIPT_DIR/../k8s/gvisor-runtimeclass.yaml\""
+else
+    echo "     kubectl apply -f ${AMP_MANIFEST_BASE_URL:-https://raw.githubusercontent.com/wso2/agent-manager/${AMP_RELEASE_REF:-main}/deployments/k8s}/gvisor-runtimeclass.yaml"
+fi
 echo ""
 echo "  2. Label and taint this node (replace <node-name> with: kubectl get nodes):"
 echo "     kubectl label node <node-name> gvisor=true --overwrite"
