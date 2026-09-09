@@ -22,18 +22,71 @@ mkdir -p "$OUT_DIR"
 BUNDLE="${OUT_DIR}/wso2-agent-manager-${VERSION}.tar.gz"
 
 # Directories the installers read at runtime (see install.sh DEPLOYMENTS_DIR +
-# install-helpers.sh ../scripts). Charts are pulled from OCI registries at install
-# time, so helm-charts/ is intentionally excluded.
+# install-helpers.sh ../scripts). setup/ is here because install-kata.sh and
+# install-gvisor.sh resolve ../k8s/ relative to themselves, and fall back to
+# fetching those manifests over the network when they are not shipped alongside.
+# Charts are pulled from OCI registries at install time, so helm-charts/ is
+# intentionally excluded.
 tar -czf "$BUNDLE" \
   deployments/vm \
   deployments/quick-start \
   deployments/single-cluster \
   deployments/values \
   deployments/k8s \
-  deployments/scripts
+  deployments/scripts \
+  deployments/setup
 
 cp deployments/vm/bootstrap.sh "${OUT_DIR}/bootstrap.sh"
 cp deployments/quick-start/start.sh "${OUT_DIR}/start.sh"
+
+# MANIFEST.json — what this bundle expects to find at install time, in a form a
+# downstream publisher can read without parsing release notes. The download is
+# distributed outside GitHub, so "which images does this expect, and from where"
+# has to travel with the artifact rather than living in the workflow that built
+# it. Image digests are not included: they are only knowable after the push, and
+# recording a guess is worse than recording nothing.
+CONFIG_FILE="${CONFIG_FILE:-.github/release-config.json}"
+IMAGE_REGISTRY="${REGISTRY:-ghcr.io}/${REGISTRY_ORG:-wso2}"
+CHART_REGISTRY="${HELM_REGISTRY:-oci://ghcr.io/wso2}"
+BUILD_COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+
+if [ -f "$CONFIG_FILE" ] && command -v jq >/dev/null 2>&1; then
+  jq -n \
+    --arg version "$VERSION" \
+    --arg buildCommit "$BUILD_COMMIT" \
+    --arg imageRegistry "$IMAGE_REGISTRY" \
+    --arg chartRegistry "$CHART_REGISTRY" \
+    --slurpfile config "$CONFIG_FILE" \
+    '{
+       version: $version,
+       buildCommit: $buildCommit,
+       imageRegistry: $imageRegistry,
+       chartRegistry: $chartRegistry,
+       images: [$config[0].images[] | { name: .name, tag: ("v" + $version) }],
+       charts: [$config[0].charts[] | { name: ., version: $version }]
+     }' > "${OUT_DIR}/MANIFEST.json"
+  echo "✅ Wrote manifest: ${OUT_DIR}/MANIFEST.json"
+else
+  echo "⚠️  Skipping MANIFEST.json (need jq and ${CONFIG_FILE})" >&2
+fi
+
+# SHA256SUMS — the integrity contract for a download served from somewhere other
+# than the GitHub release it was built in. Written last so it covers everything,
+# and in the format `sha256sum -c` reads, so verifying is one command.
+(
+  cd "$OUT_DIR"
+  # Basenames only: the file is consumed next to the artifacts, wherever they
+  # are republished, so an absolute build path would make it unusable.
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum ./* > SHA256SUMS.tmp 2>/dev/null || true
+  else
+    # macOS has shasum instead; -a 256 matches sha256sum's output format.
+    shasum -a 256 ./* > SHA256SUMS.tmp 2>/dev/null || true
+  fi
+  grep -v 'SHA256SUMS' SHA256SUMS.tmp | sed 's#\./##' > SHA256SUMS
+  rm -f SHA256SUMS.tmp
+)
+echo "✅ Wrote checksums: ${OUT_DIR}/SHA256SUMS"
 
 echo "✅ Built install bundle: $BUNDLE"
 echo "   Contents (top level):"

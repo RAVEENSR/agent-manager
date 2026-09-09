@@ -26,6 +26,11 @@ on:
 run-name: AMP Python Instrumentation Image Release ${{ inputs.instrumentation_version }} (from ${{ inputs.branch }})
 
 env:
+  # Deliberately NOT following vars.AMP_REGISTRY. This image is pulled as an
+  # init container inside namespaces created at deploy time, where no pull
+  # secret can be placed ahead of the pod, so it stays on the public registry
+  # and the control plane's baseline keeps pointing there. Publishing it
+  # privately would strand every agent deploy on ImagePullBackOff.
   REGISTRY: ghcr.io
   REGISTRY_ORG: wso2
 
@@ -93,8 +98,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          password: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
 
       - name: Build and push ${{ matrix.image.instrumentation_version }}-python${{ matrix.image.python_version }}
         uses: ./.github/actions/build-single-platform-docker-image

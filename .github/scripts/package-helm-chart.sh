@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
 # Package and push a Helm chart
-# Usage: package-helm-chart.sh <chart-name> <chart-dir> <version> <helm-registry> <github-token>
+# Usage: package-helm-chart.sh <chart-dir> <version> <helm-registry> [<token>]
+#
+# Credentials: REGISTRY_USERNAME/REGISTRY_PASSWORD override the GitHub actor and
+# the positional token. A caller pushing to an authenticated registry should use
+# them rather than the argument, which `ps` exposes to every user on the host.
 
 set -euo pipefail
 
 CHART_DIR="${1:-}"
 VERSION="${2:-}"
 HELM_REGISTRY="${3:-}"
-GITHUB_TOKEN="${4:-}"
+REGISTRY_USER="${REGISTRY_USERNAME:-${GITHUB_ACTOR:-github-actions}}"
+REGISTRY_PASS="${REGISTRY_PASSWORD:-${4:-}}"
 
-if [ -z "$CHART_DIR" ] || [ -z "$VERSION" ] || [ -z "$HELM_REGISTRY" ] || [ -z "$GITHUB_TOKEN" ]; then
+if [ -z "$CHART_DIR" ] || [ -z "$VERSION" ] || [ -z "$HELM_REGISTRY" ] || [ -z "$REGISTRY_PASS" ]; then
   echo "Error: Missing required arguments"
-  echo "Usage: package-helm-chart.sh <chart-dir> <version> <helm-registry> <github-token>"
+  echo "Usage: package-helm-chart.sh <chart-dir> <version> <helm-registry> [<token>]"
+  echo "       The token may be supplied as REGISTRY_PASSWORD instead of the argument."
   exit 1
 fi
 
@@ -21,8 +27,7 @@ if [ ! -d "$CHART_DIR" ]; then
 fi
 
 # Log in to registry
-ACTOR="${GITHUB_ACTOR:-github-actions}"
-echo "$GITHUB_TOKEN" | helm registry login -u "$ACTOR" --password-stdin "${HELM_REGISTRY#oci://}"
+echo "$REGISTRY_PASS" | helm registry login -u "$REGISTRY_USER" --password-stdin "${HELM_REGISTRY#oci://}"
 
 # Update dependencies only if tarballs are missing
 if [ -f "$CHART_DIR/Chart.lock" ]; then

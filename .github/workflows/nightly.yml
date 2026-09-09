@@ -12,9 +12,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  REGISTRY: ghcr.io
-  REGISTRY_ORG: wso2
-  HELM_REGISTRY: oci://ghcr.io/wso2
+  REGISTRY: ${{ vars.AMP_REGISTRY || 'ghcr.io' }}
+  REGISTRY_ORG: ${{ vars.AMP_REGISTRY_ORG || 'wso2' }}
+  HELM_REGISTRY: ${{ vars.AMP_HELM_REGISTRY || 'oci://ghcr.io/wso2' }}
 
 jobs:
   # Compute the dated version string once; all jobs consume it via needs.
@@ -35,6 +35,9 @@ jobs:
   # before building new ones so stale dated tags don't accumulate.
   cleanup-images:
     name: Cleanup Previous Nightly Images
+    # Talks to the GHCR packages API directly, so it only applies when the
+    # registry is GHCR. A build publishing elsewhere has nothing to clean here.
+    if: ${{ vars.AMP_REGISTRY == '' || vars.AMP_REGISTRY == 'ghcr.io' }}
     needs: compute-version
     runs-on: ubuntu-latest
     permissions:
@@ -176,6 +179,14 @@ jobs:
   build-images:
     name: Build ${{ matrix.image.name }}
     needs: [compute-version, cleanup-images, load-config]
+    # cleanup-images is skipped when publishing somewhere other than GHCR, and a
+    # skipped dependency would otherwise skip this job and everything after it,
+    # turning the whole nightly into a silent no-op.
+    if: >-
+      always() &&
+      needs.compute-version.result == 'success' &&
+      needs.load-config.result == 'success' &&
+      (needs.cleanup-images.result == 'success' || needs.cleanup-images.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -194,8 +205,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          password: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
 
       - name: Build and push ${{ matrix.image.name }}
         if: hashFiles(matrix.image.dockerfile) != ''
@@ -259,6 +270,11 @@ jobs:
           DEV_VERSION: ${{ needs.compute-version.outputs.dev-version }}
           HELM_REGISTRY: ${{ env.HELM_REGISTRY }}
           HELM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # package-helm-chart.sh prefers these over the positional token, so a
+          # custom HELM_REGISTRY authenticates with its own credentials instead of
+          # a GITHUB_TOKEN that means nothing to it.
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
 
   update-dev-tag:
     name: Update Nightly Git Tag
