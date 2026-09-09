@@ -7,7 +7,7 @@ title: Evaluation Extension
 A Helm chart to add Evaluation functionality for the Agent Management Platform, by Deploying and Configuring Monitor evaluation workflows.
 
 ```bash
-helm install amp-evaluation-extension oci://ghcr.io/wso2/helm-charts/wso2-amp-evaluation-extension \
+helm install amp-evaluation-extension oci://ghcr.io/wso2/wso2-amp-evaluation-extension \
   --namespace <namespace> --create-namespace \
   --values my-values.yaml
 ```
@@ -34,7 +34,9 @@ helm install amp-evaluation-extension oci://ghcr.io/wso2/helm-charts/wso2-amp-ev
 | Parameter | Description | Type | Default |
 |---|---|---|---|
 | `global` | Global configuration (inherited from parent chart) | object |  |
+| `global.ampImageRegistry` | Registry and organization that replaces the registry portion of the first-party AMP image repository, keeping the image name. Ignored when ampEvaluation.useLocalRegistry is true, which prefixes the in-cluster build registry instead. Deliberately not named global.imageRegistry, which Bitnami subcharts consume. | string | `""` |
 | `global.baseDomain` | Base domain for external access | string | `""` |
+| `global.imagePullSecrets` | Names of existing docker-registry secrets used to pull the evaluation image. The secrets must exist in the workflow namespace (workflows-&lt;environment&gt;), not this chart's release namespace, because that is where the evaluation job pod runs. | array | `[]` |
 | `global.registry` | Container registry configuration | object |  |
 | `global.registry.endpoint` | Registry endpoint for pushing and pulling images For local registry: "host.k3d.internal:10082" For external registry with baseDomain: automatically uses "registry.&lt;baseDomain&gt;" | string | `"host.k3d.internal:10082"` |
 

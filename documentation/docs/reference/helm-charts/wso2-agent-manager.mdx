@@ -7,7 +7,7 @@ title: Agent Manager
 Helm chart for WSO2 Agent Management Platform - Deploy, manage, and govern AI agents at scale
 
 ```bash
-helm install agent-manager oci://ghcr.io/wso2/helm-charts/wso2-agent-manager \
+helm install agent-manager oci://ghcr.io/wso2/wso2-agent-manager \
   --namespace <namespace> --create-namespace \
   --values my-values.yaml
 ```
@@ -223,6 +223,10 @@ helm install agent-manager oci://ghcr.io/wso2/helm-charts/wso2-agent-manager \
 | `console.livenessProbe` | Health checks | null | `null` |
 | `console.readinessProbe` | Readiness probe for the console. Unset uses the image default. | null | `null` |
 | `console.config` | Frontend configuration | object |  |
+| `console.config.agentManagerInternalBaseUrl` | Cluster-internal URLs the API Platform Gateway uses to reach Agent Manager when add-environment.sh installs a new gateway. The Create Environment drawer pipes these into the rendered curl\|bash command so the gateway is configured for in-cluster service discovery. | string | `"http://amp-api.wso2-amp.svc.cluster.local:9000"` |
+| `console.config.agentManagerInternalCpHost` | In-cluster address the console's server-side calls use. | string | `"amp-api-gateway-manager.wso2-amp.svc.cluster.local:9243"` |
+| `console.config.ampVersion` | Agent Manager release version — pins the deployment-script git tag (amp/vX.Y.Z). Placeholder is substituted with the real release version by the release pipeline (.github/scripts/update-helm-charts.sh); dev builds fall back to main. | string | `"0.0.0-dev"` |
+| `console.config.apiBaseUrl` | Backend API URLs (will be auto-configured if empty) Routed through the OpenChoreo control-plane gateway (see ocIngress). | string | `"http://api.amp.localhost:8080"` |
 | `console.config.auth` | Authentication (set to "" to disable) | object |  |
 | `console.config.auth.clientId` | OAuth 2.0 client ID the console authenticates with. | string | `"amp-console-client"` |
 | `console.config.auth.baseUrl` | Identity provider the console redirects users to. | string | `"http://thunder.amp.localhost:8080"` |
@@ -233,29 +237,26 @@ helm install agent-manager oci://ghcr.io/wso2/helm-charts/wso2-agent-manager \
 | `console.config.auth.validateIDToken` | Verify the ID token signature in the browser. | string | `"false"` |
 | `console.config.auth.clockTolerance` | Clock skew tolerated when validating tokens, in seconds. | integer | `300` |
 | `console.config.disableAuth` | Disable auth for development | string | `"false"` |
-| `console.config.apiBaseUrl` | Backend API URLs (will be auto-configured if empty) Routed through the OpenChoreo control-plane gateway (see ocIngress). | string | `"http://api.amp.localhost:8080"` |
+| `console.config.docsVersion` | Documentation version the console's in-product doc links point at, used as the path segment after /docs/. "latest" tracks the newest released docs. The release pipeline (.github/scripts/update-helm-charts.sh) pins this to the matching versioned docs (vX.Y.x, or the exact version for a pre-release) for final and pre-release builds. Release candidates and nightlies keep "latest", because no docs version is cut for them. | string | `"latest"` |
+| `console.config.featureFlags` | Feature flags. | object |  |
+| `console.config.featureFlags.enablePrivateRepoSupport` | Shows the private Git repository option when building agents from source. | boolean | `true` |
+| `console.config.featureFlags.enableIdentityProviderManagedMode` | When true, identity provider management calls the REST API directly instead of rendering the self-hosted manage-identity-provider.sh script snippet. | boolean | `false` |
+| `console.config.featureFlags.enableProfileManagement` | When false, the Profile Settings text fields and Save Changes button are hidden/disabled, and the Change Password tab is disabled. | boolean | `true` |
+| `console.config.featureFlags.enableUserManagement` | When false, the Add User, Invite User, Create Role, and Create Group buttons on the Settings page are disabled. | boolean | `true` |
 | `console.config.gatewayControlPlaneUrl` | Gateway control plane URL rendered into external-gateway setup commands. Routed through the OpenChoreo control-plane gateway (see agentManagerService.ocIngress.gatewayMgmt); host.docker.internal lets a gateway container on the same machine reach it. | string | `"http://host.docker.internal:8080"` |
 | `console.config.gatewayVersion` | Gateway version for setup commands (default: v1.0.0) | string | `"v1.0.0"` |
-| `console.config.ampVersion` | Agent Manager release version — pins the deployment-script git tag (amp/vX.Y.Z). Placeholder is substituted with the real release version by the release pipeline (.github/scripts/update-helm-charts.sh); dev builds fall back to main. | string | `"0.0.0-dev"` |
-| `console.config.docsVersion` | Documentation version the console's in-product doc links point at, used as the path segment after /docs/. "latest" tracks the newest released docs. The release pipeline (.github/scripts/update-helm-charts.sh) pins this to the matching versioned docs (vX.Y.x, or the exact version for a pre-release) for final and pre-release builds. Release candidates and nightlies keep "latest", because no docs version is cut for them. | string | `"latest"` |
-| `console.config.instrumentationUrl` | Trace-export URL shown to external agent developers. kgateway-routed vhost — independent of the gateway runtime's namespace; no port-forward. | string | `"http://default-default.gateway.localhost:19080/otel"` |
-| `console.config.agentManagerInternalBaseUrl` | Cluster-internal URLs the API Platform Gateway uses to reach Agent Manager when add-environment.sh installs a new gateway. The Create Environment drawer pipes these into the rendered curl\|bash command so the gateway is configured for in-cluster service discovery. | string | `"http://amp-api.wso2-amp.svc.cluster.local:9000"` |
-| `console.config.agentManagerInternalCpHost` | In-cluster address the console's server-side calls use. | string | `"amp-api-gateway-manager.wso2-amp.svc.cluster.local:9243"` |
-| `console.config.idpHostBaseDomain` | Base domain env-Thunder instances are hosted under, and whether this deployment serves them over TLS. Mirrors agentManagerService.config's own idpHostBaseDomain/tlsEnabled — kept in sync so the Create Environment drawer's rendered command matches this deployment. VM/production installs override both (see deployments/vm/lib-vm.sh). | string | `"amp.localhost"` |
-| `console.config.tlsEnabled` | Serve the console over HTTPS. | string | `"false"` |
-| `console.config.guardrailsCatalogUrl` | Guardrails catalog URL for fetching available guardrail policies | string | `"https://db720294-98fd-40f4-85a1-cc6a3b65bc9a-prod.e1-us-east-azure.choreoapis.dev/api-platform/policy-hub-api/policy-hub-public/v1.0/policies?categories=AI,Guardrails&limit=50"` |
-| `console.config.guardrailsDefinitionBaseUrl` | Guardrails definition base URL for fetching policy definitions | string | `"https://db720294-98fd-40f4-85a1-cc6a3b65bc9a-prod.e1-us-east-azure.choreoapis.dev/api-platform/policy-hub-api/policy-hub-public/v1.0/policies"` |
 | `console.config.guardrailCapabilities` | Guardrail capability flags — enable policies that require external system configuration. OOTB policies are always shown regardless of these flags. | object |  |
 | `console.config.guardrailCapabilities.awsBedrock` | Offer AWS Bedrock guardrails. Allowed values: Unlocks: aws-bedrock-guardrail. | boolean | `false` |
 | `console.config.guardrailCapabilities.azureContentSafety` | Offer Azure AI Content Safety guardrails. Allowed values: Unlocks: azure-content-safety-content-moderation. | boolean | `false` |
 | `console.config.guardrailCapabilities.graniteGuardian` | Offer Granite Guardian guardrails. Allowed values: Unlocks: granite-guardian-prompt-injection. | boolean | `false` |
 | `console.config.guardrailCapabilities.nemoGuard` | Offer NVIDIA NeMo Guardrails. Allowed values: Unlocks: nvidia-nemoguard-content-safety. | boolean | `false` |
 | `console.config.guardrailCapabilities.semanticGuardrails` | Offer semantic guardrails. Allowed values: Unlocks: semantic-prompt-guard, semantic-cache. | boolean | `false` |
-| `console.config.featureFlags` | Feature flags. | object |  |
-| `console.config.featureFlags.enablePrivateRepoSupport` | Shows the private Git repository option when building agents from source. | boolean | `true` |
-| `console.config.featureFlags.enableIdentityProviderManagedMode` | When true, identity provider management calls the REST API directly instead of rendering the self-hosted manage-identity-provider.sh script snippet. | boolean | `false` |
-| `console.config.featureFlags.enableProfileManagement` | When false, the Profile Settings text fields and Save Changes button are hidden/disabled, and the Change Password tab is disabled. | boolean | `true` |
-| `console.config.featureFlags.enableUserManagement` | When false, the Add User, Invite User, Create Role, and Create Group buttons on the Settings page are disabled. | boolean | `true` |
+| `console.config.guardrailsCatalogUrl` | Guardrails catalog URL for fetching available guardrail policies | string | `"https://db720294-98fd-40f4-85a1-cc6a3b65bc9a-prod.e1-us-east-azure.choreoapis.dev/api-platform/policy-hub-api/policy-hub-public/v1.0/policies?categories=AI,Guardrails&limit=50"` |
+| `console.config.guardrailsDefinitionBaseUrl` | Guardrails definition base URL for fetching policy definitions | string | `"https://db720294-98fd-40f4-85a1-cc6a3b65bc9a-prod.e1-us-east-azure.choreoapis.dev/api-platform/policy-hub-api/policy-hub-public/v1.0/policies"` |
+| `console.config.idpHostBaseDomain` | Base domain env-Thunder instances are hosted under, and whether this deployment serves them over TLS. Mirrors agentManagerService.config's own idpHostBaseDomain/tlsEnabled — kept in sync so the Create Environment drawer's rendered command matches this deployment. VM/production installs override both (see deployments/vm/lib-vm.sh). | string | `"amp.localhost"` |
+| `console.config.instrumentationUrl` | Trace-export URL shown to external agent developers. kgateway-routed vhost — independent of the gateway runtime's namespace; no port-forward. | string | `"http://default-default.gateway.localhost:19080/otel"` |
+| `console.config.scriptBaseUrl` | Base URL the console's generated commands fetch deployment scripts from, without a trailing slash. Empty derives the public raw.githubusercontent.com URL from ampVersion. Set it where that host is unreachable from the operator's machine, or where this build's scripts are served from somewhere else. | string | `""` |
+| `console.config.tlsEnabled` | Serve the console over HTTPS. | string | `"false"` |
 | `console.podAnnotations` | Pod-level configurations | object | `{}` |
 | `console.podLabels` | Labels added to the pod | object | `{}` |
 | `console.podSecurityContext` | Pod security context - optional, no defaults to allow image to use its own user If you need to set fsGroup or other pod-level security settings, specify them here | object | `{}` |
@@ -290,6 +291,7 @@ helm install agent-manager oci://ghcr.io/wso2/helm-charts/wso2-agent-manager \
 | Parameter | Description | Type | Default |
 |---|---|---|---|
 | `global` | Default values for agent-management-platform | object |  |
+| `global.ampImageRegistry` | Registry and organization that replaces the registry portion of every first-party AMP image repository, keeping the image name. Set this to pull the AMP images from a private registry (e.g. registry.example.com/my-org) without overriding each image individually. Third-party subchart images (PostgreSQL) are deliberately unaffected. Empty leaves each image.repository exactly as configured. Deliberately not named global.imageRegistry, which Bitnami subcharts consume. | string | `""` |
 | `global.imagePullSecrets` | Secrets used to pull images from a private registry | array | `[]` |
 | `global.storageClass` | StorageClass applied to every chart component that needs storage | string | `""` |
 

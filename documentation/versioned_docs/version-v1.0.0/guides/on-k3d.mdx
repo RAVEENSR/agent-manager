@@ -96,13 +96,26 @@ OpenChoreo organises its infrastructure into four planes, each handling a differ
 
 This phase installs all four with Agent Manager-specific configuration. **Estimated time: ~15-20 minutes.**
 
+### Step 0: Download the Release Bundle
+
+Download the release bundle once. Every manifest, values file and script this
+guide applies comes from it, so the install needs no further network access to
+GitHub — which also sidesteps the per-IP rate limiting that makes
+`helm --values <url>` fail with HTTP 429 behind shared or corporate NAT.
+
+```bash
+export VERSION="1.0.0"
+curl -fsSL -O "https://github.com/wso2/agent-manager/releases/download/amp/v${VERSION}/wso2-agent-manager-${VERSION}.tar.gz"
+tar xzf "wso2-agent-manager-${VERSION}.tar.gz"
+export AMP_DIST="$PWD"
+```
+
 ### Step 1: Create k3d Cluster
 
 Create the cluster using the Agent Manager cluster configuration, which includes all required port mappings:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wso2/agent-manager/amp/v1.0.0/deployments/quick-start/k3d-config.yaml \
-  | k3d cluster create --config=-
+k3d cluster create --config="${AMP_DIST}/deployments/quick-start/k3d-config.yaml"
 ```
 
 Set the kubectl context:
@@ -132,7 +145,7 @@ kubectl cluster-info --context k3d-amp-local
 Enables `*.openchoreo.localhost`, `*.amp.localhost`, `*.agentmanager.localhost`, `*.am-gateway.localhost`, and `*.gateway.localhost` DNS resolution inside the cluster — required for in-cluster lookups of the Console/API/Thunder hostnames as well as agent-to-agent and AI gateway traffic:
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wso2/agent-manager/amp/v1.0.0/deployments/k8s/coredns-amp-custom.yaml
+kubectl apply -f "${AMP_DIST}/deployments/k8s/coredns-amp-custom.yaml"
 ```
 
 CoreDNS's reload plugin can miss the override if the ConfigMap mounts after the pod's initial parse, so restart it to make sure the rewrite rules are active before anything depends on them:
@@ -199,7 +212,7 @@ helm upgrade --install openbao oci://ghcr.io/openbao/charts/openbao \
   --namespace openbao \
   --create-namespace \
   --version 0.25.6 \
-  --values https://raw.githubusercontent.com/wso2/agent-manager/amp/v1.0.0/deployments/single-cluster/values-openbao.yaml \
+  --values "${AMP_DIST}/deployments/single-cluster/values-openbao.yaml" \
   --timeout 180s
 
 kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=openbao -n openbao --timeout=120s
@@ -325,7 +338,7 @@ helm install openchoreo-control-plane \
   --namespace openchoreo-control-plane \
   --create-namespace \
   --timeout 600s \
-  --values https://raw.githubusercontent.com/wso2/agent-manager/amp/v1.0.0/deployments/single-cluster/values-cp.yaml
+  --values "${AMP_DIST}/deployments/single-cluster/values-cp.yaml"
 
 kubectl wait --for=condition=Available \
   deployment --all -n openchoreo-control-plane --timeout=600s
@@ -395,7 +408,7 @@ helm install openchoreo-data-plane \
   --namespace openchoreo-data-plane \
   --create-namespace \
   --timeout 600s \
-  --values https://raw.githubusercontent.com/wso2/agent-manager/amp/v1.0.0/deployments/single-cluster/values-dp.yaml
+  --values "${AMP_DIST}/deployments/single-cluster/values-dp.yaml"
 
 kubectl wait --for=condition=Available \
   deployment --all -n openchoreo-data-plane --timeout=600s
@@ -574,7 +587,7 @@ kubectl wait -n openchoreo-observability-plane \
 Apply the custom OpenTelemetry Collector ConfigMap (required for trace ingestion):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wso2/agent-manager/amp/v1.0.0/deployments/values/oc-collector-configmap.yaml \
+kubectl apply -f "${AMP_DIST}/deployments/values/oc-collector-configmap.yaml" \
   -n openchoreo-observability-plane
 ```
 
@@ -587,7 +600,7 @@ helm install openchoreo-observability-plane \
   --namespace openchoreo-observability-plane \
   --create-namespace \
   --timeout 25m \
-  --values https://raw.githubusercontent.com/wso2/agent-manager/amp/v1.0.0/deployments/single-cluster/values-op.yaml
+  --values "${AMP_DIST}/deployments/single-cluster/values-op.yaml"
 
 kubectl wait --for=condition=Available \
   deployment --all -n openchoreo-observability-plane --timeout=300s
@@ -717,9 +730,6 @@ With OpenChoreo running, you can now install the Agent Manager components — th
 Every Environment needs its own dedicated Thunder ID instance. This is separate from the platform Thunder installed in Phase 1, which only handles console and API login. This instance is what issues each agent its own OAuth2 credential (AgentID) in that Environment. Agents can still be created without it, but they will never get an AgentID there — Agent Manager keeps retrying and failing in the background, and the API Platform Gateway Extension silently skips registering its ThunderKeyManager identity provider, so the Identity Providers page stays empty with no error anywhere in the platform. Run this once the Agent Manager API is reachable at `${API_PUBLIC_URL}`:
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/wso2/agent-manager/amp/v1.0.0/deployments/scripts/add-environment-thunder.sh" \
-  -o add-environment-thunder.sh
-
 ENV_NAME=default \
 DISPLAY_NAME="Default" \
 ORG_NAME=default \
@@ -727,7 +737,7 @@ THUNDER_HANDLE=default-idp \
 AMP_API_URL="${API_PUBLIC_URL}/api/v1" \
 IDP_TOKEN_URL="${THUNDER_PUBLIC_URL}/oauth2/token" \
 THUNDER_HOST_BASE_DOMAIN="amp.localhost" \
-bash add-environment-thunder.sh
+bash "${AMP_DIST}/deployments/scripts/add-environment-thunder.sh"
 ```
 
 The script registers an unguessable handle with Agent Manager before it creates

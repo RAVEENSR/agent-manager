@@ -109,8 +109,21 @@ Pick a base domain you control (a delegated subdomain like `amp.yourdomain.com` 
 
 Concretely: `console`/`api-amp`/`thunder`/`cp` all point at the control-plane gateway — via a single required `*.<base>` wildcard, not four separate records (per-environment Thunder hostnames are created after install and are only reachable through that wildcard) — `traces` points at the observability-plane gateway, and `*.agents.<base>` plus the `agents.<base>` apex point at the data-plane gateway. [Step 10](#step-10-publish-dns-records) lists the exact records once the LoadBalancer addresses exist.
 
+Download the release bundle once. Every manifest, values file and script this
+guide applies comes from it, so the install needs no further network access to
+GitHub — which also sidesteps the per-IP rate limiting that makes
+`helm --values <url>` fail with HTTP 429 behind shared or corporate NAT.
+
 ```bash
 export VERSION="1.0.0"
+curl -fsSL -O "https://github.com/wso2/agent-manager/releases/download/amp/v${VERSION}/wso2-agent-manager-${VERSION}.tar.gz"
+tar xzf "wso2-agent-manager-${VERSION}.tar.gz"
+export AMP_DIST="$PWD"
+```
+
+Then the rest of the configuration:
+
+```bash
 export HELM_CHART_REGISTRY="ghcr.io/wso2"
 export AMP_NS="wso2-amp"
 export BUILD_CI_NS="openchoreo-workflow-plane"
@@ -396,7 +409,7 @@ helm upgrade --install openbao oci://ghcr.io/openbao/charts/openbao \
   --namespace openbao \
   --create-namespace \
   --version 0.25.6 \
-  --values https://raw.githubusercontent.com/wso2/agent-manager/amp/v${VERSION}/deployments/single-cluster/values-openbao.yaml \
+  --values "${AMP_DIST}/deployments/single-cluster/values-openbao.yaml" \
   --timeout 180s
 
 kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=openbao -n openbao --timeout=120s
@@ -933,7 +946,7 @@ helm install openchoreo-data-plane \
   --set "gateway.tls.certificateRefs[0].name=dp-gateway-tls" \
   --set gateway.httpPort=80 \
   --set gateway.httpsPort=443 \
-  --values https://raw.githubusercontent.com/wso2/agent-manager/amp/v${VERSION}/deployments/single-cluster/values-dp.yaml
+  --values "${AMP_DIST}/deployments/single-cluster/values-dp.yaml"
 
 kubectl wait --for=condition=Available \
   deployment --all -n openchoreo-data-plane --timeout=600s
@@ -1145,7 +1158,7 @@ kubectl wait -n openchoreo-observability-plane \
 Apply the custom OpenTelemetry Collector ConfigMap (required for trace ingestion):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wso2/agent-manager/amp/v${VERSION}/deployments/values/oc-collector-configmap.yaml \
+kubectl apply -f "${AMP_DIST}/deployments/values/oc-collector-configmap.yaml" \
   -n openchoreo-observability-plane
 ```
 
@@ -1190,7 +1203,7 @@ helm install openchoreo-observability-plane \
   --set observer.extraEnv.AUTH_SERVER_BASE_URL="${THUNDER_PUBLIC_URL}" \
   --set security.oidc.jwksUrl="${THUNDER_INTERNAL_URL}/oauth2/jwks" \
   --set security.oidc.tokenUrl="${THUNDER_INTERNAL_URL}/oauth2/token" \
-  --values https://raw.githubusercontent.com/wso2/agent-manager/amp/v${VERSION}/deployments/single-cluster/values-op.yaml \
+  --values "${AMP_DIST}/deployments/single-cluster/values-op.yaml" \
   --timeout 25m
 
 kubectl wait --for=condition=Available \
@@ -1450,11 +1463,6 @@ That needs a `*.otel.${BASE_DOMAIN}` DNS record and gateway certificate coverage
 
 Every Environment needs its own dedicated Thunder ID instance. This is separate from the platform Thunder installed in Phase 1, which only handles console and API login. This instance is what issues each agent its own OAuth2 credential (AgentID) in that Environment. Run this once for the default Environment: agents can still be created without it, but they will never get an AgentID there, since there is no Thunder instance to provision one against, and Agent Manager will keep retrying and failing in the background. Run it after Agent Manager (`amp`) is installed and reachable at `API_PUBLIC_URL`, since this step registers the generated credential with the Agent Manager API.
 
-```bash
-curl -fsSL "https://raw.githubusercontent.com/wso2/agent-manager/amp/v${VERSION}/deployments/scripts/add-environment-thunder.sh" \
-  -o add-environment-thunder.sh
-```
-
 Pick the tab matching your [Step 3](#step-3-setup-tls-issuer) issuer choice — the CA trust setting below only differs by that choice, nothing else changes.
 
 :::note Pass the platform client secret
@@ -1481,7 +1489,7 @@ PLATFORM_THUNDER_JWKS_URL="${THUNDER_PUBLIC_URL}/oauth2/jwks" \
 THUNDER_HOST_BASE_DOMAIN="${BASE_DOMAIN}" \
 TLS_ENABLED=true \
 SKIP_CA_BUNDLE_TRUST=true \
-bash add-environment-thunder.sh
+bash "${AMP_DIST}/deployments/scripts/add-environment-thunder.sh"
 ```
 
   </TabItem>
@@ -1529,7 +1537,7 @@ PLATFORM_THUNDER_JWKS_URL="${THUNDER_PUBLIC_URL}/oauth2/jwks" \
 PLATFORM_THUNDER_CA_PEM="${PLATFORM_THUNDER_CA_PEM}" \
 THUNDER_HOST_BASE_DOMAIN="${BASE_DOMAIN}" \
 TLS_ENABLED=true \
-bash add-environment-thunder.sh
+bash "${AMP_DIST}/deployments/scripts/add-environment-thunder.sh"
 ```
 
   </TabItem>

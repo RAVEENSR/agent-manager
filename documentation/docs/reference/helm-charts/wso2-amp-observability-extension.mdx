@@ -7,7 +7,7 @@ title: Observability Extension
 A Helm chart to add Tracing functionality for the Agent Management Platform, by Deploying and Configuring the Agent Manager Observer.
 
 ```bash
-helm install amp-observability-extension oci://ghcr.io/wso2/helm-charts/wso2-amp-observability-extension \
+helm install amp-observability-extension oci://ghcr.io/wso2/wso2-amp-observability-extension \
   --namespace <namespace> --create-namespace \
   --values my-values.yaml
 ```
@@ -57,6 +57,14 @@ helm install amp-observability-extension oci://ghcr.io/wso2/helm-charts/wso2-amp
 | `amObserver.oauth` | OAuth 2.0 discovery metadata for MCP clients (RFC 9728). Consumed by the /mcp route's protected-resource well-known endpoint. | object |  |
 | `amObserver.oauth.authorizationServers` | Comma-separated list of OAuth 2.0 authorization server URLs advertised in RFC 9728 protected resource metadata. Left empty on purpose: it defaults to auth.issuer above, which is the same authorization server. Only set it when the advertised URL must differ from the token issuer. To suppress the metadata endpoint instead, empty publicUrl — the handler checks that first, and an empty auth.issuer fails startup validation. | string | `""` |
 | `amObserver.oauth.scopesSupported` | Comma-separated list of OAuth 2.0 scopes supported by this resource, advertised in RFC 9728 protected resource metadata. | string | `"amp:observability:log-read,amp:observability:trace-read,amp:observability:metric-read,amp:observability:build-log-read"` |
+
+## global
+
+| Parameter | Description | Type | Default |
+|---|---|---|---|
+| `global` | Values shared with the other AMP charts | object |  |
+| `global.ampImageRegistry` | Registry and organization that replaces the registry portion of the first-party AMP image repository, keeping the image name. Set this to pull the observer image from a private registry (e.g. registry.example.com/my-org). Empty leaves image.repository exactly as configured. Deliberately not named global.imageRegistry, which Bitnami subcharts consume. | string | `""` |
+| `global.imagePullSecrets` | Secrets used to pull images from a private registry | array | `[]` |
 
 ## networkPolicy
 
