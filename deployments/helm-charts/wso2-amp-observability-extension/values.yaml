@@ -1,3 +1,7 @@
+global:
+  imagePullSecrets: []
+  ampImageRegistry: ""
+
 # Agent Manager Observer Service config
 amObserver:
   enabled: true

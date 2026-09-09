@@ -328,3 +328,34 @@ imagePullSecrets:
 {{- end }}
 {{- end }}
 {{- end }}
+
+{{/*
+==============================================
+Images
+==============================================
+*/}}
+
+{{/*
+Image reference for a first-party image.
+
+global.ampImageRegistry, when set, replaces the registry and organization portion
+of the image's repository and keeps the trailing image name, so one value
+redirects every AMP image at a private registry. Left empty (the default) the
+fully-qualified repository is used exactly as written, which keeps existing
+installs and any per-image repository override working unchanged.
+
+Deliberately not named global.imageRegistry: that is a Bitnami convention, and
+Helm passes global values to subcharts, so the name would also rewrite the
+postgresql subchart's images and trip its unrecognized-container guard.
+
+Usage: include "agent-management-platform.image" (dict "image" .Values.console.image "ctx" .)
+*/}}
+{{- define "agent-management-platform.image" -}}
+{{- $image := .image -}}
+{{- $ctx := .ctx -}}
+{{- $repository := $image.repository -}}
+{{- with $ctx.Values.global.ampImageRegistry -}}
+{{- $repository = printf "%s/%s" (trimSuffix "/" .) (base $repository) -}}
+{{- end -}}
+{{- printf "%s:%s" $repository ($image.tag | default $ctx.Chart.AppVersion) -}}
+{{- end -}}

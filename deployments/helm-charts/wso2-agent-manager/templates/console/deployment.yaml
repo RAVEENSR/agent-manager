@@ -43,7 +43,7 @@ spec:
               drop:
                 - ALL
           {{- end }}
-          image: "{{ .Values.console.image.repository }}:{{ .Values.console.image.tag | default .Chart.AppVersion }}"
+          image: "{{ include "agent-management-platform.image" (dict "image" .Values.console.image "ctx" .) }}"
           imagePullPolicy: {{ .Values.console.image.pullPolicy }}
           ports:
             - name: http

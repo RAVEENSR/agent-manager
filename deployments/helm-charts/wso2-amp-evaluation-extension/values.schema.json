@@ -8,11 +8,27 @@
       "additionalProperties": false,
       "description": "Global configuration (inherited from parent chart)",
       "properties": {
+        "ampImageRegistry": {
+          "default": "",
+          "description": "Registry and organization that replaces the registry portion of the first-party AMP image repository, keeping the image name. Ignored when ampEvaluation.useLocalRegistry is true, which prefixes the in-cluster build registry instead. Deliberately not named global.imageRegistry, which Bitnami subcharts consume.",
+          "title": "ampImageRegistry",
+          "type": "string"
+        },
         "baseDomain": {
           "default": "",
           "description": "Base domain for external access",
           "title": "baseDomain",
           "type": "string"
+        },
+        "imagePullSecrets": {
+          "default": [],
+          "description": "Names of existing docker-registry secrets used to pull the evaluation image. The secrets must exist in the workflow namespace (workflows-<environment>), not this chart's release namespace, because that is where the evaluation job pod runs.",
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "imagePullSecrets",
+          "type": "array"
         },
         "registry": {
           "additionalProperties": false,

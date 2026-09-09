@@ -24,6 +24,9 @@ spec:
         app.kubernetes.io/component: tls-cert-generator
     spec:
       restartPolicy: Never
+      {{- if .Values.global.imagePullSecrets }}
+      {{- include "agent-management-platform.imagePullSecrets" . | trim | nindent 6 }}
+      {{- end }}
       {{- if .Values.tlsCertsGeneration.podSecurityContext }}
       securityContext:
         {{- toYaml .Values.tlsCertsGeneration.podSecurityContext | nindent 8 }}

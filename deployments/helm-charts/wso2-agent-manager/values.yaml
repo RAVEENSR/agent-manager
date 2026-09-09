@@ -1,6 +1,7 @@
 # Default values for agent-management-platform
 global:
   imagePullSecrets: []
+  ampImageRegistry: ""
   storageClass: ""
 
 # PostgreSQL Database Configuration
@@ -512,6 +513,9 @@ console:
     # Placeholder is substituted with the real release version by the release
     # pipeline (.github/scripts/update-helm-charts.sh); dev builds fall back to main.
     ampVersion: "0.0.0-dev"
+    # -- Base URL for the console's generated deployment-script commands.
+    # Empty derives the public raw.githubusercontent.com URL from ampVersion.
+    scriptBaseUrl: ""
     # Documentation version the console's in-product doc links point at, used as
     # the path segment after /docs/. "latest" tracks the newest released docs.
     # The release pipeline (.github/scripts/update-helm-charts.sh) pins this to

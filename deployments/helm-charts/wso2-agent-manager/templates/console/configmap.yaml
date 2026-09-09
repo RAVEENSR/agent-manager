@@ -24,6 +24,10 @@ data:
   GATEWAY_VERSION: {{ .Values.console.config.gatewayVersion | default "v1.0.0" | quote }}
   # Agent Manager release version — pins the deployment-script git tag (amp/vX.Y.Z)
   AMP_VERSION: {{ .Values.console.config.ampVersion | default "v1.0.0" | quote }}
+  # Base URL the console's generated commands fetch deployment scripts from.
+  # Empty derives the public raw.githubusercontent.com URL from AMP_VERSION; set
+  # it where that host is unreachable or serves nothing for this build.
+  SCRIPT_BASE_URL: {{ .Values.console.config.scriptBaseUrl | default "" | quote }}
   # Documentation base URL for the console's in-product doc links. Built from
   # the docs version so only the version segment varies per release.
   DOCS_URL: {{ printf "https://wso2.github.io/agent-manager/docs/%s" (.Values.console.config.docsVersion | default "latest") | quote }}

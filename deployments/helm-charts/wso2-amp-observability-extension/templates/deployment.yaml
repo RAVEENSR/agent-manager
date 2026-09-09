@@ -32,13 +32,16 @@ spec:
         app: amp-observer
         app.kubernetes.io/component: observer
     spec:
+      {{- if .Values.global.imagePullSecrets }}
+      {{- include "amp-observability-extension.imagePullSecrets" . | trim | nindent 6 }}
+      {{- end }}
       containers:
         - name: observer
           # if developmentMode is true, use latest image for easier debugging
           {{- if .Values.amObserver.developmentMode }}
           image: amp-observer:0.0.0-dev
           {{- else }}
-          image: {{ .Values.amObserver.image.repository }}:{{ .Values.amObserver.image.tag }}
+          image: {{ include "amp-observability-extension.image" . }}
           {{- end }}
           imagePullPolicy: {{ .Values.amObserver.image.pullPolicy }}
           ports:

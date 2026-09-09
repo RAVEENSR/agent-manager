@@ -48,6 +48,24 @@ Otherwise returns the repository:tag as-is for external registries
   {{- $registry := include "amp-evaluation-extension.registryEndpoint" . -}}
   {{- printf "%s/%s:%s" $registry $repository $tag -}}
 {{- else -}}
+  {{- with .Values.global.ampImageRegistry -}}
+    {{- $repository = printf "%s/%s" (trimSuffix "/" .) (base $repository) -}}
+  {{- end -}}
   {{- printf "%s:%s" $repository $tag -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Image pull secrets for the evaluation job pod.
+
+The pod runs in the workflow namespace ("workflows-<environment>"), not this
+chart's release namespace, so the named secrets have to exist there. The chart
+does not create them: that keeps registry credentials out of Helm values and
+the release secret, and matches how the installer provisions them per namespace.
+*/}}
+{{- define "amp-evaluation-extension.imagePullSecrets" -}}
+imagePullSecrets:
+{{- range .Values.global.imagePullSecrets }}
+  - name: {{ . }}
+{{- end }}
+{{- end }}

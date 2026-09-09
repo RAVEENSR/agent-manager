@@ -6,6 +6,17 @@ global:
   # -- Base domain for external access
   baseDomain: ""
 
+  # -- Registry and organization replacing the registry portion of the
+  # first-party AMP image repository, keeping the image name. Ignored when
+  # useLocalRegistry is true. Not named imageRegistry: Bitnami subcharts
+  # consume that name.
+  ampImageRegistry: ""
+
+  # -- Names of existing docker-registry secrets used to pull the evaluation
+  # image. These must exist in the workflow namespace ("workflows-<env>"), not
+  # this chart's release namespace, because that is where the job pod runs.
+  imagePullSecrets: []
+
   # -- Container registry configuration
   registry:
     # -- Registry endpoint for pushing and pulling images

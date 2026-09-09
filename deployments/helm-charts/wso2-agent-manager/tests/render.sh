@@ -351,6 +351,91 @@ assert_ca_mount "a private CA volume reaches the API" "$API_TMPL" yes "${CA_VOLU
 assert_ca_mount "a private CA volume reaches the migration job" "$MIG_TMPL" yes "${CA_VOLUME[@]}"
 assert_ca_mount "no CA volume is invented for the migration job by default" "$MIG_TMPL" no
 
+# --- global.ampImageRegistry -------------------------------------------------
+# The knob exists so a private-registry install redirects every first-party image
+# with one value. Two things have to hold, and neither is visible from a plain
+# `helm template` with defaults.
+
+# image_of <template-path> <container-name> [helm --set args...] -> that
+# container's image. Selected by name, never by position: these pod specs put a
+# postgres wait-for-db initContainer ahead of the app container, so "the first
+# image:" would silently assert the wrong thing.
+image_of() {
+  local tmpl="$1" container="$2" rendered
+  shift 2
+  if ! rendered="$(helm template test-release "$CHART_DIR" --show-only "$tmpl" "$@" 2>&1)"; then
+    printf 'helm template failed: %s\n' "$rendered" >&2
+    return 1
+  fi
+  awk -v c="$container" '
+    $1 == "-" && $2 == "name:" && $3 == c { found = 1; next }
+    found && $1 == "image:" { gsub(/^"|"$/, "", $2); print $2; exit }
+  ' <<<"$rendered"
+}
+
+assert_image() {
+  local label="$1" tmpl="$2" container="$3" expected="$4"
+  shift 4
+  local actual
+  actual="$(image_of "$tmpl" "$container" "$@")"
+  if [[ "$expected" == "$actual" ]]; then
+    printf 'ok   - %s\n' "$label"
+  else
+    printf 'FAIL - %s\n      expected: %q\n      actual:   %q\n' "$label" "$expected" "$actual"
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+
+CONSOLE_TMPL=templates/console/deployment.yaml
+APP_VERSION="$(awk '/^appVersion:/ {gsub(/"/, "", $2); print $2}' "$CHART_DIR/Chart.yaml")"
+
+# Unset must leave the fully-qualified public repository exactly as written, so
+# existing installs and quick-start (which passes no overrides) are untouched.
+assert_image "default keeps the public api repository" \
+  "$API_TMPL" agent-manager-service "ghcr.io/wso2/amp-api:${APP_VERSION}"
+assert_image "default keeps the public console repository" \
+  "$CONSOLE_TMPL" console "ghcr.io/wso2/amp-console:${APP_VERSION}"
+assert_image "default keeps the public migration-job repository" \
+  "$MIG_TMPL" db-migration "ghcr.io/wso2/amp-api:${APP_VERSION}"
+
+# Set, it must replace the registry and org but keep the image name, for every
+# first-party image including the migration job (which runs as an install hook,
+# so missing it fails the install rather than a later request).
+assert_image "override redirects the api image" \
+  "$API_TMPL" agent-manager-service "registry.example.com/my-org/amp-api:${APP_VERSION}" \
+  --set global.ampImageRegistry=registry.example.com/my-org
+assert_image "override redirects the console image" \
+  "$CONSOLE_TMPL" console "registry.example.com/my-org/amp-console:${APP_VERSION}" \
+  --set global.ampImageRegistry=registry.example.com/my-org
+assert_image "override redirects the migration-job image" \
+  "$MIG_TMPL" db-migration "registry.example.com/my-org/amp-api:${APP_VERSION}" \
+  --set global.ampImageRegistry=registry.example.com/my-org
+assert_image "a trailing slash does not double up" \
+  "$API_TMPL" agent-manager-service "registry.example.com/my-org/amp-api:${APP_VERSION}" \
+  --set global.ampImageRegistry=registry.example.com/my-org/
+# A per-image repository override still wins, so the escape hatch keeps working.
+assert_image "an explicit repository is still redirected by name only" \
+  "$API_TMPL" agent-manager-service "registry.example.com/my-org/custom-api:${APP_VERSION}" \
+  --set global.ampImageRegistry=registry.example.com/my-org \
+  --set agentManagerService.image.repository=somewhere.else/team/custom-api
+
+# The name is NOT global.imageRegistry on purpose: that is a Bitnami convention,
+# and Helm passes global values into subcharts, so that name would rewrite the
+# postgresql images too and trip its unrecognized-container guard. Third-party
+# images must stay on their own registries.
+if rendered="$(helm template test-release "$CHART_DIR" \
+     --set global.ampImageRegistry=registry.example.com/my-org 2>&1)"; then
+  if grep -E '^\s+image: ' <<<"$rendered" | grep -q 'registry.example.com/my-org/bitnami'; then
+    printf 'FAIL - the override leaked into the postgresql subchart\n'
+    FAILURES=$((FAILURES + 1))
+  else
+    printf 'ok   - the override does not leak into third-party subchart images\n'
+  fi
+else
+  printf 'FAIL - chart does not render with ampImageRegistry set: %s\n' "$rendered"
+  FAILURES=$((FAILURES + 1))
+fi
+
 if ((FAILURES > 0)); then
   printf '\n%d assertion(s) failed\n' "$FAILURES"
   exit 1
