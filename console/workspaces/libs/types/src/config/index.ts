@@ -36,6 +36,14 @@ export interface AppConfig {
    * git tag (amp/vX.Y.Z).
    */
   ampVersion?: string;
+  /**
+   * Base URL the console's generated commands fetch deployment scripts from.
+   * Empty (the default) derives the public raw.githubusercontent.com URL for
+   * the release ref. Set it where those raw URLs are not reachable — a private
+   * mirror of this repository serves none, so every generated command would
+   * fail — to any host serving deployments/scripts, without a trailing slash.
+   */
+  scriptBaseUrl?: string;
   disableAuth: boolean;
   instrumentationUrl: string;
   /**

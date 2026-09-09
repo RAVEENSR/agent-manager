@@ -70,9 +70,21 @@ export function getScriptRef(): string {
   return `amp/v${bare}`;
 }
 
-/** Full raw URL for a deployment script pinned to the current release ref. */
+/**
+ * Base URL the generated commands fetch deployment scripts from, without a
+ * trailing slash. Defaults to the public raw.githubusercontent.com path for the
+ * current release ref; `globalConfig.scriptBaseUrl` overrides it for a
+ * deployment where that host is not reachable or serves nothing.
+ */
+export function getScriptBaseUrl(): string {
+  const configured = globalConfig.scriptBaseUrl?.trim();
+  if (configured) return configured.replace(/\/+$/, "");
+  return `https://raw.githubusercontent.com/wso2/agent-manager/${getScriptRef()}/deployments/scripts`;
+}
+
+/** Full URL for a deployment script, pinned to the current release ref. */
 export function getRawScriptUrl(scriptName: string): string {
-  return `https://raw.githubusercontent.com/wso2/agent-manager/${getScriptRef()}/deployments/scripts/${scriptName}`;
+  return `${getScriptBaseUrl()}/${scriptName}`;
 }
 
 const DEFAULT_GATEWAY_CONTROL_PLANE_URL = "http://localhost:9243";
