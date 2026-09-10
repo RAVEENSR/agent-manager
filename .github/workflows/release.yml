@@ -21,9 +21,9 @@ on:
 run-name: Agent Manager Release ${{ inputs.target_version }}
 
 env:
-  REGISTRY: ghcr.io
-  REGISTRY_ORG: wso2
-  HELM_REGISTRY: oci://ghcr.io/wso2
+  REGISTRY: ${{ vars.AMP_REGISTRY || 'ghcr.io' }}
+  REGISTRY_ORG: ${{ vars.AMP_REGISTRY_ORG || 'wso2' }}
+  HELM_REGISTRY: ${{ vars.AMP_HELM_REGISTRY || 'oci://ghcr.io/wso2' }}
 
 jobs:
   prepare-release:
@@ -142,6 +142,14 @@ jobs:
         run: |
           bash .github/scripts/update-helm-charts.sh \
             "$TARGET_RELEASE"
+          # Images follow REGISTRY/REGISTRY_ORG, so the charts have to as well.
+          # Without this a build publishing elsewhere ships charts still
+          # defaulting to the public registry, and the install silently pulls
+          # someone else's image of that tag rather than the one just built.
+          if [ "${REGISTRY}/${REGISTRY_ORG}" != "ghcr.io/wso2" ]; then
+            bash .github/scripts/rewrite-image-registry.sh \
+              "ghcr.io/wso2" "${REGISTRY}/${REGISTRY_ORG}"
+          fi
         env:
           TARGET_RELEASE: ${{ inputs.target_version }}
         shell: bash
@@ -314,8 +322,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          password: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
 
       - name: Build and push ${{ matrix.image.name }}
         if: hashFiles(matrix.image.dockerfile) != ''
@@ -350,8 +358,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          password: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
 
       - name: Build and push instrumentation image ${{ matrix.image.instrumentation_version }}-python${{ matrix.image.python_version }}
         uses: ./.github/actions/build-single-platform-docker-image
@@ -448,6 +456,11 @@ jobs:
           TARGET_RELEASE: ${{ inputs.target_version }}
           HELM_REGISTRY: ${{ env.HELM_REGISTRY }}
           HELM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # package-helm-chart.sh prefers these over the positional token, so a
+          # custom HELM_REGISTRY authenticates with its own credentials instead of
+          # a GITHUB_TOKEN that means nothing to it.
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
         shell: bash
 
   e2e:
@@ -494,6 +507,7 @@ jobs:
         id: install-platform
         env:
           VERSION: ${{ inputs.target_version }}
+          REPO_OWNER: ${{ github.repository_owner }}
         run: |
           cd deployments/quick-start && bash install.sh
 
@@ -634,10 +648,10 @@ jobs:
             echo "\`wso2-agent-manager-${VERSION}.tar.gz\` bundles both the VM and quick-start installers. \`bootstrap.sh\` and \`start.sh\` are also attached standalone as the one-command entry points:"
             echo '```'
             echo "# VM install"
-            echo "curl -fsSL https://github.com/${REGISTRY_ORG}/agent-manager/releases/download/amp/v${VERSION}/bootstrap.sh | sudo bash -s -- simple --host <PUBLIC_IP> --version ${VERSION}"
+            echo "curl -fsSL https://github.com/${REPO_OWNER}/agent-manager/releases/download/amp/v${VERSION}/bootstrap.sh | sudo bash -s -- simple --host <PUBLIC_IP> --version ${VERSION}"
             echo ""
             echo "# Quick-start (local dev container)"
-            echo "curl -fsSL https://github.com/${REGISTRY_ORG}/agent-manager/releases/download/amp/v${VERSION}/start.sh -o start.sh && chmod +x start.sh && ./start.sh"
+            echo "curl -fsSL https://github.com/${REPO_OWNER}/agent-manager/releases/download/amp/v${VERSION}/start.sh -o start.sh && chmod +x start.sh && ./start.sh"
             echo '```'
           } > /tmp/release-body.md
 
@@ -648,6 +662,9 @@ jobs:
           } >> $GITHUB_OUTPUT
         env:
           VERSION: ${{ inputs.target_version }}
+          # The published URLs follow the repository, not REGISTRY_ORG, which
+          # names a registry namespace and need not match the GitHub owner.
+          REPO_OWNER: ${{ github.repository_owner }}
         shell: bash
 
       - name: Download amctl artifacts

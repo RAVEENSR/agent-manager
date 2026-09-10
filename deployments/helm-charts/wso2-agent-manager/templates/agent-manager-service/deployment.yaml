@@ -71,7 +71,7 @@ spec:
               drop:
                 - ALL
           {{- end }}
-          image: "{{ .Values.agentManagerService.image.repository }}:{{ .Values.agentManagerService.image.tag | default .Chart.AppVersion }}"
+          image: "{{ include "agent-management-platform.image" (dict "image" .Values.agentManagerService.image "ctx" .) }}"
           imagePullPolicy: {{ .Values.agentManagerService.image.pullPolicy }}
           ports:
             - name: http

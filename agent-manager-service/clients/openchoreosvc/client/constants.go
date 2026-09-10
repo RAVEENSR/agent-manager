@@ -101,6 +101,10 @@ const (
 const (
 	InstrumentationImageRegistry = "ghcr.io/wso2"
 	InstrumentationImageName     = "amp-python-instrumentation-provider"
+
+	// DefaultInstrumentationImageRepository is the fallback used when the
+	// instrumentation catalog carries no entry for the requested version.
+	DefaultInstrumentationImageRepository = InstrumentationImageRegistry + "/" + InstrumentationImageName
 )
 
 // -----------------------------------------------------------------------------

@@ -8,10 +8,19 @@
       "additionalProperties": false,
       "description": "Default values for agent-management-platform",
       "properties": {
+        "ampImageRegistry": {
+          "default": "",
+          "description": "Registry and organization that replaces the registry portion of every first-party AMP image repository, keeping the image name. Set this to pull the AMP images from a private registry (e.g. registry.example.com/my-org) without overriding each image individually. Third-party subchart images (PostgreSQL) are deliberately unaffected. Empty leaves each image.repository exactly as configured. Deliberately not named global.imageRegistry, which Bitnami subcharts consume.",
+          "title": "ampImageRegistry",
+          "type": "string"
+        },
         "imagePullSecrets": {
           "default": [],
           "description": "Secrets used to pull images from a private registry",
-          "items": {},
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
           "title": "imagePullSecrets",
           "type": "array"
         },
@@ -1562,6 +1571,30 @@
           "additionalProperties": false,
           "description": "Frontend configuration",
           "properties": {
+            "agentManagerInternalBaseUrl": {
+              "default": "http://amp-api.wso2-amp.svc.cluster.local:9000",
+              "description": "Cluster-internal URLs the API Platform Gateway uses to reach Agent Manager when add-environment.sh installs a new gateway. The Create Environment drawer pipes these into the rendered curl|bash command so the gateway is configured for in-cluster service discovery.",
+              "title": "agentManagerInternalBaseUrl",
+              "type": "string"
+            },
+            "agentManagerInternalCpHost": {
+              "default": "amp-api-gateway-manager.wso2-amp.svc.cluster.local:9243",
+              "description": "In-cluster address the console's server-side calls use.",
+              "title": "agentManagerInternalCpHost",
+              "type": "string"
+            },
+            "ampVersion": {
+              "default": "0.0.0-dev",
+              "description": "Agent Manager release version \u2014 pins the deployment-script git tag (amp/vX.Y.Z). Placeholder is substituted with the real release version by the release pipeline (.github/scripts/update-helm-charts.sh); dev builds fall back to main.",
+              "title": "ampVersion",
+              "type": "string"
+            },
+            "apiBaseUrl": {
+              "default": "http://api.amp.localhost:8080",
+              "description": "Backend API URLs (will be auto-configured if empty) Routed through the OpenChoreo control-plane gateway (see ocIngress).",
+              "title": "apiBaseUrl",
+              "type": "string"
+            },
             "auth": {
               "additionalProperties": false,
               "description": "Authentication (set to \"\" to disable)",
@@ -1625,11 +1658,44 @@
               "title": "disableAuth",
               "type": "string"
             },
-            "apiBaseUrl": {
-              "default": "http://api.amp.localhost:8080",
-              "description": "Backend API URLs (will be auto-configured if empty) Routed through the OpenChoreo control-plane gateway (see ocIngress).",
-              "title": "apiBaseUrl",
+            "docsVersion": {
+              "default": "latest",
+              "description": "Documentation version the console's in-product doc links point at, used as the path segment after /docs/. \"latest\" tracks the newest released docs. The release pipeline (.github/scripts/update-helm-charts.sh) pins this to the matching versioned docs (vX.Y.x, or the exact version for a pre-release) for final and pre-release builds. Release candidates and nightlies keep \"latest\", because no docs version is cut for them.",
+              "title": "docsVersion",
               "type": "string"
+            },
+            "featureFlags": {
+              "additionalProperties": false,
+              "description": "Feature flags.",
+              "properties": {
+                "enablePrivateRepoSupport": {
+                  "default": true,
+                  "description": "Shows the private Git repository option when building agents from source.",
+                  "title": "enablePrivateRepoSupport",
+                  "type": "boolean"
+                },
+                "enableIdentityProviderManagedMode": {
+                  "default": false,
+                  "description": "When true, identity provider management calls the REST API directly instead of rendering the self-hosted manage-identity-provider.sh script snippet.",
+                  "title": "enableIdentityProviderManagedMode",
+                  "type": "boolean"
+                },
+                "enableProfileManagement": {
+                  "default": true,
+                  "description": "When false, the Profile Settings text fields and Save Changes button are hidden/disabled, and the Change Password tab is disabled.",
+                  "title": "enableProfileManagement",
+                  "type": "boolean"
+                },
+                "enableUserManagement": {
+                  "default": true,
+                  "description": "When false, the Add User, Invite User, Create Role, and Create Group buttons on the Settings page are disabled.",
+                  "title": "enableUserManagement",
+                  "type": "boolean"
+                }
+              },
+              "required": [],
+              "title": "featureFlags",
+              "type": "object"
             },
             "gatewayControlPlaneUrl": {
               "default": "http://host.docker.internal:8080",
@@ -1641,60 +1707,6 @@
               "default": "v1.0.0",
               "description": "Gateway version for setup commands (default: v1.0.0)",
               "title": "gatewayVersion",
-              "type": "string"
-            },
-            "ampVersion": {
-              "default": "0.0.0-dev",
-              "description": "Agent Manager release version \u2014 pins the deployment-script git tag (amp/vX.Y.Z). Placeholder is substituted with the real release version by the release pipeline (.github/scripts/update-helm-charts.sh); dev builds fall back to main.",
-              "title": "ampVersion",
-              "type": "string"
-            },
-            "docsVersion": {
-              "default": "latest",
-              "description": "Documentation version the console's in-product doc links point at, used as the path segment after /docs/. \"latest\" tracks the newest released docs. The release pipeline (.github/scripts/update-helm-charts.sh) pins this to the matching versioned docs (vX.Y.x, or the exact version for a pre-release) for final and pre-release builds. Release candidates and nightlies keep \"latest\", because no docs version is cut for them.",
-              "title": "docsVersion",
-              "type": "string"
-            },
-            "instrumentationUrl": {
-              "default": "http://default-default.gateway.localhost:19080/otel",
-              "description": "Trace-export URL shown to external agent developers. kgateway-routed vhost \u2014 independent of the gateway runtime's namespace; no port-forward.",
-              "title": "instrumentationUrl",
-              "type": "string"
-            },
-            "agentManagerInternalBaseUrl": {
-              "default": "http://amp-api.wso2-amp.svc.cluster.local:9000",
-              "description": "Cluster-internal URLs the API Platform Gateway uses to reach Agent Manager when add-environment.sh installs a new gateway. The Create Environment drawer pipes these into the rendered curl|bash command so the gateway is configured for in-cluster service discovery.",
-              "title": "agentManagerInternalBaseUrl",
-              "type": "string"
-            },
-            "agentManagerInternalCpHost": {
-              "default": "amp-api-gateway-manager.wso2-amp.svc.cluster.local:9243",
-              "description": "In-cluster address the console's server-side calls use.",
-              "title": "agentManagerInternalCpHost",
-              "type": "string"
-            },
-            "idpHostBaseDomain": {
-              "default": "amp.localhost",
-              "description": "Base domain env-Thunder instances are hosted under, and whether this deployment serves them over TLS. Mirrors agentManagerService.config's own idpHostBaseDomain/tlsEnabled \u2014 kept in sync so the Create Environment drawer's rendered command matches this deployment. VM/production installs override both (see deployments/vm/lib-vm.sh).",
-              "title": "idpHostBaseDomain",
-              "type": "string"
-            },
-            "tlsEnabled": {
-              "default": "false",
-              "description": "Serve the console over HTTPS.",
-              "title": "tlsEnabled",
-              "type": "string"
-            },
-            "guardrailsCatalogUrl": {
-              "default": "https://db720294-98fd-40f4-85a1-cc6a3b65bc9a-prod.e1-us-east-azure.choreoapis.dev/api-platform/policy-hub-api/policy-hub-public/v1.0/policies?categories=AI,Guardrails&limit=50",
-              "description": "Guardrails catalog URL for fetching available guardrail policies",
-              "title": "guardrailsCatalogUrl",
-              "type": "string"
-            },
-            "guardrailsDefinitionBaseUrl": {
-              "default": "https://db720294-98fd-40f4-85a1-cc6a3b65bc9a-prod.e1-us-east-azure.choreoapis.dev/api-platform/policy-hub-api/policy-hub-public/v1.0/policies",
-              "description": "Guardrails definition base URL for fetching policy definitions",
-              "title": "guardrailsDefinitionBaseUrl",
               "type": "string"
             },
             "guardrailCapabilities": {
@@ -1736,38 +1748,41 @@
               "title": "guardrailCapabilities",
               "type": "object"
             },
-            "featureFlags": {
-              "additionalProperties": false,
-              "description": "Feature flags.",
-              "properties": {
-                "enablePrivateRepoSupport": {
-                  "default": true,
-                  "description": "Shows the private Git repository option when building agents from source.",
-                  "title": "enablePrivateRepoSupport",
-                  "type": "boolean"
-                },
-                "enableIdentityProviderManagedMode": {
-                  "default": false,
-                  "description": "When true, identity provider management calls the REST API directly instead of rendering the self-hosted manage-identity-provider.sh script snippet.",
-                  "title": "enableIdentityProviderManagedMode",
-                  "type": "boolean"
-                },
-                "enableProfileManagement": {
-                  "default": true,
-                  "description": "When false, the Profile Settings text fields and Save Changes button are hidden/disabled, and the Change Password tab is disabled.",
-                  "title": "enableProfileManagement",
-                  "type": "boolean"
-                },
-                "enableUserManagement": {
-                  "default": true,
-                  "description": "When false, the Add User, Invite User, Create Role, and Create Group buttons on the Settings page are disabled.",
-                  "title": "enableUserManagement",
-                  "type": "boolean"
-                }
-              },
-              "required": [],
-              "title": "featureFlags",
-              "type": "object"
+            "guardrailsCatalogUrl": {
+              "default": "https://db720294-98fd-40f4-85a1-cc6a3b65bc9a-prod.e1-us-east-azure.choreoapis.dev/api-platform/policy-hub-api/policy-hub-public/v1.0/policies?categories=AI,Guardrails&limit=50",
+              "description": "Guardrails catalog URL for fetching available guardrail policies",
+              "title": "guardrailsCatalogUrl",
+              "type": "string"
+            },
+            "guardrailsDefinitionBaseUrl": {
+              "default": "https://db720294-98fd-40f4-85a1-cc6a3b65bc9a-prod.e1-us-east-azure.choreoapis.dev/api-platform/policy-hub-api/policy-hub-public/v1.0/policies",
+              "description": "Guardrails definition base URL for fetching policy definitions",
+              "title": "guardrailsDefinitionBaseUrl",
+              "type": "string"
+            },
+            "idpHostBaseDomain": {
+              "default": "amp.localhost",
+              "description": "Base domain env-Thunder instances are hosted under, and whether this deployment serves them over TLS. Mirrors agentManagerService.config's own idpHostBaseDomain/tlsEnabled \u2014 kept in sync so the Create Environment drawer's rendered command matches this deployment. VM/production installs override both (see deployments/vm/lib-vm.sh).",
+              "title": "idpHostBaseDomain",
+              "type": "string"
+            },
+            "instrumentationUrl": {
+              "default": "http://default-default.gateway.localhost:19080/otel",
+              "description": "Trace-export URL shown to external agent developers. kgateway-routed vhost \u2014 independent of the gateway runtime's namespace; no port-forward.",
+              "title": "instrumentationUrl",
+              "type": "string"
+            },
+            "scriptBaseUrl": {
+              "default": "",
+              "description": "Base URL the console's generated commands fetch deployment scripts from, without a trailing slash. Empty derives the public raw.githubusercontent.com URL from ampVersion. Set it where that host is unreachable from the operator's machine, or where this build's scripts are served from somewhere else.",
+              "title": "scriptBaseUrl",
+              "type": "string"
+            },
+            "tlsEnabled": {
+              "default": "false",
+              "description": "Serve the console over HTTPS.",
+              "title": "tlsEnabled",
+              "type": "string"
             }
           },
           "required": [],

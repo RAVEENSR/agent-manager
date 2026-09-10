@@ -162,6 +162,18 @@ func (c *Catalog) Get(v string) (Version, bool) {
 	return cloneVersion(got), true
 }
 
+// ImageRepositoryFor returns the init-container image repository for version,
+// falling back when the version is absent or its entry carries no repository.
+// An extension entry that overrides a bundled version is how an operator
+// redirects the image at an internal mirror.
+func (c *Catalog) ImageRepositoryFor(version, fallback string) string {
+	got, ok := c.byVersion[version]
+	if !ok || got.ImageRepository == "" {
+		return fallback
+	}
+	return got.ImageRepository
+}
+
 // cloneVersion returns a Version whose slice fields are independent
 // copies of the input's.
 func cloneVersion(v Version) Version {
@@ -213,6 +225,21 @@ func GetCatalog() *Catalog {
 		panic("instrumentation.GetCatalog called before SetCatalog")
 	}
 	return c
+}
+
+// ImageRepositoryFor resolves version against the process-wide catalog,
+// returning fallback when the catalog is not installed or the version is
+// unknown. Unlike GetCatalog it never panics: image references are built on the
+// deploy path, where an un-booted catalog should degrade to the compiled-in
+// default rather than fail the request.
+func ImageRepositoryFor(version, fallback string) string {
+	pkgCatalogMu.RLock()
+	c := pkgCatalog
+	pkgCatalogMu.RUnlock()
+	if c == nil {
+		return fallback
+	}
+	return c.ImageRepositoryFor(version, fallback)
 }
 
 // NewForTest builds a catalog directly from versions. Use only in tests

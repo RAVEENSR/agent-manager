@@ -225,10 +225,15 @@ func TestNormalizePythonMinor(t *testing.T) {
 }
 
 func TestResolveInstrumentationImageOverride(t *testing.T) {
+	// A repository that is NOT the compiled-in default, so the assertions below
+	// prove the catalog entry drives the image reference rather than the constant.
+	const mirrorRepo = "mirror.test/amp-python-instrumentation-provider"
+	const wantImage = mirrorRepo + ":0.2.1-python3.11"
+
 	instrumentation.SetCatalog(instrumentation.NewForTest(
 		[]instrumentation.Version{
-			{Version: "0.2.1", PythonVersions: []string{"3.10", "3.11"}, ImageRepository: "x"},
-			{Version: "0.4.0", PythonVersions: []string{"3.12", "3.13"}, ImageRepository: "x"},
+			{Version: "0.2.1", PythonVersions: []string{"3.10", "3.11"}, ImageRepository: mirrorRepo},
+			{Version: "0.4.0", PythonVersions: []string{"3.12", "3.13"}, ImageRepository: mirrorRepo},
 		},
 		"0.2.1",
 	))
@@ -256,8 +261,8 @@ func TestResolveInstrumentationImageOverride(t *testing.T) {
 		if version == nil || *version != "0.2.1" {
 			t.Errorf("version = %v, want requested 0.2.1", version)
 		}
-		if !strings.HasSuffix(image, "0.2.1-python3.11") {
-			t.Errorf("image = %q, want suffix 0.2.1-python3.11", image)
+		if image != wantImage {
+			t.Errorf("image = %q, want %q", image, wantImage)
 		}
 	})
 
@@ -284,8 +289,8 @@ func TestResolveInstrumentationImageOverride(t *testing.T) {
 		if version == nil || *version != "0.2.1" {
 			t.Errorf("version = %v, want preserved 0.2.1", version)
 		}
-		if !strings.HasSuffix(image, "0.2.1-python3.11") {
-			t.Errorf("image = %q, want suffix 0.2.1-python3.11", image)
+		if image != wantImage {
+			t.Errorf("image = %q, want %q", image, wantImage)
 		}
 	})
 

@@ -632,7 +632,7 @@ Correcting it after the fact means deleting the gateway registration and re-regi
 The extension already renders an OTLP ingest route for its own gateway (`<release>-otel-restapi` in the data-plane namespace), so nothing further is needed for the default environment. The standalone manifest below targets the per-environment namespace `<org>-<env>`, which does not exist until the first agent is deployed there — apply it only if you need that variant, and only after a deployment has created the namespace:
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wso2/agent-manager/amp/v${VERSION}/deployments/values/otel-collector-rest-api.yaml
+kubectl apply -f "${AMP_DIST}/deployments/values/otel-collector-rest-api.yaml"
 ```
 
 :::tip Verify

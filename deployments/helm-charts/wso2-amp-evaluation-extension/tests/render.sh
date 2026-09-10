@@ -106,6 +106,69 @@ else
   FAILURES=$((FAILURES + 1))
 fi
 
+# --- global.ampImageRegistry / global.imagePullSecrets -----------------------
+# The evaluation image is the awkward one: its pod runs as an Argo workflow in
+# the workflow namespace, not this chart's release namespace, and the repository
+# is assembled by a helper with two branches. Both branches need pinning.
+
+job_image() {
+  local rendered
+  if ! rendered="$(helm template test-release "$CHART_DIR" "$@" 2>&1)"; then
+    printf 'helm template failed: %s\n' "$rendered" >&2
+    return 1
+  fi
+  awk '$1 == "image:" { v = $2; gsub(/^['"'"'"]|['"'"'"]$/, "", v); print v; exit }' <<<"$rendered"
+}
+
+assert_image() {
+  local label="$1" expected="$2"
+  shift 2
+  local actual
+  actual="$(job_image "$@")"
+  if [[ "$expected" == "$actual" ]]; then
+    printf 'ok   - %s\n' "$label"
+  else
+    printf 'FAIL - %s\n      expected: %q\n      actual:   %q\n' "$label" "$expected" "$actual"
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+
+TAG="$(awk '/^    tag:/ {gsub(/"/, "", $2); print $2; exit}' "$CHART_DIR/values.yaml")"
+
+assert_image "default keeps the public evaluation repository" \
+  "ghcr.io/wso2/amp-evaluation-monitor:${TAG}"
+assert_image "override redirects the evaluation image" \
+  "registry.example.com/my-org/amp-evaluation-monitor:${TAG}" \
+  --set global.ampImageRegistry=registry.example.com/my-org
+assert_image "a trailing slash does not double up" \
+  "registry.example.com/my-org/amp-evaluation-monitor:${TAG}" \
+  --set global.ampImageRegistry=registry.example.com/my-org/
+# useLocalRegistry prefixes the in-cluster build registry instead; a remote
+# override there would defeat the point of importing a locally built image.
+assert_image "useLocalRegistry ignores the override" \
+  "host.k3d.internal:10082/ghcr.io/wso2/amp-evaluation-monitor:${TAG}" \
+  --set ampEvaluation.useLocalRegistry=true \
+  --set global.ampImageRegistry=registry.example.com/my-org
+
+# The pull secret has to reach BOTH specs: the ClusterWorkflowTemplate (used on a
+# direct submission) and the Workflow's runTemplate (the production path, whose
+# spec wins over the referenced template).
+if helm template test-release "$CHART_DIR" | grep -q "imagePullSecrets"; then
+  printf 'FAIL - default render should not mention imagePullSecrets\n'
+  FAILURES=$((FAILURES + 1))
+else
+  printf 'ok   - default render omits imagePullSecrets entirely\n'
+fi
+PULL_COUNT="$(helm template test-release "$CHART_DIR" \
+  --set 'global.imagePullSecrets[0]=wso2-registry-credentials' \
+  | grep -c -- '- name: wso2-registry-credentials' || true)"
+if [[ "$PULL_COUNT" == "2" ]]; then
+  printf 'ok   - the pull secret reaches both workflow specs\n'
+else
+  printf 'FAIL - expected the pull secret in 2 specs, found %s\n' "$PULL_COUNT"
+  FAILURES=$((FAILURES + 1))
+fi
+
 if [[ $FAILURES -gt 0 ]]; then
   printf '\nwso2-amp-evaluation-extension: %d render assertion(s) failed\n' "$FAILURES"
   exit 1

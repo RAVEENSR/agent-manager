@@ -49,6 +49,22 @@ Like gVisor, Kata uses a **dedicated node** labeled `kata=true` and tainted `kat
 
 ## Set Up a Kata Node
 
+:::note `${AMP_DIST}`
+The commands below run scripts and manifests from the release bundle. If you do
+not already have it extracted, fetch it first and point `AMP_DIST` at it — the
+same bundle the install guides use:
+
+```bash
+export VERSION="0.0.0-dev"
+curl -fsSL -O "https://github.com/wso2/agent-manager/releases/download/amp/v${VERSION}/wso2-agent-manager-${VERSION}.tar.gz"
+tar xzf "wso2-agent-manager-${VERSION}.tar.gz"
+export AMP_DIST="$PWD"
+```
+
+On a node-side step, extract it on that node: the installer script runs there,
+not on your workstation.
+:::
+
 ### Step 1: Add a new node to the cluster
 
 Provision a KVM-capable Linux node matching the requirements above and join it to your cluster using your platform's standard mechanism. Leave it empty.
@@ -62,10 +78,7 @@ If your platform lets you set taints at node-pool creation, apply `kata=true:NoS
 Unlike the gVisor installer (which runs on the node), the Kata installer runs from **any machine with kubectl access** and does everything through the Kubernetes API:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wso2/agent-manager/amp/v0.0.0-dev/deployments/setup/install-kata.sh \
-  -o install-kata.sh
-
-KATA_NODES="<node-name>" bash install-kata.sh
+KATA_NODES="<node-name>" bash "${AMP_DIST}/deployments/setup/install-kata.sh"
 ```
 
 What it does:
@@ -137,14 +150,11 @@ Isolation tier is set at environment creation time. Open the **Create Environmen
 If you script environment creation directly, set the variable yourself:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wso2/agent-manager/amp/v0.0.0-dev/deployments/scripts/add-environment.sh \
-  -o add-environment.sh
-
 ISOLATION_TIER=kata \
   ENV_NAME=secure-prod \
   DISPLAY_NAME="Secure Prod" \
   AGENT_MANAGER_TOKEN=<token> \
-  bash add-environment.sh
+  bash "${AMP_DIST}/deployments/scripts/add-environment.sh"
 ```
 
 The tier appears as a **Sandboxing T3** shield chip in the environment list, and as a shield icon next to the environment name on the agent's Deploy and Overview pages — hover over it to confirm *Sandboxing Tier 3 — Kata Containers*. Then deploy or promote an agent to the environment as usual.

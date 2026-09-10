@@ -242,7 +242,20 @@ assert_eq "platform CA cm PEM round-trips" "yes" \
 # Parse the rendered YAML for real when kubectl is available. The manual de-indent above
 # cannot tell a valid block scalar from an invalid header (an explicit indentation
 # indicator, say), so on its own it would pass on YAML that no parser accepts.
+# Having the binary is not the same as being able to use it: a CI runner can ship
+# kubectl with no usable configuration, and then every parse below returns empty
+# and these assertions fail for a reason the swallowed stderr never shows. Probe
+# the capability once with a trivial manifest, and if it does not come back, skip
+# visibly and print why rather than reporting four confusing failures.
+kubectl_probe_err="$(mktemp)"
+kubectl_can_parse=no
 if command -v kubectl >/dev/null 2>&1; then
+  probe_out="$(printf 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: probe\ndata:\n  k: v\n' \
+    | kubectl create --validate=false --dry-run=client -o jsonpath='{.data.k}' -f - 2>"$kubectl_probe_err" || true)"
+  [ "$probe_out" = "v" ] && kubectl_can_parse=yes
+fi
+
+if [ "$kubectl_can_parse" = "yes" ]; then
   ca_parsed="$(printf '%s\n' "$ca_cm" | kubectl create --validate=false --dry-run=client -o jsonpath='{.data.ca\.crt}' -f - 2>/dev/null || true)"
   assert_eq "platform CA cm is valid YAML" "yes" \
     "$(printf '%s' "$ca_parsed" | grep -q 'BEGIN CERTIFICATE' && echo yes || echo no)"
@@ -259,9 +272,13 @@ if command -v kubectl >/dev/null 2>&1; then
   # The byoc Secret must parse too.
   sec_type="$(render_byoc_tls_secret amp-wildcard-tls "$tmp_cert" "$tmp_key" | kubectl create --validate=false --dry-run=client -o jsonpath='{.type}' -f - 2>/dev/null || true)"
   assert_eq "byoc secret is valid YAML" "kubernetes.io/tls" "$sec_type"
+elif command -v kubectl >/dev/null 2>&1; then
+  printf 'ok   - rendered YAML parses (skipped: kubectl cannot client-dry-run here: %s)\n' \
+    "$(head -1 "$kubectl_probe_err" 2>/dev/null || echo 'no error reported')"
 else
   printf 'ok   - rendered YAML parses (skipped: kubectl not installed)\n'
 fi
+rm -f "$kubectl_probe_err"
 
 rm -f "$tmp_cert" "$tmp_key" "$tmp_c2" "$tmp_k2" "$tmp_c3" "$tmp_k3"
 

@@ -14,6 +14,10 @@ import path from "node:path";
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const CHARTS = path.join(ROOT, "deployments", "helm-charts");
 const OUT = path.join(import.meta.dirname, "..", "docs", "reference", "helm-charts");
+// Charts are published flat at oci://<registry>/<chart> (see
+// .github/scripts/package-helm-chart.sh), so the install command must carry no
+// extra path segment. Overridable so a private-registry build documents its own.
+const CHART_REGISTRY = process.env.HELM_CHART_REGISTRY || "ghcr.io/wso2";
 const CHECK = process.argv.includes("--check");
 
 const TITLES = {
@@ -79,7 +83,7 @@ for (const name of Object.keys(TITLES)) {
     `# ${TITLES[name]}`, "",
     chartDescription(name), "",
     "```bash",
-    `helm install ${name.replace("wso2-", "")} oci://ghcr.io/wso2/helm-charts/${name} \\`,
+    `helm install ${name.replace("wso2-", "")} oci://${CHART_REGISTRY}/${name} \\`,
     "  --namespace <namespace> --create-namespace \\",
     "  --values my-values.yaml",
     "```", "",

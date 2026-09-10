@@ -14,6 +14,10 @@
 #   sudo ./install-advanced.sh --config amp-config.env
 #   ./install-advanced.sh --init > amp-config.env      # emit annotated template
 #   sudo ./install-advanced.sh --config amp-config.env --dry-run   # validate + render only
+#
+# To install from a private image registry, set AMP_IMAGE_REGISTRY,
+# AMP_REGISTRY_USERNAME and AMP_REGISTRY_PASSWORD in the config file (see the
+# template --init writes). --dry-run reports the registry without the token.
 set -euo pipefail
 
 VM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -44,6 +48,25 @@ print_template() {
 AMP_VERSION=                       # REQUIRED: amp/v* release tag, e.g. 1.0.0
                                    # (see github.com/wso2/agent-manager/releases)
 DOMAIN_BASE=amp.mycompany.com      # service hosts derived as <svc>.<DOMAIN_BASE>
+
+# --- Private image registry (optional) ---
+# Leave both unset to pull the AMP images from the public registry. When set, the
+# installer redirects every first-party image, gives the cluster node registry
+# credentials, and creates the image pull secret in each namespace that needs one.
+# Third-party images (OpenChoreo, cert-manager, kgateway, PostgreSQL) always come
+# from their own public registries.
+#
+# AMP_REGISTRY_PASSWORD is a live credential: keep this file mode 600, as the
+# DNS-01 provider tokens below already require. --dry-run never prints it.
+#
+# QUOTE the username if it contains a '$' — some registries name machine
+# accounts that way, e.g. robot$project+name. This file is sourced, so an
+# unquoted '$' is expanded by the
+# shell and the install fails with an unrelated "unbound variable" error (or, if
+# that name happens to be set, silently authenticates as the wrong user).
+#AMP_IMAGE_REGISTRY=registry.example.com/my-org
+#AMP_REGISTRY_USERNAME='robot$my-org+installer'
+#AMP_REGISTRY_PASSWORD=
 
 # --- TLS mode: dns01 (default) or byoc ---
 TLS_MODE=dns01
@@ -364,6 +387,18 @@ if [[ "$DRY_RUN" == "true" ]]; then
     "$AMP_HOST_CONSOLE" "$AMP_HOST_API" "$AMP_HOST_THUNDER" "$AMP_HOST_OBSERVER" \
     "$AMP_HOST_GATEWAY" "${AMP_HOST_CP:-<none>}" "$AMP_AGENTS_BASE"
   log "DRY RUN — TLS mode: ${TLS_MODE_RESOLVED}"
+  # Confirm the registry wiring without echoing the token: dry-run goes to stdout
+  # (terminal scrollback, CI logs), same reasoning as the Secret placeholders below.
+  if [[ -n "${AMP_IMAGE_REGISTRY:-}" ]]; then
+    log "DRY RUN — image registry: ${AMP_IMAGE_REGISTRY}"
+    if [[ -n "${AMP_REGISTRY_USERNAME:-}" && -n "${AMP_REGISTRY_PASSWORD:-}" ]]; then
+      printf '  credentials: user=%s token=<omitted in dry-run>\n' "$AMP_REGISTRY_USERNAME"
+    else
+      printf '  credentials: <none configured — set AMP_REGISTRY_USERNAME and AMP_REGISTRY_PASSWORD>\n'
+    fi
+  else
+    log "DRY RUN — image registry: public default"
+  fi
   log "DRY RUN — amp helm args:"; amp_helm_args
   log "DRY RUN — required cert SANs:"; cert_dns_names
   if [[ "$TLS_MODE_RESOLVED" == "byoc" ]]; then

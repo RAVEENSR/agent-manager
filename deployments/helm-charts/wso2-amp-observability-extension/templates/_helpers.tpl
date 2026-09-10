@@ -75,3 +75,35 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+Image reference for the observer.
+
+global.ampImageRegistry, when set, replaces the registry and organization
+portion of the repository and keeps the image name, so one value redirects the
+AMP images across all the AMP charts at a private registry. Left empty (the
+default) the fully-qualified repository is used exactly as written.
+
+Deliberately not named global.imageRegistry: that is a Bitnami convention, and
+Helm passes global values into subcharts, so the name collides wherever a
+Bitnami chart is a dependency.
+*/}}
+{{- define "amp-observability-extension.image" -}}
+{{- $repository := .Values.amObserver.image.repository -}}
+{{- with .Values.global.ampImageRegistry -}}
+{{- $repository = printf "%s/%s" (trimSuffix "/" .) (base $repository) -}}
+{{- end -}}
+{{- printf "%s:%s" $repository (.Values.amObserver.image.tag | default .Chart.AppVersion) -}}
+{{- end -}}
+
+{{/*
+Image pull secrets
+*/}}
+{{- define "amp-observability-extension.imagePullSecrets" -}}
+{{- if .Values.global.imagePullSecrets }}
+imagePullSecrets:
+{{- range .Values.global.imagePullSecrets }}
+  - name: {{ . }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -11,7 +11,6 @@ inputs:
   registry:
     description: "Container registry URL"
     required: true
-    default: "ghcr.io"
   registry-org:
     description: "Registry organization/namespace"
     required: true
@@ -29,6 +28,29 @@ inputs:
 runs:
   using: "composite"
   steps:
+    # required: true is documentation only — GitHub does not fail a run for a
+    # missing input. Without this, an unset registry or org silently yields a tag
+    # like "/wso2/amp-api:v1.0.0", and the build fails much later on an invalid
+    # image reference that says nothing about the cause.
+    - name: Verify the image reference is fully specified
+      run: |
+        missing=""
+        [ -n "${REGISTRY}" ]   || missing="${missing} registry"
+        [ -n "${REGISTRY_ORG}" ] || missing="${missing} registry-org"
+        [ -n "${IMAGE_NAME}" ] || missing="${missing} image-name"
+        [ -n "${TAG}" ]        || missing="${missing} tag"
+        if [ -n "${missing}" ]; then
+          echo "::error::Missing required input(s):${missing}. The caller must pass every part of the image reference." >&2
+          exit 1
+        fi
+        echo "Publishing to ${REGISTRY}/${REGISTRY_ORG}/${IMAGE_NAME}:${TAG}"
+      env:
+        REGISTRY: ${{ inputs.registry }}
+        REGISTRY_ORG: ${{ inputs.registry-org }}
+        IMAGE_NAME: ${{ inputs.image-name }}
+        TAG: ${{ inputs.tag }}
+      shell: bash
+
     - name: Build Docker image
       run: |
         # Parse build-args into docker build format

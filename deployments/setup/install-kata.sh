@@ -271,7 +271,11 @@ echo "🧩 Registering the '${KATA_RUNTIME_CLASS}' RuntimeClass..."
 if [ -f "$SCRIPT_DIR/../k8s/kata-runtimeclass.yaml" ]; then
     kubectl apply -f "$SCRIPT_DIR/../k8s/kata-runtimeclass.yaml"
 else
-    kubectl apply -f "https://raw.githubusercontent.com/wso2/agent-manager/main/deployments/k8s/kata-runtimeclass.yaml"
+    # Release-pinned, not main: a versioned install applying a manifest from the
+    # tip of main is how a cluster ends up running something the rest of the
+    # install has never been tested against. AMP_MANIFEST_BASE_URL lets a fork or
+    # an air-gapped mirror repoint this without editing the script.
+    kubectl apply -f "${AMP_MANIFEST_BASE_URL:-https://raw.githubusercontent.com/wso2/agent-manager/${AMP_RELEASE_REF:-main}/deployments/k8s}/kata-runtimeclass.yaml"
 fi
 
 echo "🏷️  Tainting the Kata node(s) so only Kata pods schedule there..."

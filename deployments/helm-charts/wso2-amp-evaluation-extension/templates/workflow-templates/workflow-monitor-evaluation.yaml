@@ -142,6 +142,9 @@ spec:
         amp.wso2.com/component: ${parameters.agent.name}
     spec:
       serviceAccountName: workflow-sa
+      {{- if .Values.global.imagePullSecrets }}
+      {{- include "amp-evaluation-extension.imagePullSecrets" . | trim | nindent 6 }}
+      {{- end }}
       # main gets no token; only the wait sidecar does, via workflow-sa-bound-token below.
       automountServiceAccountToken: false
       executor:

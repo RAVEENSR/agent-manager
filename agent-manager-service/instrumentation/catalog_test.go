@@ -160,3 +160,51 @@ func TestSetCatalog_PanicsOnNil(t *testing.T) {
 	}()
 	SetCatalog(nil)
 }
+
+func TestImageRepositoryFor_Catalog(t *testing.T) {
+	const fallback = "fallback.test/amp-python-instrumentation-provider"
+	c := NewForTest([]Version{
+		{Version: "0.4.1", PythonVersions: []string{"3.11"}, ImageRepository: "mirror.test/provider"},
+		{Version: "0.5.0", PythonVersions: []string{"3.11"}},
+	}, "0.4.1")
+
+	if got := c.ImageRepositoryFor("0.4.1", fallback); got != "mirror.test/provider" {
+		t.Errorf("ImageRepositoryFor(0.4.1) = %q, want the catalog entry's repository", got)
+	}
+	// Entry present but carrying no repository, and an entirely unknown version,
+	// both degrade to the caller's default rather than an empty image prefix.
+	if got := c.ImageRepositoryFor("0.5.0", fallback); got != fallback {
+		t.Errorf("ImageRepositoryFor(0.5.0) = %q, want fallback for an empty repository", got)
+	}
+	if got := c.ImageRepositoryFor("9.9.9", fallback); got != fallback {
+		t.Errorf("ImageRepositoryFor(9.9.9) = %q, want fallback for an unknown version", got)
+	}
+}
+
+func TestImageRepositoryFor_ProcessWide(t *testing.T) {
+	const fallback = "fallback.test/amp-python-instrumentation-provider"
+
+	// Swap the process-wide catalog out and back so this test neither depends on
+	// nor leaks into the package-level state other tests share.
+	pkgCatalogMu.Lock()
+	saved := pkgCatalog
+	pkgCatalog = nil
+	pkgCatalogMu.Unlock()
+	t.Cleanup(func() {
+		pkgCatalogMu.Lock()
+		pkgCatalog = saved
+		pkgCatalogMu.Unlock()
+	})
+
+	// Unlike GetCatalog, this must not panic when the catalog was never installed.
+	if got := ImageRepositoryFor("0.4.1", fallback); got != fallback {
+		t.Errorf("ImageRepositoryFor with no catalog = %q, want fallback", got)
+	}
+
+	SetCatalog(NewForTest([]Version{
+		{Version: "0.4.1", PythonVersions: []string{"3.11"}, ImageRepository: "mirror.test/provider"},
+	}, "0.4.1"))
+	if got := ImageRepositoryFor("0.4.1", fallback); got != "mirror.test/provider" {
+		t.Errorf("ImageRepositoryFor = %q, want the installed catalog's repository", got)
+	}
+}

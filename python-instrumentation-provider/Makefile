@@ -6,7 +6,8 @@ PYTHON_VERSION ?= 3.11
 # locks/traceloop-$(TRACELOOP_VERSION)-python$(PYTHON_VERSION).txt.
 TRACELOOP_VERSION ?= 0.62.3
 TAG ?= dev-python$(PYTHON_VERSION)
-APP_NAME = ghcr.io/wso2/amp-python-instrumentation-provider
+REGISTRY_ENDPOINT ?= ghcr.io/wso2
+APP_NAME = $(REGISTRY_ENDPOINT)/amp-python-instrumentation-provider
 DOCKER_IMAGE = $(APP_NAME):$(TAG)
 K3D_CLUSTER_NAME = openchoreo-local-setup
 KIND_CLUSTER_NAME = openchoreo-local

@@ -277,6 +277,55 @@
       "title": "amObserver",
       "type": "object"
     },
+    "global": {
+      "additionalProperties": false,
+      "description": "Values shared with the other AMP charts",
+      "properties": {
+        "ampImageRegistry": {
+          "default": "",
+          "description": "Registry and organization that replaces the registry portion of the first-party AMP image repository, keeping the image name. Set this to pull the observer image from a private registry (e.g. registry.example.com/my-org). Empty leaves image.repository exactly as configured. Deliberately not named global.imageRegistry, which Bitnami subcharts consume.",
+          "title": "ampImageRegistry",
+          "type": "string"
+        },
+        "imagePullSecrets": {
+          "default": [],
+          "description": "Secrets used to pull images from a private registry",
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "imagePullSecrets",
+          "type": "array"
+        }
+      },
+      "required": [],
+      "title": "global",
+      "type": "object"
+    },
+    "networkPolicy": {
+      "additionalProperties": false,
+      "description": "Network restrictions applied to the pods this chart runs.",
+      "properties": {
+        "otelCollector": {
+          "additionalProperties": false,
+          "description": "Traffic the collector is allowed to accept.",
+          "properties": {
+            "enabled": {
+              "default": true,
+              "description": "No-op on clusters whose CNI doesn't enforce NetworkPolicy.",
+              "title": "enabled",
+              "type": "boolean"
+            }
+          },
+          "required": [],
+          "title": "otelCollector",
+          "type": "object"
+        }
+      },
+      "required": [],
+      "title": "networkPolicy",
+      "type": "object"
+    },
     "otelCollector": {
       "additionalProperties": false,
       "description": "OpenTelemetry collector extras",
@@ -323,30 +372,6 @@
       },
       "required": [],
       "title": "otelCollector",
-      "type": "object"
-    },
-    "networkPolicy": {
-      "additionalProperties": false,
-      "description": "Network restrictions applied to the pods this chart runs.",
-      "properties": {
-        "otelCollector": {
-          "additionalProperties": false,
-          "description": "Traffic the collector is allowed to accept.",
-          "properties": {
-            "enabled": {
-              "default": true,
-              "description": "No-op on clusters whose CNI doesn't enforce NetworkPolicy.",
-              "title": "enabled",
-              "type": "boolean"
-            }
-          },
-          "required": [],
-          "title": "otelCollector",
-          "type": "object"
-        }
-      },
-      "required": [],
-      "title": "networkPolicy",
       "type": "object"
     }
   }

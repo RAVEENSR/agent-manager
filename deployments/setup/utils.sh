@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Util: Check if a port is in use
 #
 # On Linux a published container port is held by a root-owned docker-proxy,
