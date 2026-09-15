@@ -4,8 +4,9 @@
 # The value is consumed as the path segment after /docs/ (see the console's
 # DOCS_URL in the wso2-agent-manager chart), so it must match a directory in
 # documentation/versioned_docs/version-<docs-version> and an entry in
-# documentation/versions.json exactly. Docs versions are cut per release version,
-# so this is just "v" plus the release version.
+# documentation/versions.json exactly. Final releases share one docs version per
+# minor line (vX.Y.x), so every patch release reuses the line's docs rather than
+# requiring a cut of its own. Pre-releases pin to their exact version.
 #
 # Prints nothing (exit 0) for releases that cut no docs version: release
 # candidates and nightlies follow /docs/latest.
@@ -23,6 +24,8 @@ if [[ "$TARGET_VERSION" =~ (-|\.)rc[0-9]+$ ]]; then
   : # release candidates follow /docs/latest
 elif [[ "$TARGET_VERSION" == *-dev* ]]; then
   : # nightlies follow /docs/latest
+elif [[ "$TARGET_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "v${TARGET_VERSION%.*}.x"
 else
   echo "v$TARGET_VERSION"
 fi

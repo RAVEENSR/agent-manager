@@ -26,6 +26,12 @@ const releaseUrl = /^v\d+\.\d+\.\d+/.test(latestVersion)
 // cuts. Older versions still serve the pre-reorg paths natively and need none.
 const slugRewrittenVersion = 'v1.0.0-alpha1';
 
+// Documentation versions that were republished under a new name. The 1.0.0
+// snapshot became the shared v1.0.x line that every 1.0.z release points at,
+// but consoles installed from 1.0.0 have /docs/v1.0.0 baked into DOCS_URL at
+// install time, so the old path has to keep resolving.
+const renamedVersions: [string, string][] = [['v1.0.0', 'v1.0.x']];
+
 // Pages whose path changed when the docs were reorganised into the
 // Get Started / Concepts / Guides / Tutorials / References structure. The
 // snapshot above serves them at their new paths via `slug`, so map the
@@ -115,10 +121,16 @@ const config: Config = {
           },
         ]),
         createRedirects(existingPath: string) {
+          const sources: string[] = [];
           if (existingPath.includes(`/docs/${latestVersion}/`)) {
-            return [existingPath.replace(`/docs/${latestVersion}/`, '/docs/latest/')];
+            sources.push(existingPath.replace(`/docs/${latestVersion}/`, '/docs/latest/'));
           }
-          return undefined;
+          for (const [before, after] of renamedVersions) {
+            if (existingPath.includes(`/docs/${after}/`)) {
+              sources.push(existingPath.replace(`/docs/${after}/`, `/docs/${before}/`));
+            }
+          }
+          return sources.length > 0 ? sources : undefined;
         },
       },
     ],
