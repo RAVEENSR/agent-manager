@@ -59,7 +59,7 @@ agentManagerService:
 
   image:
     repository: ghcr.io/wso2/amp-api
-    tag: "v1.0.0"
+    tag: "0.0.0-dev"
     pullPolicy: IfNotPresent
 
   # Reachable externally via the control-plane gateway (see ocIngress);
@@ -449,7 +449,7 @@ console:
 
   image:
     repository: ghcr.io/wso2/amp-console
-    tag: "v1.0.0"
+    tag: "0.0.0-dev"
     pullPolicy: Always
 
   # Reachable externally via the control-plane gateway (see ocIngress);
@@ -512,7 +512,7 @@ console:
     # Agent Manager release version — pins the deployment-script git tag (amp/vX.Y.Z).
     # Placeholder is substituted with the real release version by the release
     # pipeline (.github/scripts/update-helm-charts.sh); dev builds fall back to main.
-    ampVersion: "v1.0.0"
+    ampVersion: "0.0.0-dev"
     # -- Base URL for the console's generated deployment-script commands.
     # Empty derives the public raw.githubusercontent.com URL from ampVersion.
     scriptBaseUrl: ""
@@ -584,7 +584,7 @@ dbMigration:
 
   image:
     repository: ghcr.io/wso2/amp-api
-    tag: "v1.0.0"
+    tag: "0.0.0-dev"
     pullPolicy: IfNotPresent
 
   resources:

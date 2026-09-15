@@ -40,7 +40,7 @@ ampEvaluation:
     # IMPORTANT: For production, this should match the amp-evaluation SDK version
     # used in dbMigration.evaluatorGenerator.image.tag in the wso2-agent-manager chart.
     # Example: If using amp-evaluation==0.1.5, set this to "0.1.5"
-    tag: "v1.0.0"
+    tag: "0.0.0-dev"
 
     # -- Image pull policy
     pullPolicy: "IfNotPresent"
