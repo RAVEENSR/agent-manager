@@ -31,6 +31,9 @@ import (
 //			DeleteFunc: func(proxyID string, ouID string) error {
 //				panic("mock out the Delete method")
 //			},
+//			DeleteInProjectFunc: func(ctx context.Context, proxyID string, ouID string, projectUUID string) error {
+//				panic("mock out the DeleteInProject method")
+//			},
 //			ExistsFunc: func(proxyID string, ouID string) (bool, error) {
 //				panic("mock out the Exists method")
 //			},
@@ -76,6 +79,9 @@ type LLMProxyRepositoryMock struct {
 
 	// DeleteFunc mocks the Delete method.
 	DeleteFunc func(proxyID string, ouID string) error
+
+	// DeleteInProjectFunc mocks the DeleteInProject method.
+	DeleteInProjectFunc func(ctx context.Context, proxyID string, ouID string, projectUUID string) error
 
 	// ExistsFunc mocks the Exists method.
 	ExistsFunc func(proxyID string, ouID string) (bool, error)
@@ -143,6 +149,17 @@ type LLMProxyRepositoryMock struct {
 			ProxyID string
 			// OuID is the ouID argument value.
 			OuID string
+		}
+		// DeleteInProject holds details about calls to the DeleteInProject method.
+		DeleteInProject []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// ProxyID is the proxyID argument value.
+			ProxyID string
+			// OuID is the ouID argument value.
+			OuID string
+			// ProjectUUID is the projectUUID argument value.
+			ProjectUUID string
 		}
 		// Exists holds details about calls to the Exists method.
 		Exists []struct {
@@ -222,6 +239,7 @@ type LLMProxyRepositoryMock struct {
 	lockCountByProvider   sync.RWMutex
 	lockCreate            sync.RWMutex
 	lockDelete            sync.RWMutex
+	lockDeleteInProject   sync.RWMutex
 	lockExists            sync.RWMutex
 	lockGetByID           sync.RWMutex
 	lockGetByIDAndProject sync.RWMutex
@@ -421,6 +439,50 @@ func (mock *LLMProxyRepositoryMock) DeleteCalls() []struct {
 	mock.lockDelete.RLock()
 	calls = mock.calls.Delete
 	mock.lockDelete.RUnlock()
+	return calls
+}
+
+// DeleteInProject calls DeleteInProjectFunc.
+func (mock *LLMProxyRepositoryMock) DeleteInProject(ctx context.Context, proxyID string, ouID string, projectUUID string) error {
+	if mock.DeleteInProjectFunc == nil {
+		panic("LLMProxyRepositoryMock.DeleteInProjectFunc: method is nil but LLMProxyRepository.DeleteInProject was just called")
+	}
+	callInfo := struct {
+		Ctx         context.Context
+		ProxyID     string
+		OuID        string
+		ProjectUUID string
+	}{
+		Ctx:         ctx,
+		ProxyID:     proxyID,
+		OuID:        ouID,
+		ProjectUUID: projectUUID,
+	}
+	mock.lockDeleteInProject.Lock()
+	mock.calls.DeleteInProject = append(mock.calls.DeleteInProject, callInfo)
+	mock.lockDeleteInProject.Unlock()
+	return mock.DeleteInProjectFunc(ctx, proxyID, ouID, projectUUID)
+}
+
+// DeleteInProjectCalls gets all the calls that were made to DeleteInProject.
+// Check the length with:
+//
+//	len(mockedLLMProxyRepository.DeleteInProjectCalls())
+func (mock *LLMProxyRepositoryMock) DeleteInProjectCalls() []struct {
+	Ctx         context.Context
+	ProxyID     string
+	OuID        string
+	ProjectUUID string
+} {
+	var calls []struct {
+		Ctx         context.Context
+		ProxyID     string
+		OuID        string
+		ProjectUUID string
+	}
+	mock.lockDeleteInProject.RLock()
+	calls = mock.calls.DeleteInProject
+	mock.lockDeleteInProject.RUnlock()
 	return calls
 }
 

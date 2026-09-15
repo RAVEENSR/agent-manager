@@ -111,6 +111,9 @@ import (
 //			ListWithFiltersFunc: func(filters repositories.GatewayFilterOptions) ([]*models.Gateway, error) {
 //				panic("mock out the ListWithFilters method")
 //			},
+//			ListWithFiltersCtxFunc: func(ctx context.Context, filters repositories.GatewayFilterOptions) ([]*models.Gateway, error) {
+//				panic("mock out the ListWithFiltersCtx method")
+//			},
 //			RevokeTokenFunc: func(tokenId string) error {
 //				panic("mock out the RevokeToken method")
 //			},
@@ -225,6 +228,9 @@ type GatewayRepositoryMock struct {
 
 	// ListWithFiltersFunc mocks the ListWithFilters method.
 	ListWithFiltersFunc func(filters repositories.GatewayFilterOptions) ([]*models.Gateway, error)
+
+	// ListWithFiltersCtxFunc mocks the ListWithFiltersCtx method.
+	ListWithFiltersCtxFunc func(ctx context.Context, filters repositories.GatewayFilterOptions) ([]*models.Gateway, error)
 
 	// RevokeTokenFunc mocks the RevokeToken method.
 	RevokeTokenFunc func(tokenId string) error
@@ -424,6 +430,13 @@ type GatewayRepositoryMock struct {
 			// Filters is the filters argument value.
 			Filters repositories.GatewayFilterOptions
 		}
+		// ListWithFiltersCtx holds details about calls to the ListWithFiltersCtx method.
+		ListWithFiltersCtx []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// Filters is the filters argument value.
+			Filters repositories.GatewayFilterOptions
+		}
 		// RevokeToken holds details about calls to the RevokeToken method.
 		RevokeToken []struct {
 			// TokenId is the tokenId argument value.
@@ -483,6 +496,7 @@ type GatewayRepositoryMock struct {
 	lockListIdentityProvidersByGateway           sync.RWMutex
 	lockListIdentityProvidersByOrg               sync.RWMutex
 	lockListWithFilters                          sync.RWMutex
+	lockListWithFiltersCtx                       sync.RWMutex
 	lockRevokeToken                              sync.RWMutex
 	lockTransaction                              sync.RWMutex
 	lockUpdateActiveStatus                       sync.RWMutex
@@ -1530,6 +1544,42 @@ func (mock *GatewayRepositoryMock) ListWithFiltersCalls() []struct {
 	mock.lockListWithFilters.RLock()
 	calls = mock.calls.ListWithFilters
 	mock.lockListWithFilters.RUnlock()
+	return calls
+}
+
+// ListWithFiltersCtx calls ListWithFiltersCtxFunc.
+func (mock *GatewayRepositoryMock) ListWithFiltersCtx(ctx context.Context, filters repositories.GatewayFilterOptions) ([]*models.Gateway, error) {
+	if mock.ListWithFiltersCtxFunc == nil {
+		panic("GatewayRepositoryMock.ListWithFiltersCtxFunc: method is nil but GatewayRepository.ListWithFiltersCtx was just called")
+	}
+	callInfo := struct {
+		Ctx     context.Context
+		Filters repositories.GatewayFilterOptions
+	}{
+		Ctx:     ctx,
+		Filters: filters,
+	}
+	mock.lockListWithFiltersCtx.Lock()
+	mock.calls.ListWithFiltersCtx = append(mock.calls.ListWithFiltersCtx, callInfo)
+	mock.lockListWithFiltersCtx.Unlock()
+	return mock.ListWithFiltersCtxFunc(ctx, filters)
+}
+
+// ListWithFiltersCtxCalls gets all the calls that were made to ListWithFiltersCtx.
+// Check the length with:
+//
+//	len(mockedGatewayRepository.ListWithFiltersCtxCalls())
+func (mock *GatewayRepositoryMock) ListWithFiltersCtxCalls() []struct {
+	Ctx     context.Context
+	Filters repositories.GatewayFilterOptions
+} {
+	var calls []struct {
+		Ctx     context.Context
+		Filters repositories.GatewayFilterOptions
+	}
+	mock.lockListWithFiltersCtx.RLock()
+	calls = mock.calls.ListWithFiltersCtx
+	mock.lockListWithFiltersCtx.RUnlock()
 	return calls
 }
 

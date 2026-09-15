@@ -43,6 +43,7 @@ type LLMProviderRepository interface {
 	Count(orgUUID string) (int, error)
 	Update(ctx context.Context, p *models.LLMProvider, providerID string, orgUUID string) error
 	Delete(providerID, orgUUID string) error
+	DeleteCtx(ctx context.Context, providerID, orgUUID string) error
 	Exists(providerID, orgUUID string) (bool, error)
 	HasAssociatedProxies(ctx context.Context, providerUUID uuid.UUID) (bool, error)
 	MarkDeleting(providerUUID uuid.UUID) (bool, error)
@@ -310,6 +311,10 @@ func (r *LLMProviderRepo) ClearDeleting(providerUUID uuid.UUID) error {
 
 // Delete removes an LLM provider
 func (r *LLMProviderRepo) Delete(providerID, orgUUID string) error {
+	return r.DeleteCtx(context.Background(), providerID, orgUUID)
+}
+
+func (r *LLMProviderRepo) DeleteCtx(ctx context.Context, providerID, orgUUID string) error {
 	slog.Info("LLMProviderRepo.Delete: starting", "providerID", providerID, "orgUUID", orgUUID)
 
 	// Parse providerID as UUID
@@ -319,7 +324,7 @@ func (r *LLMProviderRepo) Delete(providerID, orgUUID string) error {
 		return fmt.Errorf("invalid provider UUID: %w", err)
 	}
 
-	return r.db.Transaction(func(tx *gorm.DB) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Verify the provider exists and belongs to the organization
 		slog.Info("LLMProviderRepo.Delete: verifying provider exists", "providerID", providerID, "uuid", providerUUID, "orgUUID", orgUUID)
 		var artifact struct{ UUID uuid.UUID }

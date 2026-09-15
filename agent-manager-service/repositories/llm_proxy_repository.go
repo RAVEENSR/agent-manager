@@ -48,6 +48,7 @@ type LLMProxyRepository interface {
 	CountByProvider(ouID, providerUUID string) (int, error)
 	Update(p *models.LLMProxy, handle string, ouID string) error
 	Delete(proxyID, ouID string) error
+	DeleteInProject(ctx context.Context, proxyID, ouID, projectUUID string) error
 	Exists(proxyID, ouID string) (bool, error)
 }
 
@@ -344,4 +345,26 @@ func (r *LLMProxyRepo) Delete(proxyID, ouID string) error {
 // Exists checks if an LLM proxy exists
 func (r *LLMProxyRepo) Exists(proxyID, ouID string) (bool, error) {
 	return r.artifactRepo.Exists(models.KindLLMProxy, proxyID, ouID)
+}
+
+// DeleteInProject removes a proxy only within the resolved organization and project.
+func (r *LLMProxyRepo) DeleteInProject(ctx context.Context, proxyID, ouID, projectUUID string) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var proxy models.LLMProxy
+		err := tx.Table("llm_proxies").Select("llm_proxies.*").
+			Joins("JOIN artifacts a ON llm_proxies.uuid = a.uuid").
+			Where("a.handle = ? AND a.ou_id = ? AND llm_proxies.project_uuid = ? AND a.kind = ?", proxyID, ouID, projectUUID, models.KindLLMProxy).
+			Take(&proxy).Error
+		if err != nil {
+			return fmt.Errorf("resolve proxy for deletion: %w", err)
+		}
+		result := tx.Where("uuid = ? AND project_uuid = ?", proxy.UUID, projectUUID).Delete(&models.LLMProxy{})
+		if result.Error != nil {
+			return fmt.Errorf("delete proxy: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return r.artifactRepo.Delete(tx, proxy.UUID.String())
+	})
 }

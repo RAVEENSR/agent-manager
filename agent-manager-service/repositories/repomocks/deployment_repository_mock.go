@@ -48,6 +48,9 @@ import (
 //			GetTrackedGatewaysByProviderFunc: func(artifactUUID uuid.UUID, orgUUID string) ([]string, error) {
 //				panic("mock out the GetTrackedGatewaysByProvider method")
 //			},
+//			GetTrackedGatewaysByProviderCtxFunc: func(ctx context.Context, artifactUUID uuid.UUID, orgUUID string) ([]string, error) {
+//				panic("mock out the GetTrackedGatewaysByProviderCtx method")
+//			},
 //			GetWithContentFunc: func(deploymentID string, artifactUUID string, orgUUID string) (*models.Deployment, error) {
 //				panic("mock out the GetWithContent method")
 //			},
@@ -105,6 +108,9 @@ type DeploymentRepositoryMock struct {
 
 	// GetTrackedGatewaysByProviderFunc mocks the GetTrackedGatewaysByProvider method.
 	GetTrackedGatewaysByProviderFunc func(artifactUUID uuid.UUID, orgUUID string) ([]string, error)
+
+	// GetTrackedGatewaysByProviderCtxFunc mocks the GetTrackedGatewaysByProviderCtx method.
+	GetTrackedGatewaysByProviderCtxFunc func(ctx context.Context, artifactUUID uuid.UUID, orgUUID string) ([]string, error)
 
 	// GetWithContentFunc mocks the GetWithContent method.
 	GetWithContentFunc func(deploymentID string, artifactUUID string, orgUUID string) (*models.Deployment, error)
@@ -215,6 +221,15 @@ type DeploymentRepositoryMock struct {
 			// OrgUUID is the orgUUID argument value.
 			OrgUUID string
 		}
+		// GetTrackedGatewaysByProviderCtx holds details about calls to the GetTrackedGatewaysByProviderCtx method.
+		GetTrackedGatewaysByProviderCtx []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// ArtifactUUID is the artifactUUID argument value.
+			ArtifactUUID uuid.UUID
+			// OrgUUID is the orgUUID argument value.
+			OrgUUID string
+		}
 		// GetWithContent holds details about calls to the GetWithContent method.
 		GetWithContent []struct {
 			// DeploymentID is the deploymentID argument value.
@@ -291,23 +306,24 @@ type DeploymentRepositoryMock struct {
 			Status models.DeploymentStatus
 		}
 	}
-	lockCreateWithLimitEnforcement    sync.RWMutex
-	lockDelete                        sync.RWMutex
-	lockDeleteStatus                  sync.RWMutex
-	lockGetByArtifactAndGateway       sync.RWMutex
-	lockGetCurrentByGateway           sync.RWMutex
-	lockGetDeployedGatewaysByProvider sync.RWMutex
-	lockGetDeployedProvidersByGateway sync.RWMutex
-	lockGetDeploymentsWithState       sync.RWMutex
-	lockGetStatus                     sync.RWMutex
-	lockGetTrackedGatewaysByProvider  sync.RWMutex
-	lockGetWithContent                sync.RWMutex
-	lockGetWithState                  sync.RWMutex
-	lockGetWithStateCtx               sync.RWMutex
-	lockIsProviderDeployedToGateway   sync.RWMutex
-	lockSetCurrent                    sync.RWMutex
-	lockSetCurrentCtx                 sync.RWMutex
-	lockUpdateStatusByDeploymentID    sync.RWMutex
+	lockCreateWithLimitEnforcement      sync.RWMutex
+	lockDelete                          sync.RWMutex
+	lockDeleteStatus                    sync.RWMutex
+	lockGetByArtifactAndGateway         sync.RWMutex
+	lockGetCurrentByGateway             sync.RWMutex
+	lockGetDeployedGatewaysByProvider   sync.RWMutex
+	lockGetDeployedProvidersByGateway   sync.RWMutex
+	lockGetDeploymentsWithState         sync.RWMutex
+	lockGetStatus                       sync.RWMutex
+	lockGetTrackedGatewaysByProvider    sync.RWMutex
+	lockGetTrackedGatewaysByProviderCtx sync.RWMutex
+	lockGetWithContent                  sync.RWMutex
+	lockGetWithState                    sync.RWMutex
+	lockGetWithStateCtx                 sync.RWMutex
+	lockIsProviderDeployedToGateway     sync.RWMutex
+	lockSetCurrent                      sync.RWMutex
+	lockSetCurrentCtx                   sync.RWMutex
+	lockUpdateStatusByDeploymentID      sync.RWMutex
 }
 
 // CreateWithLimitEnforcement calls CreateWithLimitEnforcementFunc.
@@ -699,6 +715,46 @@ func (mock *DeploymentRepositoryMock) GetTrackedGatewaysByProviderCalls() []stru
 	mock.lockGetTrackedGatewaysByProvider.RLock()
 	calls = mock.calls.GetTrackedGatewaysByProvider
 	mock.lockGetTrackedGatewaysByProvider.RUnlock()
+	return calls
+}
+
+// GetTrackedGatewaysByProviderCtx calls GetTrackedGatewaysByProviderCtxFunc.
+func (mock *DeploymentRepositoryMock) GetTrackedGatewaysByProviderCtx(ctx context.Context, artifactUUID uuid.UUID, orgUUID string) ([]string, error) {
+	if mock.GetTrackedGatewaysByProviderCtxFunc == nil {
+		panic("DeploymentRepositoryMock.GetTrackedGatewaysByProviderCtxFunc: method is nil but DeploymentRepository.GetTrackedGatewaysByProviderCtx was just called")
+	}
+	callInfo := struct {
+		Ctx          context.Context
+		ArtifactUUID uuid.UUID
+		OrgUUID      string
+	}{
+		Ctx:          ctx,
+		ArtifactUUID: artifactUUID,
+		OrgUUID:      orgUUID,
+	}
+	mock.lockGetTrackedGatewaysByProviderCtx.Lock()
+	mock.calls.GetTrackedGatewaysByProviderCtx = append(mock.calls.GetTrackedGatewaysByProviderCtx, callInfo)
+	mock.lockGetTrackedGatewaysByProviderCtx.Unlock()
+	return mock.GetTrackedGatewaysByProviderCtxFunc(ctx, artifactUUID, orgUUID)
+}
+
+// GetTrackedGatewaysByProviderCtxCalls gets all the calls that were made to GetTrackedGatewaysByProviderCtx.
+// Check the length with:
+//
+//	len(mockedDeploymentRepository.GetTrackedGatewaysByProviderCtxCalls())
+func (mock *DeploymentRepositoryMock) GetTrackedGatewaysByProviderCtxCalls() []struct {
+	Ctx          context.Context
+	ArtifactUUID uuid.UUID
+	OrgUUID      string
+} {
+	var calls []struct {
+		Ctx          context.Context
+		ArtifactUUID uuid.UUID
+		OrgUUID      string
+	}
+	mock.lockGetTrackedGatewaysByProviderCtx.RLock()
+	calls = mock.calls.GetTrackedGatewaysByProviderCtx
+	mock.lockGetTrackedGatewaysByProviderCtx.RUnlock()
 	return calls
 }
 

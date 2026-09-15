@@ -68,8 +68,11 @@ type llmController struct {
 	providerService   *services.LLMProviderService
 	proxyService      *services.LLMProxyService
 	deploymentService *services.LLMProviderDeploymentService
-	artifactRepo      repositories.ArtifactRepository
-	ocClient          client.OpenChoreoClient
+	// proxyDeploymentService is needed so a proxy deleted through the public API
+	// also has its config reclaimed from the gateways still holding it.
+	proxyDeploymentService *services.LLMProxyDeploymentService
+	artifactRepo           repositories.ArtifactRepository
+	ocClient               client.OpenChoreoClient
 }
 
 // NewLLMController creates a new LLM controller
@@ -78,16 +81,18 @@ func NewLLMController(
 	providerService *services.LLMProviderService,
 	proxyService *services.LLMProxyService,
 	deploymentService *services.LLMProviderDeploymentService,
+	proxyDeploymentService *services.LLMProxyDeploymentService,
 	artifactRepo repositories.ArtifactRepository,
 	ocClient client.OpenChoreoClient,
 ) LLMController {
 	return &llmController{
-		templateService:   templateService,
-		providerService:   providerService,
-		proxyService:      proxyService,
-		deploymentService: deploymentService,
-		artifactRepo:      artifactRepo,
-		ocClient:          ocClient,
+		templateService:        templateService,
+		providerService:        providerService,
+		proxyService:           proxyService,
+		deploymentService:      deploymentService,
+		proxyDeploymentService: proxyDeploymentService,
+		artifactRepo:           artifactRepo,
+		ocClient:               ocClient,
 	}
 }
 
@@ -1039,7 +1044,7 @@ func (c *llmController) DeleteLLMProxy(w http.ResponseWriter, r *http.Request) {
 	proxyID := r.PathValue(utils.PathParamProxyId)
 
 	// Resolve project name to UUID (validates project exists)
-	_, err := c.resolveProjectUUID(ctx, ouID, projectName)
+	projectUUID, err := c.resolveProjectUUID(ctx, ouID, projectName)
 	if err != nil {
 		if errors.Is(err, utils.ErrProjectNotFound) {
 			log.Error("DeleteLLMProxy: project not found", "ouID", ouID, "projectName", projectName, "error", err)
@@ -1051,7 +1056,7 @@ func (c *llmController) DeleteLLMProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := c.proxyService.Delete(proxyID, ouID); err != nil {
+	if err := c.proxyService.DeleteInProject(ctx, proxyID, ouID, projectUUID, c.proxyDeploymentService); err != nil {
 		switch {
 		case errors.Is(err, utils.ErrLLMProxyNotFound):
 			utils.WriteErrorResponse(w, http.StatusNotFound, "LLM proxy not found")

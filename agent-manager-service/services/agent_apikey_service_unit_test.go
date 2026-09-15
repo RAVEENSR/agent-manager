@@ -45,7 +45,7 @@ type stubEventHub struct {
 func (s *stubEventHub) Initialize() error            { return nil }
 func (s *stubEventHub) RegisterGateway(string) error { return nil }
 
-func (s *stubEventHub) PublishEvent(_ string, e eventhub.Event) error {
+func (s *stubEventHub) PublishEvent(_ context.Context, _ string, e eventhub.Event) error {
 	s.published = append(s.published, e)
 	return nil
 }

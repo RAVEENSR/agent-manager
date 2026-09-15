@@ -16,7 +16,10 @@
 
 package eventhub
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // EventType represents the type of event
 type EventType string
@@ -54,7 +57,7 @@ type GatewayState struct {
 type EventHub interface {
 	Initialize() error
 	RegisterGateway(gatewayID string) error
-	PublishEvent(gatewayID string, event Event) error
+	PublishEvent(ctx context.Context, gatewayID string, event Event) error
 	Subscribe(gatewayID string) (<-chan Event, error)
 	Unsubscribe(gatewayID string, subscriber <-chan Event) error
 	UnsubscribeAll(gatewayID string) error

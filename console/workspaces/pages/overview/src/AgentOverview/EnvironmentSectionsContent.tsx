@@ -66,7 +66,6 @@ export function EnvironmentSectionsContent({
                         projectId={projectId}
                         agentId={agentId}
                         envId={envId}
-                        external={external}
                     />
                 </Grid>
                 <Grid size={{ xs: 12, md: 6 }}>

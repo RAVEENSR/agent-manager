@@ -275,22 +275,24 @@ func (s *infraResourceManager) DeleteProject(ctx context.Context, ouID string, p
 		s.logger.Error("Failed to get organization", "ouID", ouID, "error", err)
 		return err
 	}
-	// Check agents exist for the project
-	s.logger.Debug("Checking for associated agents", "projectName", projectName)
-	agents, err := s.ocClient.ListComponents(ctx, ouID, projectName)
+	// Refuse to delete a project that still holds components. This counts every component,
+	// not just agents: projects are shared with other WSO2 Cloud products, and deleting the
+	// project would take their components with it via the project-cleanup finalizer.
+	s.logger.Debug("Checking for components in the project", "ouID", ouID, "projectName", projectName)
+	componentCount, err := s.ocClient.CountProjectComponents(ctx, ouID, projectName)
 	if err != nil {
 		if errors.Is(err, utils.ErrProjectNotFound) {
 			s.logger.Warn("Project not found while listing components; delete is idempotent", "ouID", ouID, "projectName", projectName)
 			return nil
 		}
-		s.logger.Error("Failed to list agents for project", "projectName", projectName, "error", err)
+		s.logger.Error("Failed to count components for project", "ouID", ouID, "projectName", projectName, "error", err)
 		return err
 	}
-	if len(agents) > 0 {
-		s.logger.Warn("Cannot delete project with associated agents", "ouID", ouID, "projectName", projectName, "agentCount", len(agents))
+	if componentCount > 0 {
+		s.logger.Warn("Cannot delete project that still has components", "ouID", ouID, "projectName", projectName, "componentCount", componentCount)
 		return utils.ErrProjectHasAssociatedAgents
 	}
-	s.logger.Debug("No associated agents found, proceeding with deletion", "projectName", projectName)
+	s.logger.Debug("No components found, proceeding with deletion", "ouID", ouID, "projectName", projectName)
 
 	// Delete project from OpenChoreo
 	deleteAttempt, auditErr := audit.Begin(

@@ -24,6 +24,9 @@ import (
 //			ComponentExistsFunc: func(ctx context.Context, ouID string, projectName string, componentName string) (bool, error) {
 //				panic("mock out the ComponentExists method")
 //			},
+//			CountProjectComponentsFunc: func(ctx context.Context, ouID string, projectName string) (int, error) {
+//				panic("mock out the CountProjectComponents method")
+//			},
 //			CreateComponentFunc: func(ctx context.Context, ouID string, projectName string, req client.CreateComponentRequest) error {
 //				panic("mock out the CreateComponent method")
 //			},
@@ -258,6 +261,9 @@ type OpenChoreoClientMock struct {
 
 	// ComponentExistsFunc mocks the ComponentExists method.
 	ComponentExistsFunc func(ctx context.Context, ouID string, projectName string, componentName string) (bool, error)
+
+	// CountProjectComponentsFunc mocks the CountProjectComponents method.
+	CountProjectComponentsFunc func(ctx context.Context, ouID string, projectName string) (int, error)
 
 	// CreateComponentFunc mocks the CreateComponent method.
 	CreateComponentFunc func(ctx context.Context, ouID string, projectName string, req client.CreateComponentRequest) error
@@ -506,6 +512,15 @@ type OpenChoreoClientMock struct {
 			ProjectName string
 			// ComponentName is the componentName argument value.
 			ComponentName string
+		}
+		// CountProjectComponents holds details about calls to the CountProjectComponents method.
+		CountProjectComponents []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// OuID is the ouID argument value.
+			OuID string
+			// ProjectName is the projectName argument value.
+			ProjectName string
 		}
 		// CreateComponent holds details about calls to the CreateComponent method.
 		CreateComponent []struct {
@@ -1336,6 +1351,7 @@ type OpenChoreoClientMock struct {
 	}
 	lockAttachTraits                           sync.RWMutex
 	lockComponentExists                        sync.RWMutex
+	lockCountProjectComponents                 sync.RWMutex
 	lockCreateComponent                        sync.RWMutex
 	lockCreateDeploymentPipeline               sync.RWMutex
 	lockCreateEnvironment                      sync.RWMutex
@@ -1501,6 +1517,46 @@ func (mock *OpenChoreoClientMock) ComponentExistsCalls() []struct {
 	mock.lockComponentExists.RLock()
 	calls = mock.calls.ComponentExists
 	mock.lockComponentExists.RUnlock()
+	return calls
+}
+
+// CountProjectComponents calls CountProjectComponentsFunc.
+func (mock *OpenChoreoClientMock) CountProjectComponents(ctx context.Context, ouID string, projectName string) (int, error) {
+	if mock.CountProjectComponentsFunc == nil {
+		panic("OpenChoreoClientMock.CountProjectComponentsFunc: method is nil but OpenChoreoClient.CountProjectComponents was just called")
+	}
+	callInfo := struct {
+		Ctx         context.Context
+		OuID        string
+		ProjectName string
+	}{
+		Ctx:         ctx,
+		OuID:        ouID,
+		ProjectName: projectName,
+	}
+	mock.lockCountProjectComponents.Lock()
+	mock.calls.CountProjectComponents = append(mock.calls.CountProjectComponents, callInfo)
+	mock.lockCountProjectComponents.Unlock()
+	return mock.CountProjectComponentsFunc(ctx, ouID, projectName)
+}
+
+// CountProjectComponentsCalls gets all the calls that were made to CountProjectComponents.
+// Check the length with:
+//
+//	len(mockedOpenChoreoClient.CountProjectComponentsCalls())
+func (mock *OpenChoreoClientMock) CountProjectComponentsCalls() []struct {
+	Ctx         context.Context
+	OuID        string
+	ProjectName string
+} {
+	var calls []struct {
+		Ctx         context.Context
+		OuID        string
+		ProjectName string
+	}
+	mock.lockCountProjectComponents.RLock()
+	calls = mock.calls.CountProjectComponents
+	mock.lockCountProjectComponents.RUnlock()
 	return calls
 }
 

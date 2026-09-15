@@ -73,7 +73,14 @@ type OpenChoreoClient interface {
 	GetEnvResourceConfigs(ctx context.Context, ouID, projectName, componentName, environment string) (*ComponentResourceConfigsResponse, error)
 	UpdateEnvResourceConfigs(ctx context.Context, ouID, projectName, componentName, environment string, req UpdateComponentResourceConfigsRequest) error
 	DeleteComponent(ctx context.Context, ouID, projectName, componentName string) error
+	// ListComponents returns only the agent components in the project. Projects are shared
+	// across WSO2 Cloud products, so a project can also hold components another product
+	// created; those are deliberately left out (see isAgentComponentType).
 	ListComponents(ctx context.Context, ouID, projectName string) ([]*models.AgentResponse, error)
+	// CountProjectComponents counts every component in the project, including those other
+	// products created. Emptiness checks must use this rather than ListComponents, which
+	// would report a project still holding another product's components as empty.
+	CountProjectComponents(ctx context.Context, ouID, projectName string) (int, error)
 	ListComponentsByKind(ctx context.Context, ouID, projectName, kindName string) ([]*models.AgentResponse, error)
 	ComponentExists(ctx context.Context, ouID, projectName, componentName string) (bool, error)
 	AttachTraits(ctx context.Context, ouID, projectName, componentName string, traitRequests []TraitRequest) error

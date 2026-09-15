@@ -1254,14 +1254,75 @@ func (c *openChoreoClient) ListComponents(ctx context.Context, ouID, projectName
 
 	components := make([]*models.AgentResponse, 0, len(resp.JSON200.Items))
 	for i := range resp.JSON200.Items {
-		comp, err := convertComponentFromTyped(&resp.JSON200.Items[i])
+		item := &resp.JSON200.Items[i]
+		if item.Spec == nil || !isAgentComponentType(item.Spec.ComponentType.Name) {
+			// Projects are shared across WSO2 Cloud products, so a project can contain
+			// components other products created (e.g. a plain "deployment/service").
+			// Agent Manager should only ever list components it itself provisions.
+			continue
+		}
+		comp, err := convertComponentFromTyped(item)
 		if err != nil {
-			slog.Error("failed to convert component", "component", resp.JSON200.Items[i].Metadata.Name, "error", err)
+			slog.Error("failed to convert component", "component", item.Metadata.Name, "error", err)
 			continue
 		}
 		components = append(components, comp)
 	}
 	return components, nil
+}
+
+// CountProjectComponents counts every component in the project, whichever product created it.
+//
+// ListComponents answers "which agents does this project have"; this answers "is this project
+// empty". The two differ because projects are shared: a project holding only another product's
+// components has no agents but is not empty, and deleting it would take that product's
+// components with it (the Project carries an openchoreo.dev/project-cleanup finalizer).
+func (c *openChoreoClient) CountProjectComponents(ctx context.Context, ouID, projectName string) (int, error) {
+	namespaceName := c.NamespaceFor(ouID)
+	var cursor *gen.CursorParam
+	total := 0
+	for {
+		resp, err := c.ocClient.ListComponentsWithResponse(ctx, namespaceName, &gen.ListComponentsParams{
+			Project: &projectName,
+			Limit:   &defaultListLimit,
+			Cursor:  cursor,
+		})
+		if err != nil {
+			return 0, fmt.Errorf("failed to list components: %w", err)
+		}
+		if resp.StatusCode() != http.StatusOK {
+			return 0, handleErrorResponse(resp.StatusCode(), ErrorResponses{
+				JSON401: resp.JSON401,
+				JSON403: resp.JSON403,
+				JSON404: resp.JSON404,
+				JSON500: resp.JSON500,
+			})
+		}
+		if resp.JSON200 == nil {
+			return total, nil
+		}
+
+		total += len(resp.JSON200.Items)
+		nextCursor := resp.JSON200.Pagination.NextCursor
+		if nextCursor == nil || *nextCursor == "" {
+			return total, nil
+		}
+		next := gen.CursorParam(*nextCursor)
+		cursor = &next
+	}
+}
+
+// isAgentComponentType reports whether componentTypeName is one of the component
+// types agent-manager itself creates (see getOpenChoreoComponentType and
+// buildInternalAgentFromKindComponentRequestBody). Used to filter out components
+// created by other products sharing the same project.
+func isAgentComponentType(componentTypeName string) bool {
+	switch ComponentType(componentTypeName) {
+	case ComponentTypeInternalAgentAPI, ComponentTypeExternalAgentAPI:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *openChoreoClient) ListComponentsByKind(ctx context.Context, ouID, projectName, kindName string) ([]*models.AgentResponse, error) {

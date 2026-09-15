@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -293,19 +294,57 @@ func preserveUpstreamAuthCredential(existing, updated *models.UpstreamAuth) *mod
 	return updated
 }
 
-// Delete deletes an LLM proxy
-func (s *LLMProxyService) Delete(proxyID, ouID string) error {
+// gatewayDeletionTimeout bounds post-commit cleanup independently of request cancellation.
+const gatewayDeletionTimeout = 10 * time.Second
+
+// Delete is used by internal cleanup paths that already own the proxy handle.
+func (s *LLMProxyService) Delete(ctx context.Context, proxyID, ouID string, deploymentService *LLMProxyDeploymentService) error {
+	return s.deleteProxy(ctx, proxyID, ouID, "", deploymentService)
+}
+
+// DeleteInProject enforces the project named by the public API before cleanup starts.
+func (s *LLMProxyService) DeleteInProject(ctx context.Context, proxyID, ouID, projectUUID string, deploymentService *LLMProxyDeploymentService) error {
+	if projectUUID == "" {
+		return utils.ErrInvalidInput
+	}
+	return s.deleteProxy(ctx, proxyID, ouID, projectUUID, deploymentService)
+}
+
+func (s *LLMProxyService) deleteProxy(ctx context.Context, proxyID, ouID, projectUUID string, deploymentService *LLMProxyDeploymentService) error {
 	if proxyID == "" {
 		return utils.ErrInvalidInput
 	}
-
-	if err := s.proxyRepo.Delete(proxyID, ouID); err != nil {
+	proxy, err := s.proxyRepo.GetByIDCtx(ctx, proxyID, ouID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return utils.ErrLLMProxyNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("resolve proxy for deletion: %w", err)
+	}
+	if proxy == nil {
+		return utils.ErrLLMProxyNotFound
+	}
+	if projectUUID != "" && proxy.ProjectUUID.String() != projectUUID {
+		return utils.ErrLLMProxyNotFound
+	}
+	var gatewayIDs []string
+	if deploymentService != nil {
+		gatewayIDs, err = deploymentService.GatewayIDsForProxyDeletion(ctx, proxy.UUID, ouID)
+		if err != nil {
+			return fmt.Errorf("resolve proxy deletion gateways: %w", err)
+		}
+	}
+	if err := s.proxyRepo.DeleteInProject(ctx, proxyID, ouID, proxy.ProjectUUID.String()); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return utils.ErrLLMProxyNotFound
 		}
-		return fmt.Errorf("failed to delete proxy: %w", err)
+		return fmt.Errorf("delete proxy: %w", err)
 	}
-
+	if deploymentService != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gatewayDeletionTimeout)
+		defer cancel()
+		deploymentService.BroadcastLLMProxyDeletion(cleanupCtx, proxyID, ouID, gatewayIDs)
+	}
 	return nil
 }
 

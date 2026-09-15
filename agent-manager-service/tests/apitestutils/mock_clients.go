@@ -144,6 +144,9 @@ func CreateMockOpenChoreoClient() *clientmocks.OpenChoreoClientMock {
 		ListComponentsFunc: func(ctx context.Context, namespaceName string, projectName string) ([]*models.AgentResponse, error) {
 			return []*models.AgentResponse{}, nil
 		},
+		CountProjectComponentsFunc: func(ctx context.Context, namespaceName string, projectName string) (int, error) {
+			return 0, nil
+		},
 		DeleteProjectFunc: func(ctx context.Context, namespaceName string, projectName string) error {
 			return nil
 		},

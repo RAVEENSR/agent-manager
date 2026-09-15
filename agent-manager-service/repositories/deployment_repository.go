@@ -61,6 +61,7 @@ type DeploymentRepository interface {
 	// Gateway mapping methods (derived from deployment status)
 	GetDeployedGatewaysByProvider(artifactUUID uuid.UUID, orgUUID string) ([]string, error)
 	GetTrackedGatewaysByProvider(artifactUUID uuid.UUID, orgUUID string) ([]string, error)
+	GetTrackedGatewaysByProviderCtx(ctx context.Context, artifactUUID uuid.UUID, orgUUID string) ([]string, error)
 	GetDeployedProvidersByGateway(gatewayUUID uuid.UUID, orgUUID string) ([]string, error)
 	IsProviderDeployedToGateway(artifactUUID uuid.UUID, gatewayUUID uuid.UUID, orgUUID string) (bool, error)
 	GetByArtifactAndGateway(artifactUUID, gatewayUUID, orgUUID string) (*models.Deployment, error)
@@ -433,8 +434,12 @@ func (r *DeploymentRepo) GetDeployedGatewaysByProvider(artifactUUID uuid.UUID, o
 // UNDEPLOYED. Used by save-time redeploy flows that must reach every gateway the proxy
 // has ever been pushed to, including ones whose last deploy ack failed.
 func (r *DeploymentRepo) GetTrackedGatewaysByProvider(artifactUUID uuid.UUID, orgUUID string) ([]string, error) {
+	return r.GetTrackedGatewaysByProviderCtx(context.Background(), artifactUUID, orgUUID)
+}
+
+func (r *DeploymentRepo) GetTrackedGatewaysByProviderCtx(ctx context.Context, artifactUUID uuid.UUID, orgUUID string) ([]string, error) {
 	var gatewayUUIDs []string
-	err := r.db.Table("deployment_status").
+	err := r.db.WithContext(ctx).Table("deployment_status").
 		Where("artifact_uuid = ? AND ou_id = ?", artifactUUID, orgUUID).
 		Pluck("gateway_uuid", &gatewayUUIDs).Error
 	if err != nil {

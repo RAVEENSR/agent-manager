@@ -259,7 +259,11 @@ func (b *SQLBackend) RegisterGateway(gatewayID string) error {
 }
 
 // PublishEvent publishes an event atomically (insert event + bump gateway version).
-func (b *SQLBackend) PublishEvent(gatewayID string, event Event) error {
+func (b *SQLBackend) PublishEvent(ctx context.Context, gatewayID string, event Event) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(b.ctx, cancel)
+	defer stop()
 	var err error
 	if gatewayID, err = normalizeGatewayID(gatewayID); err != nil {
 		return err
@@ -275,7 +279,7 @@ func (b *SQLBackend) PublishEvent(gatewayID string, event Event) error {
 		eventID = event.EventID
 	}
 
-	tx, err := b.db.BeginTx(b.ctx, nil)
+	tx, err := b.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -288,11 +292,12 @@ func (b *SQLBackend) PublishEvent(gatewayID string, event Event) error {
 	// Ensure the gateway row exists. This handles gateways that existed before
 	// the EventHub was introduced and gateways that publish events before their
 	// first WebSocket connection (e.g. API key provisioning at agent creation).
-	if _, err = tx.Stmt(b.upsertGatewayStmt).Exec(gatewayID); err != nil {
+	if _, err = tx.StmtContext(ctx, b.upsertGatewayStmt).ExecContext(ctx, gatewayID); err != nil {
 		return fmt.Errorf("failed to ensure gateway registered: %w", err)
 	}
 
-	_, err = tx.Stmt(b.insertEventStmt).Exec(
+	_, err = tx.StmtContext(ctx, b.insertEventStmt).ExecContext(
+		ctx,
 		gatewayID,
 		time.Now(),
 		event.OriginatedTimestamp,
@@ -309,7 +314,7 @@ func (b *SQLBackend) PublishEvent(gatewayID string, event Event) error {
 		}
 		err = nil
 
-		exists, checkErr := b.eventExists(eventID)
+		exists, checkErr := b.eventExists(ctx, eventID)
 		if checkErr != nil {
 			return fmt.Errorf("failed to check event existence after insert failure: %w", checkErr)
 		}
@@ -322,7 +327,7 @@ func (b *SQLBackend) PublishEvent(gatewayID string, event Event) error {
 		return fmt.Errorf("failed to insert event: %w", insertErr)
 	}
 
-	result, err := tx.Stmt(b.updateGatewayVersionStmt).Exec(newVersion, gatewayID)
+	result, err := tx.StmtContext(ctx, b.updateGatewayVersionStmt).ExecContext(ctx, newVersion, gatewayID)
 	if err != nil {
 		return fmt.Errorf("failed to update gateway version: %w", err)
 	}
@@ -344,9 +349,9 @@ func (b *SQLBackend) PublishEvent(gatewayID string, event Event) error {
 	return nil
 }
 
-func (b *SQLBackend) eventExists(eventID string) (bool, error) {
+func (b *SQLBackend) eventExists(ctx context.Context, eventID string) (bool, error) {
 	var id string
-	err := b.getEventByIDStmt.QueryRow(eventID).Scan(&id)
+	err := b.getEventByIDStmt.QueryRowContext(ctx, eventID).Scan(&id)
 	if err == nil {
 		return true, nil
 	}

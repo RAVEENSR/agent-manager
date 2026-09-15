@@ -30,7 +30,6 @@ import (
 
 	"github.com/wso2/agent-manager/agent-manager-service/clients/clientmocks"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/jwtassertion"
-	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/tests/apitestutils"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 	"github.com/wso2/agent-manager/agent-manager-service/wiring"
@@ -74,17 +73,11 @@ func TestDeleteProject(t *testing.T) {
 
 	t.Run("Deleting a project with agents should return 409", func(t *testing.T) {
 		openChoreoClient := apitestutils.CreateMockOpenChoreoClient()
-		openChoreoClient.ListComponentsFunc = func(ctx context.Context, orgName string, projectName string) ([]*models.AgentResponse, error) {
+		openChoreoClient.CountProjectComponentsFunc = func(ctx context.Context, orgName string, projectName string) (int, error) {
 			if projectName == testProjectWithAgents {
-				return []*models.AgentResponse{
-					{
-						Name:        "test-agent",
-						ProjectName: projectName,
-						DisplayName: "Test Agent",
-					},
-				}, nil
+				return 1, nil
 			}
-			return []*models.AgentResponse{}, nil
+			return 0, nil
 		}
 		testClients := wiring.TestClients{
 			OpenChoreoClient: openChoreoClient,

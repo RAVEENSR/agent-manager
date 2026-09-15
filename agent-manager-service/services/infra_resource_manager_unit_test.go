@@ -306,11 +306,29 @@ func TestInfraResourceManager_ListProjects(t *testing.T) {
 func TestInfraResourceManager_DeleteProject(t *testing.T) {
 	const org, proj = "acme", "proj-a"
 
-	t.Run("idempotent when ListComponents reports project not found", func(t *testing.T) {
+	t.Run("refuses deletion when only another product's components remain", func(t *testing.T) {
+		// A shared project can hold components no agent list would show. Counting agents
+		// instead of components here would delete the project — and with it, via the
+		// project-cleanup finalizer, another product's components.
 		oc := &clientmocks.OpenChoreoClientMock{
 			GetOrganizationFunc: okOrg(),
+			CountProjectComponentsFunc: func(_ context.Context, _, _ string) (int, error) {
+				return 1, nil
+			},
 			ListComponentsFunc: func(_ context.Context, _, _ string) ([]*models.AgentResponse, error) {
-				return nil, utils.ErrProjectNotFound
+				return []*models.AgentResponse{}, nil // no agents, yet not empty
+			},
+			// DeleteProjectFunc nil => must not be reached.
+		}
+		err := newInfraManager(oc).DeleteProject(auditableCtx(t), org, proj)
+		assert.ErrorIs(t, err, utils.ErrProjectHasAssociatedAgents)
+	})
+
+	t.Run("idempotent when the component count reports project not found", func(t *testing.T) {
+		oc := &clientmocks.OpenChoreoClientMock{
+			GetOrganizationFunc: okOrg(),
+			CountProjectComponentsFunc: func(_ context.Context, _, _ string) (int, error) {
+				return 0, utils.ErrProjectNotFound
 			},
 			// DeleteProjectFunc nil => must not be reached.
 		}
@@ -321,8 +339,8 @@ func TestInfraResourceManager_DeleteProject(t *testing.T) {
 	t.Run("refuses deletion when agents are associated", func(t *testing.T) {
 		oc := &clientmocks.OpenChoreoClientMock{
 			GetOrganizationFunc: okOrg(),
-			ListComponentsFunc: func(_ context.Context, _, _ string) ([]*models.AgentResponse, error) {
-				return []*models.AgentResponse{{Name: "agent-1"}}, nil
+			CountProjectComponentsFunc: func(_ context.Context, _, _ string) (int, error) {
+				return 1, nil
 			},
 		}
 		err := newInfraManager(oc).DeleteProject(auditableCtx(t), org, proj)
@@ -333,8 +351,8 @@ func TestInfraResourceManager_DeleteProject(t *testing.T) {
 		deleted := false
 		oc := &clientmocks.OpenChoreoClientMock{
 			GetOrganizationFunc: okOrg(),
-			ListComponentsFunc: func(_ context.Context, _, _ string) ([]*models.AgentResponse, error) {
-				return []*models.AgentResponse{}, nil
+			CountProjectComponentsFunc: func(_ context.Context, _, _ string) (int, error) {
+				return 0, nil
 			},
 			DeleteProjectFunc: func(_ context.Context, _, _ string) error {
 				deleted = true
@@ -349,8 +367,8 @@ func TestInfraResourceManager_DeleteProject(t *testing.T) {
 	t.Run("idempotent when DeleteProject reports project not found", func(t *testing.T) {
 		oc := &clientmocks.OpenChoreoClientMock{
 			GetOrganizationFunc: okOrg(),
-			ListComponentsFunc: func(_ context.Context, _, _ string) ([]*models.AgentResponse, error) {
-				return []*models.AgentResponse{}, nil
+			CountProjectComponentsFunc: func(_ context.Context, _, _ string) (int, error) {
+				return 0, nil
 			},
 			DeleteProjectFunc: func(_ context.Context, _, _ string) error {
 				return utils.ErrProjectNotFound
@@ -364,8 +382,8 @@ func TestInfraResourceManager_DeleteProject(t *testing.T) {
 		boom := errors.New("list boom")
 		oc := &clientmocks.OpenChoreoClientMock{
 			GetOrganizationFunc: okOrg(),
-			ListComponentsFunc: func(_ context.Context, _, _ string) ([]*models.AgentResponse, error) {
-				return nil, boom
+			CountProjectComponentsFunc: func(_ context.Context, _, _ string) (int, error) {
+				return 0, boom
 			},
 		}
 		err := newInfraManager(oc).DeleteProject(auditableCtx(t), org, proj)

@@ -64,6 +64,7 @@ type GatewayRepository interface {
 	GetByNameAndOrgID(name, ouID string) (*models.Gateway, error)
 	List() ([]*models.Gateway, error)
 	ListWithFilters(filters GatewayFilterOptions) ([]*models.Gateway, error)
+	ListWithFiltersCtx(ctx context.Context, filters GatewayFilterOptions) ([]*models.Gateway, error)
 	CountWithFilters(filters GatewayFilterOptions) (int64, error)
 	Delete(gatewayID, ouID string) error
 	UpdateGateway(gateway *models.Gateway) error
@@ -172,7 +173,11 @@ func (r *GatewayRepo) List() ([]*models.Gateway, error) {
 
 // ListWithFilters retrieves gateways with optional filtering and pagination
 func (r *GatewayRepo) ListWithFilters(filters GatewayFilterOptions) ([]*models.Gateway, error) {
-	query := r.buildFilterQuery(filters)
+	return r.ListWithFiltersCtx(context.Background(), filters)
+}
+
+func (r *GatewayRepo) ListWithFiltersCtx(ctx context.Context, filters GatewayFilterOptions) ([]*models.Gateway, error) {
+	query := r.buildFilterQuery(filters).WithContext(ctx)
 
 	// Apply pagination at database level
 	if filters.Limit > 0 {

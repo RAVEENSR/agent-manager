@@ -17,6 +17,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1129,4 +1130,81 @@ func pathsAreEqual(a, b models.LLMPolicyPath) bool {
 // isBoolTrue checks if a boolean pointer is non-nil and true
 func isBoolTrue(v *bool) bool {
 	return v != nil && *v
+}
+
+// GatewayIDsForProviderDeletion returns every gateway that could still hold the
+// provider config: all gateways with a deployment-status record, regardless of
+// current state, unioned with all active gateways in the organization.
+func (s *LLMProviderDeploymentService) GatewayIDsForProviderDeletion(ctx context.Context, artifactUUID uuid.UUID, ouID string) ([]string, error) {
+	gatewayIDs := map[string]struct{}{}
+	if s.deploymentRepo != nil {
+		tracked, err := s.deploymentRepo.GetTrackedGatewaysByProviderCtx(ctx, artifactUUID, ouID)
+		if err != nil {
+			return nil, fmt.Errorf("get tracked deletion gateways: %w", err)
+		}
+		for _, id := range tracked {
+			if strings.TrimSpace(id) != "" {
+				gatewayIDs[id] = struct{}{}
+			}
+		}
+	}
+	if s.gatewayRepo != nil {
+		active := true
+		gateways, err := s.gatewayRepo.ListWithFiltersCtx(ctx, repositories.GatewayFilterOptions{OrganizationID: ouID, Status: &active})
+		if err != nil {
+			return nil, fmt.Errorf("get active deletion gateways: %w", err)
+		}
+		for _, gateway := range gateways {
+			if gateway != nil {
+				gatewayIDs[gateway.UUID.String()] = struct{}{}
+			}
+		}
+	}
+	out := make([]string, 0, len(gatewayIDs))
+	for id := range gatewayIDs {
+		out = append(out, id)
+	}
+	return out, nil
+}
+
+// BroadcastLLMProviderDeletion tells the given gateways to drop this provider's
+// config outright. The paired llmprovider.undeployed event only flips the gateway's
+// desired state and deliberately preserves the config, its keys and its policies,
+// so this is the only event that actually reclaims it from the xDS snapshot.
+//
+// Best-effort by design: a deletion already committed in the database must not be
+// rolled back because one gateway is unreachable.
+func (s *LLMProviderDeploymentService) BroadcastLLMProviderDeletion(ctx context.Context, providerID, ouID string, gatewayIDs []string) {
+	if s.gatewayEventsService == nil || len(gatewayIDs) == 0 {
+		return
+	}
+
+	// providerID must be the canonical control-plane UUID, not a handle. The gateway
+	// resolves it with findAPIConfig, which looks up the stored config id and then
+	// falls back to the control-plane artifact id — and an LlmProvider config is
+	// stored under its UUID, with no artifact-id annotation to fall back to. Passing
+	// a handle therefore misses both lookups and the gateway silently logs
+	// "configuration not found" instead of dropping the config.
+	//
+	// This deliberately does NOT mirror the sibling llmprovider.undeployed event,
+	// which still passes whatever identifier the caller used and so has this same
+	// latent bug when handed a handle.
+	//
+	// Note the asymmetry with BroadcastLLMProxyDeletion: LlmProxy configs are stored
+	// under their handle, so that path passes the handle instead. Do not "unify"
+	// these two without re-checking what the gateway actually keys each kind by.
+	event := &models.LLMProviderDeletionEvent{ProviderID: providerID}
+
+	for _, gatewayID := range gatewayIDs {
+		if strings.TrimSpace(gatewayID) == "" {
+			continue
+		}
+		if err := s.gatewayEventsService.BroadcastLLMProviderDeletionEvent(ctx, gatewayID, event); err != nil {
+			slog.Warn("LLMProviderDeploymentService.BroadcastLLMProviderDeletion: failed to broadcast deletion event",
+				"providerID", providerID, "ouID", ouID, "gatewayID", gatewayID, "error", err)
+		} else {
+			slog.Info("LLMProviderDeploymentService.BroadcastLLMProviderDeletion: deletion event sent",
+				"providerID", providerID, "ouID", ouID, "gatewayID", gatewayID)
+		}
+	}
 }
