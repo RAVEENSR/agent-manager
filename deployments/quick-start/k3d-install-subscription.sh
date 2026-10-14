@@ -251,10 +251,12 @@ tar -xzf "$BUNDLE" -C "$DIST_DIR" || die "failed to unpack the install bundle"
 QUICK_START_DIR="${DIST_DIR}/deployments/quick-start"
 [[ -f "${QUICK_START_DIR}/install.sh" ]] || die "the install bundle is missing deployments/quick-start/install.sh"
 # The bundle's installer defaults name where its charts and images come from,
-# and its manifest records the project it was built for. A bundle built for a
-# different project would install from there, so refuse it.
-grep -q "\"registry\": *\"${REGISTRY_HOST}/${PROJECT}\"" "${DIST_DIR}/MANIFEST.json" 2>/dev/null || \
-  die "the ${TAG} bundle was not built for ${REGISTRY_HOST}/${PROJECT}"
+# and its manifest records the image registry it was built for, as
+# "imageRegistry" (the release bundle's key) or "registry". A bundle built for
+# a different project would install from there, so refuse it.
+EXPECTED_REGISTRY="${REGISTRY_HOST}/${PROJECT}"
+grep -Eq "\"(imageRegistry|registry)\"[[:space:]]*:[[:space:]]*\"${EXPECTED_REGISTRY//./\\.}\"" "${DIST_DIR}/MANIFEST.json" 2>/dev/null || \
+  die "the ${TAG} bundle was not built for ${EXPECTED_REGISTRY}"
 log "Bundle verified and unpacked in ${DIST_DIR}"
 
 if [[ "$DOWNLOAD_ONLY" == true ]]; then
