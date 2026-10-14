@@ -250,6 +250,13 @@ code="$(registry_get "blobs/${LAYER}" "$BUNDLE")"
 tar -xzf "$BUNDLE" -C "$DIST_DIR" || die "failed to unpack the install bundle"
 QUICK_START_DIR="${DIST_DIR}/deployments/quick-start"
 [[ -f "${QUICK_START_DIR}/install.sh" ]] || die "the install bundle is missing deployments/quick-start/install.sh"
+# The bundle's installer defaults name where its charts and images come from,
+# and its manifest records the image registry it was built for, as
+# "imageRegistry" (the release bundle's key) or "registry". A bundle built for
+# a different project would install from there, so refuse it.
+EXPECTED_REGISTRY="${REGISTRY_HOST}/${PROJECT}"
+grep -Eq "\"(imageRegistry|registry)\"[[:space:]]*:[[:space:]]*\"${EXPECTED_REGISTRY//./\\.}\"" "${DIST_DIR}/MANIFEST.json" 2>/dev/null || \
+  die "the ${TAG} bundle was not built for ${EXPECTED_REGISTRY}"
 log "Bundle verified and unpacked in ${DIST_DIR}"
 
 if [[ "$DOWNLOAD_ONLY" == true ]]; then
@@ -268,13 +275,13 @@ if [[ -z "${K3D_FIX_DNS:-}" ]] && docker info --format '{{.Name}}' 2>/dev/null |
   export K3D_FIX_DNS=0
 fi
 
-# Set explicitly, not left to the bundle's defaults, so variables left in the
-# shell from an earlier guided install cannot point it somewhere else. The
-# bundled installer takes the credentials from here for the node's registry
-# configuration, the pull secrets and the helm login.
-export AMP_IMAGE_REGISTRY="${REGISTRY_HOST}/${PROJECT}"
-export HELM_CHART_REGISTRY="${REGISTRY_HOST}/${PROJECT}"
-export VERSION="$CHART_VERSION"
+# Where the charts and images come from, and at which version, is stamped into
+# the bundle's installer defaults when the bundle is published, so it always
+# matches how that update was published. Clear any values left in the shell
+# from an earlier guided install so those defaults apply. The bundled installer
+# takes the credentials from here for the node's registry configuration, the
+# pull secrets and the helm login.
+unset AMP_IMAGE_REGISTRY HELM_CHART_REGISTRY VERSION
 export AMP_REGISTRY_USERNAME AMP_REGISTRY_PASSWORD
 unset AMP_REGISTRY_CREDENTIALS_FILE
 
