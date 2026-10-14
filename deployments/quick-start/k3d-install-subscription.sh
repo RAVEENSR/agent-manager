@@ -22,7 +22,7 @@ set -euo pipefail
 
 # Stamped to the release version at build time (see .github/scripts/update-install-helpers.sh).
 # Support updates of a release are published as <release>.<level>.
-DEFAULT_VERSION="0.0.0-dev"
+DEFAULT_VERSION="1.0.0"
 REGISTRY_URL="${AMP_SUBSCRIPTION_REGISTRY_URL:-https://registry.wso2.com}"
 REGISTRY_URL="${REGISTRY_URL%/}"
 REGISTRY_HOST="${REGISTRY_URL#*://}"
