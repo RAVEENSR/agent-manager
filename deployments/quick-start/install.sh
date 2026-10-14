@@ -1678,18 +1678,15 @@ echo ""
 
 log_step "Installation Complete!"
 
-log_success "OpenChoreo and Agent Management Platform are ready!"
-echo ""
-log_info "Cluster: ${CLUSTER_CONTEXT}"
+log_success "Agent Manager is ready."
+# The console sign-in comes first, as the one next step. The API and trace
+# endpoints are left out: the console shows an agent's trace endpoint where it
+# is needed, and the API is reached through the console or amctl.
 # Localhost URLs apply to the local quick-start. Wrappers that front the cluster
 # with a reverse proxy (e.g. the VM installer) set SHOW_LOCALHOST_URLS=false and
 # print their own reachable URLs instead.
 if [[ "${SHOW_LOCALHOST_URLS:-true}" == "true" ]]; then
-  log_info "Agent Management Platform Console: http://console.amp.localhost:8080"
-  log_info "Agent Management Platform API: http://api.amp.localhost:8080"
-  log_info "Observability Gateway (for traces): http://default-default.gateway.localhost:19080/otel"
-
-  # Admin login for the console above. Fetched fresh from the amp-admin-credentials
+  # Admin login for the local console. Fetched fresh from the amp-admin-credentials
   # Secret (see wso2-amp-thunder-extension/templates/admin-credentials.yaml) rather
   # than tracked through the install. Wrappers that set SHOW_LOCALHOST_URLS=false
   # print their own reachable console URL and their own copy of this instead —
@@ -1739,9 +1736,13 @@ log_info "To check status: kubectl get pods -A"
 # "is this the plain local quick-start?".
 if [[ "${SHOW_UNINSTALL_HINTS:-${SHOW_LOCALHOST_URLS:-true}}" == "true" ]]; then
   echo ""
+  # Full path: the one-command installers run this script from an unpacked
+  # bundle, so the caller's shell is rarely in this directory. Shell-quoted so
+  # the commands still paste correctly when the path contains spaces.
+  UNINSTALL_SCRIPT="$(printf '%q' "${SCRIPT_DIR}/uninstall.sh")"
   log_step "Uninstall Options"
-  log_info "Uninstall platform (keep cluster):       ./uninstall.sh"
-  log_info "Uninstall and delete k3d cluster:        ./uninstall.sh --delete-cluster"
-  log_info "Full cleanup (including Colima profile):  ./uninstall.sh --delete-cluster --delete-colima"
+  log_info "Uninstall platform (keep cluster):       bash ${UNINSTALL_SCRIPT}"
+  log_info "Uninstall and delete k3d cluster:        bash ${UNINSTALL_SCRIPT} --delete-cluster"
+  log_info "Full cleanup (including Colima profile):  bash ${UNINSTALL_SCRIPT} --delete-cluster --delete-colima"
 fi
 echo ""
