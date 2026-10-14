@@ -1737,10 +1737,12 @@ log_info "To check status: kubectl get pods -A"
 if [[ "${SHOW_UNINSTALL_HINTS:-${SHOW_LOCALHOST_URLS:-true}}" == "true" ]]; then
   echo ""
   # Full path: the one-command installers run this script from an unpacked
-  # bundle, so the caller's shell is rarely in this directory.
+  # bundle, so the caller's shell is rarely in this directory. Shell-quoted so
+  # the commands still paste correctly when the path contains spaces.
+  UNINSTALL_SCRIPT="$(printf '%q' "${SCRIPT_DIR}/uninstall.sh")"
   log_step "Uninstall Options"
-  log_info "Uninstall platform (keep cluster):       bash ${SCRIPT_DIR}/uninstall.sh"
-  log_info "Uninstall and delete k3d cluster:        bash ${SCRIPT_DIR}/uninstall.sh --delete-cluster"
-  log_info "Full cleanup (including Colima profile):  bash ${SCRIPT_DIR}/uninstall.sh --delete-cluster --delete-colima"
+  log_info "Uninstall platform (keep cluster):       bash ${UNINSTALL_SCRIPT}"
+  log_info "Uninstall and delete k3d cluster:        bash ${UNINSTALL_SCRIPT} --delete-cluster"
+  log_info "Full cleanup (including Colima profile):  bash ${UNINSTALL_SCRIPT} --delete-cluster --delete-colima"
 fi
 echo ""
