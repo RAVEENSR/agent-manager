@@ -558,6 +558,15 @@ if ! k3d cluster list 2>/dev/null | grep -q "${CLUSTER_NAME}"; then
     log_success "All required ports are available"
 fi
 
+# Charts on the same private registry as the images need a helm login as well.
+# Doing it here also proves the credentials before any cluster is created.
+if declare -F amp_registry_helm_login >/dev/null 2>&1; then
+    if ! amp_registry_helm_login; then
+        log_error "Could not log helm in to the chart registry ${HELM_CHART_REGISTRY}"
+        exit 1
+    fi
+fi
+
 log_success "All prerequisites verified"
 
 # ============================================================================
