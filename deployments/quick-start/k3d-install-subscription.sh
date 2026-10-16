@@ -210,9 +210,8 @@ chart_version_for() {
   if [[ "$1" -eq 0 ]]; then echo "$VERSION"; else echo "${VERSION}-u$1"; fi
 }
 
-# Sets NEWEST_LEVEL to the newest level published, or leaves it empty.
-NEWEST_LEVEL=""
-find_newest() {
+# Prints the newest level published, or nothing if none is.
+newest_level() {
   local found n
   if show_chart ">=${VERSION}-u <${VERSION}"; then
     found="$(sed -n 's/^version:[[:space:]]*//p' "$WORK/chart.yaml" | head -1)"
@@ -220,21 +219,25 @@ find_newest() {
       die "unexpected chart version '${found}' for release ${VERSION} in ${PROJECT}"
     n="${BASH_REMATCH[1]}"
     while show_chart "$(chart_version_for $((n + 1)))"; do n=$((n + 1)); done
-    NEWEST_LEVEL="$n"
+    echo "$n"
   elif show_chart "$VERSION"; then
-    NEWEST_LEVEL=0
+    echo 0
   fi
 }
 
-find_newest
+# A named version is looked up directly. Finding the newest needs the registry
+# to list tags, so for a named version it only adds to the messages and is never
+# allowed to stop the install.
 if [[ -z "$LEVEL" ]]; then
-  [[ -n "$NEWEST_LEVEL" ]] || die "nothing of release ${VERSION} is published to ${PROJECT} yet"
-  LEVEL="$NEWEST_LEVEL"
-elif ! show_chart "$(chart_version_for "$LEVEL")"; then
-  if [[ -n "$NEWEST_LEVEL" ]]; then
-    die "$(chart_version_for "$LEVEL") is not published to ${PROJECT}; the newest is $(chart_version_for "$NEWEST_LEVEL")"
+  LEVEL="$(newest_level)"
+  [[ -n "$LEVEL" ]] || die "nothing of release ${VERSION} is published to ${PROJECT} yet"
+  NEWEST_LEVEL="$LEVEL"
+else
+  if ! show_chart "$(chart_version_for "$LEVEL")"; then
+    NEWEST_LEVEL="$(newest_level 2>/dev/null)" || NEWEST_LEVEL=""
+    die "$(chart_version_for "$LEVEL") is not published to ${PROJECT}${NEWEST_LEVEL:+; the newest is $(chart_version_for "$NEWEST_LEVEL")}"
   fi
-  die "$(chart_version_for "$LEVEL") is not published to ${PROJECT}, and nothing of release ${VERSION} is yet"
+  NEWEST_LEVEL="$(newest_level 2>/dev/null)" || NEWEST_LEVEL=""
 fi
 CHART_VERSION="$(chart_version_for "$LEVEL")"
 if [[ "$LEVEL" -eq 0 ]]; then TAG="$VERSION"; else TAG="${VERSION}.${LEVEL}"; fi
