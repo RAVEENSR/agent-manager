@@ -146,6 +146,9 @@ type GatewayRepository interface {
 	ListIdentityProvidersByGateway(gatewayID string) ([]models.GatewayIdentityProvider, error)
 	ListIdentityProvidersByEnvironment(environmentID string) ([]models.GatewayIdentityProvider, error)
 	ListIdentityProvidersByOrg(ouID string) ([]IdentityProviderWithContext, error)
+
+	// WithTx returns the repository bound to tx.
+	WithTx(tx *gorm.DB) GatewayRepository
 }
 
 // GatewayRepo implements GatewayRepository using GORM
@@ -156,6 +159,11 @@ type GatewayRepo struct {
 // NewGatewayRepo creates a new gateway repository
 func NewGatewayRepo(db *gorm.DB) GatewayRepository {
 	return &GatewayRepo{db: db}
+}
+
+// WithTx returns the repository bound to tx.
+func (r *GatewayRepo) WithTx(tx *gorm.DB) GatewayRepository {
+	return &GatewayRepo{db: tx}
 }
 
 // Create inserts a new gateway

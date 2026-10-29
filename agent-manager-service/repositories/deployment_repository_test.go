@@ -70,7 +70,7 @@ func seedAgentDeployment(t *testing.T) (artifactUUID uuid.UUID, ouID string) {
 func TestDeploymentDeleteForArtifactInATransaction(t *testing.T) {
 	repo := NewDeploymentRepo(db.GetDB())
 	artifactUUID, ouID := seedAgentDeployment(t)
-	gateways, err := repo.GetDeployedGatewaysByProvider(artifactUUID, ouID)
+	gateways, err := repo.LiveGateways(context.Background(), ouID, artifactUUID)
 	require.NoError(t, err)
 	require.Len(t, gateways, 1)
 
@@ -79,12 +79,12 @@ func TestDeploymentDeleteForArtifactInATransaction(t *testing.T) {
 		return errors.New("roll back")
 	})
 	require.Error(t, rolledBack)
-	gateways, err = repo.GetDeployedGatewaysByProvider(artifactUUID, ouID)
+	gateways, err = repo.LiveGateways(context.Background(), ouID, artifactUUID)
 	require.NoError(t, err)
 	assert.Len(t, gateways, 1, "a rolled-back delete leaves the deployment")
 
 	require.NoError(t, repo.DeleteForArtifact(context.Background(), artifactUUID, ouID))
-	gateways, err = repo.GetDeployedGatewaysByProvider(artifactUUID, ouID)
+	gateways, err = repo.LiveGateways(context.Background(), ouID, artifactUUID)
 	require.NoError(t, err)
 	assert.Empty(t, gateways, "deployment_status went with the deployments")
 }

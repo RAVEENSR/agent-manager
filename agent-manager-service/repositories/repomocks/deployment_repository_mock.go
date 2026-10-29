@@ -62,9 +62,6 @@ import (
 //			GetCurrentByGatewayFunc: func(artifactUUID string, gatewayID string, orgUUID string) (*models.Deployment, error) {
 //				panic("mock out the GetCurrentByGateway method")
 //			},
-//			GetDeployedGatewaysByProviderFunc: func(artifactUUID uuid.UUID, orgUUID string) ([]string, error) {
-//				panic("mock out the GetDeployedGatewaysByProvider method")
-//			},
 //			GetDeployedProvidersByGatewayFunc: func(gatewayUUID uuid.UUID, orgUUID string) ([]string, error) {
 //				panic("mock out the GetDeployedProvidersByGateway method")
 //			},
@@ -191,9 +188,6 @@ type DeploymentRepositoryMock struct {
 
 	// GetCurrentByGatewayFunc mocks the GetCurrentByGateway method.
 	GetCurrentByGatewayFunc func(artifactUUID string, gatewayID string, orgUUID string) (*models.Deployment, error)
-
-	// GetDeployedGatewaysByProviderFunc mocks the GetDeployedGatewaysByProvider method.
-	GetDeployedGatewaysByProviderFunc func(artifactUUID uuid.UUID, orgUUID string) ([]string, error)
 
 	// GetDeployedProvidersByGatewayFunc mocks the GetDeployedProvidersByGateway method.
 	GetDeployedProvidersByGatewayFunc func(gatewayUUID uuid.UUID, orgUUID string) ([]string, error)
@@ -406,13 +400,6 @@ type DeploymentRepositoryMock struct {
 			ArtifactUUID string
 			// GatewayID is the gatewayID argument value.
 			GatewayID string
-			// OrgUUID is the orgUUID argument value.
-			OrgUUID string
-		}
-		// GetDeployedGatewaysByProvider holds details about calls to the GetDeployedGatewaysByProvider method.
-		GetDeployedGatewaysByProvider []struct {
-			// ArtifactUUID is the artifactUUID argument value.
-			ArtifactUUID uuid.UUID
 			// OrgUUID is the orgUUID argument value.
 			OrgUUID string
 		}
@@ -691,7 +678,6 @@ type DeploymentRepositoryMock struct {
 	lockFailStaleTransitional           sync.RWMutex
 	lockGetByArtifactAndGateway         sync.RWMutex
 	lockGetCurrentByGateway             sync.RWMutex
-	lockGetDeployedGatewaysByProvider   sync.RWMutex
 	lockGetDeployedProvidersByGateway   sync.RWMutex
 	lockGetDeploymentsWithState         sync.RWMutex
 	lockGetPullable                     sync.RWMutex
@@ -1293,42 +1279,6 @@ func (mock *DeploymentRepositoryMock) GetCurrentByGatewayCalls() []struct {
 	mock.lockGetCurrentByGateway.RLock()
 	calls = mock.calls.GetCurrentByGateway
 	mock.lockGetCurrentByGateway.RUnlock()
-	return calls
-}
-
-// GetDeployedGatewaysByProvider calls GetDeployedGatewaysByProviderFunc.
-func (mock *DeploymentRepositoryMock) GetDeployedGatewaysByProvider(artifactUUID uuid.UUID, orgUUID string) ([]string, error) {
-	if mock.GetDeployedGatewaysByProviderFunc == nil {
-		panic("DeploymentRepositoryMock.GetDeployedGatewaysByProviderFunc: method is nil but DeploymentRepository.GetDeployedGatewaysByProvider was just called")
-	}
-	callInfo := struct {
-		ArtifactUUID uuid.UUID
-		OrgUUID      string
-	}{
-		ArtifactUUID: artifactUUID,
-		OrgUUID:      orgUUID,
-	}
-	mock.lockGetDeployedGatewaysByProvider.Lock()
-	mock.calls.GetDeployedGatewaysByProvider = append(mock.calls.GetDeployedGatewaysByProvider, callInfo)
-	mock.lockGetDeployedGatewaysByProvider.Unlock()
-	return mock.GetDeployedGatewaysByProviderFunc(artifactUUID, orgUUID)
-}
-
-// GetDeployedGatewaysByProviderCalls gets all the calls that were made to GetDeployedGatewaysByProvider.
-// Check the length with:
-//
-//	len(mockedDeploymentRepository.GetDeployedGatewaysByProviderCalls())
-func (mock *DeploymentRepositoryMock) GetDeployedGatewaysByProviderCalls() []struct {
-	ArtifactUUID uuid.UUID
-	OrgUUID      string
-} {
-	var calls []struct {
-		ArtifactUUID uuid.UUID
-		OrgUUID      string
-	}
-	mock.lockGetDeployedGatewaysByProvider.RLock()
-	calls = mock.calls.GetDeployedGatewaysByProvider
-	mock.lockGetDeployedGatewaysByProvider.RUnlock()
 	return calls
 }
 

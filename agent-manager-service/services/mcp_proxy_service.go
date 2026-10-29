@@ -211,7 +211,7 @@ func (s *MCPProxyService) Create(ctx context.Context, orgUUID, createdBy string,
 	if err := s.validateMCPEndpointSecurity(ctx, orgUUID, req.Endpoints, nil); err != nil {
 		return nil, err
 	}
-	if err := s.validateMCPEndpointPlacement(orgUUID, req.Endpoints, nil); err != nil {
+	if err := s.validateMCPEndpointPlacement(ctx, orgUUID, req.Endpoints, nil); err != nil {
 		return nil, err
 	}
 	endpoints, err := s.buildMCPEndpointsForStorage(req.Endpoints, nil)
@@ -401,7 +401,7 @@ func (s *MCPProxyService) Get(ctx context.Context, orgUUID, proxyID string) (*mo
 				status := models.MCPDeploymentStatusUndeployed
 				artifactUUID := byEnv[envBinding.EnvironmentUUID]
 				if artifactUUID != uuid.Nil {
-					gatewayIDs, err := s.deploymentRepo.GetDeployedGatewaysByProvider(artifactUUID, orgUUID)
+					gatewayIDs, err := s.deploymentRepo.PlacedGateways(ctx, orgUUID, artifactUUID)
 					if err != nil {
 						s.logger.Warn("Failed to list deployed gateways for MCP proxy endpoint environment",
 							"proxyID", proxy.UUID, "endpoint", endpointDTO.ID, "environment", envBinding.EnvironmentUUID, "ouID", orgUUID, "error", err)
@@ -471,7 +471,7 @@ func (s *MCPProxyService) Update(ctx context.Context, orgUUID, proxyID string, r
 	if err := s.validateMCPEndpointSecurity(ctx, orgUUID, req.Endpoints, existingArtifactByEnv); err != nil {
 		return nil, err
 	}
-	if err := s.validateMCPEndpointPlacement(orgUUID, req.Endpoints, existingArtifactByEnv); err != nil {
+	if err := s.validateMCPEndpointPlacement(ctx, orgUUID, req.Endpoints, existingArtifactByEnv); err != nil {
 		return nil, err
 	}
 
@@ -1294,7 +1294,7 @@ func (s *MCPProxyService) validateMCPEndpointSecurity(
 			if artifactUUID, ok := existingArtifactByEnv[envIDStr]; ok && artifactUUID != uuid.Nil {
 				var deployed []string
 				if s.deploymentRepo != nil {
-					ids, depErr := s.deploymentRepo.GetDeployedGatewaysByProvider(artifactUUID, orgName)
+					ids, depErr := s.deploymentRepo.PlacedGateways(ctx, orgName, artifactUUID)
 					if depErr != nil {
 						return fmt.Errorf("endpoint %q environment %q: list deployed gateways: %w", handle, env.EnvironmentUUID, depErr)
 					}
@@ -1347,7 +1347,7 @@ func (s *MCPProxyService) validateMCPEndpointSecurity(
 // create. An environment with a deployed artifact anchors on that artifact's gateway, so
 // errPlacementFixed also surfaces before the write rather than after it.
 func (s *MCPProxyService) validateMCPEndpointPlacement(
-	orgUUID string, endpoints []models.MCPProxyEndpointDTO, existingArtifactByEnv map[string]uuid.UUID,
+	ctx context.Context, orgUUID string, endpoints []models.MCPProxyEndpointDTO, existingArtifactByEnv map[string]uuid.UUID,
 ) error {
 	for _, endpoint := range endpoints {
 		handle := strings.TrimSpace(endpoint.ID)
@@ -1358,7 +1358,7 @@ func (s *MCPProxyService) validateMCPEndpointPlacement(
 				continue // already rejected by validateMCPEndpoints
 			}
 
-			deployed, ok := s.anchorGatewaysForEnvironment(orgUUID, existingArtifactByEnv[envIDStr])
+			deployed, ok := s.anchorGatewaysForEnvironment(ctx, orgUUID, existingArtifactByEnv[envIDStr])
 			if !ok {
 				// Anchor unknown: skip rather than resolve without it, since environment-only
 				// selection could reject a binding the anchor would have resolved cleanly.
@@ -1374,14 +1374,14 @@ func (s *MCPProxyService) validateMCPEndpointPlacement(
 	return nil
 }
 
-// anchorGatewaysForEnvironment returns the gateways artifactUUID is deployed to, and whether
+// anchorGatewaysForEnvironment returns the gateways artifactUUID is placed on, and whether
 // that set could be determined at all. A nil artifact is a new binding: no anchor to look up,
 // which is a known-empty set rather than an unknown one.
-func (s *MCPProxyService) anchorGatewaysForEnvironment(orgUUID string, artifactUUID uuid.UUID) ([]string, bool) {
+func (s *MCPProxyService) anchorGatewaysForEnvironment(ctx context.Context, orgUUID string, artifactUUID uuid.UUID) ([]string, bool) {
 	if artifactUUID == uuid.Nil || s.deploymentRepo == nil {
 		return nil, true
 	}
-	deployed, err := s.deploymentRepo.GetDeployedGatewaysByProvider(artifactUUID, orgUUID)
+	deployed, err := s.deploymentRepo.PlacedGateways(ctx, orgUUID, artifactUUID)
 	if err != nil {
 		s.logger.Warn("Skipping MCP placement pre-check; could not list existing deployments",
 			"artifactUUID", artifactUUID, "error", err)

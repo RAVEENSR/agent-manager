@@ -94,6 +94,7 @@ func newPublisherMocks(t *testing.T) *publisherMocks {
 		artifacts: &repomocks.ArtifactRepositoryMock{},
 		hub:       &recordingEventHub{},
 	}
+	m.artifacts.WithTxFunc = func(*gorm.DB) repositories.ArtifactRepository { return m.artifacts }
 	m.exposures = &repomocks.PlatformAgentExposureRepositoryMock{
 		WithTxFunc: func(tx *gorm.DB) repositories.PlatformAgentExposureRepository {
 			assert.Same(t, txSentinel, tx)
@@ -105,7 +106,7 @@ func newPublisherMocks(t *testing.T) *publisherMocks {
 			assert.Same(t, txSentinel, tx)
 			return m.txDeployments
 		},
-		GetDeployedGatewaysByProviderFunc: func(uuid.UUID, string) ([]string, error) { return []string{"gw-1"}, nil },
+		PlacedGatewaysFunc: func(context.Context, string, uuid.UUID) ([]string, error) { return []string{"gw-1"}, nil },
 		QueueRenderFunc: func(context.Context, *gorm.DB, string, uuid.UUID, []uuid.UUID, string,
 			repositories.QueueScope) (int64, error) {
 			return 0, nil

@@ -31,6 +31,7 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/clients/clientmocks"
 	"github.com/wso2/agent-manager/agent-manager-service/eventhub"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories/repomocks"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 	"github.com/wso2/agent-manager/agent-manager-service/websocket"
@@ -107,6 +108,7 @@ func newAPIKeyServiceFixture(t *testing.T, existing *models.StoredAPIKey) *apiKe
 			return &models.Artifact{UUID: artifactUUID, Kind: models.KindAgent}, nil
 		},
 	}
+	artifactRepo.WithTxFunc = func(*gorm.DB) repositories.ArtifactRepository { return artifactRepo }
 	gateway := newGateway(t, models.GatewayRoleIngress, true)
 	gateway.UUID = gatewayUUID
 	gatewayRepo := gatewayFixtureRepo(t, envUUID, []*models.Gateway{gateway})

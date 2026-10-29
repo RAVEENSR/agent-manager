@@ -59,8 +59,7 @@ func newStatusPathFixture(t *testing.T, artifactUUID uuid.UUID) *statusPathFixtu
 	}
 	f.row = models.DeploymentStatusRecord{PerformedAt: models.NewPerformedAt(time.Now())}
 	f.repo = &repomocks.DeploymentRepositoryMock{
-		GetDeployedGatewaysByProviderFunc: func(uuid.UUID, string) ([]string, error) { return nil, nil },
-		PlacedGatewaysFunc:                func(context.Context, string, uuid.UUID) ([]string, error) { return nil, nil },
+		PlacedGatewaysFunc: func(context.Context, string, uuid.UUID) ([]string, error) { return nil, nil },
 		GetWithContentFunc: func(string, string, string) (*models.Deployment, error) {
 			return f.deployment, nil
 		},
@@ -365,4 +364,60 @@ func TestUndeployLLMProxy(t *testing.T) {
 		assert.Equal(t, models.DeploymentStatusUndeployed, *got.Status)
 		assert.Empty(t, f.hub.published)
 	})
+}
+
+// A deployment the gateway is to serve can't be deleted, whatever its status: deleting a DEPLOYING or failed
+// deployment would orphan it on the gateway. Undeployed and archived deployments can be.
+func TestDeleteRefusesThePlacedDeployment(t *testing.T) {
+	type rowShape struct {
+		status, desired models.DeploymentStatus
+		archived        bool
+	}
+	placed := map[string]rowShape{
+		"deploying":     {status: models.DeploymentStatusDeploying, desired: models.DeploymentStatusDeployed},
+		"deployed":      {status: models.DeploymentStatusDeployed, desired: models.DeploymentStatusDeployed},
+		"failed deploy": {status: models.DeploymentStatusFailed, desired: models.DeploymentStatusDeployed},
+	}
+	notPlaced := map[string]rowShape{
+		"undeploying":     {status: models.DeploymentStatusUndeploying, desired: models.DeploymentStatusUndeployed},
+		"undeployed":      {status: models.DeploymentStatusUndeployed, desired: models.DeploymentStatusUndeployed},
+		"failed undeploy": {status: models.DeploymentStatusFailed, desired: models.DeploymentStatusUndeployed},
+		"archived":        {archived: true},
+	}
+	withRow := func(f *statusPathFixture, shape rowShape) {
+		if shape.archived {
+			archived := models.DeploymentStatusArchived
+			f.deployment.Status = &archived
+			return
+		}
+		f.deployment.SetStatusRow(&models.DeploymentStatusRecord{Status: shape.status, StatusDesired: shape.desired})
+	}
+	deleteBoth := func(t *testing.T, shape rowShape) (providerErr, proxyErr error, deletes int) {
+		provider := &models.LLMProvider{UUID: uuid.New()}
+		f := newStatusPathFixture(t, provider.UUID)
+		withRow(f, shape)
+		f.repo.DeleteFunc = func(string, string, string) error { return nil }
+		providerErr = f.providerService(provider).DeleteLLMProviderDeployment("provider-handle",
+			f.deployment.DeploymentID.String(), "ou-1")
+		proxyErr = f.proxyService(&models.LLMProxy{UUID: provider.UUID}).DeleteLLMProxyDeployment("proxy-handle",
+			f.deployment.DeploymentID.String(), "ou-1")
+		return providerErr, proxyErr, len(f.repo.DeleteCalls())
+	}
+
+	for name, shape := range placed {
+		t.Run(name, func(t *testing.T) {
+			providerErr, proxyErr, deletes := deleteBoth(t, shape)
+			assert.ErrorIs(t, providerErr, utils.ErrDeploymentIsDeployed)
+			assert.ErrorIs(t, proxyErr, utils.ErrDeploymentIsDeployed)
+			assert.Zero(t, deletes)
+		})
+	}
+	for name, shape := range notPlaced {
+		t.Run(name, func(t *testing.T) {
+			providerErr, proxyErr, deletes := deleteBoth(t, shape)
+			assert.NoError(t, providerErr)
+			assert.NoError(t, proxyErr)
+			assert.Equal(t, 2, deletes)
+		})
+	}
 }

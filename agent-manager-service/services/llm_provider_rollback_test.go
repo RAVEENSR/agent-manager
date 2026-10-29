@@ -67,7 +67,7 @@ func TestDelete_AlreadyUndeployedProviderBroadcastsCanonicalUUID(t *testing.T) {
 		},
 	}
 	deploymentRepo := &repomocks.DeploymentRepositoryMock{
-		GetDeployedGatewaysByProviderFunc: func(_ uuid.UUID, _ string) ([]string, error) {
+		PlacedGatewaysFunc: func(_ context.Context, _ string, _ uuid.UUID) ([]string, error) {
 			return nil, nil
 		},
 		DeleteEventGatewaysFunc: func(_ context.Context, ouID string, providerUUID uuid.UUID) ([]string, error) {
@@ -126,7 +126,7 @@ func TestDelete_RejectsWithoutUndeployingWhenProviderHasAssociatedProxies(t *tes
 		ClearDeletingFunc:        func(_ uuid.UUID) error { clearCalled = true; return nil },
 	}
 	deploymentRepo := &repomocks.DeploymentRepositoryMock{
-		GetDeployedGatewaysByProviderFunc: func(_ uuid.UUID, _ string) ([]string, error) {
+		PlacedGatewaysFunc: func(_ context.Context, _ string, _ uuid.UUID) ([]string, error) {
 			// Should never be reached: the proxies check must short-circuit first.
 			undeployCalled = true
 			return []string{"gw-1"}, nil
@@ -154,7 +154,7 @@ func TestDelete_RejectsWhenAlreadyMarkedDeleting(t *testing.T) {
 		MarkDeletingFunc: func(_ uuid.UUID) (bool, error) { return false, nil },
 	}
 	deploymentRepo := &repomocks.DeploymentRepositoryMock{
-		GetDeployedGatewaysByProviderFunc: func(_ uuid.UUID, _ string) ([]string, error) {
+		PlacedGatewaysFunc: func(_ context.Context, _ string, _ uuid.UUID) ([]string, error) {
 			undeployCalled = true
 			return []string{"gw-1"}, nil
 		},
@@ -182,7 +182,7 @@ func TestDelete_ClearsDeletingFlagWhenUndeployFails(t *testing.T) {
 		ClearDeletingFunc:        func(_ uuid.UUID) error { clearCalled = true; return nil },
 	}
 	deploymentRepo := &repomocks.DeploymentRepositoryMock{
-		GetDeployedGatewaysByProviderFunc: func(_ uuid.UUID, _ string) ([]string, error) {
+		PlacedGatewaysFunc: func(_ context.Context, _ string, _ uuid.UUID) ([]string, error) {
 			return []string{"gw-1"}, nil
 		},
 		GetDeploymentsWithStateFunc: func(_ string, _ string, _ *string, _ *string, _ int) ([]*models.Deployment, error) {
@@ -233,7 +233,7 @@ func TestDelete_CompletesAfterCancellationFollowingSuccessfulUndeploy(t *testing
 		DeleteEventGatewaysFunc: func(context.Context, string, uuid.UUID) ([]string, error) {
 			return []string{gatewayID.String()}, nil
 		},
-		GetDeployedGatewaysByProviderFunc: func(uuid.UUID, string) ([]string, error) {
+		PlacedGatewaysFunc: func(context.Context, string, uuid.UUID) ([]string, error) {
 			return []string{gatewayID.String()}, nil
 		},
 		GetDeploymentsWithStateFunc: func(string, string, *string, *string, int) ([]*models.Deployment, error) {

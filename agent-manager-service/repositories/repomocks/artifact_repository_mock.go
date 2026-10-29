@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 	"gorm.io/gorm"
 )
 
@@ -48,6 +49,9 @@ import (
 //			UpdateCatalogStatusFunc: func(tx *gorm.DB, uuidMoqParam string, organizationUUID string, inCatalog bool) error {
 //				panic("mock out the UpdateCatalogStatus method")
 //			},
+//			WithTxFunc: func(tx *gorm.DB) repositories.ArtifactRepository {
+//				panic("mock out the WithTx method")
+//			},
 //		}
 //
 //		// use mockedArtifactRepository in code that requires repositories.ArtifactRepository
@@ -84,6 +88,9 @@ type ArtifactRepositoryMock struct {
 
 	// UpdateCatalogStatusFunc mocks the UpdateCatalogStatus method.
 	UpdateCatalogStatusFunc func(tx *gorm.DB, uuidMoqParam string, organizationUUID string, inCatalog bool) error
+
+	// WithTxFunc mocks the WithTx method.
+	WithTxFunc func(tx *gorm.DB) repositories.ArtifactRepository
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -171,6 +178,11 @@ type ArtifactRepositoryMock struct {
 			// InCatalog is the inCatalog argument value.
 			InCatalog bool
 		}
+		// WithTx holds details about calls to the WithTx method.
+		WithTx []struct {
+			// Tx is the tx argument value.
+			Tx *gorm.DB
+		}
 	}
 	lockCountByKindAndOrg   sync.RWMutex
 	lockCreate              sync.RWMutex
@@ -182,6 +194,7 @@ type ArtifactRepositoryMock struct {
 	lockListExisting        sync.RWMutex
 	lockUpdate              sync.RWMutex
 	lockUpdateCatalogStatus sync.RWMutex
+	lockWithTx              sync.RWMutex
 }
 
 // CountByKindAndOrg calls CountByKindAndOrgFunc.
@@ -569,5 +582,37 @@ func (mock *ArtifactRepositoryMock) UpdateCatalogStatusCalls() []struct {
 	mock.lockUpdateCatalogStatus.RLock()
 	calls = mock.calls.UpdateCatalogStatus
 	mock.lockUpdateCatalogStatus.RUnlock()
+	return calls
+}
+
+// WithTx calls WithTxFunc.
+func (mock *ArtifactRepositoryMock) WithTx(tx *gorm.DB) repositories.ArtifactRepository {
+	if mock.WithTxFunc == nil {
+		panic("ArtifactRepositoryMock.WithTxFunc: method is nil but ArtifactRepository.WithTx was just called")
+	}
+	callInfo := struct {
+		Tx *gorm.DB
+	}{
+		Tx: tx,
+	}
+	mock.lockWithTx.Lock()
+	mock.calls.WithTx = append(mock.calls.WithTx, callInfo)
+	mock.lockWithTx.Unlock()
+	return mock.WithTxFunc(tx)
+}
+
+// WithTxCalls gets all the calls that were made to WithTx.
+// Check the length with:
+//
+//	len(mockedArtifactRepository.WithTxCalls())
+func (mock *ArtifactRepositoryMock) WithTxCalls() []struct {
+	Tx *gorm.DB
+} {
+	var calls []struct {
+		Tx *gorm.DB
+	}
+	mock.lockWithTx.RLock()
+	calls = mock.calls.WithTx
+	mock.lockWithTx.RUnlock()
 	return calls
 }

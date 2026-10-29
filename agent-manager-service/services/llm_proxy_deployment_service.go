@@ -346,12 +346,58 @@ func (s *LLMProxyDeploymentService) RestoreLLMProxyDeployment(proxyID, deploymen
 	return deployment, nil
 }
 
-// GetLLMProxyDeployments retrieves all deployments for a proxy
-// GetDeployedGatewaysByProvider returns the gateway UUIDs where the given provider artifact is currently deployed.
-func (s *LLMProxyDeploymentService) GetDeployedGatewaysByProvider(providerUUID uuid.UUID, ouID string) ([]string, error) {
-	return s.deploymentRepo.GetDeployedGatewaysByProvider(providerUUID, ouID)
+// PlacedGateways returns the gateways the artifact (a provider or a proxy) is placed on, whatever their status.
+func (s *LLMProxyDeploymentService) PlacedGateways(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error) {
+	return s.deploymentRepo.PlacedGateways(ctx, ouID, artifactUUID)
 }
 
+// PlacedGatewaysOfProxy returns the gateways the proxy is placed on, whatever their status.
+func (s *LLMProxyDeploymentService) PlacedGatewaysOfProxy(ctx context.Context, proxyHandle, ouID string) ([]string, error) {
+	proxy, err := s.proxyByID(proxyHandle, ouID)
+	if err != nil {
+		return nil, err
+	}
+	return s.deploymentRepo.PlacedGateways(ctx, ouID, proxy.UUID)
+}
+
+// UndeployEverywhere undeploys the proxy from every gateway it is placed on, whatever the placement's status, in one
+// transaction. utils.ErrLLMProxyNotFound when the proxy is gone.
+func (s *LLMProxyDeploymentService) UndeployEverywhere(ctx context.Context, proxyHandle, ouID string) error {
+	proxy, err := s.proxyByID(proxyHandle, ouID)
+	if err != nil {
+		return err
+	}
+	return s.tx(ctx, func(tx *gorm.DB) error {
+		gateways, err := s.deploymentRepo.WithTx(tx).PlacedGateways(ctx, ouID, proxy.UUID)
+		if err != nil {
+			return err
+		}
+		for _, gatewayID := range gateways {
+			gatewayUUID, err := uuid.Parse(gatewayID)
+			if err != nil {
+				return fmt.Errorf("invalid gateway UUID %q: %w", gatewayID, err)
+			}
+			if err := s.core.Undeploy(ctx, tx, proxyPlacement(proxy, proxy.Handle, ouID, gatewayUUID)); err != nil {
+				return fmt.Errorf("failed to undeploy from gateway %s: %w", gatewayID, err)
+			}
+		}
+		return nil
+	})
+}
+
+// proxyByID is the proxy with the id or handle; utils.ErrLLMProxyNotFound when there is none.
+func (s *LLMProxyDeploymentService) proxyByID(proxyID, ouID string) (*models.LLMProxy, error) {
+	proxy, err := s.proxyRepo.GetByID(proxyID, ouID)
+	if errors.Is(err, gorm.ErrRecordNotFound) || (err == nil && proxy == nil) {
+		return nil, utils.ErrLLMProxyNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get proxy: %w", err)
+	}
+	return proxy, nil
+}
+
+// GetLLMProxyDeployments retrieves all deployments for a proxy
 func (s *LLMProxyDeploymentService) GetLLMProxyDeployments(proxyID, ouID string, gatewayID *string, status *string) ([]*models.Deployment, error) {
 	// Get proxy
 	proxy, err := s.proxyRepo.GetByID(proxyID, ouID)
@@ -426,7 +472,8 @@ func (s *LLMProxyDeploymentService) DeleteLLMProxyDeployment(proxyID, deployment
 	if deployment == nil {
 		return utils.ErrDeploymentNotFound
 	}
-	if deployment.Status != nil && *deployment.Status == models.DeploymentStatusDeployed {
+	// The gateway is to serve a placed deployment, whatever its status; deleting it would orphan it there.
+	if deployment.Placed() {
 		return utils.ErrDeploymentIsDeployed
 	}
 

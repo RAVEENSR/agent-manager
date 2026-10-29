@@ -185,6 +185,30 @@ func TestRedeployEverywhereRendersOnlyPlacedRows(t *testing.T) {
 	assert.Equal(t, otherDeployed.DeploymentID, *f.row(t, other, gatewayA).DeploymentID, "another proxy is untouched")
 }
 
+// Tearing an agent's or monitor's proxy down undeploys every gateway it is placed on, whatever the row's status:
+// a deploy the gateway hasn't acked yet is undeployed too.
+func TestUndeployEverywhereUndeploysEveryPlacedRow(t *testing.T) {
+	f := newProxyFixture(t)
+	proxy := f.newProxy(t)
+	envA, envB := uuid.New(), uuid.New()
+	gatewayA, gatewayB := f.mapGateway(t, envA), f.mapGateway(t, envB)
+	_, err := f.proxies.DeployForEnvironment(context.Background(), proxy, f.sync.ouID, envA, gatewayA)
+	require.NoError(t, err)
+	_, err = f.proxies.DeployForEnvironment(context.Background(), proxy, f.sync.ouID, envB, gatewayB)
+	require.NoError(t, err)
+	require.Equal(t, models.DeploymentStatusDeploying, f.row(t, proxy, gatewayA).Status)
+
+	require.NoError(t, f.proxies.UndeployEverywhere(context.Background(), proxy.Handle, f.sync.ouID))
+
+	for _, gateway := range []uuid.UUID{gatewayA, gatewayB} {
+		row := f.row(t, proxy, gateway)
+		assert.Equal(t, models.DeploymentStatusUndeploying, row.Status)
+		assert.Equal(t, models.DeploymentStatusUndeployed, row.StatusDesired)
+	}
+	assert.ErrorIs(t, f.proxies.UndeployEverywhere(context.Background(), "no-such-proxy", f.sync.ouID),
+		utils.ErrLLMProxyNotFound)
+}
+
 // The placement pass places an agent's proxy from its record alone, on its environment's egress gateway.
 func TestPlacementPassPlacesAnAgentConfigProxy(t *testing.T) {
 	f := newProxyFixture(t)

@@ -129,6 +129,9 @@ import (
 //			UpsertIdentityProviderFunc: func(provider *models.GatewayIdentityProvider) error {
 //				panic("mock out the UpsertIdentityProvider method")
 //			},
+//			WithTxFunc: func(tx *gorm.DB) repositories.GatewayRepository {
+//				panic("mock out the WithTx method")
+//			},
 //		}
 //
 //		// use mockedGatewayRepository in code that requires repositories.GatewayRepository
@@ -246,6 +249,9 @@ type GatewayRepositoryMock struct {
 
 	// UpsertIdentityProviderFunc mocks the UpsertIdentityProvider method.
 	UpsertIdentityProviderFunc func(provider *models.GatewayIdentityProvider) error
+
+	// WithTxFunc mocks the WithTx method.
+	WithTxFunc func(tx *gorm.DB) repositories.GatewayRepository
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -466,6 +472,11 @@ type GatewayRepositoryMock struct {
 			// Provider is the provider argument value.
 			Provider *models.GatewayIdentityProvider
 		}
+		// WithTx holds details about calls to the WithTx method.
+		WithTx []struct {
+			// Tx is the tx argument value.
+			Tx *gorm.DB
+		}
 	}
 	lockAcquireEnvironmentLock                   sync.RWMutex
 	lockCountActiveTokens                        sync.RWMutex
@@ -504,6 +515,7 @@ type GatewayRepositoryMock struct {
 	lockUpdateActiveStatus                       sync.RWMutex
 	lockUpdateGateway                            sync.RWMutex
 	lockUpsertIdentityProvider                   sync.RWMutex
+	lockWithTx                                   sync.RWMutex
 }
 
 // AcquireEnvironmentLock calls AcquireEnvironmentLockFunc.
@@ -1750,5 +1762,37 @@ func (mock *GatewayRepositoryMock) UpsertIdentityProviderCalls() []struct {
 	mock.lockUpsertIdentityProvider.RLock()
 	calls = mock.calls.UpsertIdentityProvider
 	mock.lockUpsertIdentityProvider.RUnlock()
+	return calls
+}
+
+// WithTx calls WithTxFunc.
+func (mock *GatewayRepositoryMock) WithTx(tx *gorm.DB) repositories.GatewayRepository {
+	if mock.WithTxFunc == nil {
+		panic("GatewayRepositoryMock.WithTxFunc: method is nil but GatewayRepository.WithTx was just called")
+	}
+	callInfo := struct {
+		Tx *gorm.DB
+	}{
+		Tx: tx,
+	}
+	mock.lockWithTx.Lock()
+	mock.calls.WithTx = append(mock.calls.WithTx, callInfo)
+	mock.lockWithTx.Unlock()
+	return mock.WithTxFunc(tx)
+}
+
+// WithTxCalls gets all the calls that were made to WithTx.
+// Check the length with:
+//
+//	len(mockedGatewayRepository.WithTxCalls())
+func (mock *GatewayRepositoryMock) WithTxCalls() []struct {
+	Tx *gorm.DB
+} {
+	var calls []struct {
+		Tx *gorm.DB
+	}
+	mock.lockWithTx.RLock()
+	calls = mock.calls.WithTx
+	mock.lockWithTx.RUnlock()
 	return calls
 }

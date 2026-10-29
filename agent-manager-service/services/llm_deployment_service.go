@@ -269,6 +269,17 @@ func (s *LLMProviderDeploymentService) UndeployLLMProviderDeployment(providerID,
 	return deployment, nil
 }
 
+// UndeployFromGateway undeploys the provider from a gateway it is placed on, whatever the placement's status.
+func (s *LLMProviderDeploymentService) UndeployFromGateway(ctx context.Context, provider *models.LLMProvider, ouID, gatewayID string) error {
+	gatewayUUID, err := uuid.Parse(gatewayID)
+	if err != nil {
+		return fmt.Errorf("invalid gateway UUID %q: %w", gatewayID, err)
+	}
+	return s.tx(ctx, func(tx *gorm.DB) error {
+		return s.core.Undeploy(ctx, tx, providerPlacement(provider, ouID, gatewayUUID))
+	})
+}
+
 // undeployAndRead undeploys the placement and reads back its row in the same transaction.
 func undeployAndRead(
 	ctx context.Context, runTx TxRunner, core *reconcile.Core, repo repositories.DeploymentRepository, p models.Placement,
@@ -426,7 +437,8 @@ func (s *LLMProviderDeploymentService) DeleteLLMProviderDeployment(providerID, d
 	if deployment == nil {
 		return utils.ErrDeploymentNotFound
 	}
-	if deployment.Status != nil && *deployment.Status == models.DeploymentStatusDeployed {
+	// The gateway is to serve a placed deployment, whatever its status; deleting it would orphan it there.
+	if deployment.Placed() {
 		return utils.ErrDeploymentIsDeployed
 	}
 

@@ -17,11 +17,13 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/wso2/agent-manager/agent-manager-service/db"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 	"gorm.io/gorm"
@@ -157,6 +159,18 @@ func resolveEgressGatewayForArtifact(
 		return gw, nil
 	}
 	return resolveEgressGatewayForEnvironment(repo, ouID, envUUID, requested)
+}
+
+// placementReposIn are the repositories bound to the transaction ctx carries, if any, so a placement made inside a
+// save reads the save's rows on its connection.
+func placementReposIn(
+	ctx context.Context, deployments repositories.DeploymentRepository, gateways repositories.GatewayRepository,
+) (repositories.DeploymentRepository, repositories.GatewayRepository) {
+	tx := db.TxFrom(ctx)
+	if tx == nil {
+		return deployments, gateways
+	}
+	return deployments.WithTx(tx), gateways.WithTx(tx)
 }
 
 // validateEgressPlacement checks that the named gateway may host this artifact: it must

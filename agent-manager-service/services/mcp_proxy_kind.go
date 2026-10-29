@@ -170,11 +170,12 @@ func (k *MCPProxyKind) UnplacedRecords(
 
 // Targets is the environment's egress gateway, anchored on where the artifact is already placed.
 func (k *MCPProxyKind) Targets(ctx context.Context, record reconcile.Record) (uuid.UUID, bool, error) {
-	anchors, err := k.deploymentRepo.PlacedGateways(ctx, record.OUID, record.ArtifactUUID)
+	deployments, gateways := placementReposIn(ctx, k.deploymentRepo, k.gatewayRepo)
+	anchors, err := deployments.PlacedGateways(ctx, record.OUID, record.ArtifactUUID)
 	if err != nil {
 		return uuid.Nil, false, err
 	}
-	gateway, err := resolveEgressGatewayForArtifact(k.gatewayRepo, record.OUID, record.EnvironmentUUID, anchors, nil)
+	gateway, err := resolveEgressGatewayForArtifact(gateways, record.OUID, record.EnvironmentUUID, anchors, nil)
 	if errors.Is(err, errNoGatewayForEnvironment) || errors.Is(err, errNoEgressGatewayForEnvironment) {
 		return uuid.Nil, false, nil
 	}

@@ -41,6 +41,48 @@ type Deployment struct {
 	// Read-only fields - populated via JOIN, never inserted/updated directly
 	Status    *DeploymentStatus `gorm:"column:status;->" json:"status,omitempty"`
 	UpdatedAt *time.Time        `gorm:"column:status_updated_at;->" json:"updatedAt,omitempty"`
+	// The rest of the status row, for UserStatus and Placed.
+	StatusDesired *DeploymentStatus `gorm:"column:status_desired;->" json:"-"`
+	StatusReason  *string           `gorm:"column:status_reason;->" json:"-"`
+	NextAttemptAt *time.Time        `gorm:"column:next_attempt_at;->" json:"-"`
+	RenderReason  *string           `gorm:"column:render_reason;->" json:"-"`
+}
+
+// SetStatusRow records row, the status row pointing at the deployment, on it.
+func (d *Deployment) SetStatusRow(row *DeploymentStatusRecord) {
+	d.Status = &row.Status
+	d.StatusDesired = &row.StatusDesired
+	d.StatusReason = &row.StatusReason
+	d.NextAttemptAt = row.NextAttemptAt
+	d.RenderReason = &row.RenderReason
+}
+
+// Placed reports whether a status row points at the deployment and heads for DEPLOYED, in any status: the gateway
+// is to serve it.
+func (d *Deployment) Placed() bool {
+	return d.StatusDesired != nil && *d.StatusDesired == DeploymentStatusDeployed
+}
+
+// UserStatus is what the user is shown for the deployment: ARCHIVED when no status row points at it, otherwise
+// what UserStatusOf derives from the row.
+func (d *Deployment) UserStatus() UserStatus {
+	if d.Status == nil || *d.Status == DeploymentStatusArchived || d.StatusDesired == nil {
+		return UserStatus{Status: DeploymentStatusArchived}
+	}
+	return UserStatusOf(DeploymentStatusRecord{
+		Status:        *d.Status,
+		StatusDesired: *d.StatusDesired,
+		StatusReason:  stringOrEmpty(d.StatusReason),
+		NextAttemptAt: d.NextAttemptAt,
+		RenderReason:  stringOrEmpty(d.RenderReason),
+	})
+}
+
+func stringOrEmpty(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // TableName returns the table name for the Deployment model

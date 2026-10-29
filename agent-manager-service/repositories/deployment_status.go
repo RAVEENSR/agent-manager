@@ -57,8 +57,9 @@ func (r *DeploymentRepo) StartDeploy(ctx context.Context, tx *gorm.DB, p models.
 	if err != nil {
 		return err
 	}
-	deploying := models.DeploymentStatusDeploying
-	deployment.Status = &deploying
+	deployment.SetStatusRow(&models.DeploymentStatusRecord{
+		Status: models.DeploymentStatusDeploying, StatusDesired: models.DeploymentStatusDeployed,
+	})
 	deployment.UpdatedAt = &performedAt
 	return nil
 }

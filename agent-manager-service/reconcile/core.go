@@ -142,7 +142,7 @@ func (c *Core) Deploy(ctx context.Context, tx *gorm.DB, p models.Placement) (*Ap
 // can't deploy is still validated. A render error from an inline kind is returned for the caller to abort its
 // transaction with a 4xx; waiting for an input is not an error.
 func (c *Core) DeployRecord(ctx context.Context, tx *gorm.DB, kind EnvironmentKind, record Record) (*Applied, error) {
-	gateway, ok, err := c.target(ctx, kind, record)
+	gateway, ok, err := c.target(db.CtxWithTx(ctx, tx), kind, record)
 	if err != nil {
 		return nil, err
 	}
@@ -157,6 +157,7 @@ func (c *Core) DeployRecord(ctx context.Context, tx *gorm.DB, kind EnvironmentKi
 	return c.deployTo(ctx, tx, kind, models.Placement{ArtifactRef: record.ArtifactRef, GatewayUUID: gateway})
 }
 
+// target is the gateway the record goes to. A save passes a ctx carrying its transaction, so Targets reads the save.
 func (c *Core) target(ctx context.Context, kind EnvironmentKind, record Record) (uuid.UUID, bool, error) {
 	if record.RequestedGateway != nil {
 		return *record.RequestedGateway, true, nil

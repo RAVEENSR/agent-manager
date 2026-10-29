@@ -1534,10 +1534,9 @@ func monitorProxyName(monitorID uuid.UUID, monitorName, providerName string) str
 func (s *monitorManagerService) resolveMonitorGateway(
 	ctx context.Context, ouID string, envUUID uuid.UUID, providerUUIDStr string,
 ) (*models.Gateway, error) {
-	_ = ctx
 	var deployed []string
 	if providerUUID, err := uuid.Parse(providerUUIDStr); err == nil {
-		ids, depErr := s.llmProvisioner.ProxyDeploymentService().GetDeployedGatewaysByProvider(providerUUID, ouID)
+		ids, depErr := s.llmProvisioner.ProxyDeploymentService().PlacedGateways(ctx, ouID, providerUUID)
 		if depErr != nil {
 			return nil, fmt.Errorf("failed to list deployed gateways for provider %s: %w", providerUUIDStr, depErr)
 		}

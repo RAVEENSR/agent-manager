@@ -216,7 +216,7 @@ func (s *MCPProxyService) deployMCPProxyEndpoints(ctx context.Context, tx *gorm.
 			if ee.ArtifactUUID == uuid.Nil {
 				return fmt.Errorf("%s: missing artifact id", label)
 			}
-			gateway, err := s.mcpEnvGateway(proxy, ee, ouID)
+			gateway, err := s.mcpEnvGateway(ctx, tx, proxy, ee, ouID)
 			if err != nil {
 				return fmt.Errorf("%s: %w", label, err)
 			}
@@ -239,19 +239,21 @@ func (s *MCPProxyService) deployMCPProxyEndpoints(ctx context.Context, tx *gorm.
 	return nil
 }
 
-// mcpEnvGateway is the gateway the binding deploys on: anchored on the gateway it is already deployed to, so a
-// second egress gateway in the environment never re-homes it, or the request's explicit gateway, validated here.
-// Nil when the environment has no gateway.
-func (s *MCPProxyService) mcpEnvGateway(proxy *models.MCPProxy, ee *models.MCPProxyEndpointEnvironment, ouID string) (*uuid.UUID, error) {
-	var deployed []string
+// mcpEnvGateway is the gateway the binding deploys on: anchored on the gateway it is already placed on, whatever the
+// placement's status, so a second egress gateway in the environment never re-homes it, or the request's explicit
+// gateway, validated here. Nil when the environment has no gateway. It reads through the save's transaction tx.
+func (s *MCPProxyService) mcpEnvGateway(
+	ctx context.Context, tx *gorm.DB, proxy *models.MCPProxy, ee *models.MCPProxyEndpointEnvironment, ouID string,
+) (*uuid.UUID, error) {
+	var placed []string
 	if s.deploymentRepo != nil {
-		ids, err := s.deploymentRepo.GetDeployedGatewaysByProvider(ee.ArtifactUUID, ouID)
+		ids, err := s.deploymentRepo.WithTx(tx).PlacedGateways(ctx, ouID, ee.ArtifactUUID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to list existing deployments: %w", err)
 		}
-		deployed = ids
+		placed = ids
 	}
-	gateway, err := resolveEgressGatewayForArtifact(s.gatewayRepo, ouID, ee.EnvironmentUUID, deployed, ee.RequestedGatewayUUID)
+	gateway, err := resolveEgressGatewayForArtifact(s.gatewayRepo.WithTx(tx), ouID, ee.EnvironmentUUID, placed, ee.RequestedGatewayUUID)
 	if errors.Is(err, errNoGatewayForEnvironment) {
 		s.logger.Info("No gateway mapped to the environment; validating the MCP proxy endpoint only",
 			"proxyUUID", proxy.UUID, "environment", ee.EnvironmentUUID)

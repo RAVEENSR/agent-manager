@@ -124,11 +124,13 @@ func TestPromoteAgent_A2AInheritsSourceCardCORSAndRepublishes(t *testing.T) {
 			return txConfigs
 		},
 	}
-	s.artifactRepo = &repomocks.ArtifactRepositoryMock{
+	artifacts := &repomocks.ArtifactRepositoryMock{
 		GetByHandleFunc: func(_, _ string) (*models.Artifact, error) {
 			return &models.Artifact{UUID: artifactUUID, Kind: models.KindAgent}, nil
 		},
 	}
+	artifacts.WithTxFunc = func(*gorm.DB) repositories.ArtifactRepository { return artifacts }
+	s.artifactRepo = artifacts
 	pubRepo := &repomocks.PlatformAgentExposureRepositoryMock{
 		UpsertFunc: func(_ context.Context, _ *models.PlatformAgentExposure) error {
 			events = append(events, "expose")
@@ -186,11 +188,13 @@ func TestPromoteAgent_A2AFailsWhenTheExposureCannotBeWritten(t *testing.T) {
 		},
 		WithTxFunc: func(*gorm.DB) repositories.AgentConfigRepository { return txConfigs },
 	}
-	s.artifactRepo = &repomocks.ArtifactRepositoryMock{
+	artifacts := &repomocks.ArtifactRepositoryMock{
 		GetByHandleFunc: func(_, _ string) (*models.Artifact, error) {
 			return &models.Artifact{UUID: uuid.New(), Kind: models.KindAgent}, nil
 		},
 	}
+	artifacts.WithTxFunc = func(*gorm.DB) repositories.ArtifactRepository { return artifacts }
+	s.artifactRepo = artifacts
 	pubRepo := &repomocks.PlatformAgentExposureRepositoryMock{
 		UpsertFunc: func(context.Context, *models.PlatformAgentExposure) error { return assert.AnError },
 	}

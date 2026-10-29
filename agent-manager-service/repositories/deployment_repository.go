@@ -59,7 +59,6 @@ type DeploymentRepository interface {
 	UpdateStatusByDeploymentID(deploymentID, gatewayUUID string, status models.DeploymentStatus) (time.Time, error)
 
 	// Gateway mapping methods (derived from deployment status)
-	GetDeployedGatewaysByProvider(artifactUUID uuid.UUID, orgUUID string) ([]string, error)
 	GetTrackedGatewaysByProvider(artifactUUID uuid.UUID, orgUUID string) ([]string, error)
 	GetTrackedGatewaysByProviderCtx(ctx context.Context, artifactUUID uuid.UUID, orgUUID string) ([]string, error)
 	GetDeployedProvidersByGateway(gatewayUUID uuid.UUID, orgUUID string) ([]string, error)
@@ -336,6 +335,9 @@ func (r *DeploymentRepo) DeleteStatus(artifactUUID, orgUUID, gatewayID string) e
 		Delete(&models.DeploymentStatusRecord{}).Error
 }
 
+// statusRowColumns are the status row's columns a Deployment derives its UserStatus from, joined as s.
+const statusRowColumns = "s.status_desired, s.status_reason, s.next_attempt_at, s.render_reason"
+
 // GetWithState retrieves a deployment with its lifecycle state populated (without content)
 func (r *DeploymentRepo) GetWithState(deploymentID, artifactUUID, orgUUID string) (*models.Deployment, error) {
 	return r.GetWithStateCtx(context.Background(), deploymentID, artifactUUID, orgUUID)
@@ -347,7 +349,7 @@ func (r *DeploymentRepo) GetWithStateCtx(ctx context.Context, deploymentID, arti
 	err := r.db.WithContext(ctx).Table("deployments d").
 		Select("d.deployment_id, d.name, d.artifact_uuid, d.ou_id, d.gateway_uuid, "+
 			"d.base_deployment_id, d.metadata, d.created_at, "+
-			"s.status, s.updated_at AS status_updated_at").
+			"s.status, s.updated_at AS status_updated_at, "+statusRowColumns).
 		Joins("LEFT JOIN deployment_status s ON d.deployment_id = s.deployment_id "+
 			"AND d.artifact_uuid = s.artifact_uuid "+
 			"AND d.ou_id = s.ou_id "+
@@ -385,6 +387,7 @@ func (r *DeploymentRepo) GetDeploymentsWithState(artifactUUID, orgUUID string, g
                 d.base_deployment_id, d.metadata, d.created_at,
                 s.status as current_status,
                 s.updated_at as status_updated_at,
+                s.status_desired, s.status_reason, s.next_attempt_at, s.render_reason,
                 ROW_NUMBER() OVER (
                     PARTITION BY d.gateway_uuid
                     ORDER BY
@@ -411,7 +414,8 @@ func (r *DeploymentRepo) GetDeploymentsWithState(artifactUUID, orgUUID string, g
         SELECT
 			deployment_id, name, artifact_uuid, ou_id, gateway_uuid,
             base_deployment_id, metadata, created_at,
-            current_status as status, status_updated_at
+            current_status as status, status_updated_at,
+            status_desired, status_reason, next_attempt_at, render_reason
         FROM AnnotatedDeployments
         WHERE rank_idx <= ?`
 
@@ -440,20 +444,6 @@ func (r *DeploymentRepo) GetDeploymentsWithState(artifactUUID, orgUUID string, g
 	}
 
 	return deployments, err
-}
-
-// GetDeployedGatewaysByProvider returns all gateway UUIDs where this provider is currently deployed
-func (r *DeploymentRepo) GetDeployedGatewaysByProvider(artifactUUID uuid.UUID, orgUUID string) ([]string, error) {
-	var gatewayUUIDs []string
-	err := r.db.Table("deployment_status").
-		Where("artifact_uuid = ? AND ou_id = ? AND status = ?",
-			artifactUUID, orgUUID, models.DeploymentStatusDeployed).
-		Pluck("gateway_uuid", &gatewayUUIDs).Error
-	if err != nil {
-		return nil, err
-	}
-
-	return gatewayUUIDs, nil
 }
 
 // GetTrackedGatewaysByProvider returns all gateway UUIDs where this provider has a

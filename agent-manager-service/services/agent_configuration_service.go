@@ -3984,32 +3984,15 @@ func (s *agentConfigurationService) Update(ctx context.Context, configUUID uuid.
 	for _, proxyHandle := range proxiesToDelete {
 		s.logger.Info("Cleaning up replaced proxy", "proxyHandle", proxyHandle)
 
-		deployments, err := s.llmProxyDeploymentService.GetLLMProxyDeployments(proxyHandle, ouID, nil, nil)
-		if err != nil {
+		// The replaced proxy is still placed; undeploy it first, same as the whole-config
+		// deletion path (deleteLLMConfig) does.
+		if err := s.llmProxyDeploymentService.UndeployEverywhere(ctx, proxyHandle, ouID); err != nil {
 			s.logger.Error(
-				"Failed to get deployments for proxy cleanup",
+				"Failed to undeploy proxy during cleanup",
 				"proxyHandle", proxyHandle,
 				"error", err,
 			)
 			cleanupErrors++
-		} else {
-			for _, dep := range deployments {
-				// The replaced proxy's deployment is still DEPLOYED — DeleteLLMProxyDeployment
-				// rejects that (ErrDeploymentIsDeployed). It must be undeployed first, same as
-				// the whole-config deletion path (deleteLLMConfig) already does.
-				if dep.Status == nil || *dep.Status != models.DeploymentStatusDeployed {
-					continue
-				}
-				if _, err := s.llmProxyDeploymentService.UndeployLLMProxyDeployment(ctx, proxyHandle, dep.DeploymentID.String(), dep.GatewayUUID.String(), ouID); err != nil {
-					s.logger.Error(
-						"Failed to undeploy deployment during cleanup",
-						"proxyHandle", proxyHandle,
-						"deploymentID", dep.DeploymentID,
-						"error", err,
-					)
-					cleanupErrors++
-				}
-			}
 		}
 
 		if err := s.llmProxyService.Delete(ctx, proxyHandle, ouID, s.llmProxyDeploymentService); err != nil {
@@ -4248,8 +4231,7 @@ func (s *agentConfigurationService) deleteLLMConfig(ctx context.Context, existin
 			"proxyHandle", proxyHandle,
 		)
 
-		deployments, err := s.llmProxyDeploymentService.GetLLMProxyDeployments(proxyHandle, ouID, nil, nil)
-		if err != nil {
+		if err := s.llmProxyDeploymentService.UndeployEverywhere(ctx, proxyHandle, ouID); err != nil {
 			if errors.Is(err, utils.ErrLLMProxyNotFound) {
 				// Proxy already gone — skip deployment cleanup for this mapping.
 				s.logger.Info(
@@ -4257,19 +4239,11 @@ func (s *agentConfigurationService) deleteLLMConfig(ctx context.Context, existin
 					"proxyHandle", proxyHandle,
 				)
 			} else {
-				return fmt.Errorf("failed to get deployments for proxy %q: %w", proxyHandle, err)
-			}
-		} else {
-			for _, dep := range deployments {
-				if _, err := s.llmProxyDeploymentService.UndeployLLMProxyDeployment(ctx, proxyHandle, dep.DeploymentID.String(), dep.GatewayUUID.String(), ouID); err != nil {
-					s.logger.Error(
-						"Failed to undeploy deployment during cleanup",
-						"proxyHandle", proxyHandle,
-						"deploymentID", dep.DeploymentID,
-						"gatewayID", dep.GatewayUUID,
-						"error", err,
-					)
-				}
+				s.logger.Error(
+					"Failed to undeploy proxy during cleanup",
+					"proxyHandle", proxyHandle,
+					"error", err,
+				)
 			}
 		}
 
@@ -4455,21 +4429,11 @@ func (s *agentConfigurationService) DeleteForAgentDeletion(ctx context.Context, 
 		}
 
 		// Step 3: Undeploy proxy deployments.
-		deployments, err := s.llmProxyDeploymentService.GetLLMProxyDeployments(proxyHandle, ouID, nil, nil)
-		if err != nil {
-			if !errors.Is(err, utils.ErrLLMProxyNotFound) {
-				s.logger.Warn("Failed to get proxy deployments during agent deletion",
-					"proxyHandle", proxyHandle, "error", err)
-				cleanupErrs = append(cleanupErrs, fmt.Sprintf("get deployments for proxy %s: %v", proxyHandle, err))
-			}
-		} else {
-			for _, dep := range deployments {
-				if _, err := s.llmProxyDeploymentService.UndeployLLMProxyDeployment(ctx, proxyHandle, dep.DeploymentID.String(), dep.GatewayUUID.String(), ouID); err != nil {
-					s.logger.Warn("Failed to undeploy proxy deployment during agent deletion",
-						"proxyHandle", proxyHandle, "deploymentID", dep.DeploymentID, "error", err)
-					cleanupErrs = append(cleanupErrs, fmt.Sprintf("undeploy %s deployment %s: %v", proxyHandle, dep.DeploymentID, err))
-				}
-			}
+		if err := s.llmProxyDeploymentService.UndeployEverywhere(ctx, proxyHandle, ouID); err != nil &&
+			!errors.Is(err, utils.ErrLLMProxyNotFound) {
+			s.logger.Warn("Failed to undeploy proxy during agent deletion",
+				"proxyHandle", proxyHandle, "error", err)
+			cleanupErrs = append(cleanupErrs, fmt.Sprintf("undeploy proxy %s: %v", proxyHandle, err))
 		}
 
 		// Step 4: Delete proxy record.
@@ -4695,15 +4659,14 @@ func (s *agentConfigurationService) deleteMCPConfigForAgentDeletion(ctx context.
 
 // Helper methods
 
-// resolveGatewayForProvider returns the gateway hosting this LLM provider in the given
-// environment, or the environment's single egress gateway when it has no deployment there.
+// resolveGatewayForProvider returns the gateway this LLM provider is placed on in the given
+// environment, or the environment's single egress gateway when it isn't placed there.
 func (s *agentConfigurationService) resolveGatewayForProvider(
 	ctx context.Context, providerUUIDStr, ouID string, envUUID uuid.UUID,
 ) (*models.Gateway, error) {
-	_ = ctx
 	var deployed []string
 	if providerUUID, err := uuid.Parse(providerUUIDStr); err == nil {
-		ids, gwErr := s.llmProxyDeploymentService.GetDeployedGatewaysByProvider(providerUUID, ouID)
+		ids, gwErr := s.llmProxyDeploymentService.PlacedGateways(ctx, ouID, providerUUID)
 		if gwErr != nil {
 			return nil, fmt.Errorf("failed to list deployed gateways for provider %s: %w", providerUUIDStr, gwErr)
 		}
@@ -4712,21 +4675,15 @@ func (s *agentConfigurationService) resolveGatewayForProvider(
 	return resolveEgressGatewayForArtifact(s.gatewayRepo, ouID, envUUID, deployed, nil)
 }
 
-// resolveGatewayForProxy returns the gateway the LLM proxy is actually deployed to.
+// resolveGatewayForProxy returns the gateway the LLM proxy is placed on, whatever the placement's status.
 func (s *agentConfigurationService) resolveGatewayForProxy(
 	ctx context.Context, proxyHandle, ouID string, envUUID uuid.UUID,
 ) (*models.Gateway, error) {
-	_ = ctx
-	deployedStatus := string(models.DeploymentStatusDeployed)
-	var deployed []string
-	deployments, err := s.llmProxyDeploymentService.GetLLMProxyDeployments(proxyHandle, ouID, nil, &deployedStatus)
+	placed, err := s.llmProxyDeploymentService.PlacedGatewaysOfProxy(ctx, proxyHandle, ouID)
 	if err != nil && !errors.Is(err, utils.ErrLLMProxyNotFound) {
-		return nil, fmt.Errorf("failed to list deployments for proxy %s: %w", proxyHandle, err)
+		return nil, fmt.Errorf("failed to list the gateways proxy %s is placed on: %w", proxyHandle, err)
 	}
-	for _, dep := range deployments {
-		deployed = append(deployed, dep.GatewayUUID.String())
-	}
-	return resolveEgressGatewayForArtifact(s.gatewayRepo, ouID, envUUID, deployed, nil)
+	return resolveEgressGatewayForArtifact(s.gatewayRepo, ouID, envUUID, placed, nil)
 }
 
 // errMCPEnvNotDeployable reports that an MCP proxy cannot back an agent binding in an
@@ -4763,14 +4720,13 @@ func (s *agentConfigurationService) resolveDeployableMCPGateway(
 }
 
 // resolveGatewayForMCPArtifact returns the gateway the MCP proxy's shared per-environment
-// artifact is deployed to.
+// artifact is placed on, whatever the placement's status.
 func (s *agentConfigurationService) resolveGatewayForMCPArtifact(
 	ctx context.Context, artifactUUID uuid.UUID, ouID string, envUUID uuid.UUID,
 ) (*models.Gateway, error) {
-	_ = ctx
 	var deployed []string
 	if s.mcpProxyService != nil && s.mcpProxyService.deploymentRepo != nil {
-		ids, err := s.mcpProxyService.deploymentRepo.GetDeployedGatewaysByProvider(artifactUUID, ouID)
+		ids, err := s.mcpProxyService.deploymentRepo.PlacedGateways(ctx, ouID, artifactUUID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to list deployed gateways for MCP artifact %s: %w", artifactUUID, err)
 		}

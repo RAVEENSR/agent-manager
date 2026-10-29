@@ -193,18 +193,19 @@ func (k *LLMProxyKind) Targets(ctx context.Context, record reconcile.Record) (uu
 	if err != nil {
 		return uuid.Nil, false, err
 	}
-	anchors, err := k.deploymentRepo.PlacedGateways(ctx, record.OUID, record.ArtifactUUID)
+	deployments, gateways := placementReposIn(ctx, k.deploymentRepo, k.gatewayRepo)
+	anchors, err := deployments.PlacedGateways(ctx, record.OUID, record.ArtifactUUID)
 	if err != nil {
 		return uuid.Nil, false, err
 	}
 	if providerUUID, err := uuid.Parse(proxy.Configuration.Provider); err == nil {
-		providerGateways, err := k.deploymentRepo.PlacedGateways(ctx, record.OUID, providerUUID)
+		providerGateways, err := deployments.PlacedGateways(ctx, record.OUID, providerUUID)
 		if err != nil {
 			return uuid.Nil, false, err
 		}
 		anchors = append(anchors, providerGateways...)
 	}
-	gateway, err := resolveEgressGatewayForArtifact(k.gatewayRepo, record.OUID, record.EnvironmentUUID, anchors, nil)
+	gateway, err := resolveEgressGatewayForArtifact(gateways, record.OUID, record.EnvironmentUUID, anchors, nil)
 	if errors.Is(err, errNoGatewayForEnvironment) || errors.Is(err, errNoEgressGatewayForEnvironment) {
 		return uuid.Nil, false, nil
 	}

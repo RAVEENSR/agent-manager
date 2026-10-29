@@ -53,6 +53,7 @@ func deploySettingsService(configs *repomocks.AgentConfigRepositoryMock, publish
 			return &models.Artifact{UUID: uuid.New(), Handle: handle, Kind: models.KindAgent, OUID: ouID}, nil
 		},
 	}
+	artifacts.WithTxFunc = func(*gorm.DB) repositories.ArtifactRepository { return artifacts }
 	return NewAgentManagerService(nil, oc, nil, nil, nil, configs, nil, nil, artifacts, nil, nil, nil, nil, nil, nil, nil,
 		publisher, nil, nil, nil, testLogger()).(*agentManagerService)
 }

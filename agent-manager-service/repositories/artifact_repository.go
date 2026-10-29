@@ -43,6 +43,8 @@ type ArtifactRepository interface {
 	GetByUUID(artifactUUID, orgUUID string) (*models.Artifact, error)
 	ListByHandlePrefix(ctx context.Context, kind, handlePrefix, orgUUID string) ([]*models.Artifact, error)
 	CountByKindAndOrg(kind, orgUUID string) (int, error)
+	// WithTx returns the repository bound to tx.
+	WithTx(tx *gorm.DB) ArtifactRepository
 }
 
 // ArtifactRepo implements ArtifactRepository using GORM
@@ -53,6 +55,11 @@ type ArtifactRepo struct {
 // NewArtifactRepo creates a new artifact repository
 func NewArtifactRepo(db *gorm.DB) ArtifactRepository {
 	return &ArtifactRepo{db: db}
+}
+
+// WithTx returns the repository bound to tx.
+func (r *ArtifactRepo) WithTx(tx *gorm.DB) ArtifactRepository {
+	return &ArtifactRepo{db: tx}
 }
 
 // Create inserts a new artifact within a transaction

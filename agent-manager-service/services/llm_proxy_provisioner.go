@@ -378,22 +378,13 @@ func (p *LLMProxyProvisioner) CleanupProxy(ctx context.Context, proxy *models.LL
 		}
 	}
 
-	// Undeploy all proxy deployments.
-	deployments, err := p.llmProxyDeploymentService.GetLLMProxyDeployments(proxyHandle, ouID, nil, nil)
-	if err != nil {
+	// Undeploy the proxy wherever it is placed.
+	if err := p.llmProxyDeploymentService.UndeployEverywhere(ctx, proxyHandle, ouID); err != nil {
 		if !errors.Is(err, utils.ErrLLMProxyNotFound) {
-			return fmt.Errorf("failed to get deployments for proxy %q: %w", proxyHandle, err)
-		}
-		p.logger.Info("Proxy already deleted, skipping deployment cleanup", "proxyHandle", proxyHandle)
-	} else {
-		for _, dep := range deployments {
-			if _, err := p.llmProxyDeploymentService.UndeployLLMProxyDeployment(
-				ctx, proxyHandle, dep.DeploymentID.String(), dep.GatewayUUID.String(), ouID,
-			); err != nil {
-				p.logger.Error("Failed to undeploy proxy during cleanup",
-					"proxyHandle", proxyHandle, "deploymentID", dep.DeploymentID, "error", err)
-				cleanupErrs = append(cleanupErrs, fmt.Errorf("undeploy deployment %s: %w", dep.DeploymentID, err))
-			}
+			p.logger.Error("Failed to undeploy proxy during cleanup", "proxyHandle", proxyHandle, "error", err)
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("undeploy proxy: %w", err))
+		} else {
+			p.logger.Info("Proxy already deleted, skipping deployment cleanup", "proxyHandle", proxyHandle)
 		}
 	}
 
