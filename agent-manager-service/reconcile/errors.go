@@ -18,6 +18,9 @@ package reconcile
 
 import (
 	"errors"
+	"fmt"
+
+	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 )
 
 // ErrInputNotReady matches a Render error made by InputNotReady.
@@ -49,6 +52,36 @@ func (e *permanent) Unwrap() error { return e.err }
 // Permanent marks a Render error that retrying won't fix: the owed deploy is given up.
 func Permanent(err error) error {
 	return &permanent{err: err}
+}
+
+// RenderFailedError is a claimed render that failed, with its outcome already recorded on the row: the row is
+// queued, waiting or given up, and the gateway keeps what it was last sent. An inline caller is told; the worker
+// isn't, since the outcome is its whole answer.
+type RenderFailedError struct {
+	Outcome repositories.RenderOutcomeKind
+	Reason  string
+	Err     error
+}
+
+func (e *RenderFailedError) Error() string { return fmt.Sprintf("render failed: %s", e.Reason) }
+func (e *RenderFailedError) Unwrap() error { return e.Err }
+
+// ignoreRenderFailed drops a RenderFailedError, which the worker has nothing more to do with.
+func ignoreRenderFailed(err error) error {
+	var failed *RenderFailedError
+	if errors.As(err, &failed) {
+		return nil
+	}
+	return err
+}
+
+// ignoreWaiting drops a render waiting for an input: the worker retries it, and it never fails a request.
+func ignoreWaiting(err error) error {
+	var failed *RenderFailedError
+	if errors.As(err, &failed) && failed.Outcome == repositories.RenderWaiting {
+		return nil
+	}
+	return err
 }
 
 // IsPermanent reports whether err, or an error it wraps, was marked Permanent.

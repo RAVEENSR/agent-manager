@@ -290,7 +290,8 @@ func (c *Core) PrepareDelete(ctx context.Context, tx *gorm.DB, ref models.Artifa
 
 // MarkStale marks a redeploy owed on the artifact's placed rows, on gateways or, when empty, on all of them, because
 // an input outside the artifact changed. A kind that renders inline is rendered now, each row in its own
-// transaction; any other kind is left to the worker.
+// transaction; any other kind is left to the worker. A failed inline render is returned as a RenderFailedError,
+// unless it waits for an input: its row stays queued with the outcome recorded.
 func (c *Core) MarkStale(ctx context.Context, kind, ouID string, artifactUUID uuid.UUID, gateways []uuid.UUID, reason string) error {
 	k, err := c.kindOf(kind)
 	if err != nil {
@@ -304,18 +305,21 @@ func (c *Core) MarkStale(ctx context.Context, kind, ouID string, artifactUUID uu
 		c.nudge()
 		return nil
 	}
-	return c.renderOwed(ctx, ouID, artifactUUID, gateways)
+	return c.renderOwed(ctx, ouID, artifactUUID, gateways, ignoreWaiting)
 }
 
-// renderOwed claims and renders the artifact's due rows on gateways (all when empty).
-func (c *Core) renderOwed(ctx context.Context, ouID string, artifactUUID uuid.UUID, gateways []uuid.UUID) error {
+// renderOwed claims and renders the artifact's due rows on gateways (all when empty). filter decides which of each
+// row's render errors the caller is told.
+func (c *Core) renderOwed(
+	ctx context.Context, ouID string, artifactUUID uuid.UUID, gateways []uuid.UUID, filter func(error) error,
+) error {
 	claims, err := c.repo.ClaimDueRendersOf(ctx, ouID, artifactUUID, gateways, c.now(), c.cfg.Lease)
 	if err != nil {
 		return err
 	}
 	var errs []error
 	for _, claim := range claims {
-		errs = append(errs, c.renderClaim(ctx, claim))
+		errs = append(errs, filter(c.renderClaim(ctx, claim)))
 	}
 	return errors.Join(errs...)
 }
@@ -349,7 +353,8 @@ func (c *Core) AfterLive() repositories.AfterLiveFunc {
 }
 
 // renderClaim renders a claimed row outside any transaction and writes back what came of it. A write-back the
-// claim no longer holds the token for is dropped: a newer request, restore or undeploy owns the row.
+// claim no longer holds the token for is dropped: a newer request, restore or undeploy owns the row. A failed render
+// is recorded on the row and then returned as a RenderFailedError.
 func (c *Core) renderClaim(ctx context.Context, claim models.ClaimedRender) error {
 	log := c.logger.With("artifactUUID", claim.ArtifactUUID, "kind", claim.Kind, "gatewayUUID", claim.GatewayUUID)
 	kind, ok := c.byArtifact[claim.Kind]
@@ -373,7 +378,10 @@ func (c *Core) renderClaim(ctx context.Context, claim models.ClaimedRender) erro
 	default:
 		outcome := renderOutcome(err, renderReason(kind, err), claim, c.cfg.AttemptBudget)
 		log.Warn("Render didn't produce a deployment", "outcome", outcome.Outcome, "attempt", claim.AttemptCount, "error", err)
-		return c.superseded(log, c.repo.RecordRenderOutcome(ctx, claim, outcome))
+		if recordErr := c.repo.RecordRenderOutcome(ctx, claim, outcome); recordErr != nil {
+			return c.superseded(log, recordErr)
+		}
+		return &RenderFailedError{Outcome: outcome.Outcome, Reason: outcome.Reason, Err: err}
 	}
 }
 

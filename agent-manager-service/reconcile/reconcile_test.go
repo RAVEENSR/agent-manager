@@ -972,6 +972,48 @@ func TestMarkStaleTouchesOnlyPlacedRows(t *testing.T) {
 	assert.Len(t, eventsFor(t, undeployed.GatewayUUID), 2, "deploy and undeploy only")
 }
 
+// A failed inline render reaches MarkStale's caller; the gateway keeps what it was sent and the row keeps the
+// outcome.
+func TestMarkStaleReturnsAFailedInlineRender(t *testing.T) {
+	kind := newFakeKind(fakeGatewayKind, true)
+	core := newCore(t, kind)
+	p := seedPlacement(t, fakeGatewayKind)
+	first := deploy(t, core, p).DeploymentID
+	renderErr := Permanent(errors.New("invalid config"))
+	kind.setRender(func(context.Context, models.ArtifactRef) (Rendered, error) { return Rendered{}, renderErr })
+
+	err := core.MarkStale(context.Background(), fakeGatewayKind, p.OUID, p.ArtifactUUID, nil, "inputs changed")
+
+	var failed *RenderFailedError
+	require.ErrorAs(t, err, &failed)
+	assert.Equal(t, repositories.RenderGiveUp, failed.Outcome)
+	assert.ErrorIs(t, err, renderErr)
+	row := statusRow(t, p)
+	assert.Equal(t, first, *row.DeploymentID, "no deployment was written")
+	assert.Equal(t, "invalid config", row.RenderReason)
+	assert.Len(t, eventsFor(t, p.GatewayUUID), 1, "only the first deploy's event")
+}
+
+// A record gone before its redeploy renders undeploys the row; that isn't a failure.
+func TestMarkStaleOfAGoneRecordIsNotAFailure(t *testing.T) {
+	kind := newFakeEnvKind(true)
+	core := newCore(t, kind)
+	ouID := testOU()
+	env := uuid.New()
+	gateway := seedGateway(t, ouID, env)
+	record := seedRecord(t, nil, seedArtifact(t, ouID, fakeEnvKindName), env)
+	require.NoError(t, inTx(t, func(tx *gorm.DB) error {
+		_, err := core.DeployRecord(context.Background(), tx, kind, record)
+		return err
+	}))
+	deleteRecord(t, record.ArtifactUUID)
+
+	require.NoError(t, core.MarkStale(context.Background(), fakeEnvKindName, ouID, record.ArtifactUUID, nil, "inputs changed"))
+
+	row := statusRow(t, models.Placement{ArtifactRef: record.ArtifactRef, GatewayUUID: gateway})
+	assert.Equal(t, models.DeploymentStatusUndeploying, row.Status)
+}
+
 func TestPrepareDeleteSendsToEveryGatewaySentTheArtifactAndEveryActiveGateway(t *testing.T) {
 	kind := newFakeKind(fakeGatewayKind, true)
 	core := newCore(t, kind)

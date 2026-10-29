@@ -148,6 +148,26 @@ func TestMCPScopeChangeReRendersInline(t *testing.T) {
 	assert.Contains(t, string(pulled.Content), "get_forecast")
 }
 
+// A scope change whose configuration doesn't render reaches the caller, and no gateway is sent anything.
+func TestMCPScopeChangeThatFailsToRenderReachesTheCaller(t *testing.T) {
+	f := newMCPFixture(t)
+	gateway := f.mapGateway(t, f.env)
+	require.NoError(t, f.deploy(t))
+	before := *f.mcpRow(t, gateway).DeploymentID
+	published := len(f.hub.published)
+	f.proxy.Endpoints[0].Configuration.Upstream = nil
+	require.NoError(t, db.GetDB().Model(&models.MCPProxyEndpoint{}).Where("uuid = ?", f.proxy.Endpoints[0].UUID).
+		Update("configuration", f.proxy.Endpoints[0].Configuration).Error)
+
+	err := f.svc.RedeployMCPProxy(context.Background(), f.proxy, f.sync.ouID)
+
+	require.ErrorIs(t, err, utils.ErrInvalidInput)
+	row := f.mcpRow(t, gateway)
+	assert.Equal(t, before, *row.DeploymentID, "no deployment was written")
+	assert.Nil(t, row.NextAttemptAt, "no redeploy was queued")
+	assert.Len(t, f.hub.published, published, "no event was written")
+}
+
 // The placement pass places a binding whose environment gains a gateway, and a deleted binding's artifact sends its
 // delete event in the deleting transaction.
 func TestMCPPlacementAndDelete(t *testing.T) {

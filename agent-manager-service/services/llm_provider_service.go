@@ -32,6 +32,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/wso2/agent-manager/agent-manager-service/reconcile"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
@@ -1392,9 +1393,13 @@ func (s *LLMProviderService) syncProxyAuthHeader(
 	}
 
 	// Every gateway the proxy is placed on re-renders from the stored config. A config that doesn't render is
-	// rejected before any gateway is touched; a later per-gateway failure stays on that gateway's row and is
-	// retried by the reconcile worker.
+	// rejected before any gateway is touched, so the stored headers are restored. A later per-gateway failure keeps
+	// them: other gateways may already serve them, and the reconcile worker retries that gateway from the store.
 	if err := proxyDeploymentService.RedeployEverywhere(ctx, proxy, ouID, "the provider's API key settings changed"); err != nil {
+		var renderFailed *reconcile.RenderFailedError
+		if errors.As(err, &renderFailed) {
+			return false, fmt.Errorf("proxy %s saved but gateway update failed (retried in the background): %w", proxy.Handle, err)
+		}
 		restoreStoredHeaders()
 		return false, fmt.Errorf("failed to redeploy proxy %s: %w", proxy.Handle, err)
 	}

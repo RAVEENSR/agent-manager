@@ -290,19 +290,35 @@ func gatewayOrderKey(gateway *uuid.UUID) string {
 }
 
 // RedeployMCPProxy re-renders the proxy's artifacts wherever they are placed, because an input outside the proxy
-// changed (its scopes). Inline: the gateways get the new policies before the request returns.
+// changed (its scopes). Inline: the gateways get the new policies before the request returns. Every artifact is
+// rendered first, so a configuration that doesn't render is returned before any redeploy is queued.
 func (s *MCPProxyService) RedeployMCPProxy(ctx context.Context, proxy *models.MCPProxy, ouID string) error {
+	artifacts := mcpProxyArtifacts(proxy, ouID)
+	for _, artifact := range artifacts {
+		if _, err := s.kind.Render(ctx, artifact); err != nil && !errors.Is(err, reconcile.ErrRecordGone) {
+			return err
+		}
+	}
 	var errs []error
+	for _, artifact := range artifacts {
+		errs = append(errs, s.core.MarkStale(ctx, artifact.Kind, ouID, artifact.ArtifactUUID, nil,
+			"the proxy's scopes changed"))
+	}
+	return errors.Join(errs...)
+}
+
+// mcpProxyArtifacts are the proxy's per-(endpoint, environment) gateway artifacts.
+func mcpProxyArtifacts(proxy *models.MCPProxy, ouID string) []models.ArtifactRef {
+	var artifacts []models.ArtifactRef
 	for _, endpoint := range proxy.Endpoints {
 		for _, ee := range endpoint.Environments {
 			if ee.ArtifactUUID == uuid.Nil {
 				continue
 			}
-			errs = append(errs, s.core.MarkStale(ctx, models.KindMCPMapping, ouID, ee.ArtifactUUID, nil,
-				"the proxy's scopes changed"))
+			artifacts = append(artifacts, models.ArtifactRef{OUID: ouID, ArtifactUUID: ee.ArtifactUUID, Kind: models.KindMCPMapping})
 		}
 	}
-	return errors.Join(errs...)
+	return artifacts
 }
 
 // deleteMCPProxyEnvironmentArtifacts deletes the given per-environment gateway artifacts and their deployments, each

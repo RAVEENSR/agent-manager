@@ -131,7 +131,7 @@ func (w *Worker) RunOnce(ctx context.Context) {
 		var wg sync.WaitGroup
 		for _, claim := range claims {
 			wg.Go(func() {
-				if err := w.core.renderClaim(ctx, claim); err != nil {
+				if err := ignoreRenderFailed(w.core.renderClaim(ctx, claim)); err != nil {
 					w.logger.Error("Failed to write back a render", "artifactUUID", claim.ArtifactUUID,
 						"gatewayUUID", claim.GatewayUUID, "error", err)
 				}
@@ -147,7 +147,7 @@ func (w *Worker) RunOnce(ctx context.Context) {
 // RunOnceFor renders the artifact's rows due now, as RunOnce does for the fleet. A test renders its own artifact
 // with it without claiming rows other tests sharing the database made due.
 func (w *Worker) RunOnceFor(ctx context.Context, ouID string, artifactUUID uuid.UUID) error {
-	return w.core.renderOwed(ctx, ouID, artifactUUID, nil)
+	return w.core.renderOwed(ctx, ouID, artifactUUID, nil, ignoreRenderFailed)
 }
 
 // RequestPlaceEnv queues a placement pass over the environment, which a gateway was just mapped to, without waiting
@@ -234,7 +234,7 @@ func (w *Worker) placeRecord(ctx context.Context, kind EnvironmentKind, record R
 	if err != nil || !inserted {
 		return err
 	}
-	return w.core.renderOwed(ctx, p.OUID, p.ArtifactUUID, []uuid.UUID{gateway})
+	return w.core.renderOwed(ctx, p.OUID, p.ArtifactUUID, []uuid.UUID{gateway}, ignoreRenderFailed)
 }
 
 // driftLoop checks for drift on interval boundaries, so the replicas' ticks line up and the scan lock leaves
