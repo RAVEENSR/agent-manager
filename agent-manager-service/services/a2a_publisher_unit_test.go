@@ -19,6 +19,8 @@ package services
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/google/uuid"
@@ -36,10 +38,17 @@ import (
 // txSentinel stands in for an open transaction; tx-bound mocks check they were handed it.
 var txSentinel = &gorm.DB{}
 
+// sentinelTx hands fn the shared transaction sentinel; publisherMocks.tx adds a counter and an injected failure on top.
+func sentinelTx(_ context.Context, fn func(tx *gorm.DB) error) error { return fn(txSentinel) }
+
+func testLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
 // publisherMocks keeps the plain and the transaction-bound mocks apart, so a write that
 // escapes the transaction reaches a nil func and panics.
 type publisherMocks struct {
-	pubs, txPubs               *repomocks.A2APublicationRepositoryMock
+	exposures, txExposures     *repomocks.PlatformAgentExposureRepositoryMock
 	proxies                    *repomocks.A2AProxyRepositoryMock
 	envCards                   *repomocks.A2AAgentCardRepositoryMock
 	deployments, txDeployments *repomocks.DeploymentRepositoryMock
@@ -64,7 +73,7 @@ func (m *publisherMocks) tx() TxRunner {
 
 func newPublisherMocks(t *testing.T) *publisherMocks {
 	m := &publisherMocks{
-		txPubs:        &repomocks.A2APublicationRepositoryMock{},
+		txExposures:   &repomocks.PlatformAgentExposureRepositoryMock{},
 		proxies:       &repomocks.A2AProxyRepositoryMock{},
 		txDeployments: &repomocks.DeploymentRepositoryMock{},
 		gateways: &repomocks.GatewayRepositoryMock{
@@ -80,10 +89,10 @@ func newPublisherMocks(t *testing.T) *publisherMocks {
 		artifacts: &repomocks.ArtifactRepositoryMock{},
 		hub:       &recordingEventHub{},
 	}
-	m.pubs = &repomocks.A2APublicationRepositoryMock{
-		WithTxFunc: func(tx *gorm.DB) repositories.A2APublicationRepository {
+	m.exposures = &repomocks.PlatformAgentExposureRepositoryMock{
+		WithTxFunc: func(tx *gorm.DB) repositories.PlatformAgentExposureRepository {
 			assert.Same(t, txSentinel, tx)
-			return m.txPubs
+			return m.txExposures
 		},
 	}
 	m.deployments = &repomocks.DeploymentRepositoryMock{
@@ -97,7 +106,7 @@ func newPublisherMocks(t *testing.T) *publisherMocks {
 }
 
 func (m *publisherMocks) publisher() *A2APublisher {
-	return NewA2APublisher(m.tx(), m.pubs, m.proxies, m.envCards, m.artifacts, m.deployments, m.gateways, NewGatewayEventsService(m.hub), testLogger())
+	return NewA2APublisher(m.tx(), m.exposures, m.proxies, m.envCards, m.artifacts, m.deployments, m.gateways, NewGatewayEventsService(m.hub), testLogger())
 }
 
 func testA2AKey() a2aPublicationKey {
@@ -184,7 +193,7 @@ func TestA2APublisherSaveAndRepublishSkipsTheLockForAnInternalAgent(t *testing.T
 		Type: models.AgentType{Type: "agent-api", SubType: "a2a-agent"},
 	}
 	m.proxies.WithTxFunc = func(*gorm.DB) repositories.A2AProxyRepository { return m.proxies }
-	m.txPubs.EnqueueFunc = func(context.Context, *models.A2APublication) error { return nil }
+	m.txExposures.UpsertFunc = func(context.Context, *models.PlatformAgentExposure) error { return nil }
 	var savedIn *gorm.DB
 
 	err := m.publisher().SaveAndRepublish(context.Background(), internal, testA2AKey(), uuid.New(), func(tx *gorm.DB) error {
@@ -196,8 +205,24 @@ func TestA2APublisherSaveAndRepublishSkipsTheLockForAnInternalAgent(t *testing.T
 	assert.Same(t, txSentinel, savedIn)
 	assert.Empty(t, m.proxies.LockAgentEnvCalls())
 	assert.Empty(t, m.proxies.GetByEnvUUIDCalls())
-	require.Len(t, m.txPubs.EnqueueCalls(), 1)
-	assert.Equal(t, models.A2APublicationSourcePlatform, m.txPubs.EnqueueCalls()[0].Pub.Source)
+	require.Len(t, m.txExposures.UpsertCalls(), 1)
+	assert.Equal(t, models.AgentExposureProtocolA2A, m.txExposures.UpsertCalls()[0].Exposure.Protocol)
+}
+
+// An internal agent's save and exposure are one transaction: a failed exposure fails the save.
+func TestA2APublisherSaveAndRepublishFailsWhenTheExposureCannotBeWritten(t *testing.T) {
+	m := newPublisherMocks(t)
+	internal := &models.AgentResponse{
+		Name: "weather", Provisioning: models.Provisioning{Type: "internal"},
+		Type: models.AgentType{Type: "agent-api", SubType: "a2a-agent"},
+	}
+	m.txExposures.UpsertFunc = func(context.Context, *models.PlatformAgentExposure) error { return assert.AnError }
+
+	err := m.publisher().SaveAndRepublish(context.Background(), internal, testA2AKey(), uuid.New(), func(*gorm.DB) error {
+		return nil
+	})
+
+	assert.ErrorIs(t, err, assert.AnError)
 }
 
 func TestA2APublisherSaveAndRepublishDoesNotSaveWhenTheLockFails(t *testing.T) {
@@ -215,27 +240,46 @@ func TestA2APublisherSaveAndRepublishDoesNotSaveWhenTheLockFails(t *testing.T) {
 	assert.False(t, saved)
 }
 
-func TestA2APublisherEnqueueJoinsTheCallersTransaction(t *testing.T) {
+func TestA2APublisherExposeJoinsTheCallersTransaction(t *testing.T) {
 	m := newPublisherMocks(t)
-	m.txPubs.EnqueueFunc = func(context.Context, *models.A2APublication) error { return nil }
+	m.txExposures.UpsertFunc = func(context.Context, *models.PlatformAgentExposure) error { return nil }
 	artifactUUID := uuid.New()
 
-	require.NoError(t, m.publisher().Enqueue(context.Background(), txSentinel, testA2AKey(),
-		models.A2APublicationSourceExternal, artifactUUID))
+	require.NoError(t, m.publisher().Expose(context.Background(), txSentinel, testA2AKey(), artifactUUID))
 
-	queued := m.txPubs.EnqueueCalls()
-	require.Len(t, queued, 1)
-	assert.Equal(t, models.A2APublicationSourceExternal, queued[0].Pub.Source)
-	assert.Equal(t, artifactUUID, queued[0].Pub.ArtifactUUID)
-	assert.Equal(t, testA2AKey().EnvironmentUUID, queued[0].Pub.EnvironmentUUID)
-	assert.Equal(t, "dev", queued[0].Pub.EnvironmentName)
+	exposed := m.txExposures.UpsertCalls()
+	require.Len(t, exposed, 1)
+	assert.Equal(t, models.AgentExposureProtocolA2A, exposed[0].Exposure.Protocol)
+	assert.Equal(t, artifactUUID, exposed[0].Exposure.ArtifactUUID)
+	assert.Equal(t, testA2AKey().EnvironmentUUID, exposed[0].Exposure.EnvironmentUUID)
+	assert.Equal(t, "dev", exposed[0].Exposure.EnvironmentName)
+}
+
+// A proxied external agent's record is its proxy row; its save writes no exposure.
+func TestA2APublisherSaveAndRepublishExposesNoExternalAgent(t *testing.T) {
+	m := newPublisherMocks(t) // txExposures.UpsertFunc is nil: an exposure would panic
+	m.proxies.WithTxFunc = func(*gorm.DB) repositories.A2AProxyRepository { return m.proxies }
+	m.proxies.LockAgentEnvFunc = func(context.Context, string, string, string, uuid.UUID) error { return nil }
+	m.proxies.GetByEnvUUIDFunc = func(context.Context, string, string, string, uuid.UUID) (*models.A2AProxy, error) {
+		return &models.A2AProxy{}, nil
+	}
+	saved := false
+
+	err := m.publisher().SaveAndRepublish(context.Background(), externalAgent(), testA2AKey(), uuid.New(), func(*gorm.DB) error {
+		saved = true
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.True(t, saved)
+	assert.Empty(t, m.txExposures.UpsertCalls())
 }
 
 // The artifact stays so the environment's API keys survive a switch back to proxied.
 func TestA2APublisherTeardownEnvKeepsTheArtifactAndWaitsToTellTheGateway(t *testing.T) {
 	m := newPublisherMocks(t)
 	m.txDeployments.DeleteForArtifactFunc = func(context.Context, uuid.UUID, string) error { return nil }
-	m.txPubs.DeleteForAgentEnvFunc = func(context.Context, string, string, string, uuid.UUID) error { return nil }
+	m.txExposures.DeleteForAgentEnvFunc = func(context.Context, string, string, string, uuid.UUID) error { return nil }
 	artifactUUID := uuid.New()
 	publisher := m.publisher()
 
@@ -244,7 +288,7 @@ func TestA2APublisherTeardownEnvKeepsTheArtifactAndWaitsToTellTheGateway(t *test
 	assert.Empty(t, m.artifacts.DeleteCalls())
 	require.Len(t, m.txDeployments.DeleteForArtifactCalls(), 1)
 	assert.Equal(t, artifactUUID, m.txDeployments.DeleteForArtifactCalls()[0].ArtifactUUID)
-	require.Len(t, m.txPubs.DeleteForAgentEnvCalls(), 1)
+	require.Len(t, m.txExposures.DeleteForAgentEnvCalls(), 1)
 	assert.Empty(t, m.hub.published, "nothing is sent before the transaction commits")
 
 	publisher.SendTeardown(context.Background(), teardown)
@@ -255,18 +299,18 @@ func TestA2APublisherTeardownEnvKeepsTheArtifactAndWaitsToTellTheGateway(t *test
 
 func TestA2APublisherDeleteForAgentDropsPublicationsAndProxies(t *testing.T) {
 	m := newPublisherMocks(t)
-	m.pubs.DeleteForAgentFunc = func(context.Context, string, string, string) error { return nil }
+	m.exposures.DeleteForAgentFunc = func(context.Context, string, string, string) error { return nil }
 	m.proxies.DeleteForAgentFunc = func(context.Context, string, string, string) error { return nil }
 
 	require.NoError(t, m.publisher().DeleteForAgent(context.Background(), "org-1", "checkout", "weather"))
-	assert.Len(t, m.pubs.DeleteForAgentCalls(), 1)
+	assert.Len(t, m.exposures.DeleteForAgentCalls(), 1)
 	assert.Len(t, m.proxies.DeleteForAgentCalls(), 1)
 }
 
 func TestA2APublisherTeardownEnvAndDropArtifactDeletesTheArtifactInTheTransaction(t *testing.T) {
 	m := newPublisherMocks(t)
 	m.txDeployments.DeleteForArtifactFunc = func(context.Context, uuid.UUID, string) error { return nil }
-	m.txPubs.DeleteForAgentEnvFunc = func(context.Context, string, string, string, uuid.UUID) error { return nil }
+	m.txExposures.DeleteForAgentEnvFunc = func(context.Context, string, string, string, uuid.UUID) error { return nil }
 	m.artifacts.DeleteFunc = func(tx *gorm.DB, _ string) error {
 		assert.Same(t, txSentinel, tx)
 		return gorm.ErrRecordNotFound // already gone is not a failure
@@ -279,25 +323,25 @@ func TestA2APublisherTeardownEnvAndDropArtifactDeletesTheArtifactInTheTransactio
 	assert.Equal(t, artifactUUID, teardown.artifactUUID)
 	require.Len(t, m.artifacts.DeleteCalls(), 1)
 	assert.Equal(t, artifactUUID.String(), m.artifacts.DeleteCalls()[0].UUID)
-	assert.Len(t, m.txPubs.DeleteForAgentEnvCalls(), 1)
+	assert.Len(t, m.txExposures.DeleteForAgentEnvCalls(), 1)
 }
 
 func TestA2APublisherTeardownEnvAndDropArtifactSkipsAMissingArtifact(t *testing.T) {
 	m := newPublisherMocks(t)
-	m.txPubs.DeleteForAgentEnvFunc = func(context.Context, string, string, string, uuid.UUID) error { return nil }
+	m.txExposures.DeleteForAgentEnvFunc = func(context.Context, string, string, string, uuid.UUID) error { return nil }
 	// artifacts.DeleteFunc is nil: deleting would panic.
 
 	_, err := m.publisher().TeardownEnvAndDropArtifact(context.Background(), txSentinel, testA2AKey(), uuid.Nil)
 
 	require.NoError(t, err)
 	assert.Empty(t, m.txDeployments.DeleteForArtifactCalls())
-	assert.Len(t, m.txPubs.DeleteForAgentEnvCalls(), 1)
+	assert.Len(t, m.txExposures.DeleteForAgentEnvCalls(), 1)
 }
 
 func TestA2APublisherTeardownEnvAndDropArtifactReportsAFailedDelete(t *testing.T) {
 	m := newPublisherMocks(t)
 	m.txDeployments.DeleteForArtifactFunc = func(context.Context, uuid.UUID, string) error { return nil }
-	m.txPubs.DeleteForAgentEnvFunc = func(context.Context, string, string, string, uuid.UUID) error { return nil }
+	m.txExposures.DeleteForAgentEnvFunc = func(context.Context, string, string, string, uuid.UUID) error { return nil }
 	m.artifacts.DeleteFunc = func(*gorm.DB, string) error { return assert.AnError }
 
 	_, err := m.publisher().TeardownEnvAndDropArtifact(context.Background(), txSentinel, testA2AKey(), uuid.New())
@@ -308,17 +352,17 @@ func TestA2APublisherTeardownEnvAndDropArtifactReportsAFailedDelete(t *testing.T
 func TestA2APublisherTeardownEnvironmentRemovesEverythingAndTellsTheGateways(t *testing.T) {
 	m := newPublisherMocks(t)
 	envUUID, artifactUUID := uuid.New(), uuid.New()
-	pub := models.A2APublication{
+	pub := models.PlatformAgentExposure{
 		OUID: "org-1", ProjectName: "checkout", AgentName: "weather", EnvironmentName: "dev",
-		EnvironmentUUID: envUUID, ArtifactUUID: artifactUUID, Source: models.A2APublicationSourceExternal,
+		EnvironmentUUID: envUUID, ArtifactUUID: artifactUUID,
 	}
-	m.pubs.ListForEnvironmentFunc = func(context.Context, string, uuid.UUID) ([]models.A2APublication, error) {
-		return []models.A2APublication{pub}, nil
+	m.exposures.ListForEnvironmentFunc = func(context.Context, string, uuid.UUID) ([]models.PlatformAgentExposure, error) {
+		return []models.PlatformAgentExposure{pub}, nil
 	}
-	m.pubs.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
+	m.exposures.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
 	m.proxies.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
 	m.txDeployments.DeleteForArtifactFunc = func(context.Context, uuid.UUID, string) error { return nil }
-	m.txPubs.DeleteForAgentEnvFunc = func(context.Context, string, string, string, uuid.UUID) error { return nil }
+	m.txExposures.DeleteForAgentEnvFunc = func(context.Context, string, string, string, uuid.UUID) error { return nil }
 	m.artifacts.DeleteFunc = func(tx *gorm.DB, _ string) error {
 		assert.Same(t, txSentinel, tx)
 		return nil
@@ -327,7 +371,7 @@ func TestA2APublisherTeardownEnvironmentRemovesEverythingAndTellsTheGateways(t *
 	require.NoError(t, m.publisher().TeardownEnvironment(context.Background(), "org-1", envUUID))
 
 	require.Len(t, m.artifacts.DeleteCalls(), 1, "a deleted environment needs no artifact")
-	assert.Len(t, m.pubs.DeleteForEnvironmentCalls(), 1)
+	assert.Len(t, m.exposures.DeleteForEnvironmentCalls(), 1)
 	assert.Len(t, m.proxies.DeleteForEnvironmentCalls(), 1)
 	require.Len(t, m.hub.published, 1)
 	assert.Equal(t, artifactUUID.String(), deletedAgentID(t, m.hub.published[0]))
@@ -339,8 +383,8 @@ func TestA2APublisherTeardownEnvironmentDropsTheArtifactOfADirectEnvironment(t *
 	m := newPublisherMocks(t)
 	envUUID, gwUUID := uuid.New(), uuid.New()
 	leftover := &models.Artifact{UUID: uuid.New(), Handle: "checkout/weather/" + envUUID.String(), Kind: models.KindAgent}
-	m.pubs.ListForEnvironmentFunc = func(context.Context, string, uuid.UUID) ([]models.A2APublication, error) {
-		return []models.A2APublication{}, nil
+	m.exposures.ListForEnvironmentFunc = func(context.Context, string, uuid.UUID) ([]models.PlatformAgentExposure, error) {
+		return []models.PlatformAgentExposure{}, nil
 	}
 	m.envCards.ListForEnvironmentFunc = func(context.Context, string, uuid.UUID) ([]models.A2AAgentCard, error) {
 		return []models.A2AAgentCard{{ProjectName: "checkout", AgentName: "weather", EnvironmentUUID: envUUID}}, nil
@@ -350,7 +394,7 @@ func TestA2APublisherTeardownEnvironmentDropsTheArtifactOfADirectEnvironment(t *
 	m.gateways.ListWithFiltersFunc = func(repositories.GatewayFilterOptions) ([]*models.Gateway, error) {
 		return []*models.Gateway{{UUID: gwUUID}}, nil
 	}
-	m.pubs.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
+	m.exposures.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
 	m.proxies.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
 	m.artifacts.GetByHandleFunc = func(handle, ouID string) (*models.Artifact, error) {
 		assert.Equal(t, leftover.Handle, handle)
@@ -381,15 +425,15 @@ func TestA2APublisherTeardownEnvironmentDropsTheArtifactOfADirectEnvironment(t *
 func TestA2APublisherTeardownEnvironmentDoesNotDropAnArtifactTwice(t *testing.T) {
 	m := newPublisherMocks(t)
 	envUUID, artifactUUID := uuid.New(), uuid.New()
-	m.pubs.ListForEnvironmentFunc = func(context.Context, string, uuid.UUID) ([]models.A2APublication, error) {
-		return []models.A2APublication{{
+	m.exposures.ListForEnvironmentFunc = func(context.Context, string, uuid.UUID) ([]models.PlatformAgentExposure, error) {
+		return []models.PlatformAgentExposure{{
 			OUID: "org-1", AgentName: "weather", EnvironmentUUID: envUUID, ArtifactUUID: artifactUUID,
 		}}, nil
 	}
-	m.pubs.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
+	m.exposures.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
 	m.proxies.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
 	m.txDeployments.DeleteForArtifactFunc = func(context.Context, uuid.UUID, string) error { return nil }
-	m.txPubs.DeleteForAgentEnvFunc = func(context.Context, string, string, string, uuid.UUID) error { return nil }
+	m.txExposures.DeleteForAgentEnvFunc = func(context.Context, string, string, string, uuid.UUID) error { return nil }
 	m.envCards.ListForEnvironmentFunc = func(context.Context, string, uuid.UUID) ([]models.A2AAgentCard, error) {
 		return []models.A2AAgentCard{{ProjectName: "checkout", AgentName: "weather", EnvironmentUUID: envUUID}}, nil
 	}
@@ -435,17 +479,17 @@ func TestA2APublisherTeardownEnvironmentReportsAnArtifactItCannotListOrDelete(t 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newPublisherMocks(t)
-			m.pubs.ListForEnvironmentFunc = func(context.Context, string, uuid.UUID) ([]models.A2APublication, error) {
-				return []models.A2APublication{}, nil
+			m.exposures.ListForEnvironmentFunc = func(context.Context, string, uuid.UUID) ([]models.PlatformAgentExposure, error) {
+				return []models.PlatformAgentExposure{}, nil
 			}
-			m.pubs.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
+			m.exposures.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
 			m.proxies.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
 			tc.setup(m)
 
 			err := m.publisher().TeardownEnvironment(context.Background(), "org-1", envUUID)
 
 			assert.ErrorIs(t, err, assert.AnError)
-			assert.Len(t, m.pubs.DeleteForEnvironmentCalls(), 1, "the rest of the teardown still runs")
+			assert.Len(t, m.exposures.DeleteForEnvironmentCalls(), 1, "the rest of the teardown still runs")
 			assert.Len(t, m.proxies.DeleteForEnvironmentCalls(), 1)
 		})
 	}
@@ -456,8 +500,8 @@ func TestA2APublisherTeardownEnvironmentReportsAnArtifactItCannotListOrDelete(t 
 func TestA2APublisherTeardownEnvironmentSweepsOnlyA2AAgents(t *testing.T) {
 	m := newPublisherMocks(t)
 	envUUID := uuid.New()
-	m.pubs.ListForEnvironmentFunc = func(context.Context, string, uuid.UUID) ([]models.A2APublication, error) {
-		return []models.A2APublication{}, nil
+	m.exposures.ListForEnvironmentFunc = func(context.Context, string, uuid.UUID) ([]models.PlatformAgentExposure, error) {
+		return []models.PlatformAgentExposure{}, nil
 	}
 	m.envCards.ListForEnvironmentFunc = func(_ context.Context, ouID string, env uuid.UUID) ([]models.A2AAgentCard, error) {
 		assert.Equal(t, "org-1", ouID)
@@ -468,7 +512,7 @@ func TestA2APublisherTeardownEnvironmentSweepsOnlyA2AAgents(t *testing.T) {
 		assert.Equal(t, agentEnvAPIArtifactHandle("checkout", "direct-now", envUUID.String()), handle)
 		return nil, utils.ErrArtifactNotFound
 	}
-	m.pubs.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
+	m.exposures.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
 	m.proxies.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
 
 	require.NoError(t, m.publisher().TeardownEnvironment(context.Background(), "org-1", envUUID))
@@ -483,17 +527,17 @@ func TestA2APublisherTeardownEnvironmentSweepsOnlyA2AAgents(t *testing.T) {
 func TestA2APublisherTeardownEnvironmentStillDropsTheRowsAfterAFailure(t *testing.T) {
 	m := newPublisherMocks(t)
 	artifactUUID := uuid.New()
-	m.pubs.ListForEnvironmentFunc = func(context.Context, string, uuid.UUID) ([]models.A2APublication, error) {
-		return []models.A2APublication{{AgentName: "weather", ArtifactUUID: artifactUUID}}, nil
+	m.exposures.ListForEnvironmentFunc = func(context.Context, string, uuid.UUID) ([]models.PlatformAgentExposure, error) {
+		return []models.PlatformAgentExposure{{AgentName: "weather", ArtifactUUID: artifactUUID}}, nil
 	}
 	m.txErr = assert.AnError // every per-row transaction fails to commit
-	m.pubs.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
+	m.exposures.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
 	m.proxies.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
 
 	err := m.publisher().TeardownEnvironment(context.Background(), "org-1", uuid.New())
 
 	assert.ErrorIs(t, err, assert.AnError)
-	assert.Len(t, m.pubs.DeleteForEnvironmentCalls(), 1)
+	assert.Len(t, m.exposures.DeleteForEnvironmentCalls(), 1)
 	assert.Len(t, m.proxies.DeleteForEnvironmentCalls(), 1)
 	require.Len(t, m.hub.published, 1)
 	assert.Equal(t, "gw-1", m.hub.published[0].GatewayID)
@@ -503,7 +547,7 @@ func TestA2APublisherTeardownEnvironmentStillDropsTheRowsAfterAFailure(t *testin
 func TestA2APublisherEnvironmentUUIDsListsProxiesWhenPublicationsFail(t *testing.T) {
 	id := uuid.MustParse("55555555-5555-5555-5555-555555555555")
 	m := newPublisherMocks(t)
-	m.pubs.ListEnvironmentUUIDsFunc = func(context.Context, string, string) ([]uuid.UUID, error) {
+	m.exposures.ListEnvironmentUUIDsFunc = func(context.Context, string, string) ([]uuid.UUID, error) {
 		return nil, errors.New("publication listing down")
 	}
 	m.proxies.ListEnvironmentUUIDsFunc = func(context.Context, string, string) ([]uuid.UUID, error) {

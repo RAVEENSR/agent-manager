@@ -31,18 +31,17 @@ import (
 )
 
 // a2aPublishingAgentService is an agentManagerService whose only A2A collaborator is the publisher.
-func a2aPublishingAgentService(pubs *repomocks.A2APublicationRepositoryMock, proxies *repomocks.A2AProxyRepositoryMock) *agentManagerService {
+func a2aPublishingAgentService(pubs *repomocks.PlatformAgentExposureRepositoryMock, proxies *repomocks.A2AProxyRepositoryMock) *agentManagerService {
 	publisher := NewA2APublisher(nil, pubs, proxies, nil, nil, nil, nil, nil, testLogger())
 	return NewAgentManagerService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 		publisher, nil, nil, nil, testLogger()).(*agentManagerService)
 }
 
-// A deploy records the intent to publish rather than publishing inline: the
-// upstream address is not readable until the release binding reconciles.
-func TestEnqueueA2APublicationRecordsTheArtifactUUID(t *testing.T) {
-	var enqueued []models.A2APublication
-	repo := &repomocks.A2APublicationRepositoryMock{
-		EnqueueFunc: func(ctx context.Context, pub *models.A2APublication) error {
+// A deploy records that the agent is exposed in the environment, against its per-environment artifact.
+func TestExposeA2AAgentRecordsTheArtifactUUID(t *testing.T) {
+	var enqueued []models.PlatformAgentExposure
+	repo := &repomocks.PlatformAgentExposureRepositoryMock{
+		UpsertFunc: func(ctx context.Context, pub *models.PlatformAgentExposure) error {
 			enqueued = append(enqueued, *pub)
 			return nil
 		},
@@ -52,7 +51,7 @@ func TestEnqueueA2APublicationRecordsTheArtifactUUID(t *testing.T) {
 	envUUID := uuid.New()
 	artifactUUID := uuid.New()
 	agentUUID := uuid.New()
-	svc.enqueueA2APublication(context.Background(), a2aPublicationKey{OUID: "org-1", ProjectName: "checkout", AgentName: "trip-planner", EnvironmentName: "dev", EnvironmentUUID: envUUID, AgentUUID: &agentUUID}, models.A2APublicationSourcePlatform, artifactUUID)
+	svc.exposeA2AAgent(context.Background(), a2aPublicationKey{OUID: "org-1", ProjectName: "checkout", AgentName: "trip-planner", EnvironmentName: "dev", EnvironmentUUID: envUUID, AgentUUID: &agentUUID}, artifactUUID)
 
 	require.Len(t, enqueued, 1)
 	assert.Equal(t, "trip-planner", enqueued[0].AgentName)
@@ -62,24 +61,23 @@ func TestEnqueueA2APublicationRecordsTheArtifactUUID(t *testing.T) {
 	assert.Equal(t, &agentUUID, enqueued[0].AgentUUID)
 }
 
-// A queue failure must not fail a deploy that has otherwise succeeded — the
-// reconciler is not the deploy's critical path, and the agent is running.
-func TestEnqueueA2APublicationSurvivesRepoFailure(t *testing.T) {
-	repo := &repomocks.A2APublicationRepositoryMock{
-		EnqueueFunc: func(ctx context.Context, pub *models.A2APublication) error {
+// A failed write must not fail a deploy that has otherwise succeeded: the agent is running.
+func TestExposeA2AAgentSurvivesRepoFailure(t *testing.T) {
+	repo := &repomocks.PlatformAgentExposureRepositoryMock{
+		UpsertFunc: func(ctx context.Context, pub *models.PlatformAgentExposure) error {
 			return assert.AnError
 		},
 	}
 	svc := a2aPublishingAgentService(repo, &repomocks.A2AProxyRepositoryMock{})
 	assert.NotPanics(t, func() {
-		svc.enqueueA2APublication(context.Background(), a2aPublicationKey{OUID: "org-1", ProjectName: "checkout", AgentName: "trip-planner", EnvironmentName: "dev", EnvironmentUUID: uuid.New()}, models.A2APublicationSourcePlatform, uuid.New())
+		svc.exposeA2AAgent(context.Background(), a2aPublicationKey{OUID: "org-1", ProjectName: "checkout", AgentName: "trip-planner", EnvironmentName: "dev", EnvironmentUUID: uuid.New()}, uuid.New())
 	})
 }
 
-func TestRepublishA2AAgentQueuesA2AAgents(t *testing.T) {
-	var enqueued []models.A2APublication
-	repo := &repomocks.A2APublicationRepositoryMock{
-		EnqueueFunc: func(ctx context.Context, pub *models.A2APublication) error {
+func TestRepublishA2AAgentExposesA2AAgents(t *testing.T) {
+	var enqueued []models.PlatformAgentExposure
+	repo := &repomocks.PlatformAgentExposureRepositoryMock{
+		UpsertFunc: func(ctx context.Context, pub *models.PlatformAgentExposure) error {
 			enqueued = append(enqueued, *pub)
 			return nil
 		},
@@ -99,18 +97,18 @@ func TestRepublishA2AAgentQueuesA2AAgents(t *testing.T) {
 }
 
 // A REST agent's policies ride on its release binding, which the caller has
-// already updated; queueing it would publish an Agent resource for a non-agent.
+// already updated; exposing it would publish an Agent resource for a non-agent.
 func TestRepublishA2AAgentIgnoresOtherAgents(t *testing.T) {
-	repo := &repomocks.A2APublicationRepositoryMock{}
+	repo := &repomocks.PlatformAgentExposureRepositoryMock{}
 	svc := a2aPublishingAgentService(repo, &repomocks.A2AProxyRepositoryMock{})
 	agent := &models.AgentResponse{Type: models.AgentType{Type: "agent-api", SubType: "chat-api"}}
 
 	require.NoError(t, svc.republishA2AAgent(context.Background(), agent, "org-1", "checkout", "greeter", "dev", uuid.New().String(), uuid.New()))
-	assert.Empty(t, repo.EnqueueCalls())
+	assert.Empty(t, repo.UpsertCalls())
 }
 
 func TestRepublishA2AAgentRejectsUnparseableEnvironmentUUID(t *testing.T) {
-	svc := a2aPublishingAgentService(&repomocks.A2APublicationRepositoryMock{}, &repomocks.A2AProxyRepositoryMock{})
+	svc := a2aPublishingAgentService(&repomocks.PlatformAgentExposureRepositoryMock{}, &repomocks.A2AProxyRepositoryMock{})
 	agent := &models.AgentResponse{Type: models.AgentType{Type: "agent-api", SubType: "a2a-agent"}}
 	err := svc.republishA2AAgent(context.Background(), agent, "org-1", "checkout", "trip-planner", "dev", "not-a-uuid", uuid.New())
 	require.Error(t, err)
@@ -118,11 +116,11 @@ func TestRepublishA2AAgentRejectsUnparseableEnvironmentUUID(t *testing.T) {
 }
 
 // A new A2A agent's first binding comes from create, not a deploy, so create
-// must queue the first environment's publication itself.
-func TestEnqueueCreatedA2AAgentQueuesTheFirstEnvironment(t *testing.T) {
-	var enqueued []models.A2APublication
-	repo := &repomocks.A2APublicationRepositoryMock{
-		EnqueueFunc: func(ctx context.Context, pub *models.A2APublication) error {
+// must expose it in the first environment itself.
+func TestEnqueueCreatedA2AAgentExposesTheFirstEnvironment(t *testing.T) {
+	var enqueued []models.PlatformAgentExposure
+	repo := &repomocks.PlatformAgentExposureRepositoryMock{
+		UpsertFunc: func(ctx context.Context, pub *models.PlatformAgentExposure) error {
 			enqueued = append(enqueued, *pub)
 			return nil
 		},
@@ -146,11 +144,11 @@ func TestEnqueueCreatedA2AAgentQueuesTheFirstEnvironment(t *testing.T) {
 	assert.Equal(t, &agentUUID, enqueued[0].AgentUUID)
 }
 
-// The UUID only sharpens the reconciler's cleanup, so a failed lookup still queues the row.
-func TestEnqueueCreatedA2AAgentQueuesEvenWhenTheAgentLookupFails(t *testing.T) {
-	var enqueued []models.A2APublication
-	repo := &repomocks.A2APublicationRepositoryMock{
-		EnqueueFunc: func(ctx context.Context, pub *models.A2APublication) error {
+// The UUID only sharpens the card cleanup, so a failed lookup still records the row.
+func TestEnqueueCreatedA2AAgentExposesEvenWhenTheAgentLookupFails(t *testing.T) {
+	var enqueued []models.PlatformAgentExposure
+	repo := &repomocks.PlatformAgentExposureRepositoryMock{
+		UpsertFunc: func(ctx context.Context, pub *models.PlatformAgentExposure) error {
 			enqueued = append(enqueued, *pub)
 			return nil
 		},
@@ -169,9 +167,9 @@ func TestEnqueueCreatedA2AAgentQueuesEvenWhenTheAgentLookupFails(t *testing.T) {
 }
 
 // Non-A2A agents and agents without an env artifact have nothing to publish; a
-// nil EnqueueFunc panics if any of these paths reaches the queue.
+// nil UpsertFunc panics if any of these paths reaches the queue.
 func TestEnqueueCreatedA2AAgentSkipsAgentsWithNothingToPublish(t *testing.T) {
-	svc := a2aPublishingAgentService(&repomocks.A2APublicationRepositoryMock{}, &repomocks.A2AProxyRepositoryMock{})
+	svc := a2aPublishingAgentService(&repomocks.PlatformAgentExposureRepositoryMock{}, &repomocks.A2AProxyRepositoryMock{})
 	envUUID := uuid.New().String()
 
 	assert.NotPanics(t, func() {
@@ -181,15 +179,9 @@ func TestEnqueueCreatedA2AAgentSkipsAgentsWithNothingToPublish(t *testing.T) {
 	})
 }
 
-// A proxied external agent publishes its origin, so its row must say so or the worker reads a release binding.
-func TestRepublishA2AAgentQueuesAProxiedExternalAgentAsExternal(t *testing.T) {
-	var enqueued []models.A2APublication
-	pubs := &repomocks.A2APublicationRepositoryMock{
-		EnqueueFunc: func(_ context.Context, pub *models.A2APublication) error {
-			enqueued = append(enqueued, *pub)
-			return nil
-		},
-	}
+// An external agent's record is its proxy row, so a proxied one gets no exposure.
+func TestRepublishA2AAgentRecordsNoExposureForAnExternalAgent(t *testing.T) {
+	pubs := &repomocks.PlatformAgentExposureRepositoryMock{} // UpsertFunc is nil: an exposure would panic
 	proxies := &repomocks.A2AProxyRepositoryMock{
 		GetByEnvUUIDFunc: func(context.Context, string, string, string, uuid.UUID) (*models.A2AProxy, error) {
 			return &models.A2AProxy{}, nil
@@ -198,13 +190,11 @@ func TestRepublishA2AAgentQueuesAProxiedExternalAgentAsExternal(t *testing.T) {
 	svc := a2aPublishingAgentService(pubs, proxies)
 
 	require.NoError(t, svc.republishA2AAgent(context.Background(), externalAgent(), "org-1", "checkout", "weather", "dev", uuid.New().String(), uuid.New()))
-
-	require.Len(t, enqueued, 1)
-	assert.Equal(t, models.A2APublicationSourceExternal, enqueued[0].Source)
+	assert.Empty(t, pubs.UpsertCalls())
 }
 
 func TestRepublishA2AAgentSkipsADirectExternalAgent(t *testing.T) {
-	pubs := &repomocks.A2APublicationRepositoryMock{} // EnqueueFunc is nil: queueing would panic
+	pubs := &repomocks.PlatformAgentExposureRepositoryMock{} // UpsertFunc is nil: queueing would panic
 	proxies := &repomocks.A2AProxyRepositoryMock{
 		GetByEnvUUIDFunc: func(context.Context, string, string, string, uuid.UUID) (*models.A2AProxy, error) {
 			return nil, repositories.ErrA2AProxyNotFound
@@ -213,12 +203,12 @@ func TestRepublishA2AAgentSkipsADirectExternalAgent(t *testing.T) {
 	svc := a2aPublishingAgentService(pubs, proxies)
 
 	require.NoError(t, svc.republishA2AAgent(context.Background(), externalAgent(), "org-1", "checkout", "weather", "dev", uuid.New().String(), uuid.New()))
-	assert.Empty(t, pubs.EnqueueCalls())
+	assert.Empty(t, pubs.UpsertCalls())
 }
 
 // A same-named agent created later must not inherit a proxy, or its secret.
 func TestClearInheritedA2AStateDropsPublicationsAndProxies(t *testing.T) {
-	pubs := &repomocks.A2APublicationRepositoryMock{DeleteForAgentFunc: func(context.Context, string, string, string) error { return nil }}
+	pubs := &repomocks.PlatformAgentExposureRepositoryMock{DeleteForAgentFunc: func(context.Context, string, string, string) error { return nil }}
 	proxies := &repomocks.A2AProxyRepositoryMock{DeleteForAgentFunc: func(context.Context, string, string, string) error { return nil }}
 	svc := a2aPublishingAgentService(pubs, proxies)
 

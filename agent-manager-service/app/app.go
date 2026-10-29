@@ -241,16 +241,7 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 		}
 	}
 
-	// Start the A2A publication reconciler. It runs unconditionally: it is a
-	// no-op for an org with no A2A agents, and gating it on a feature flag would
-	// leave a deploy's queued publication stranded if the flag were ever off.
-	a2aReconcilerCtx, a2aReconcilerCancel := context.WithCancel(backgroundCtx)
-	if err := dependencies.A2APublicationReconciler.Start(a2aReconcilerCtx); err != nil {
-		slog.Error("failed to start A2A publication reconciler", "error", err)
-		os.Exit(1)
-	}
-
-	// Started unconditionally, like the publication reconciler that feeds it.
+	// Started unconditionally: it is a no-op for an org with no A2A agents.
 	a2aCardReconcilerCtx, a2aCardReconcilerCancel := context.WithCancel(backgroundCtx)
 	if err := dependencies.A2ACardReconciler.Start(a2aCardReconcilerCtx); err != nil {
 		slog.Error("failed to start A2A card reconciler", "error", err)
@@ -311,11 +302,6 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 			if err := dependencies.AgentThunderReconciler.Stop(); err != nil {
 				slog.Error("error stopping agent thunder provisioning reconciler", "error", err)
 			}
-		}
-
-		a2aReconcilerCancel()
-		if err := dependencies.A2APublicationReconciler.Stop(); err != nil {
-			slog.Error("error stopping A2A publication reconciler", "error", err)
 		}
 
 		a2aCardReconcilerCancel()

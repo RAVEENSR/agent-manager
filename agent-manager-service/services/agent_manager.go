@@ -6653,32 +6653,23 @@ func a2aGatewayRouteTrait(upstreamPort int32) client.TraitRequest {
 	}
 }
 
-// enqueueA2APublication records that an A2A agent's gateway resource is due to
-// be emitted for one environment.
-//
-// The publication cannot happen here. upstream.url is read from the release
-// binding's status, which OpenChoreo populates only once the binding
-// reconciles — after this call returns — so an inline publish would emit an
-// Agent with an empty upstream that routes nowhere while looking healthy. The
-// A2A publication reconciler picks the row up and finishes the job.
+// exposeA2AAgent records that a platform A2A agent is exposed through one environment's gateway.
 //
 // Best effort: the agent is deployed and running by this point, and failing the
-// deploy over a queue write would report a false failure for work that
+// deploy over this write would report a false failure for work that
 // succeeded. A missed row surfaces as an agent that never appears on its
-// gateway, which the next deploy, promotion or deploy-settings save re-queues.
-func (s *agentManagerService) enqueueA2APublication(
-	ctx context.Context, key a2aPublicationKey, source models.A2APublicationSource, artifactUUID uuid.UUID,
-) {
+// gateway, which the next deploy, promotion or deploy-settings save records again.
+func (s *agentManagerService) exposeA2AAgent(ctx context.Context, key a2aPublicationKey, artifactUUID uuid.UUID) {
 	if s.a2aPublisher == nil {
 		return
 	}
-	if err := s.a2aPublisher.Enqueue(ctx, nil, key, source, artifactUUID); err != nil {
-		s.logger.Error("Failed to queue A2A agent gateway publication; the agent is deployed but will not reach its gateway until it is next deployed, promoted, or its deploy settings are saved",
+	if err := s.a2aPublisher.Expose(ctx, nil, key, artifactUUID); err != nil {
+		s.logger.Error("Failed to record the A2A agent's gateway exposure; the agent is deployed but will not reach its gateway until it is next deployed, promoted, or its deploy settings are saved",
 			"agentName", key.AgentName, "environment", key.EnvironmentName, "error", err)
 	}
 }
 
-// enqueueCreatedA2AAgent queues a new A2A agent's first-environment publication,
+// enqueueCreatedA2AAgent exposes a new A2A agent in its first environment,
 // since neither the kind bind nor the source build workflow notifies AMS.
 func (s *agentManagerService) enqueueCreatedA2AAgent(
 	ctx context.Context,
@@ -6702,7 +6693,7 @@ func (s *agentManagerService) enqueueCreatedA2AAgent(
 		agentUUID = parseAgentUUID(agent.UUID)
 	}
 	key := a2aPublicationKey{OUID: ouID, ProjectName: projectName, AgentName: agentName, EnvironmentName: environmentName, EnvironmentUUID: envUUID, AgentUUID: agentUUID}
-	s.enqueueA2APublication(ctx, key, models.A2APublicationSourcePlatform, artifact.UUID)
+	s.exposeA2AAgent(ctx, key, artifact.UUID)
 }
 
 // parseAgentUUID returns nil for a missing or malformed UUID; the reconciler then checks by name.
@@ -6727,22 +6718,23 @@ func (s *agentManagerService) saveDeploySettings(
 	})
 }
 
-// republishA2AAgent re-queues an A2A agent's gateway resource after the config
-// it is built from changed. Call it only after that config is persisted: the
-// reconciler builds from the stored row, so queueing first can publish the old
-// settings. Other agent kinds are left alone — their policies ride on the
-// release binding's trait. An external agent publishes only while its environment is proxied.
+// republishA2AAgent records a platform A2A agent's exposure in the environment it was deployed or promoted to.
+// Other agent kinds are left alone — their policies ride on the release binding's trait — and an external agent's
+// record is its proxy row.
 func (s *agentManagerService) republishA2AAgent(
 	ctx context.Context,
 	agent *models.AgentResponse,
 	ouID, projectName, agentName, environmentName, environmentUUID string,
 	artifactUUID uuid.UUID,
 ) error {
+	if isExternalProvisioned(agent) {
+		return nil
+	}
 	key, ok, err := s.a2aRepublicationKey(ctx, agent, ouID, projectName, agentName, environmentName, environmentUUID)
 	if err != nil || !ok {
 		return err
 	}
-	s.enqueueA2APublication(ctx, key, a2aPublicationSourceFor(agent), artifactUUID)
+	s.exposeA2AAgent(ctx, key, artifactUUID)
 	return nil
 }
 

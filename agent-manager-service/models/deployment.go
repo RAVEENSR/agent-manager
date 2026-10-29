@@ -53,22 +53,47 @@ func (Deployment) TableName() string {
 type DeploymentStatus string
 
 const (
-	DeploymentStatusDeployed   DeploymentStatus = "DEPLOYED"
-	DeploymentStatusUndeployed DeploymentStatus = "UNDEPLOYED"
-	DeploymentStatusArchived   DeploymentStatus = "ARCHIVED" // Derived state: exists in history but not in status table
+	// DeploymentStatusPending is a deploy owed to a gateway that has never been sent anything for the artifact.
+	DeploymentStatusPending     DeploymentStatus = "PENDING"
+	DeploymentStatusDeploying   DeploymentStatus = "DEPLOYING"
+	DeploymentStatusDeployed    DeploymentStatus = "DEPLOYED"
+	DeploymentStatusUndeploying DeploymentStatus = "UNDEPLOYING"
+	DeploymentStatusUndeployed  DeploymentStatus = "UNDEPLOYED"
+	DeploymentStatusFailed      DeploymentStatus = "FAILED"
+	DeploymentStatusArchived    DeploymentStatus = "ARCHIVED" // Derived state: exists in history but not in status table
 )
 
-// DeploymentStatusRecord represents the current deployment status record
+// DeploymentStatusRecord is one artifact's state on one gateway, and the render queue for its next deploy.
 type DeploymentStatusRecord struct {
-	ArtifactUUID uuid.UUID        `gorm:"column:artifact_uuid;primaryKey" json:"artifactId"`
-	OUID         string           `gorm:"column:ou_id;primaryKey" json:"organizationId"`
-	GatewayUUID  uuid.UUID        `gorm:"column:gateway_uuid;primaryKey" json:"gatewayId"`
-	DeploymentID uuid.UUID        `gorm:"column:deployment_id" json:"deploymentId"`
+	ArtifactUUID uuid.UUID `gorm:"column:artifact_uuid;primaryKey" json:"artifactId"`
+	OUID         string    `gorm:"column:ou_id;primaryKey" json:"organizationId"`
+	GatewayUUID  uuid.UUID `gorm:"column:gateway_uuid;primaryKey" json:"gatewayId"`
+	// DeploymentID is nil only while nothing has been sent: PENDING, or UNDEPLOYED reached from PENDING.
+	DeploymentID *uuid.UUID       `gorm:"column:deployment_id" json:"deploymentId"`
 	Status       DeploymentStatus `gorm:"column:status" json:"status"`
-	UpdatedAt    time.Time        `gorm:"column:updated_at" json:"updatedAt"`
+	// StatusDesired is DEPLOYED or UNDEPLOYED: where the current transition is heading.
+	StatusDesired DeploymentStatus `gorm:"column:status_desired" json:"statusDesired"`
+	// StatusReason is the gateway's error code, or DEPLOYMENT_TIMEOUT.
+	StatusReason string `gorm:"column:status_reason" json:"statusReason"`
+	// PerformedAt is when the current transition started; always written through NewPerformedAt.
+	PerformedAt time.Time `gorm:"column:performed_at" json:"performedAt"`
+	// NextAttemptAt is non-nil while a deploy is owed to the gateway.
+	NextAttemptAt *time.Time `gorm:"column:next_attempt_at" json:"-"`
+	AttemptCount  int        `gorm:"column:attempt_count" json:"-"`
+	RenderReason  string     `gorm:"column:render_reason" json:"-"`
+	UpdatedAt     time.Time  `gorm:"column:updated_at" json:"updatedAt"`
 }
 
 // TableName returns the table name for the DeploymentStatusRecord model
 func (DeploymentStatusRecord) TableName() string {
 	return "deployment_status"
+}
+
+// NewPerformedAt is t as the gateway stores it: UTC at millisecond precision. A zero t becomes now, because the
+// gateway reads a zero performedAt as "now", which always wins.
+func NewPerformedAt(t time.Time) time.Time {
+	if t.IsZero() {
+		t = time.Now()
+	}
+	return t.UTC().Truncate(time.Millisecond)
 }

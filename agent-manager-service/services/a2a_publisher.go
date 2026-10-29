@@ -55,7 +55,7 @@ type TxRunner func(ctx context.Context, fn func(tx *gorm.DB) error) error
 // A2APublisher holds the gateway-publication steps agentManagerService and a2aProxyService share.
 type A2APublisher struct {
 	tx             TxRunner
-	pubRepo        repositories.A2APublicationRepository
+	exposureRepo   repositories.PlatformAgentExposureRepository
 	proxyRepo      repositories.A2AProxyRepository
 	cardRepo       repositories.A2AAgentCardRepository
 	artifactRepo   repositories.ArtifactRepository
@@ -68,7 +68,7 @@ type A2APublisher struct {
 // NewA2APublisher creates an A2APublisher.
 func NewA2APublisher(
 	tx TxRunner,
-	pubRepo repositories.A2APublicationRepository,
+	exposureRepo repositories.PlatformAgentExposureRepository,
 	proxyRepo repositories.A2AProxyRepository,
 	cardRepo repositories.A2AAgentCardRepository,
 	artifactRepo repositories.ArtifactRepository,
@@ -79,7 +79,7 @@ func NewA2APublisher(
 ) *A2APublisher {
 	return &A2APublisher{
 		tx:             tx,
-		pubRepo:        pubRepo,
+		exposureRepo:   exposureRepo,
 		proxyRepo:      proxyRepo,
 		cardRepo:       cardRepo,
 		artifactRepo:   artifactRepo,
@@ -90,19 +90,10 @@ func NewA2APublisher(
 	}
 }
 
-// a2aPublicationSourceFor says where the agent's gateway upstream comes from.
-func a2aPublicationSourceFor(agent *models.AgentResponse) models.A2APublicationSource {
-	if isExternalProvisioned(agent) {
-		return models.A2APublicationSourceExternal
-	}
-	return models.A2APublicationSourcePlatform
-}
-
-// Enqueue queues the environment's publication; a non-nil tx makes it part of the caller's transaction.
-func (p *A2APublisher) Enqueue(
-	ctx context.Context, tx *gorm.DB, key a2aPublicationKey, source models.A2APublicationSource, artifactUUID uuid.UUID,
-) error {
-	pub := &models.A2APublication{
+// Expose records that a platform agent is exposed in the environment; a non-nil tx makes it part of the caller's
+// transaction. External agents have no exposure: their proxy row is the record.
+func (p *A2APublisher) Expose(ctx context.Context, tx *gorm.DB, key a2aPublicationKey, artifactUUID uuid.UUID) error {
+	exposure := &models.PlatformAgentExposure{
 		OUID:            key.OUID,
 		ProjectName:     key.ProjectName,
 		AgentName:       key.AgentName,
@@ -110,10 +101,10 @@ func (p *A2APublisher) Enqueue(
 		EnvironmentUUID: key.EnvironmentUUID,
 		ArtifactUUID:    artifactUUID,
 		AgentUUID:       key.AgentUUID,
-		Source:          source,
+		Protocol:        models.AgentExposureProtocolA2A,
 	}
-	if err := p.publications(tx).Enqueue(ctx, pub); err != nil {
-		return fmt.Errorf("failed to queue the A2A gateway publication: %w", err)
+	if err := p.exposures(tx).Upsert(ctx, exposure); err != nil {
+		return fmt.Errorf("failed to record the A2A agent's gateway exposure: %w", err)
 	}
 	return nil
 }
@@ -155,10 +146,10 @@ func (p *A2APublisher) SaveAndRepublish(
 		if err := save(tx); err != nil {
 			return err
 		}
-		if !publish {
+		if !publish || isExternalProvisioned(agent) {
 			return nil
 		}
-		return p.Enqueue(ctx, tx, key, a2aPublicationSourceFor(agent), artifactUUID)
+		return p.Expose(ctx, tx, key, artifactUUID)
 	})
 }
 
@@ -171,12 +162,7 @@ func (p *A2APublisher) GatewayURL(ouID string, envUUID uuid.UUID, agentName stri
 	return a2aGatewayURL(gateway, agentName), nil
 }
 
-// Publication returns the environment's publication row.
-func (p *A2APublisher) Publication(ctx context.Context, ouID, projectName, agentName string, envUUID uuid.UUID) (*models.A2APublication, error) {
-	return p.pubRepo.Get(ctx, ouID, projectName, agentName, envUUID)
-}
-
-// TeardownEnv drops one environment's publication and gateway deployments in tx but keeps the artifact and its API keys; send the result after commit.
+// TeardownEnv drops one environment's exposure and gateway deployments in tx but keeps the artifact and its API keys; send the result after commit.
 func (p *A2APublisher) TeardownEnv(
 	ctx context.Context, tx *gorm.DB, key a2aPublicationKey, artifactUUID uuid.UUID,
 ) (a2aTeardown, error) {
@@ -187,9 +173,9 @@ func (p *A2APublisher) TeardownEnv(
 			return a2aTeardown{}, fmt.Errorf("failed to delete the A2A agent's gateway deployments: %w", err)
 		}
 	}
-	err := p.publications(tx).DeleteForAgentEnv(ctx, key.OUID, key.ProjectName, key.AgentName, key.EnvironmentUUID)
+	err := p.exposures(tx).DeleteForAgentEnv(ctx, key.OUID, key.ProjectName, key.AgentName, key.EnvironmentUUID)
 	if err != nil {
-		return a2aTeardown{}, fmt.Errorf("failed to delete the A2A publication: %w", err)
+		return a2aTeardown{}, fmt.Errorf("failed to delete the A2A agent's exposure: %w", err)
 	}
 	return a2aTeardown{artifactUUID: artifactUUID, gatewayIDs: gatewayIDs}, nil
 }
@@ -218,11 +204,11 @@ func (p *A2APublisher) SendTeardown(ctx context.Context, t a2aTeardown) {
 	sendA2AAgentWithdrawal(ctx, p.events, t.artifactUUID, t.gatewayIDs, !t.dropsArtifact, p.logger)
 }
 
-// DeleteForAgent drops the agent's publication and proxy rows; deleteAgentAPIArtifact tells the gateways.
+// DeleteForAgent drops the agent's exposure and proxy rows; deleteAgentAPIArtifact tells the gateways.
 func (p *A2APublisher) DeleteForAgent(ctx context.Context, ouID, projectName, agentName string) error {
 	var errs []error
-	if err := p.pubRepo.DeleteForAgent(ctx, ouID, projectName, agentName); err != nil {
-		errs = append(errs, fmt.Errorf("failed to delete A2A publications: %w", err))
+	if err := p.exposureRepo.DeleteForAgent(ctx, ouID, projectName, agentName); err != nil {
+		errs = append(errs, fmt.Errorf("failed to delete A2A agent exposures: %w", err))
 	}
 	if err := p.proxyRepo.DeleteForAgent(ctx, ouID, projectName, agentName); err != nil {
 		errs = append(errs, fmt.Errorf("failed to delete A2A proxies: %w", err))
@@ -233,28 +219,28 @@ func (p *A2APublisher) DeleteForAgent(ctx context.Context, ouID, projectName, ag
 // TeardownEnvironment removes a deleted environment's A2A rows, deployments and A2A agent artifacts, then tells the
 // gateways; one failure does not stop the rest. Call it before the environment's card rows go: they name the agents.
 func (p *A2APublisher) TeardownEnvironment(ctx context.Context, ouID string, envUUID uuid.UUID) error {
-	pubs, err := p.pubRepo.ListForEnvironment(ctx, ouID, envUUID)
+	exposures, err := p.exposureRepo.ListForEnvironment(ctx, ouID, envUUID)
 	if err != nil {
-		return fmt.Errorf("failed to list the environment's A2A publications: %w", err)
+		return fmt.Errorf("failed to list the environment's A2A agent exposures: %w", err)
 	}
 	var errs []error
 	var teardowns []a2aTeardown
-	for _, pub := range pubs {
-		teardown, err := p.teardownDeletedEnv(ctx, pub)
+	for _, exposure := range exposures {
+		teardown, err := p.teardownDeletedEnv(ctx, exposure)
 		if err != nil {
 			errs = append(errs, err)
 		}
 		teardowns = append(teardowns, teardown)
 	}
-	// A switch to direct drops the publication but keeps the artifact, so find the rest through the card rows.
+	// External agents have no exposure, and a switch to direct keeps the artifact, so find the rest through the card rows.
 	swept, err := p.dropLeftoverArtifacts(ctx, ouID, envUUID, teardowns)
 	if err != nil {
 		errs = append(errs, err)
 	}
 	teardowns = append(teardowns, swept...)
 	// Rows a failed teardown left, and proxies that never published, go regardless: the environment is gone.
-	if err := p.pubRepo.DeleteForEnvironment(ctx, ouID, envUUID); err != nil {
-		errs = append(errs, fmt.Errorf("failed to delete the environment's A2A publications: %w", err))
+	if err := p.exposureRepo.DeleteForEnvironment(ctx, ouID, envUUID); err != nil {
+		errs = append(errs, fmt.Errorf("failed to delete the environment's A2A agent exposures: %w", err))
 	}
 	if err := p.proxyRepo.DeleteForEnvironment(ctx, ouID, envUUID); err != nil {
 		errs = append(errs, fmt.Errorf("failed to delete the environment's A2A proxies: %w", err))
@@ -265,45 +251,45 @@ func (p *A2APublisher) TeardownEnvironment(ctx context.Context, ouID string, env
 	return errors.Join(errs...)
 }
 
-// EnvironmentUUIDs lists every environment UUID with publication or proxy rows recorded under name, even when one listing fails.
+// EnvironmentUUIDs lists every environment UUID with exposure or proxy rows recorded under name, even when one listing fails.
 func (p *A2APublisher) EnvironmentUUIDs(ctx context.Context, ouID, name string) ([]uuid.UUID, error) {
 	var errs []error
-	pubs, err := p.pubRepo.ListEnvironmentUUIDs(ctx, ouID, name)
+	exposed, err := p.exposureRepo.ListEnvironmentUUIDs(ctx, ouID, name)
 	if err != nil {
-		errs = append(errs, fmt.Errorf("failed to list A2A publication environments: %w", err))
+		errs = append(errs, fmt.Errorf("failed to list A2A agent exposure environments: %w", err))
 	}
 	proxies, err := p.proxyRepo.ListEnvironmentUUIDs(ctx, ouID, name)
 	if err != nil {
 		errs = append(errs, fmt.Errorf("failed to list A2A proxy environments: %w", err))
 	}
-	return append(pubs, proxies...), errors.Join(errs...)
+	return append(exposed, proxies...), errors.Join(errs...)
 }
 
-// teardownDeletedEnv removes one publication together with its artifact, which a deleted environment no longer needs.
+// teardownDeletedEnv removes one exposure together with its artifact, which a deleted environment no longer needs.
 // On failure it still returns the teardown to send; agent deletion sweeps the artifact left behind.
-func (p *A2APublisher) teardownDeletedEnv(ctx context.Context, pub models.A2APublication) (a2aTeardown, error) {
+func (p *A2APublisher) teardownDeletedEnv(ctx context.Context, exposure models.PlatformAgentExposure) (a2aTeardown, error) {
 	key := a2aPublicationKey{
-		OUID: pub.OUID, ProjectName: pub.ProjectName, AgentName: pub.AgentName,
-		EnvironmentName: pub.EnvironmentName, EnvironmentUUID: pub.EnvironmentUUID,
+		OUID: exposure.OUID, ProjectName: exposure.ProjectName, AgentName: exposure.AgentName,
+		EnvironmentName: exposure.EnvironmentName, EnvironmentUUID: exposure.EnvironmentUUID,
 	}
 	var teardown a2aTeardown
 	err := p.tx(ctx, func(tx *gorm.DB) error {
 		var err error
-		teardown, err = p.TeardownEnvAndDropArtifact(ctx, tx, key, pub.ArtifactUUID)
+		teardown, err = p.TeardownEnvAndDropArtifact(ctx, tx, key, exposure.ArtifactUUID)
 		return err
 	})
 	if err != nil {
 		// The environment's rows go regardless, so the gateways must drop the Agent now or never.
 		return a2aTeardown{
-			artifactUUID:  pub.ArtifactUUID,
-			gatewayIDs:    collectA2AAgentDeletionTargets(p.deploymentRepo, p.gatewayRepo, pub.ArtifactUUID, pub.OUID, true, p.logger),
+			artifactUUID:  exposure.ArtifactUUID,
+			gatewayIDs:    collectA2AAgentDeletionTargets(p.deploymentRepo, p.gatewayRepo, exposure.ArtifactUUID, exposure.OUID, true, p.logger),
 			dropsArtifact: true,
-		}, fmt.Errorf("agent %s: %w", pub.AgentName, err)
+		}, fmt.Errorf("agent %s: %w", exposure.AgentName, err)
 	}
 	return teardown, nil
 }
 
-// dropLeftoverArtifacts deletes the artifacts of the environment's A2A agents that no publication teardown covered.
+// dropLeftoverArtifacts deletes the artifacts of the environment's A2A agents that no exposure teardown covered.
 // The card rows name those agents; a REST or chat agent's artifact for the environment is not touched.
 func (p *A2APublisher) dropLeftoverArtifacts(ctx context.Context, ouID string, envUUID uuid.UUID, done []a2aTeardown) ([]a2aTeardown, error) {
 	cards, err := p.cardRepo.ListForEnvironment(ctx, ouID, envUUID)
@@ -340,11 +326,11 @@ func (p *A2APublisher) dropLeftoverArtifacts(ctx context.Context, ouID string, e
 	return teardowns, errors.Join(errs...)
 }
 
-func (p *A2APublisher) publications(tx *gorm.DB) repositories.A2APublicationRepository {
+func (p *A2APublisher) exposures(tx *gorm.DB) repositories.PlatformAgentExposureRepository {
 	if tx == nil {
-		return p.pubRepo
+		return p.exposureRepo
 	}
-	return p.pubRepo.WithTx(tx)
+	return p.exposureRepo.WithTx(tx)
 }
 
 func (p *A2APublisher) proxies(tx *gorm.DB) repositories.A2AProxyRepository {

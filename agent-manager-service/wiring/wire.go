@@ -82,7 +82,6 @@ var serviceProviderSet = wire.NewSet(
 	// reconciler that consumes it is wired here.
 	ProvideAgentIdentityInjectionServiceWithEndpointResolver,
 	services.NewAgentThunderReconcilerService,
-	services.NewA2APublicationReconcilerService,
 	services.NewA2ACardFetcher,
 	services.NewA2ACardReconcilerService,
 	services.NewA2AAgentCardService,
@@ -383,7 +382,7 @@ var repositoryProviderSet = wire.NewSet(
 	ProvideMCPProxyRepository,
 	repositories.NewMCPProxyEndpointRepository,
 	ProvideDeploymentRepository,
-	ProvideA2APublicationRepository,
+	ProvidePlatformAgentExposureRepository,
 	ProvideA2AAgentCardRepository,
 	ProvideA2AProxyRepository,
 	ProvideArtifactRepository,
@@ -519,8 +518,8 @@ func ProvideTxRunner(db *gorm.DB) services.TxRunner {
 	}
 }
 
-func ProvideA2APublicationRepository(db *gorm.DB) repositories.A2APublicationRepository {
-	return repositories.NewA2APublicationRepository(db)
+func ProvidePlatformAgentExposureRepository(db *gorm.DB) repositories.PlatformAgentExposureRepository {
+	return repositories.NewPlatformAgentExposureRepository(db)
 }
 
 func ProvideArtifactRepository(db *gorm.DB) repositories.ArtifactRepository {

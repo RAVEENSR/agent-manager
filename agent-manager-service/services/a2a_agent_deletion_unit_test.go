@@ -197,7 +197,7 @@ func newAgentArtifactDeletionFixture(t *testing.T, artifacts map[string]uuid.UUI
 			return []*models.Gateway{}, nil
 		},
 	}
-	pubRepo := &repomocks.A2APublicationRepositoryMock{
+	pubRepo := &repomocks.PlatformAgentExposureRepositoryMock{
 		DeleteForAgentFunc: func(context.Context, string, string, string) error {
 			f.steps = append(f.steps, "delete-queue")
 			f.queueDeletes++

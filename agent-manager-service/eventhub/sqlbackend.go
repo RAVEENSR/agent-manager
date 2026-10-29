@@ -131,14 +131,17 @@ func (b *SQLBackend) prepareStatements() (err error) {
 	}()
 
 	b.insertEventStmt, err = b.db.Prepare(rebind(`
-		INSERT INTO eventhub_events (gateway_id, processed_timestamp, originated_timestamp, entity_type, action, entity_id, event_id, event_data)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`))
+		INSERT INTO eventhub_events (gateway_id, processed_timestamp, originated_timestamp, entity_type, action, entity_id, event_id, event_data, seq)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`))
 	if err != nil {
 		return fmt.Errorf("prepare insert event: %w", err)
 	}
 
+	// The bump takes the gateway-state row lock, so the seq it returns orders the gateway's events by commit.
 	b.updateGatewayVersionStmt, err = b.db.Prepare(rebind(`
-		UPDATE eventhub_gateway_states SET version_id = ?, updated_at = CURRENT_TIMESTAMP WHERE gateway_id = ?`))
+		UPDATE eventhub_gateway_states SET seq = seq + 1, version_id = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE gateway_id = ?
+		RETURNING seq`))
 	if err != nil {
 		return fmt.Errorf("prepare update gateway version: %w", err)
 	}
@@ -296,6 +299,16 @@ func (b *SQLBackend) PublishEvent(ctx context.Context, gatewayID string, event E
 		return fmt.Errorf("failed to ensure gateway registered: %w", err)
 	}
 
+	var seq int64
+	err = tx.StmtContext(ctx, b.updateGatewayVersionStmt).QueryRowContext(ctx, newVersion, gatewayID).Scan(&seq)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = fmt.Errorf("gateway %q is not registered", gatewayID)
+		return err
+	}
+	if err != nil {
+		return fmt.Errorf("failed to update gateway version: %w", err)
+	}
+
 	_, err = tx.StmtContext(ctx, b.insertEventStmt).ExecContext(
 		ctx,
 		gatewayID,
@@ -306,6 +319,7 @@ func (b *SQLBackend) PublishEvent(ctx context.Context, gatewayID string, event E
 		event.EntityID,
 		eventID,
 		eventData,
+		seq,
 	)
 	if err != nil {
 		insertErr := err
@@ -325,15 +339,6 @@ func (b *SQLBackend) PublishEvent(ctx context.Context, gatewayID string, event E
 			return nil
 		}
 		return fmt.Errorf("failed to insert event: %w", insertErr)
-	}
-
-	result, err := tx.StmtContext(ctx, b.updateGatewayVersionStmt).ExecContext(ctx, newVersion, gatewayID)
-	if err != nil {
-		return fmt.Errorf("failed to update gateway version: %w", err)
-	}
-	if rows, _ := result.RowsAffected(); rows == 0 {
-		err = fmt.Errorf("gateway %q is not registered", gatewayID)
-		return err
 	}
 
 	if err = tx.Commit(); err != nil {

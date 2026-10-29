@@ -40,8 +40,6 @@ import (
 const (
 	a2aUpstreamHeaderMaxLen = 255
 	a2aUpstreamValueMaxLen  = 8192
-	// a2aProxyNoPublicationMsg reports a proxied environment with no publication queued; a refresh queues one.
-	a2aProxyNoPublicationMsg = "no gateway publication is queued for this environment; refresh to publish it again"
 )
 
 // a2aUpstreamHeaderPattern is the gateway's set-headers name schema.
@@ -151,18 +149,12 @@ func (s *a2aProxyService) GetA2AProxy(ctx context.Context, ouID, projectName, ag
 	if err != nil {
 		return nil, err
 	}
-	status := &models.A2AProxyStatus{UpstreamAuthHeader: proxy.UpstreamAuthHeader, GatewayURL: gatewayURL}
-	pub, err := s.publisher.Publication(ctx, t.key.OUID, t.key.ProjectName, t.key.AgentName, t.key.EnvironmentUUID)
-	switch {
-	case errors.Is(err, repositories.ErrA2APublicationNotFound):
-		// Enabling writes both rows together, so a missing publication never resolves on its own.
-		status.Status, status.LastError = models.A2APublicationStatusFailed, a2aProxyNoPublicationMsg
-	case err != nil:
-		return nil, fmt.Errorf("failed to read the A2A publication: %w", err)
-	default:
-		status.Status, status.LastError = pub.Status, pub.LastError
-	}
-	return status, nil
+	// TODO: report the gateway's deployment status once A2A agents deploy through deployment_status.
+	return &models.A2AProxyStatus{
+		Status:             models.A2APublicationStatusPending,
+		UpstreamAuthHeader: proxy.UpstreamAuthHeader,
+		GatewayURL:         gatewayURL,
+	}, nil
 }
 
 func (s *a2aProxyService) SetA2AProxy(
@@ -204,7 +196,7 @@ func (s *a2aProxyService) SetA2AProxy(
 				return err
 			}
 		}
-		return s.enqueuePublication(ctx, tx, t)
+		return s.ensureArtifact(tx, t)
 	})
 	if err == nil {
 		// Completed after the agent-gone check, so the record says whether the credential change stayed.
@@ -263,7 +255,7 @@ func (s *a2aProxyService) StoreCardSource(
 		if err != nil {
 			return fmt.Errorf("failed to park the agent card: %w", err)
 		}
-		return s.enqueuePublication(ctx, tx, t)
+		return s.ensureArtifact(tx, t)
 	})
 	if err != nil {
 		return err
@@ -411,13 +403,12 @@ func (s *a2aProxyService) switchFromDirect(ctx context.Context, tx *gorm.DB, t a
 	return nil
 }
 
-// enqueuePublication queues the environment's external publication against its artifact, creating it if needed.
-func (s *a2aProxyService) enqueuePublication(ctx context.Context, tx *gorm.DB, t a2aProxyTarget) error {
-	artifact, err := ensureAgentEnvAPIArtifact(tx, s.artifactRepo, t.key.OUID, t.key.ProjectName, t.key.AgentName, t.env.UUID)
-	if err != nil {
+// ensureArtifact creates the proxied environment's agent artifact, which the gateway serves the agent and its keys under.
+func (s *a2aProxyService) ensureArtifact(tx *gorm.DB, t a2aProxyTarget) error {
+	if _, err := ensureAgentEnvAPIArtifact(tx, s.artifactRepo, t.key.OUID, t.key.ProjectName, t.key.AgentName, t.env.UUID); err != nil {
 		return fmt.Errorf("failed to ensure the agent's API artifact: %w", err)
 	}
-	return s.publisher.Enqueue(ctx, tx, t.key, models.A2APublicationSourceExternal, artifact.UUID)
+	return nil
 }
 
 // republish re-derives the routes from the origin card, then refetches it; a direct environment gets ifDirect (nil: ErrEnvironmentNotProxied).
@@ -430,7 +421,7 @@ func (s *a2aProxyService) republish(ctx context.Context, t a2aProxyTarget, ifDir
 		if proxy == nil {
 			return onDirect(ctx, tx, s.cardRepo, t, ifDirect)
 		}
-		return s.enqueuePublication(ctx, tx, t)
+		return s.ensureArtifact(tx, t)
 	})
 	if err != nil {
 		return err

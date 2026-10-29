@@ -81,3 +81,30 @@ func TestDeploymentDeleteForArtifactInATransaction(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, gateways, "deployment_status went with the deployments")
 }
+
+// Until the status core replaces them, the legacy writers must satisfy migration 051's CHECKs.
+func TestDeploymentLegacyWritersRecordDesiredStateAndPerformedAt(t *testing.T) {
+	artifactUUID, ouID := seedAgentDeployment(t)
+	gdb := db.GetDB()
+	var row models.DeploymentStatusRecord
+	require.NoError(t, gdb.Where("artifact_uuid = ? AND ou_id = ?", artifactUUID, ouID).First(&row).Error)
+	assert.Equal(t, models.DeploymentStatusDeployed, row.StatusDesired)
+	assert.Equal(t, models.NewPerformedAt(row.PerformedAt), row.PerformedAt.UTC(), "performed_at is in milliseconds")
+	require.NotNil(t, row.DeploymentID)
+
+	_, err := NewDeploymentRepo(gdb).SetCurrentCtx(context.Background(), artifactUUID.String(), ouID,
+		row.GatewayUUID.String(), row.DeploymentID.String(), models.DeploymentStatusUndeployed)
+	require.NoError(t, err)
+	var undeployed models.DeploymentStatusRecord
+	require.NoError(t, gdb.Where("artifact_uuid = ? AND ou_id = ?", artifactUUID, ouID).First(&undeployed).Error)
+	assert.Equal(t, models.DeploymentStatusUndeployed, undeployed.Status)
+	assert.Equal(t, models.DeploymentStatusUndeployed, undeployed.StatusDesired)
+	assert.False(t, undeployed.PerformedAt.Before(row.PerformedAt))
+
+	_, err = NewDeploymentRepo(gdb).UpdateStatusByDeploymentID(row.DeploymentID.String(), row.GatewayUUID.String(),
+		models.DeploymentStatusDeployed)
+	require.NoError(t, err)
+	var acked models.DeploymentStatusRecord
+	require.NoError(t, gdb.Where("artifact_uuid = ? AND ou_id = ?", artifactUUID, ouID).First(&acked).Error)
+	assert.Equal(t, models.DeploymentStatusDeployed, acked.StatusDesired)
+}

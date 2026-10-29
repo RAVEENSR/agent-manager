@@ -84,6 +84,10 @@ func NewDeploymentRepo(db *gorm.DB) DeploymentRepository {
 	}
 }
 
+// legacyStatusColumns are what the settled-status writers overwrite: they record DEPLOYED or UNDEPLOYED as both
+// the status and the desired status.
+var legacyStatusColumns = []string{"deployment_id", "status", "status_desired", "performed_at", "updated_at"}
+
 // CreateWithLimitEnforcement atomically creates a deployment with hard limit enforcement
 func (r *DeploymentRepo) CreateWithLimitEnforcement(deployment *models.Deployment, hardLimit int) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
@@ -144,17 +148,19 @@ func (r *DeploymentRepo) CreateWithLimitEnforcement(deployment *models.Deploymen
 
 		// Insert or update deployment status (UPSERT)
 		deploymentStatus := &models.DeploymentStatusRecord{
-			ArtifactUUID: deployment.ArtifactUUID,
-			OUID:         deployment.OUID,
-			GatewayUUID:  deployment.GatewayUUID,
-			DeploymentID: deployment.DeploymentID,
-			Status:       *deployment.Status,
-			UpdatedAt:    *deployment.UpdatedAt,
+			ArtifactUUID:  deployment.ArtifactUUID,
+			OUID:          deployment.OUID,
+			GatewayUUID:   deployment.GatewayUUID,
+			DeploymentID:  &deployment.DeploymentID,
+			Status:        *deployment.Status,
+			StatusDesired: *deployment.Status,
+			PerformedAt:   models.NewPerformedAt(updatedAt),
+			UpdatedAt:     *deployment.UpdatedAt,
 		}
 
 		return tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "artifact_uuid"}, {Name: "ou_id"}, {Name: "gateway_uuid"}},
-			DoUpdates: clause.AssignmentColumns([]string{"deployment_id", "status", "updated_at"}),
+			DoUpdates: clause.AssignmentColumns(legacyStatusColumns),
 		}).Create(deploymentStatus).Error
 	})
 }
@@ -252,17 +258,19 @@ func (r *DeploymentRepo) SetCurrentCtx(ctx context.Context, artifactUUID, orgUUI
 	}
 
 	deploymentStatus := &models.DeploymentStatusRecord{
-		ArtifactUUID: artifactUUID_uuid,
-		OUID:         orgUUID,
-		GatewayUUID:  gatewayUUID_uuid,
-		DeploymentID: deploymentUUID_uuid,
-		Status:       status,
-		UpdatedAt:    updatedAt,
+		ArtifactUUID:  artifactUUID_uuid,
+		OUID:          orgUUID,
+		GatewayUUID:   gatewayUUID_uuid,
+		DeploymentID:  &deploymentUUID_uuid,
+		Status:        status,
+		StatusDesired: status,
+		PerformedAt:   models.NewPerformedAt(updatedAt),
+		UpdatedAt:     updatedAt,
 	}
 
 	err = r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "artifact_uuid"}, {Name: "ou_id"}, {Name: "gateway_uuid"}},
-		DoUpdates: clause.AssignmentColumns([]string{"deployment_id", "status", "updated_at"}),
+		DoUpdates: clause.AssignmentColumns(legacyStatusColumns),
 	}).Create(deploymentStatus).Error
 
 	return updatedAt, err
@@ -275,8 +283,9 @@ func (r *DeploymentRepo) UpdateStatusByDeploymentID(deploymentID, gatewayUUID st
 	result := r.db.Table("deployment_status").
 		Where("deployment_id = ? AND gateway_uuid = ?", deploymentID, gatewayUUID).
 		Updates(map[string]interface{}{
-			"status":     status,
-			"updated_at": updatedAt,
+			"status":         status,
+			"status_desired": status,
+			"updated_at":     updatedAt,
 		})
 	if result.Error != nil {
 		return time.Time{}, result.Error

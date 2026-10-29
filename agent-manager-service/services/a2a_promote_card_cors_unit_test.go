@@ -120,9 +120,9 @@ func TestPromoteAgent_A2AInheritsSourceCardCORSAndRepublishes(t *testing.T) {
 			return &models.Artifact{UUID: artifactUUID, Kind: models.KindAgent}, nil
 		},
 	}
-	pubRepo := &repomocks.A2APublicationRepositoryMock{
-		EnqueueFunc: func(_ context.Context, _ *models.A2APublication) error {
-			events = append(events, "enqueue")
+	pubRepo := &repomocks.PlatformAgentExposureRepositoryMock{
+		UpsertFunc: func(_ context.Context, _ *models.PlatformAgentExposure) error {
+			events = append(events, "expose")
 			return nil
 		},
 	}
@@ -142,10 +142,10 @@ func TestPromoteAgent_A2AInheritsSourceCardCORSAndRepublishes(t *testing.T) {
 	assert.Equal(t, []string{"Content-Type"}, upserted.CardCORSAllowHeaders)
 	assert.Equal(t, sourceOverride.CardCORSAllowCredentials, upserted.CardCORSAllowCredentials)
 
-	enqueued := pubRepo.EnqueueCalls()
-	require.Len(t, enqueued, 1, "the target is queued for gateway publication")
-	assert.Equal(t, "staging", enqueued[0].Pub.EnvironmentName)
-	assert.Equal(t, stagingUUID, enqueued[0].Pub.EnvironmentUUID)
-	assert.Equal(t, artifactUUID, enqueued[0].Pub.ArtifactUUID)
-	assert.Equal(t, []string{"upsert", "enqueue"}, events, "queued only after the config it is built from is saved")
+	enqueued := pubRepo.UpsertCalls()
+	require.Len(t, enqueued, 1, "the agent is exposed in the target")
+	assert.Equal(t, "staging", enqueued[0].Exposure.EnvironmentName)
+	assert.Equal(t, stagingUUID, enqueued[0].Exposure.EnvironmentUUID)
+	assert.Equal(t, artifactUUID, enqueued[0].Exposure.ArtifactUUID)
+	assert.Equal(t, []string{"upsert", "expose"}, events, "exposed only after the config it is built from is saved")
 }
