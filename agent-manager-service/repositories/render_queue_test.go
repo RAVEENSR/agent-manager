@@ -550,16 +550,16 @@ func TestGatewayDeleteRemovesItsStatusRows(t *testing.T) {
 
 	require.NoError(t, NewGatewayRepo(db.GetDB()).Delete(p.GatewayUUID.String(), p.OUID))
 
-	var statuses []models.DeploymentStatus
-	require.NoError(t, db.GetDB().Model(&models.DeploymentStatusRecord{}).
-		Where("gateway_uuid = ?", p.GatewayUUID).Pluck("status", &statuses).Error)
-	assert.Equal(t, []models.DeploymentStatus{models.DeploymentStatusUndeployed}, statuses,
-		"the PENDING row goes, or it would keep rendering; the user's undeploy stays")
+	var kept []models.DeploymentStatusRecord
+	require.NoError(t, db.GetDB().Where("gateway_uuid = ?", p.GatewayUUID).Find(&kept).Error)
+	require.Len(t, kept, 1, "the PENDING row goes, or it would keep rendering; the user's undeploy stays")
+	assert.Equal(t, models.DeploymentStatusUndeployed, kept[0].Status)
+	assert.Nil(t, kept[0].NextAttemptAt)
 }
 
 // A gateway with nothing held can be deleted (HasGatewayDeployments), but it may still have a deploy owed: a PENDING
-// row, or an UNDEPLOYED row re-queued. Its delete takes the PENDING row and the owed deploy with it, so nothing is left
-// to render for the deleted gateway; the undeployed row stays as the user's undeploy.
+// row, or an UNDEPLOYED row re-queued. Its delete takes every status row with it, so nothing is left to render for
+// the deleted gateway.
 func TestGatewayDeleteLeavesNothingToRender(t *testing.T) {
 	pending := seedPlacement(t, models.KindLLMProxy)
 	require.True(t, insertPending(t, pending, "placed"))
@@ -581,9 +581,8 @@ func TestGatewayDeleteLeavesNothingToRender(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, claims, "nothing is owed to the deleted gateway")
 	}
-	var kept []models.DeploymentStatusRecord
-	require.NoError(t, db.GetDB().Where("gateway_uuid = ?", pending.GatewayUUID).Find(&kept).Error)
-	require.Len(t, kept, 1)
-	assert.Equal(t, owed.ArtifactUUID, kept[0].ArtifactUUID, "only the user's undeploy outlives the gateway")
-	assert.Nil(t, kept[0].NextAttemptAt)
+	var rows int64
+	require.NoError(t, db.GetDB().Model(&models.DeploymentStatusRecord{}).
+		Where("gateway_uuid = ?", pending.GatewayUUID).Count(&rows).Error)
+	assert.Zero(t, rows)
 }

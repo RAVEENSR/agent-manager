@@ -287,7 +287,7 @@ func (r *GatewayRepo) buildFilterQuery(filters GatewayFilterOptions) *gorm.DB {
 // Delete soft-deletes a gateway with organization isolation (sets deleted_at).
 // Soft delete does not trigger FK ON DELETE CASCADE, so active tokens are
 // revoked and its deployments and status rows are removed explicitly here, except UNDEPLOYED status
-// rows: they are kept with no deployment so the user's undeploy outlives the gateway. Other child
+// rows of a finished undeploy (nothing owed): they are kept with no deployment so the user's undeploy outlives the gateway. Other child
 // tables (environment mappings, identity providers) are left in place and must be
 // filtered by gateways.deleted_at at the read site.
 func (r *GatewayRepo) Delete(gatewayID, ouID string) error {
@@ -310,20 +310,19 @@ func (r *GatewayRepo) Delete(gatewayID, ouID string) error {
 			return err
 		}
 
-		// UNDEPLOYED rows are kept, detached from their deployments and with no deploy owed, so
-		// the user's undeploy outlives the gateway: with no row at all the placement pass would
-		// deploy the artifact again on another gateway.
+		// A finished undeploy outlives the gateway, detached from its deployment: with no row at
+		// all the placement pass would deploy the artifact again on another gateway. A row still
+		// owed a deploy goes, so the artifact is placed again.
+		const finishedUndeploy = "status = ? AND next_attempt_at IS NULL"
 		if err := tx.Model(&models.DeploymentStatusRecord{}).
-			Where("gateway_uuid = ? AND ou_id = ? AND status = ?", gatewayID, ouID, models.DeploymentStatusUndeployed).
-			UpdateColumns(map[string]any{
-				"deployment_id": nil, "next_attempt_at": nil, "attempt_count": 0, "render_reason": "",
-			}).Error; err != nil {
+			Where("gateway_uuid = ? AND ou_id = ? AND "+finishedUndeploy, gatewayID, ouID, models.DeploymentStatusUndeployed).
+			UpdateColumn("deployment_id", nil).Error; err != nil {
 			return err
 		}
 
 		// The other rows go: a PENDING row has no deployment to cascade with, and would keep
 		// rendering for a gateway that no longer exists.
-		if err := tx.Where("gateway_uuid = ? AND ou_id = ? AND status <> ?", gatewayID, ouID, models.DeploymentStatusUndeployed).
+		if err := tx.Where("gateway_uuid = ? AND ou_id = ? AND NOT ("+finishedUndeploy+")", gatewayID, ouID, models.DeploymentStatusUndeployed).
 			Delete(&models.DeploymentStatusRecord{}).Error; err != nil {
 			return err
 		}

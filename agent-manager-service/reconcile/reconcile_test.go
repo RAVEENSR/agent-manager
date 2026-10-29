@@ -921,6 +921,32 @@ func TestGatewayDeleteKeepsAUserUndeploy(t *testing.T) {
 	}
 }
 
+func TestGatewayDeleteDropsAnUndeployOwedADeploy(t *testing.T) {
+	kind := newFakeEnvKind(true)
+	core, worker := newWorker(t, kind)
+	ouID, env := testOU(), uuid.New()
+	ref := seedArtifact(t, ouID, fakeEnvKindName)
+	seedRecord(t, nil, ref, env)
+	old := seedGateway(t, ouID, env)
+	p := models.Placement{ArtifactRef: ref, GatewayUUID: old}
+	repo := repositories.NewDeploymentRepo(db.GetDB())
+	require.NoError(t, inTx(t, func(tx *gorm.DB) error {
+		_, err := repo.InsertPending(context.Background(), tx, p, "placed")
+		return err
+	}))
+	require.NoError(t, inTx(t, func(tx *gorm.DB) error { return core.Undeploy(context.Background(), tx, p) }))
+	_, err := repo.QueueRender(context.Background(), nil, ouID, ref.ArtifactUUID, nil, "redeploy", repositories.QueueScopeAny)
+	require.NoError(t, err)
+	require.NotNil(t, statusRow(t, p).NextAttemptAt, "a deploy is owed on the undeployed row")
+
+	require.NoError(t, repositories.NewGatewayRepo(db.GetDB()).Delete(old.String(), ouID))
+	fresh := seedGateway(t, ouID, env)
+	require.NoError(t, worker.PlaceEnv(context.Background(), ouID, env))
+
+	assert.Nil(t, statusRow(t, p), "the owed deploy goes with the gateway")
+	assert.NotNil(t, statusRow(t, models.Placement{ArtifactRef: ref, GatewayUUID: fresh}), "so the artifact is placed again")
+}
+
 func TestGatewayDeleteRemovesPendingRows(t *testing.T) {
 	core := newCore(t, newFakeEnvKind(true))
 	ouID := testOU()
