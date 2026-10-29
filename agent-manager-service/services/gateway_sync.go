@@ -30,23 +30,6 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
 
-// gatewayArtifactOf is the kind the gateway knows an artifact as, and the id it stores it under: the UUID, except an
-// LLM proxy, which is stored under its handle. ok is false for a kind AMS doesn't deploy to gateways.
-func gatewayArtifactOf(ref models.ArtifactRef) (kind, artifactID string, ok bool) {
-	switch ref.Kind {
-	case models.KindLLMProvider:
-		return models.KindLLMProvider, ref.ArtifactUUID.String(), true
-	case models.KindLLMProxy:
-		return models.KindLLMProxy, ref.Handle, true
-	case models.KindMCPProxy, models.KindMCPMapping:
-		return kindMCPProxy, ref.ArtifactUUID.String(), true
-	case models.KindAgent:
-		return models.KindAgent, ref.ArtifactUUID.String(), true
-	default:
-		return "", "", false
-	}
-}
-
 // ListGatewayDeployments is the gateway's startup sync list: what it should hold, as it stored it. It only reads.
 func (s *GatewayInternalAPIService) ListGatewayDeployments(ctx context.Context, ouID, gatewayID string) ([]models.ControlPlaneDeployment, error) {
 	rows, err := s.deploymentRepo.ListForGatewaySync(ctx, ouID, gatewayID)
@@ -55,7 +38,7 @@ func (s *GatewayInternalAPIService) ListGatewayDeployments(ctx context.Context, 
 	}
 	deployments := make([]models.ControlPlaneDeployment, 0, len(rows))
 	for _, row := range rows {
-		kind, artifactID, ok := gatewayArtifactOf(row.ArtifactRef)
+		kind, artifactID, ok := s.artifacts.GatewayArtifact(row.ArtifactRef)
 		if !ok {
 			slog.Warn("GatewayInternalAPIService: skipping a gateway deployment of a kind the gateway doesn't sync",
 				"artifactUUID", row.ArtifactUUID, "kind", row.Kind, "gatewayID", gatewayID)
@@ -110,7 +93,7 @@ func (s *GatewayInternalAPIService) FetchDeploymentBatch(
 	}
 	batch := make([]utils.BatchDeployment, 0, len(contents))
 	for _, c := range contents {
-		kind, artifactID, ok := gatewayArtifactOf(c.ArtifactRef)
+		kind, artifactID, ok := s.artifacts.GatewayArtifact(c.ArtifactRef)
 		if !ok {
 			continue
 		}

@@ -28,6 +28,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/wso2/agent-manager/agent-manager-service/reconcile"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories/repomocks"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
@@ -58,7 +59,13 @@ var activeDeploymentLookups = []struct {
 const testArtifactID = "0192f4c1-9a7d-7c3e-b4f2-1a2b3c4d5e6f"
 
 func newGatewayInternalServiceWithDeployments(repo *repomocks.DeploymentRepositoryMock) *GatewayInternalAPIService {
-	return NewGatewayInternalAPIService(nil, nil, repo, nil, nil, nil, nil)
+	return NewGatewayInternalAPIService(nil, nil, repo, nil, nil, nil, nil, gatewayKinds())
+}
+
+// gatewayKinds names artifacts as the registered kinds do; naming needs none of their dependencies.
+func gatewayKinds() *reconcile.Core {
+	return reconcile.NewCore(nil, nil, nil, reconcile.Kinds{NewLLMProviderKind(), &LLMProxyKind{}, &MCPProxyKind{}, &A2AAgentKind{}},
+		reconcile.Config{}, discardLogger())
 }
 
 func TestActiveArtifactDeploymentByGatewayReturnsYamlKeyedByID(t *testing.T) {
@@ -138,7 +145,7 @@ func TestActiveAgentDeploymentDecryptsTheUpstreamSecret(t *testing.T) {
 			return &models.Deployment{Content: []byte(stored)}, nil
 		},
 	}
-	svc := NewGatewayInternalAPIService(nil, nil, repo, nil, nil, nil, key)
+	svc := NewGatewayInternalAPIService(nil, nil, repo, nil, nil, nil, key, gatewayKinds())
 
 	got, err := svc.GetActiveAgentDeploymentByGateway(context.Background(), testArtifactID, "ou-1", "gw-1")
 	require.NoError(t, err)

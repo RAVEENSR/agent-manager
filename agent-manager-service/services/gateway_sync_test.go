@@ -45,7 +45,8 @@ func newSyncFixture(t *testing.T) *syncFixture {
 	t.Helper()
 	f := &syncFixture{ouID: "ou-" + uuid.NewString()[:8], repo: repositories.NewDeploymentRepo(db.GetDB())}
 	f.gateway = f.seedGateway(t, f.ouID)
-	f.svc = NewGatewayInternalAPIService(nil, nil, f.repo, repositories.NewArtifactRepo(db.GetDB()), nil, nil, nil)
+	f.svc = NewGatewayInternalAPIService(nil, nil, f.repo, repositories.NewArtifactRepo(db.GetDB()), nil, nil, nil,
+		gatewayKinds())
 	return f
 }
 

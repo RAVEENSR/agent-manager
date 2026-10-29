@@ -90,6 +90,31 @@ func TestListGatewayDeploymentsNamesEachArtifactAsTheGatewayStoresIt(t *testing.
 	assert.Equal(t, got[0].Etag, again[0].Etag, "the etag is stable for the same deployment")
 }
 
+// stubGatewayArtifacts names every artifact as kind Stub under its handle.
+type stubGatewayArtifacts struct{}
+
+func (stubGatewayArtifacts) GatewayArtifact(ref models.ArtifactRef) (string, string, bool) {
+	return "Stub", ref.Handle, true
+}
+
+// The sync routes name an artifact as its kind does.
+func TestGatewaySyncRoutesAskTheKinds(t *testing.T) {
+	row := syncRow(models.KindRestAPI, "the-handle", models.GatewaySyncStateDeployed, uuid.NewString(), time.Now())
+	repo := &repomocks.DeploymentRepositoryMock{
+		ListForGatewaySyncFunc: func(context.Context, string, string) ([]models.GatewaySyncRow, error) {
+			return []models.GatewaySyncRow{row}, nil
+		},
+	}
+	svc := NewGatewayInternalAPIService(nil, nil, repo, nil, nil, nil, nil, stubGatewayArtifacts{})
+
+	got, err := svc.ListGatewayDeployments(context.Background(), "ou-1", "gw-1")
+
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "Stub", got[0].Kind)
+	assert.Equal(t, "the-handle", got[0].ArtifactID)
+}
+
 func TestSyncEtagChangesWithTheDeploymentAndItsTime(t *testing.T) {
 	at := models.NewPerformedAt(time.Now())
 	base := syncEtag("artifact", "deployment", at)
@@ -134,7 +159,7 @@ func TestFetchDeploymentBatch(t *testing.T) {
 			return []models.GatewayDeploymentContent{provider, proxy, mcp, restAPI}, nil
 		},
 	}
-	svc := NewGatewayInternalAPIService(nil, nil, repo, nil, nil, nil, key)
+	svc := NewGatewayInternalAPIService(nil, nil, repo, nil, nil, nil, key, gatewayKinds())
 
 	got, err := svc.FetchDeploymentBatch(context.Background(), "ou-1", "gw-1", []string{
 		strings.ToUpper(provider.DeploymentID.String()), "", proxy.DeploymentID.String(), "not-a-uuid",
@@ -177,7 +202,7 @@ func TestCheckArtifactsExist(t *testing.T) {
 			return []models.ArtifactRef{provider, proxy}, nil
 		},
 	}
-	svc := NewGatewayInternalAPIService(nil, nil, nil, artifacts, nil, nil, nil)
+	svc := NewGatewayInternalAPIService(nil, nil, nil, artifacts, nil, nil, nil, gatewayKinds())
 
 	got, err := svc.CheckArtifactsExist(context.Background(), "ou-1", []string{
 		strings.ToUpper(provider.ArtifactUUID.String()), provider.ArtifactUUID.String(), "proxy-handle",

@@ -41,6 +41,13 @@ type GatewayInternalAPIService struct {
 	gatewayRepo      repositories.GatewayRepository
 	infraResourceMgr InfraResourceManager
 	encryptionKey    []byte
+	artifacts        GatewayArtifacts
+}
+
+// GatewayArtifacts names an artifact as the gateway knows it: the kind, and the id it stores it under; ok is false
+// for a kind AMS doesn't deploy to gateways (reconcile.Core, which asks the registered kinds).
+type GatewayArtifacts interface {
+	GatewayArtifact(ref models.ArtifactRef) (kind, artifactID string, ok bool)
 }
 
 // DeploymentNotification represents the notification from gateway
@@ -93,8 +100,10 @@ func NewGatewayInternalAPIService(
 	gatewayRepo repositories.GatewayRepository,
 	infraResourceMgr InfraResourceManager,
 	encryptionKey []byte,
+	artifacts GatewayArtifacts,
 ) *GatewayInternalAPIService {
 	return &GatewayInternalAPIService{
+		artifacts:        artifacts,
 		providerRepo:     providerRepo,
 		proxyRepo:        proxyRepo,
 		deploymentRepo:   deploymentRepo,

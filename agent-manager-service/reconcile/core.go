@@ -118,7 +118,7 @@ func (c *Core) kindOf(name string) (Kind, error) {
 }
 
 // GatewayArtifact is the kind and id the gateway knows the artifact by; ok is false for a kind no reconciler is
-// registered for. The startup sync and the ack handler move onto it once every kind is registered.
+// registered for. The gateway sync routes name artifacts with it.
 func (c *Core) GatewayArtifact(ref models.ArtifactRef) (kindName, artifactID string, ok bool) {
 	kind, found := c.byArtifact[ref.Kind]
 	if !found {

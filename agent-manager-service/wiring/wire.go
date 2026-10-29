@@ -415,6 +415,7 @@ var reconcileProviderSet = wire.NewSet(
 	services.NewA2AAgentKind,
 	ProvideReconcileKinds,
 	ProvideReconcileCore,
+	wire.Bind(new(services.GatewayArtifacts), new(*reconcile.Core)),
 	reconcile.NewWorker,
 )
 
