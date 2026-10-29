@@ -280,13 +280,23 @@ func (r *DeploymentRepo) ListDeployedForDrift(ctx context.Context, kind string, 
 	return placements, nil
 }
 
-// TryLockDriftScan claims this interval's drift scan for the caller's transaction, until it ends. false means
-// another replica holds it.
-func TryLockDriftScan(tx *gorm.DB) (bool, error) {
+const driftScanLockKey = "drift"
+
+// TryLockDriftScan claims this interval's drift scan on conn's session, until UnlockDriftScan or the
+// connection closes. false means another replica holds it. conn must be pinned with gorm.DB.Connection.
+func TryLockDriftScan(conn *gorm.DB) (bool, error) {
 	var locked bool
-	if err := tx.Raw("SELECT pg_try_advisory_xact_lock(?, hashtext(?))", driftScanLockNamespace, "drift").
+	if err := conn.Raw("SELECT pg_try_advisory_lock(?, hashtext(?))", DriftScanLockNamespace, driftScanLockKey).
 		Scan(&locked).Error; err != nil {
 		return false, fmt.Errorf("failed to try the drift scan lock: %w", err)
 	}
 	return locked, nil
+}
+
+// UnlockDriftScan releases the lock TryLockDriftScan took, on the same pinned connection.
+func UnlockDriftScan(conn *gorm.DB) error {
+	if err := conn.Exec("SELECT pg_advisory_unlock(?, hashtext(?))", DriftScanLockNamespace, driftScanLockKey).Error; err != nil {
+		return fmt.Errorf("failed to release the drift scan lock: %w", err)
+	}
+	return nil
 }

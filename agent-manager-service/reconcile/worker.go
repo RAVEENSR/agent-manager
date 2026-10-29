@@ -266,18 +266,29 @@ func (w *Worker) driftLoop(ctx context.Context) {
 }
 
 // CheckDrift marks DEPLOYED rows whose inputs moved for a re-render, for every kind with a DriftChecker. One
-// replica scans at a time: scanned is false when another holds the scan.
+// replica scans at a time: scanned is false when another holds the scan. The scan holds a session lock on one
+// pinned connection, so no transaction stays open across the external drift calls.
 func (w *Worker) CheckDrift(ctx context.Context) (scanned bool, err error) {
-	tx := w.core.db.WithContext(ctx).Begin()
-	if tx.Error != nil {
-		return false, tx.Error
-	}
-	defer tx.Rollback()
-	locked, err := repositories.TryLockDriftScan(tx)
-	if err != nil || !locked {
-		return false, err
-	}
+	err = w.core.db.WithContext(ctx).Connection(func(conn *gorm.DB) error {
+		locked, err := repositories.TryLockDriftScan(conn)
+		if err != nil || !locked {
+			return err
+		}
+		scanned = true
+		defer w.unlockDriftScan(ctx, conn)
+		return w.scanForDrift(ctx)
+	})
+	return scanned, err
+}
 
+// unlockDriftScan ignores ctx's cancellation: a scan cut short by it must still release the lock.
+func (w *Worker) unlockDriftScan(ctx context.Context, conn *gorm.DB) {
+	if err := repositories.UnlockDriftScan(conn.WithContext(context.WithoutCancel(ctx))); err != nil {
+		w.logger.Warn("Failed to release the drift scan lock; it stays with its pooled connection until that closes", "error", err)
+	}
+}
+
+func (w *Worker) scanForDrift(ctx context.Context) error {
 	drifted := 0
 	for _, kind := range w.core.kinds {
 		checker, ok := kind.(DriftChecker)
@@ -288,7 +299,7 @@ func (w *Worker) CheckDrift(ctx context.Context) (scanned bool, err error) {
 			n, err := w.checkDrift(ctx, checker, artifactKind)
 			drifted += n
 			if err != nil {
-				return true, err
+				return err
 			}
 		}
 	}
@@ -296,7 +307,7 @@ func (w *Worker) CheckDrift(ctx context.Context) (scanned bool, err error) {
 		w.logger.Info("Re-rendering drifted gateway deployments", "count", drifted)
 		w.Nudge()
 	}
-	return true, tx.Commit().Error
+	return nil
 }
 
 func (w *Worker) checkDrift(ctx context.Context, checker DriftChecker, artifactKind string) (int, error) {

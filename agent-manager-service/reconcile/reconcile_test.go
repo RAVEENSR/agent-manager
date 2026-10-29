@@ -1047,6 +1047,59 @@ func TestDriftRunsOnOneReplica(t *testing.T) {
 	assert.Equal(t, models.DeploymentStatusDeployed, row.Status)
 }
 
+func seedDeployedDriftPlacement(t *testing.T, core *Core) models.Placement {
+	t.Helper()
+	p := models.Placement{ArtifactRef: seedArtifact(t, testOU(), "FakeDrift")}
+	p.GatewayUUID = seedGateway(t, p.OUID)
+	ack(t, core, p, deploy(t, core, p).DeploymentID, models.DeploymentAckStatusSuccess)
+	return p
+}
+
+func TestDriftScanHoldsNoTransactionOpen(t *testing.T) {
+	kind := newFakeKind("FakeDrift", true)
+	core, worker := newWorker(t, kind)
+	p := seedDeployedDriftPlacement(t, core)
+	var states []string
+	kind.drifted = func(got models.Placement) bool {
+		if got == p {
+			db.GetDB().Raw(`SELECT s.state FROM pg_locks l JOIN pg_stat_activity s USING (pid)
+				WHERE l.locktype = 'advisory' AND l.classid = ? AND l.objid = hashtext('drift')::oid`,
+				repositories.DriftScanLockNamespace).Scan(&states)
+		}
+		return false
+	}
+
+	_, err := worker.CheckDrift(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, states, 1, "the scan's lock is found in pg_locks while the scan runs")
+	assert.Equal(t, "idle", states[0])
+}
+
+func TestDriftScanReleasesTheLockOnError(t *testing.T) {
+	kind := newFakeKind("FakeDrift", true)
+	core, first := newWorker(t, kind)
+	second := NewWorker(newCore(t, kind), testLogger())
+	p := seedDeployedDriftPlacement(t, core)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	kind.drifted = func(got models.Placement) bool {
+		if got == p {
+			cancel()
+		}
+		return true
+	}
+
+	scanned, err := first.CheckDrift(ctx)
+	require.Error(t, err)
+	assert.True(t, scanned)
+
+	kind.drifted = nil
+	scanned, err = second.CheckDrift(context.Background())
+	require.NoError(t, err)
+	assert.True(t, scanned, "the failed scan released the lock")
+}
+
 // MarkStale touches only placed rows.
 func TestMarkStaleTouchesOnlyPlacedRows(t *testing.T) {
 	kind := newFakeKind(fakeGatewayKind, true)
