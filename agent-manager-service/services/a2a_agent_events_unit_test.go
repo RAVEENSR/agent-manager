@@ -38,6 +38,8 @@ type recordingEventHub struct {
 	contexts  []context.Context
 	txs       []*gorm.DB // the caller's transaction per event; nil for PublishEvent
 	onPublish func()
+	// fail, when set, is the error publishing evt returns; nothing is recorded then.
+	fail func(evt eventhub.Event) error
 }
 
 func (h *recordingEventHub) PublishEvent(ctx context.Context, gatewayID string, evt eventhub.Event) error {
@@ -45,6 +47,11 @@ func (h *recordingEventHub) PublishEvent(ctx context.Context, gatewayID string, 
 }
 
 func (h *recordingEventHub) PublishEventTx(ctx context.Context, tx *gorm.DB, gatewayID string, evt eventhub.Event) error {
+	if h.fail != nil {
+		if err := h.fail(evt); err != nil {
+			return err
+		}
+	}
 	h.published = append(h.published, evt)
 	h.contexts = append(h.contexts, ctx)
 	h.txs = append(h.txs, tx)

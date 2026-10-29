@@ -251,6 +251,26 @@ func (p *A2APublisher) DropArtifact(ctx context.Context, tx *gorm.DB, artifact m
 	return events.Publish(ctx, tx)
 }
 
+// DropAgentArtifact deletes one of a deleted agent's per-environment artifacts with its exposure, proxy and card
+// rows in that environment, and writes its delete events, in tx.
+func (p *A2APublisher) DropAgentArtifact(ctx context.Context, tx *gorm.DB, key a2aPublicationKey, artifact models.ArtifactRef) error {
+	err := p.exposures(tx).DeleteForAgentEnv(ctx, key.OUID, key.ProjectName, key.AgentName, key.EnvironmentUUID)
+	if err != nil {
+		return fmt.Errorf("failed to delete the A2A agent's exposure: %w", err)
+	}
+	err = p.proxies(tx).Delete(ctx, key.OUID, key.ProjectName, key.AgentName, key.EnvironmentUUID)
+	if err != nil && !errors.Is(err, repositories.ErrA2AProxyNotFound) {
+		return fmt.Errorf("failed to delete the A2A proxy: %w", err)
+	}
+	if p.cardRepo != nil {
+		err := p.cardRepo.WithTx(tx).DeleteForAgentEnvUUID(ctx, key.OUID, key.ProjectName, key.AgentName, key.EnvironmentUUID)
+		if err != nil {
+			return fmt.Errorf("failed to delete the A2A agent card: %w", err)
+		}
+	}
+	return p.DropArtifact(ctx, tx, artifact)
+}
+
 // DeleteForAgent drops the agent's exposure and proxy rows; deleteAgentAPIArtifact tells the gateways.
 func (p *A2APublisher) DeleteForAgent(ctx context.Context, ouID, projectName, agentName string) error {
 	var errs []error

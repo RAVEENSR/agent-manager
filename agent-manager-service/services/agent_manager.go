@@ -3158,12 +3158,7 @@ func (s *agentManagerService) cleanupAgentMonitors(ctx context.Context, ouID, pr
 // deleteAgentAPIArtifact removes the agent's per-environment API artifacts and
 // tells gateways holding an A2A Agent for them to drop it. It returns what it
 // could not remove; the component is already gone by then, so deleting the
-// agent again re-runs this cleanup.
-//
-// Order matters: publication and proxy rows go first so the reconciler cannot re-publish,
-// gateway targets are read before the artifact delete cascades the deployment
-// rows away, and the broadcast goes last so a gateway re-fetching the Agent
-// finds nothing left to serve. isA2AAgent is false when the agent could not be read;
+// agent again retries the rest. isA2AAgent is false when the agent could not be read;
 // deployment rows then stand in for it.
 func (s *agentManagerService) deleteAgentAPIArtifact(ctx context.Context, ouID, projectName, agentName string, isA2AAgent bool) error {
 	err := s.cleanUpAgentAPIArtifacts(ctx, ouID, projectName, agentName, isA2AAgent)
@@ -3173,9 +3168,28 @@ func (s *agentManagerService) deleteAgentAPIArtifact(ctx context.Context, ouID, 
 	return nil
 }
 
-// cleanUpAgentAPIArtifacts is deleteAgentAPIArtifact's work, reporting every step that failed.
+// cleanUpAgentAPIArtifacts is deleteAgentAPIArtifact's work. Each environment's artifact goes in one transaction
+// with its exposure, proxy and card rows and its delete events, so a failure leaves that environment whole for
+// the retry. The agent's rows in environments without an artifact go once every artifact is gone.
 func (s *agentManagerService) cleanUpAgentAPIArtifacts(ctx context.Context, ouID, projectName, agentName string, isA2AAgent bool) error {
+	// Listed by handle, not by pipeline: routing can put an artifact in any org environment.
+	prefix := agentAPIArtifactHandlePrefix(projectName, agentName)
+	artifacts, err := s.artifactRepo.ListByHandlePrefix(ctx, models.KindAgent, prefix, ouID)
+	if err != nil {
+		return fmt.Errorf("failed to list agent API artifacts for cleanup: %w", err)
+	}
+
 	var errs []error
+	for _, artifact := range artifacts {
+		key := a2aPublicationKey{OUID: ouID, ProjectName: projectName, AgentName: agentName}
+		if err := s.dropAgentArtifact(ctx, key, strings.TrimPrefix(artifact.Handle, prefix), artifact); err != nil {
+			errs = append(errs, fmt.Errorf("failed to delete agent API artifact %s: %w", artifact.Handle, err))
+		}
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+
 	if s.a2aPublisher != nil {
 		if err := s.a2aPublisher.DeleteForAgent(ctx, ouID, projectName, agentName); err != nil {
 			errs = append(errs, err)
@@ -3186,29 +3200,22 @@ func (s *agentManagerService) cleanUpAgentAPIArtifacts(ctx context.Context, ouID
 			errs = append(errs, fmt.Errorf("failed to delete A2A agent card rows: %w", err))
 		}
 	}
-
-	// Listed by handle, not by pipeline: routing can put an artifact in any org environment.
-	artifacts, err := s.artifactRepo.ListByHandlePrefix(ctx, models.KindAgent, agentAPIArtifactHandlePrefix(projectName, agentName), ouID)
-	if err != nil {
-		return errors.Join(append(errs, fmt.Errorf("failed to list agent API artifacts for cleanup: %w", err))...)
-	}
-
-	for _, artifact := range artifacts {
-		if err := s.dropAgentArtifact(ctx, artifact); err != nil {
-			errs = append(errs, fmt.Errorf("failed to delete agent API artifact %s: %w", artifact.Handle, err))
-		}
-	}
 	return errors.Join(errs...)
 }
 
-// dropAgentArtifact deletes one per-environment agent artifact, writing its delete events, in the same transaction,
-// to every gateway it was ever sent. An artifact that only holds API keys was sent to none.
-func (s *agentManagerService) dropAgentArtifact(ctx context.Context, artifact *models.Artifact) error {
+// dropAgentArtifact deletes one per-environment agent artifact, with the agent's A2A rows in its environment, writing
+// its delete events in the same transaction. An artifact whose handle names no environment UUID goes alone.
+func (s *agentManagerService) dropAgentArtifact(ctx context.Context, key a2aPublicationKey, envID string, artifact *models.Artifact) error {
 	if s.a2aPublisher == nil {
 		return s.artifactRepo.Delete(s.db, artifact.UUID.String())
 	}
+	envUUID, envErr := uuid.Parse(envID)
+	key.EnvironmentUUID = envUUID
 	return s.a2aPublisher.tx(ctx, func(tx *gorm.DB) error {
-		return s.a2aPublisher.DropArtifact(ctx, tx, agentArtifactRef(artifact))
+		if envErr != nil {
+			return s.a2aPublisher.DropArtifact(ctx, tx, agentArtifactRef(artifact))
+		}
+		return s.a2aPublisher.DropAgentArtifact(ctx, tx, key, agentArtifactRef(artifact))
 	})
 }
 

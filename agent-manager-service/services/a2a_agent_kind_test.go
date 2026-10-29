@@ -20,6 +20,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync/atomic"
 	"testing"
@@ -32,6 +33,7 @@ import (
 
 	"github.com/wso2/agent-manager/agent-manager-service/clients/clientmocks"
 	"github.com/wso2/agent-manager/agent-manager-service/db"
+	"github.com/wso2/agent-manager/agent-manager-service/eventhub"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/reconcile"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
@@ -163,4 +165,56 @@ func TestPlacementPassPlacesAPlatformAgentFromItsExposure(t *testing.T) {
 	row := f.row(t, artifact)
 	require.NotNil(t, row)
 	assert.Equal(t, models.DeploymentStatusDeploying, row.Status)
+}
+
+// An agent delete drops each environment's artifact with its exposure and card rows and its delete events in one
+// transaction: a failure part way leaves all of it for the retry.
+func TestAgentDeleteIsAtomicPerEnvironment(t *testing.T) {
+	f := newA2AFixture(t)
+	artifact, key := f.platformAgent(t)
+	f.url.Store("http://agent.dev.svc:8080")
+	require.NoError(t, f.publisher.tx(context.Background(), func(tx *gorm.DB) error {
+		return f.publisher.Publish(context.Background(), tx, key, artifact)
+	}))
+	f.worker.RunOnce(context.Background())
+	require.Equal(t, models.DeploymentStatusDeploying, f.row(t, artifact).Status)
+	cards := repositories.NewA2AAgentCardRepository(db.GetDB())
+	require.NoError(t, cards.Enqueue(context.Background(), &models.A2AAgentCard{
+		OUID: key.OUID, ProjectName: key.ProjectName, AgentName: key.AgentName, EnvironmentName: key.EnvironmentName,
+		EnvironmentUUID: key.EnvironmentUUID, Source: models.A2AAgentCardSourcePlatform,
+	}))
+	t.Cleanup(func() { db.GetDB().Exec(`DELETE FROM a2a_agent_cards WHERE agent_name = ?`, key.AgentName) })
+	svc := &agentManagerService{
+		db: db.GetDB(), artifactRepo: repositories.NewArtifactRepo(db.GetDB()), a2aCardRepo: cards,
+		a2aPublisher: f.publisher, logger: testLogger(),
+	}
+	exposures := repositories.NewPlatformAgentExposureRepository(db.GetDB())
+	f.hub.fail = func(evt eventhub.Event) error {
+		if evt.EventType == "agent.deleted" {
+			return errors.New("event hub is down")
+		}
+		return nil
+	}
+
+	err := svc.deleteAgentAPIArtifact(context.Background(), key.OUID, key.ProjectName, key.AgentName, true)
+
+	require.Error(t, err)
+	_, err = repositories.NewArtifactRepo(db.GetDB()).GetByUUID(artifact.ArtifactUUID.String(), key.OUID)
+	assert.NoError(t, err, "the artifact stays")
+	_, err = exposures.GetByArtifact(context.Background(), key.OUID, artifact.ArtifactUUID)
+	assert.NoError(t, err, "the exposure stays")
+	_, err = cards.Get(context.Background(), key.OUID, key.ProjectName, key.AgentName, key.EnvironmentName)
+	assert.NoError(t, err, "the card stays")
+	assert.NotNil(t, f.row(t, artifact), "the status row stays")
+
+	f.hub.fail = nil
+	require.NoError(t, svc.deleteAgentAPIArtifact(context.Background(), key.OUID, key.ProjectName, key.AgentName, true))
+
+	_, err = exposures.GetByArtifact(context.Background(), key.OUID, artifact.ArtifactUUID)
+	assert.Error(t, err, "the exposure is gone")
+	_, err = cards.Get(context.Background(), key.OUID, key.ProjectName, key.AgentName, key.EnvironmentName)
+	assert.Error(t, err, "the card is gone")
+	assert.Nil(t, f.row(t, artifact))
+	last := f.hub.published[len(f.hub.published)-1]
+	assert.Equal(t, "agent.deleted", string(last.EventType))
 }

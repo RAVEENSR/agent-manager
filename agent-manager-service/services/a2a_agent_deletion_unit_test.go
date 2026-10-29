@@ -64,6 +64,15 @@ type agentArtifactDeletionFixture struct {
 	// failDelete makes the artifact delete of that UUID fail with the error.
 	failDelete map[string]error
 	gateways   map[string]string
+	envs       map[string]uuid.UUID
+}
+
+// env is the UUID standing in for an environment the test names by label.
+func (f *agentArtifactDeletionFixture) env(label string) uuid.UUID {
+	if _, ok := f.envs[label]; !ok {
+		f.envs[label] = uuid.New()
+	}
+	return f.envs[label]
 }
 
 // gateway is the UUID standing in for a gateway the test names by label.
@@ -78,14 +87,15 @@ func (f *agentArtifactDeletionFixture) gateway(label string) string {
 // plus an unrelated agent's artifact the prefix lookup must not pick up.
 func newAgentArtifactDeletionFixture(t *testing.T, artifacts map[string]uuid.UUID, deployedTo map[uuid.UUID][]string) *agentArtifactDeletionFixture {
 	t.Helper()
-	f := &agentArtifactDeletionFixture{hub: &recordingEventHub{}, gateways: map[string]string{}}
+	f := &agentArtifactDeletionFixture{hub: &recordingEventHub{}, gateways: map[string]string{}, envs: map[string]uuid.UUID{}}
 	f.hub.onPublish = func() { f.steps = append(f.steps, "broadcast") }
 
 	// OpenChoreo is not consulted: the artifacts themselves say which environments to clear.
 	oc := &clientmocks.OpenChoreoClientMock{}
 	stored := []*models.Artifact{{UUID: uuid.New(), Handle: agentEnvAPIArtifactHandle("proj", "agent-2", "env-dev"), Kind: models.KindAgent}}
-	for envUUID, id := range artifacts {
-		stored = append(stored, &models.Artifact{UUID: id, Handle: agentEnvAPIArtifactHandle("proj", "agent", envUUID), Kind: models.KindAgent})
+	for env, id := range artifacts {
+		handle := agentEnvAPIArtifactHandle("proj", "agent", f.env(env).String())
+		stored = append(stored, &models.Artifact{UUID: id, Handle: handle, Kind: models.KindAgent})
 	}
 	artifactRepo := &repomocks.ArtifactRepositoryMock{
 		ListByHandlePrefixFunc: func(_ context.Context, kind, prefix, _ string) ([]*models.Artifact, error) {
@@ -129,6 +139,14 @@ func newAgentArtifactDeletionFixture(t *testing.T, artifacts map[string]uuid.UUI
 			f.queueDeletes++
 			return nil
 		},
+		DeleteForAgentEnvFunc: func(context.Context, string, string, string, uuid.UUID) error {
+			f.steps = append(f.steps, "delete-exposure")
+			return nil
+		},
+	}
+	pubRepo.WithTxFunc = func(tx *gorm.DB) repositories.PlatformAgentExposureRepository {
+		assert.Same(t, txSentinel, tx)
+		return pubRepo
 	}
 	cardRepo := &repomocks.A2AAgentCardRepositoryMock{
 		DeleteForAgentFunc: func(context.Context, string, string, string) error {
@@ -136,12 +154,28 @@ func newAgentArtifactDeletionFixture(t *testing.T, artifacts map[string]uuid.UUI
 			f.cardDeletes++
 			return nil
 		},
+		DeleteForAgentEnvUUIDFunc: func(context.Context, string, string, string, uuid.UUID) error {
+			f.steps = append(f.steps, "delete-card")
+			return nil
+		},
+	}
+	cardRepo.WithTxFunc = func(tx *gorm.DB) repositories.A2AAgentCardRepository {
+		assert.Same(t, txSentinel, tx)
+		return cardRepo
 	}
 	proxyRepo := &repomocks.A2AProxyRepositoryMock{
 		DeleteForAgentFunc: func(context.Context, string, string, string) error {
 			f.steps = append(f.steps, "delete-proxies")
 			return nil
 		},
+		DeleteFunc: func(context.Context, string, string, string, uuid.UUID) error {
+			f.steps = append(f.steps, "delete-proxy")
+			return repositories.ErrA2AProxyNotFound
+		},
+	}
+	proxyRepo.WithTxFunc = func(tx *gorm.DB) repositories.A2AProxyRepository {
+		assert.Same(t, txSentinel, tx)
+		return proxyRepo
 	}
 	events := NewGatewayEventsService(f.hub)
 	publisher := withA2ACore(NewA2APublisher(sentinelTx, pubRepo, proxyRepo, cardRepo, artifactRepo, deploymentRepo, gatewayRepo, events,
@@ -171,8 +205,9 @@ func TestDeleteAgentAPIArtifactClearsEveryEnvironmentArtifact(t *testing.T) {
 	assert.Equal(t, map[string]string{f.gateway("gw-dev"): devID.String(), f.gateway("gw-qa"): qaID.String()}, got)
 }
 
-// Targets are read before the artifact delete cascades the deployment rows away,
-// and the gateway is told only once nothing is left to re-publish or re-serve it.
+// Each environment's A2A rows go with its artifact, in its transaction; targets are read before the artifact
+// delete cascades the deployment rows away, and the gateway is told last. The agent's rows in environments without
+// an artifact go after.
 func TestDeleteAgentAPIArtifactBroadcastsLast(t *testing.T) {
 	devID := uuid.New()
 	f := newAgentArtifactDeletionFixture(t,
@@ -181,7 +216,10 @@ func TestDeleteAgentAPIArtifactBroadcastsLast(t *testing.T) {
 
 	require.NoError(t, f.svc.deleteAgentAPIArtifact(context.Background(), "org-1", "proj", "agent", true))
 
-	assert.Equal(t, []string{"delete-queue", "delete-proxies", "delete-cards", "collect", "delete-artifact", "broadcast"}, f.steps)
+	assert.Equal(t, []string{
+		"delete-exposure", "delete-proxy", "delete-card", "collect", "delete-artifact", "broadcast",
+		"delete-queue", "delete-proxies", "delete-cards",
+	}, f.steps)
 }
 
 // A REST agent's artifacts never reached a gateway as an A2A Agent: no events.
@@ -230,6 +268,7 @@ func TestDeleteAgentAPIArtifactReportsADeleteFailureAfterTheRest(t *testing.T) {
 	assert.Equal(t, []string{devID.String()}, f.deletedUUIDs)
 	require.Len(t, f.hub.published, 1, "only the removed artifact is withdrawn; the other still exists")
 	assert.Equal(t, devID.String(), deletedAgentID(t, f.hub.published[0]))
+	assert.Zero(t, f.queueDeletes, "the agent-wide sweep waits for the retry")
 }
 
 // Card rows go with the agent, external A2A agents included, so a same-named agent starts clean.
