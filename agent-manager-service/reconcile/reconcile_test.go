@@ -998,3 +998,32 @@ func TestPrepareDeleteSendsToEveryGatewayThatWasSentTheArtifact(t *testing.T) {
 	}
 	assert.Empty(t, eventsFor(t, pending.GatewayUUID), "a gateway that was never sent the artifact isn't told")
 }
+
+// A user undeploy supersedes a deploy owed on a row that is already undeployed: nothing is rendered or sent.
+func TestUndeployCancelsADeployOwedOnAnUndeployedRow(t *testing.T) {
+	kind := newFakeKind(fakeGatewayKind, true)
+	core, worker := newWorker(t, kind)
+	p := seedPlacement(t, fakeGatewayKind)
+	deploy(t, core, p)
+	require.NoError(t, inTx(t, func(tx *gorm.DB) error { return core.Undeploy(context.Background(), tx, p) }))
+	_, err := repositories.NewDeploymentRepo(db.GetDB()).QueueRender(context.Background(), nil, p.OUID, p.ArtifactUUID,
+		nil, "redeploy", repositories.QueueScopeAny)
+	require.NoError(t, err)
+	eventsBefore := len(eventsFor(t, p.GatewayUUID))
+	rendersBefore := kind.renderCount()
+
+	require.NoError(t, inTx(t, func(tx *gorm.DB) error { return core.Undeploy(context.Background(), tx, p) }))
+	clockAt(core)
+	worker.RunOnce(context.Background())
+	claims, err := repositories.NewDeploymentRepo(db.GetDB()).ClaimDueRendersOf(context.Background(), p.OUID,
+		p.ArtifactUUID, nil, time.Now().Add(time.Hour), testLease)
+	require.NoError(t, err)
+	assert.Empty(t, claims, "nothing is owed after the undeploy")
+
+	row := statusRow(t, p)
+	assert.Equal(t, models.DeploymentStatusUndeployed, row.StatusDesired)
+	assert.Equal(t, models.DeploymentStatusUndeploying, row.Status)
+	assert.Nil(t, row.NextAttemptAt)
+	assert.Equal(t, rendersBefore, kind.renderCount())
+	assert.Len(t, eventsFor(t, p.GatewayUUID), eventsBefore)
+}

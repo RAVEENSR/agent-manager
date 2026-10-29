@@ -273,6 +273,26 @@ func TestBeginUndeploy(t *testing.T) {
 		_, err = beginUndeploy(t, p)
 		assert.ErrorIs(t, err, utils.ErrDeploymentNotActive)
 	})
+	t.Run("an undeployed row with a deploy owed only loses its queue", func(t *testing.T) {
+		p := seedPlacement(t, models.KindLLMProxy)
+		startDeploy(t, p)
+		_, err := beginUndeploy(t, p)
+		require.NoError(t, err)
+		_, err = NewDeploymentRepo(db.GetDB()).QueueRender(context.Background(), nil, p.OUID, p.ArtifactUUID, nil,
+			"redeploy", QueueScopeAny)
+		require.NoError(t, err)
+
+		sendEvent, err := beginUndeploy(t, p)
+		require.NoError(t, err)
+		assert.False(t, sendEvent)
+		row := statusRow(t, p)
+		assert.Equal(t, models.DeploymentStatusUndeploying, row.Status)
+		assert.Equal(t, models.DeploymentStatusUndeployed, row.StatusDesired)
+		assertQueueClear(t, row)
+
+		_, err = beginUndeploy(t, p)
+		assert.ErrorIs(t, err, utils.ErrDeploymentNotActive, "with no queue left there is nothing to undeploy")
+	})
 	t.Run("no row is not active", func(t *testing.T) {
 		_, err := beginUndeploy(t, seedPlacement(t, models.KindLLMProxy))
 		assert.ErrorIs(t, err, utils.ErrDeploymentNotActive)

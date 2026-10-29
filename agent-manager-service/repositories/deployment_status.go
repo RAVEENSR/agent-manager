@@ -90,7 +90,9 @@ func (r *DeploymentRepo) upsertStatus(ctx context.Context, tx *gorm.DB, p models
 }
 
 // BeginUndeploy starts an undeploy transition. A row never sent to the gateway (PENDING) is undeployed at once and
-// needs no event; any other row heading for DEPLOYED goes UNDEPLOYING and the caller sends the undeploy event.
+// needs no event; any other row heading for DEPLOYED goes UNDEPLOYING and the caller sends the undeploy event. A row
+// already heading for UNDEPLOYED with a deploy owed only loses its queue, with no event: the undeploy supersedes the
+// owed deploy.
 func (r *DeploymentRepo) BeginUndeploy(ctx context.Context, tx *gorm.DB, p models.Placement) (bool, error) {
 	var statuses []models.DeploymentStatus
 	err := r.on(ctx, tx).Raw(`
@@ -107,10 +109,20 @@ func (r *DeploymentRepo) BeginUndeploy(ctx context.Context, tx *gorm.DB, p model
 	if err != nil {
 		return false, fmt.Errorf("failed to begin undeploy: %w", err)
 	}
-	if len(statuses) == 0 {
+	if len(statuses) > 0 {
+		return statuses[0] == models.DeploymentStatusUndeploying, nil
+	}
+	cancelled := r.on(ctx, tx).Exec(`
+		UPDATE deployment_status SET next_attempt_at = NULL, attempt_count = 0, render_reason = '', updated_at = NOW()
+		WHERE artifact_uuid = ? AND ou_id = ? AND gateway_uuid = ? AND status_desired = ? AND next_attempt_at IS NOT NULL`,
+		p.ArtifactUUID, p.OUID, p.GatewayUUID, models.DeploymentStatusUndeployed)
+	if cancelled.Error != nil {
+		return false, fmt.Errorf("failed to cancel the owed deploy: %w", cancelled.Error)
+	}
+	if cancelled.RowsAffected == 0 {
 		return false, utils.ErrDeploymentNotActive
 	}
-	return statuses[0] == models.DeploymentStatusUndeploying, nil
+	return false, nil
 }
 
 // ackedRow is a status row an ack changed, joined to its artifact.

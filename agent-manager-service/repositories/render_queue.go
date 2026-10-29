@@ -26,7 +26,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
-	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
 
 // ErrRenderSuperseded is a render write-back whose claim token the row no longer holds: a newer request, a restore
@@ -232,22 +231,12 @@ func (r *DeploymentRepo) RecordRenderOutcome(ctx context.Context, claim models.C
 }
 
 // AbandonRender undeploys a claimed row whose per-environment record is gone, as BeginUndeploy does, while the row
-// still holds the claim's token. A row already heading for UNDEPLOYED only loses its queue.
+// still holds the claim's token.
 func (r *DeploymentRepo) AbandonRender(ctx context.Context, tx *gorm.DB, claim models.ClaimedRender) (bool, error) {
 	if err := r.lockClaim(ctx, tx, claim); err != nil {
 		return false, err
 	}
-	sendEvent, err := r.BeginUndeploy(ctx, tx, claim.Placement)
-	if !errors.Is(err, utils.ErrDeploymentNotActive) {
-		return sendEvent, err
-	}
-	err = r.on(ctx, tx).Model(&models.DeploymentStatusRecord{}).
-		Where(statusKey, claim.ArtifactUUID, claim.OUID, claim.GatewayUUID).
-		Updates(map[string]any{"next_attempt_at": nil, "attempt_count": 0, "render_reason": "", "updated_at": gorm.Expr("NOW()")}).Error
-	if err != nil {
-		return false, fmt.Errorf("failed to clear the render queue: %w", err)
-	}
-	return false, nil
+	return r.BeginUndeploy(ctx, tx, claim.Placement)
 }
 
 // DriftKey is a placement's position in ListDeployedForDrift's order: pass the last one listed as afterKey.
