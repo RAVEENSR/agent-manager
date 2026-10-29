@@ -17,9 +17,11 @@
 package reconcile
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -73,4 +75,25 @@ func TestAfterLiveSkipsKindsWithNoHook(t *testing.T) {
 	err := core.AfterLive()(context.Background(), nil, models.Placement{ArtifactRef: models.ArtifactRef{Kind: models.KindMCPProxy}}, uuid.New())
 
 	assert.NoError(t, err)
+}
+
+func TestMergeDeleteEventsOrdersByGateway(t *testing.T) {
+	gateways := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+	slices.SortFunc(gateways, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+	g1, g2, g3 := gateways[0], gateways[1], gateways[2]
+	e := func(id string) eventhub.Event { return eventhub.Event{EventID: id} }
+	a := DeleteEvents{events: []addressedEvent{{g1, e("e1")}, {g3, e("e2")}}}
+	b := DeleteEvents{events: []addressedEvent{{g1, e("e3")}, {g2, e("e4")}, {g3, e("e5")}}}
+
+	merged := MergeDeleteEvents(a, b)
+
+	var gotGateways []uuid.UUID
+	var gotEvents []string
+	for _, ev := range merged.events {
+		gotGateways = append(gotGateways, ev.gateway)
+		gotEvents = append(gotEvents, ev.event.EventID)
+	}
+	assert.Equal(t, []uuid.UUID{g1, g1, g2, g3, g3}, gotGateways)
+	assert.Equal(t, []string{"e1", "e3", "e4", "e2", "e5"}, gotEvents)
+	assert.NoError(t, MergeDeleteEvents().Publish(context.Background(), nil))
 }

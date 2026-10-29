@@ -3457,12 +3457,7 @@ func (s *agentConfigurationService) deleteMCPMappingArtifacts(ctx context.Contex
 			return err
 		}
 	}
-	for _, artifactEvents := range events {
-		if err := artifactEvents.Publish(ctx, tx); err != nil {
-			return err
-		}
-	}
-	return nil
+	return reconcile.MergeDeleteEvents(events...).Publish(ctx, tx)
 }
 
 func mcpMappingArtifacts(mappings []models.EnvAgentMCPMapping) []uuid.UUID {

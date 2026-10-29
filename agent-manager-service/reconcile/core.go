@@ -17,10 +17,12 @@
 package reconcile
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -283,7 +285,7 @@ type addressedEvent struct {
 }
 
 // Publish writes the delete events in tx, the deleting transaction, after the delete. Gateways are locked in
-// gateway order.
+// gateway order only within this one DeleteEvents, so a caller publishing several merges them first.
 func (d DeleteEvents) Publish(ctx context.Context, tx *gorm.DB) error {
 	for _, e := range d.events {
 		if err := d.core.publish(ctx, tx, e.gateway, e.event); err != nil {
@@ -291,6 +293,22 @@ func (d DeleteEvents) Publish(ctx context.Context, tx *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+// MergeDeleteEvents joins the events of several artifacts into one list in gateway order, the byte order of the
+// UUIDs that Postgres sorts uuid by, so that publishing it locks gateways in one global order.
+func MergeDeleteEvents(all ...DeleteEvents) DeleteEvents {
+	var merged DeleteEvents
+	for _, d := range all {
+		if merged.core == nil {
+			merged.core = d.core
+		}
+		merged.events = append(merged.events, d.events...)
+	}
+	slices.SortStableFunc(merged.events, func(a, b addressedEvent) int {
+		return bytes.Compare(a.gateway[:], b.gateway[:])
+	})
+	return merged
 }
 
 // PrepareDelete builds the artifact's delete events, before its row and status rows cascade away, for every
