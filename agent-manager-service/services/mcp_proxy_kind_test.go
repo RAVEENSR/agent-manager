@@ -131,8 +131,10 @@ func TestMCPScopeChangeReRendersInline(t *testing.T) {
 		MCPProxyUUID: f.proxy.UUID, Action: "read", Tools: []string{"get_forecast"},
 	}).Error)
 	enabled := true
-	f.proxy.Endpoints[0].Configuration.Security = &models.SecurityConfig{Enabled: &enabled,
-		Identity: &models.IdentitySecurity{Enabled: &enabled}}
+	f.proxy.Endpoints[0].Configuration.Security = &models.SecurityConfig{
+		Enabled:  &enabled,
+		Identity: &models.IdentitySecurity{Enabled: &enabled},
+	}
 	require.NoError(t, db.GetDB().Model(&models.MCPProxyEndpoint{}).Where("uuid = ?", f.proxy.Endpoints[0].UUID).
 		Update("configuration", f.proxy.Endpoints[0].Configuration).Error)
 

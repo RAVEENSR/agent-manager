@@ -109,7 +109,8 @@ func newPublisherMocks(t *testing.T) *publisherMocks {
 		},
 		PlacedGatewaysFunc: func(context.Context, string, uuid.UUID) ([]string, error) { return []string{"gw-1"}, nil },
 		QueueRenderFunc: func(context.Context, *gorm.DB, string, uuid.UUID, []uuid.UUID, string,
-			repositories.QueueScope) (int64, error) {
+			repositories.QueueScope,
+		) (int64, error) {
 			return 0, nil
 		},
 	}

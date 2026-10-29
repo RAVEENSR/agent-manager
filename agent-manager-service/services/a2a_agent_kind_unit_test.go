@@ -118,8 +118,10 @@ func goldenA2AKind(t *testing.T, proxy *models.A2AProxy, fetcher A2ACardFetcher)
 }
 
 func goldenA2AArtifact() models.ArtifactRef {
-	return models.ArtifactRef{OUID: "ou-golden", ArtifactUUID: uuid.New(), Kind: models.KindAgent,
-		Handle: agentEnvAPIArtifactHandle("checkout", "trip-planner", goldenA2AEnvUUID.String())}
+	return models.ArtifactRef{
+		OUID: "ou-golden", ArtifactUUID: uuid.New(), Kind: models.KindAgent,
+		Handle: agentEnvAPIArtifactHandle("checkout", "trip-planner", goldenA2AEnvUUID.String()),
+	}
 }
 
 func TestA2AAgentKindRendersTodaysYAMLForAPlatformAgent(t *testing.T) {

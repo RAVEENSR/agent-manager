@@ -240,8 +240,10 @@ func TestMCPSaveLocksItsStatusRowsBeforeTheFirstEvent(t *testing.T) {
 			Environments:  []models.MCPProxyEndpointEnvironment{{EnvironmentUUID: env, ArtifactUUID: uuid.New()}},
 		}
 	}
-	proxy := &models.MCPProxy{UUID: uuid.New(), Handle: "proxy-handle",
-		Endpoints: []models.MCPProxyEndpoint{binding("a"), binding("b")}}
+	proxy := &models.MCPProxy{
+		UUID: uuid.New(), Handle: "proxy-handle",
+		Endpoints: []models.MCPProxyEndpoint{binding("a"), binding("b")},
+	}
 
 	var log []string
 	var lockedArtifacts []uuid.UUID

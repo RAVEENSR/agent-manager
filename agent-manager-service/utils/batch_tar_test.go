@@ -20,6 +20,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"io"
 	"path/filepath"
 	"testing"
@@ -35,13 +36,13 @@ func extractLikeTheGateway(t *testing.T, archive []byte) (map[string][]byte, []s
 	t.Helper()
 	gz, err := gzip.NewReader(bytes.NewReader(archive))
 	require.NoError(t, err)
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 	tr := tar.NewReader(gz)
 	deployments := map[string][]byte{}
 	var names []string
 	for {
 		header, err := tr.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err)

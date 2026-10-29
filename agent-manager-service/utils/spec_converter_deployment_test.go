@@ -31,8 +31,10 @@ import (
 func TestConvertModelToSpecLLMDeploymentResponse(t *testing.T) {
 	due := time.Now()
 	withRow := func(row models.DeploymentStatusRecord) *models.Deployment {
-		d := &models.Deployment{DeploymentID: uuid.New(), Name: "p-1a2b3c4d", ArtifactUUID: uuid.New(),
-			GatewayUUID: uuid.New(), CreatedAt: due}
+		d := &models.Deployment{
+			DeploymentID: uuid.New(), Name: "p-1a2b3c4d", ArtifactUUID: uuid.New(),
+			GatewayUUID: uuid.New(), CreatedAt: due,
+		}
 		d.SetStatusRow(&row)
 		return d
 	}

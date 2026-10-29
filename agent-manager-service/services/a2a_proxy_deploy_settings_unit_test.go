@@ -84,7 +84,8 @@ func deploySettingsMocks(t *testing.T) *publisherMocks {
 	}
 	m.proxies.LockAgentEnvFunc = func(context.Context, string, string, string, uuid.UUID) error { return nil }
 	m.deployments.QueueRenderFunc = func(context.Context, *gorm.DB, string, uuid.UUID, []uuid.UUID, string,
-		repositories.QueueScope) (int64, error) {
+		repositories.QueueScope,
+	) (int64, error) {
 		return 0, nil
 	}
 	return m
@@ -127,7 +128,8 @@ func TestUpdateAgentDeploySettingsSavesWhenTheReRenderCannotBeMarked(t *testing.
 		return &models.A2AProxy{}, nil
 	}
 	m.deployments.QueueRenderFunc = func(context.Context, *gorm.DB, string, uuid.UUID, []uuid.UUID, string,
-		repositories.QueueScope) (int64, error) {
+		repositories.QueueScope,
+	) (int64, error) {
 		return 0, errors.New("database is down")
 	}
 	configs, txConfigs := savedConfigs(t)

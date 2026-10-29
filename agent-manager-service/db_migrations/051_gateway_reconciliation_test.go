@@ -171,7 +171,8 @@ func seedAt050(t *testing.T, g *gorm.DB) seed050 {
 		VALUES (?, ?, 'gateway', ?)`, s.deployedArtifact, s.gateway, seedOU)
 
 	publication := func(id uuid.UUID, agent, envName string, envUUID, artifactID uuid.UUID, agentUUID *uuid.UUID,
-		source, status, updatedAt string) {
+		source, status, updatedAt string,
+	) {
 		exec(t, g, `INSERT INTO a2a_publications
 			(id, ou_id, project_name, agent_name, environment_name, environment_uuid, artifact_uuid, agent_uuid,
 			 source, status, attempt_count, last_error, published_upstream_url, created_at, updated_at)

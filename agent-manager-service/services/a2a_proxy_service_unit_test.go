@@ -169,7 +169,8 @@ func (h *proxyHarness) acceptsWrites() {
 	}
 	h.deployments.BeginUndeployFunc = func(context.Context, *gorm.DB, models.Placement) (bool, error) { return true, nil }
 	h.deployments.QueueRenderFunc = func(context.Context, *gorm.DB, string, uuid.UUID, []uuid.UUID, string,
-		repositories.QueueScope) (int64, error) {
+		repositories.QueueScope,
+	) (int64, error) {
 		return 0, nil
 	}
 }
@@ -484,8 +485,10 @@ func TestGetA2AProxyReportsItsDeploymentStatus(t *testing.T) {
 		want models.UserStatus
 	}{
 		"waiting for its first render": {
-			models.DeploymentStatusRecord{Status: models.DeploymentStatusPending, StatusDesired: models.DeploymentStatusDeployed,
-				NextAttemptAt: &due, RenderReason: "the origin's card can't be fetched"},
+			models.DeploymentStatusRecord{
+				Status: models.DeploymentStatusPending, StatusDesired: models.DeploymentStatusDeployed,
+				NextAttemptAt: &due, RenderReason: "the origin's card can't be fetched",
+			},
 			models.UserStatus{Status: models.DeploymentStatusDeploying, Reason: "the origin's card can't be fetched"},
 		},
 		"deploying": {
@@ -497,8 +500,10 @@ func TestGetA2AProxyReportsItsDeploymentStatus(t *testing.T) {
 			models.UserStatus{Status: models.DeploymentStatusDeployed},
 		},
 		"failed": {
-			models.DeploymentStatusRecord{Status: models.DeploymentStatusFailed, StatusDesired: models.DeploymentStatusDeployed,
-				StatusReason: "DEPLOYMENT_TIMEOUT"},
+			models.DeploymentStatusRecord{
+				Status: models.DeploymentStatusFailed, StatusDesired: models.DeploymentStatusDeployed,
+				StatusReason: "DEPLOYMENT_TIMEOUT",
+			},
 			models.UserStatus{Status: models.DeploymentStatusFailed, Reason: "DEPLOYMENT_TIMEOUT"},
 		},
 		"undeploying": {

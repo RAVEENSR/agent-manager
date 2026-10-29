@@ -45,8 +45,10 @@ func goldenProxy() *models.LLMProxy {
 			Provider:     goldenProvider().UUID.String(),
 			UpstreamAuth: &models.UpstreamAuth{Type: &authType, Header: &authHeader, SecretRef: &ref},
 			Resilience:   &models.Resilience{Timeout: &timeout},
-			Security: &models.SecurityConfig{Enabled: &enabled,
-				APIKey: &models.APIKeySecurity{Enabled: &enabled, Key: "X-Agent-Key", In: "Header"}},
+			Security: &models.SecurityConfig{
+				Enabled: &enabled,
+				APIKey:  &models.APIKeySecurity{Enabled: &enabled, Key: "X-Agent-Key", In: "Header"},
+			},
 			Policies: []models.LLMPolicy{{Name: "content-length-guardrail", Version: "v0.3.1", Paths: []models.LLMPolicyPath{
 				{Path: "/*", Methods: []string{"*"}, Params: map[string]any{"maxRequestBytes": 4096}},
 			}}},

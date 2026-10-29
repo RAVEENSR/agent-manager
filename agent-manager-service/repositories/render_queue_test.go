@@ -494,8 +494,10 @@ func TestListDeployedForDrift(t *testing.T) {
 		exposure := newTestExposure(t, ouID, "agent-"+uuid.NewString()[:8], uuid.New())
 		require.NoError(t, NewPlatformAgentExposureRepository(db.GetDB()).Upsert(context.Background(), exposure))
 		return models.Placement{
-			ArtifactRef: models.ArtifactRef{OUID: ouID, ArtifactUUID: exposure.ArtifactUUID, Kind: models.KindAgent,
-				Handle: "checkout/" + exposure.AgentName + "/" + exposure.EnvironmentUUID.String()},
+			ArtifactRef: models.ArtifactRef{
+				OUID: ouID, ArtifactUUID: exposure.ArtifactUUID, Kind: models.KindAgent,
+				Handle: "checkout/" + exposure.AgentName + "/" + exposure.EnvironmentUUID.String(),
+			},
 			GatewayUUID: gateway,
 		}
 	}

@@ -36,6 +36,7 @@ func (stubKind) Name() string { return "Mcp" }
 func (stubKind) Render(context.Context, models.ArtifactRef) (Rendered, error) {
 	return Rendered{}, nil
 }
+
 func (stubKind) GatewayArtifactID(ref models.ArtifactRef) string { return ref.ArtifactUUID.String() }
 func (stubKind) DeployEvent(EventRef) eventhub.Event             { return eventhub.Event{} }
 func (stubKind) UndeployEvent(EventRef) eventhub.Event           { return eventhub.Event{} }

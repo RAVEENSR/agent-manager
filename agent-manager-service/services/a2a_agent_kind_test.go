@@ -149,8 +149,10 @@ func (f *a2aFixture) render(t *testing.T, artifact models.ArtifactRef) {
 func (f *a2aFixture) ack(t *testing.T, artifact models.ArtifactRef, action string) {
 	t.Helper()
 	row := f.row(t, artifact)
-	ack := models.DeploymentAck{ArtifactID: artifact.ArtifactUUID.String(), Action: action, Status: "success",
-		PerformedAt: row.PerformedAt}
+	ack := models.DeploymentAck{
+		ArtifactID: artifact.ArtifactUUID.String(), Action: action, Status: "success",
+		PerformedAt: row.PerformedAt,
+	}
 	if action == "deploy" {
 		ack.DeploymentID = row.DeploymentID.String()
 	}
@@ -423,8 +425,10 @@ func TestAPlatformAgentWithoutTheA2ASubtypeGetsNoExposure(t *testing.T) {
 		db: db.GetDB(), agentConfigRepo: repositories.NewAgentConfigRepo(db.GetDB()),
 		artifactRepo: repositories.NewArtifactRepo(db.GetDB()), a2aPublisher: f.publisher, logger: testLogger(),
 	}
-	chat := &models.AgentResponse{UUID: uuid.NewString(), Name: key.AgentName, Provisioning: models.Provisioning{Type: "internal"},
-		Type: models.AgentType{Type: "agent-api", SubType: "chat-api"}}
+	chat := &models.AgentResponse{
+		UUID: uuid.NewString(), Name: key.AgentName, Provisioning: models.Provisioning{Type: "internal"},
+		Type: models.AgentType{Type: "agent-api", SubType: "chat-api"},
+	}
 	cfg := &models.AgentConfig{OUID: key.OUID, ProjectName: key.ProjectName, AgentName: key.AgentName, EnvironmentName: "dev"}
 
 	require.NoError(t, svc.recordAgentEnvDeploy(context.Background(), chat, cfg, f.env.String(), func(*gorm.DB) (*models.Artifact, error) {

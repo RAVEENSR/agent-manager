@@ -70,8 +70,10 @@ func goldenProvider() *models.LLMProvider {
 			}},
 			Resilience:    &models.Resilience{Timeout: &timeout},
 			AccessControl: &models.LLMAccessControl{Mode: "allow_all"},
-			Security: &models.SecurityConfig{Enabled: &enabled,
-				APIKey: &models.APIKeySecurity{Enabled: &enabled, Key: "X-API-Key", In: "header"}},
+			Security: &models.SecurityConfig{
+				Enabled: &enabled,
+				APIKey:  &models.APIKeySecurity{Enabled: &enabled, Key: "X-API-Key", In: "header"},
+			},
 			RateLimiting: &models.LLMRateLimitingConfig{ProviderLevel: &models.RateLimitingScopeConfig{
 				Global: &models.RateLimitingLimitConfig{
 					Token:   &models.TokenRateLimit{Enabled: true, Count: 1000, Reset: models.RateLimitResetWindow{Duration: 1, Unit: "minute"}},

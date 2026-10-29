@@ -51,8 +51,10 @@ func (heldPlacementKind) Targets(context.Context, Record) (uuid.UUID, bool, erro
 // A requested placement runs on the worker, and Stop waits for one in progress.
 func TestStopWaitsForARequestedPlacement(t *testing.T) {
 	kind := heldPlacementKind{entered: make(chan uuid.UUID, 1), release: make(chan struct{})}
-	core := NewCore(nil, nil, nil, Kinds{kind}, Config{RenderInterval: time.Hour, PlaceInterval: time.Hour,
-		DriftInterval: time.Hour}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	core := NewCore(nil, nil, nil, Kinds{kind}, Config{
+		RenderInterval: time.Hour, PlaceInterval: time.Hour,
+		DriftInterval: time.Hour,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	worker := NewWorker(core, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	require.NoError(t, worker.Start(context.Background()))
 	env := uuid.New()

@@ -46,11 +46,15 @@ func goldenMCPProxy() (*models.MCPProxy, []models.MCPProxyScope) {
 			UUID:   uuid.MustParse("9c4f5d85-3a01-4f4d-8d61-3b8e9cadbecf"),
 			Handle: "primary",
 			Configuration: models.MCPEndpointConfig{
-				Upstream: &models.UpstreamEndpoint{URL: "https://weather.example.com/mcp",
-					Auth: &models.UpstreamAuth{Type: &authType, Header: &authHeader, SecretRef: &ref}},
+				Upstream: &models.UpstreamEndpoint{
+					URL:  "https://weather.example.com/mcp",
+					Auth: &models.UpstreamAuth{Type: &authType, Header: &authHeader, SecretRef: &ref},
+				},
 				Policies: []models.MCPPolicy{{Name: "mcp-rate-limit", Version: "v1.0.0", Params: map[string]any{"limit": 10}}},
-				Security: &models.SecurityConfig{Enabled: &enabled,
-					APIKey: &models.APIKeySecurity{Enabled: &enabled, Key: "X-API-Key", In: "header"}},
+				Security: &models.SecurityConfig{
+					Enabled: &enabled,
+					APIKey:  &models.APIKeySecurity{Enabled: &enabled, Key: "X-API-Key", In: "header"},
+				},
 			},
 			Environments: []models.MCPProxyEndpointEnvironment{{
 				EnvironmentUUID: uuid.MustParse("ad506e96-4b12-4a5e-9e72-4c9fadbecfd0"),

@@ -404,7 +404,7 @@ func TestDeleteRefusesThePlacedOrHeldDeployment(t *testing.T) {
 		}
 		f.deployment.SetStatusRow(row)
 	}
-	deleteBoth := func(t *testing.T, shape rowShape) (providerErr, proxyErr error, deletes int) {
+	deleteBoth := func(t *testing.T, shape rowShape) (deletes int, providerErr, proxyErr error) {
 		provider := &models.LLMProvider{UUID: uuid.New()}
 		f := newStatusPathFixture(t, provider.UUID)
 		withRow(f, shape)
@@ -413,12 +413,12 @@ func TestDeleteRefusesThePlacedOrHeldDeployment(t *testing.T) {
 			f.deployment.DeploymentID.String(), "ou-1")
 		proxyErr = f.proxyService(&models.LLMProxy{UUID: provider.UUID}).DeleteLLMProxyDeployment("proxy-handle",
 			f.deployment.DeploymentID.String(), "ou-1")
-		return providerErr, proxyErr, len(f.repo.DeleteCalls())
+		return len(f.repo.DeleteCalls()), providerErr, proxyErr
 	}
 
 	for name, shape := range placed {
 		t.Run(name, func(t *testing.T) {
-			providerErr, proxyErr, deletes := deleteBoth(t, shape)
+			deletes, providerErr, proxyErr := deleteBoth(t, shape)
 			assert.ErrorIs(t, providerErr, utils.ErrDeploymentIsDeployed)
 			assert.ErrorIs(t, proxyErr, utils.ErrDeploymentIsDeployed)
 			assert.Zero(t, deletes)
@@ -426,7 +426,7 @@ func TestDeleteRefusesThePlacedOrHeldDeployment(t *testing.T) {
 	}
 	for name, shape := range notPlaced {
 		t.Run(name, func(t *testing.T) {
-			providerErr, proxyErr, deletes := deleteBoth(t, shape)
+			deletes, providerErr, proxyErr := deleteBoth(t, shape)
 			assert.NoError(t, providerErr)
 			assert.NoError(t, proxyErr)
 			assert.Equal(t, 2, deletes)
