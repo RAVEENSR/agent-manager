@@ -18,6 +18,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -116,6 +117,27 @@ func TestUpdateAgentDeploySettingsDecidesAProxiedExternalAgentUnderTheLock(t *te
 		"the pre-check reads unlocked; the save re-decides under the lock")
 	require.Len(t, m.deployments.QueueRenderCalls(), 1, "the proxied agent's placed rows re-render after the save")
 	assert.Equal(t, repositories.QueueScopePlaced, m.deployments.QueueRenderCalls()[0].Scope)
+}
+
+// The save has committed when a proxied agent's re-render is marked: a failure there is logged, not reported.
+func TestUpdateAgentDeploySettingsSavesWhenTheReRenderCannotBeMarked(t *testing.T) {
+	m := deploySettingsMocks(t)
+	m.proxies.GetByEnvUUIDFunc = func(context.Context, string, string, string, uuid.UUID) (*models.A2AProxy, error) {
+		return &models.A2AProxy{}, nil
+	}
+	m.deployments.QueueRenderFunc = func(context.Context, *gorm.DB, string, uuid.UUID, []uuid.UUID, string,
+		repositories.QueueScope) (int64, error) {
+		return 0, errors.New("database is down")
+	}
+	configs, txConfigs := savedConfigs(t)
+	svc := deploySettingsService(configs, m.publisher())
+
+	err := svc.UpdateAgentDeploySettings(tierGrantedCtx(t), "org-1", "checkout", "weather",
+		&spec.UpdateAgentDeploySettingsRequest{EnvironmentName: "dev"})
+
+	require.NoError(t, err)
+	assert.Len(t, txConfigs.UpsertCalls(), 1)
+	assert.Len(t, m.deployments.QueueRenderCalls(), 1)
 }
 
 // A proxied external agent takes A2A CORS whatever subtype it was created with.

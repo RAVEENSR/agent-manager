@@ -137,7 +137,8 @@ func (p *A2APublisher) ShouldPublish(
 // SaveAndRepublish runs save in one transaction with the redeploy the agent's environment is owed afterwards, if
 // any. A platform agent's exposure is written and its render queued in that transaction. An external agent is
 // decided under its environment's transition lock, so a concurrent switch to direct cannot be missed; while proxied,
-// its placed rows are marked stale once the save commits.
+// its placed rows are marked stale once the save commits. The save stands if that fails: the next save or proxy
+// refresh re-renders them.
 func (p *A2APublisher) SaveAndRepublish(
 	ctx context.Context, agent *models.AgentResponse, key a2aPublicationKey, artifact models.ArtifactRef, save func(tx *gorm.DB) error,
 ) error {
@@ -164,10 +165,14 @@ func (p *A2APublisher) SaveAndRepublish(
 	if err != nil || !publish {
 		return err
 	}
-	if external {
-		return p.MarkStale(ctx, artifact, "the agent's deploy settings changed")
+	if !external {
+		p.Nudge()
+		return nil
 	}
-	p.Nudge()
+	if err := p.MarkStale(ctx, artifact, "the agent's deploy settings changed"); err != nil {
+		p.logger.Warn("Saved the agent's deploy settings but couldn't re-render its gateway deployments",
+			"artifactUUID", artifact.ArtifactUUID, "error", err)
+	}
 	return nil
 }
 
