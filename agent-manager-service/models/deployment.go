@@ -115,7 +115,8 @@ type DeploymentStatusRecord struct {
 	ArtifactUUID uuid.UUID `gorm:"column:artifact_uuid;primaryKey" json:"artifactId"`
 	OUID         string    `gorm:"column:ou_id;primaryKey" json:"organizationId"`
 	GatewayUUID  uuid.UUID `gorm:"column:gateway_uuid;primaryKey" json:"gatewayId"`
-	// DeploymentID is nil only while nothing has been sent: PENDING, or UNDEPLOYED reached from PENDING.
+	// DeploymentID is nil while nothing has been sent (PENDING, or UNDEPLOYED reached from PENDING), and on an
+	// UNDEPLOYED row whose deployment was deleted.
 	DeploymentID *uuid.UUID       `gorm:"column:deployment_id" json:"deploymentId"`
 	Status       DeploymentStatus `gorm:"column:status" json:"status"`
 	// StatusDesired is DEPLOYED or UNDEPLOYED: where the current transition is heading.

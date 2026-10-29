@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
@@ -168,21 +169,41 @@ func (r *DeploymentRepo) GetWithContent(deploymentID, artifactUUID, orgUUID stri
 	return &deployment, nil
 }
 
-// Delete deletes a deployment record
+// Delete deletes a deployment that isn't current (utils.ErrDeploymentIsDeployed otherwise). An UNDEPLOYED status
+// row pointing at it is detached and kept: cascading it away would let the placement pass re-place an artifact the
+// user undeployed.
 func (r *DeploymentRepo) Delete(deploymentID, artifactUUID, orgUUID string) error {
-	result := r.db.Where("deployment_id = ? AND artifact_uuid = ? AND ou_id = ?",
-		deploymentID, artifactUUID, orgUUID).
-		Delete(&models.Deployment{})
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var rows []models.DeploymentStatusRecord
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("deployment_id = ? AND artifact_uuid = ? AND ou_id = ?", deploymentID, artifactUUID, orgUUID).
+			Find(&rows).Error; err != nil {
+			return err
+		}
+		for i := range rows {
+			var pointedAt models.Deployment
+			pointedAt.SetStatusRow(&rows[i])
+			if pointedAt.Current() {
+				return utils.ErrDeploymentIsDeployed
+			}
+		}
+		if err := tx.Model(&models.DeploymentStatusRecord{}).
+			Where("deployment_id = ? AND artifact_uuid = ? AND ou_id = ? AND status = ?",
+				deploymentID, artifactUUID, orgUUID, models.DeploymentStatusUndeployed).
+			UpdateColumn("deployment_id", nil).Error; err != nil {
+			return err
+		}
 
-	if result.Error != nil {
-		return result.Error
-	}
-
-	if result.RowsAffected == 0 {
-		return errors.New("deployment not found")
-	}
-
-	return nil
+		result := tx.Where("deployment_id = ? AND artifact_uuid = ? AND ou_id = ?", deploymentID, artifactUUID, orgUUID).
+			Delete(&models.Deployment{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return errors.New("deployment not found")
+		}
+		return nil
+	})
 }
 
 // statusRowColumns are the status row's columns a Deployment derives its UserStatus from, joined as s.

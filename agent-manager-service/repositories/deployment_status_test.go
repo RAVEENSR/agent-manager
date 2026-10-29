@@ -597,3 +597,24 @@ func TestGetStatusRecordWithNoRow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, row)
 }
+
+// Delete refuses the deployment a placed or held row points at, under the row's lock, and detaches an UNDEPLOYED
+// row instead of cascading it away.
+func TestDeleteKeepsTheStatusRow(t *testing.T) {
+	repo := NewDeploymentRepo(db.GetDB())
+	p := seedPlacement(t, models.KindLLMProvider)
+	deployment := startDeploy(t, p)
+	id, artifact := deployment.DeploymentID.String(), p.ArtifactUUID.String()
+
+	assert.ErrorIs(t, repo.Delete(id, artifact, p.OUID), utils.ErrDeploymentIsDeployed)
+	assert.Equal(t, deployment.DeploymentID, *statusRow(t, p).DeploymentID)
+
+	_, err := beginUndeploy(t, p)
+	require.NoError(t, err)
+	applyAck(t, p, undeployAck(artifact, models.DeploymentAckStatusSuccess), nil)
+	require.NoError(t, repo.Delete(id, artifact, p.OUID))
+
+	row := statusRow(t, p)
+	assert.Equal(t, models.DeploymentStatusUndeployed, row.Status)
+	assert.Nil(t, row.DeploymentID)
+}

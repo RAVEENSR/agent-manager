@@ -224,6 +224,39 @@ func TestPlacementPassPlacesAnAgentConfigProxy(t *testing.T) {
 	assert.Equal(t, models.DeploymentStatusDeploying, row.Status)
 }
 
+// Deleting the deployment an undeployed agent-config proxy's row points at keeps the row, detached from it, so the
+// placement pass doesn't re-place the proxy the user undeployed.
+func TestDeletingAnUndeployedAgentConfigProxyDeploymentKeepsItUndeployed(t *testing.T) {
+	f := newProxyFixture(t)
+	proxy := f.newProxy(t)
+	env := uuid.New()
+	gateway := f.mapGateway(t, env)
+	f.mapToAgent(t, proxy, env)
+	ctx := context.Background()
+	deployed, err := f.proxies.DeployForEnvironment(ctx, proxy, f.sync.ouID, env, gateway)
+	require.NoError(t, err)
+	_, err = f.proxies.UndeployLLMProxyDeployment(ctx, proxy.Handle, deployed.DeploymentID.String(), gateway.String(),
+		f.sync.ouID)
+	require.NoError(t, err)
+	applied, err := f.sync.repo.ApplyAck(ctx, gateway.String(), models.DeploymentAck{
+		ArtifactID: proxy.Handle, Action: models.DeploymentAckActionUndeploy, Status: models.DeploymentAckStatusSuccess,
+	}, nil)
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	require.NoError(t, f.proxies.DeleteLLMProxyDeployment(proxy.Handle, deployed.DeploymentID.String(), f.sync.ouID))
+	published := len(f.hub.published)
+	require.NoError(t, f.worker.PlaceAll(ctx))
+
+	row := f.row(t, proxy, gateway)
+	require.NotNil(t, row, "the undeployed row is kept")
+	assert.Equal(t, models.DeploymentStatusUndeployed, row.Status)
+	assert.Equal(t, models.DeploymentStatusUndeployed, row.StatusDesired)
+	assert.Nil(t, row.DeploymentID)
+	assert.Nil(t, row.NextAttemptAt)
+	assert.Len(t, f.hub.published, published, "nothing is re-placed")
+}
+
 // An agent-config save after the proxy was undeployed from its environment's gateway through the public route has
 // nothing placed to refresh there: it saves.
 func TestAgentConfigProxyUpdateAfterAPublicUndeploySaves(t *testing.T) {
