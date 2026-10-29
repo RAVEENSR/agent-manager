@@ -2132,11 +2132,9 @@ func (s *agentConfigurationService) processEnvProxyUpdate(
 		}, fmt.Errorf("failed to get the current deployment for environment %s: %w", envName, err)
 	}
 
+	// A nil deployment means nothing is placed on the gateway to refresh, e.g. after a public-route undeploy.
 	newDeployment, err := s.llmProxyDeploymentService.Redeploy(ctx, updatedProxy, ouID, gateway.UUID,
 		"the agent's model configuration changed")
-	if err == nil && newDeployment == nil {
-		err = utils.ErrDeploymentNotActive
-	}
 	if err != nil {
 		return rollbackResource{
 			proxyHandle:      proxyHandle,
@@ -2145,10 +2143,14 @@ func (s *agentConfigurationService) processEnvProxyUpdate(
 		}, fmt.Errorf("failed to redeploy proxy for environment %s: %w", envName, err)
 	}
 
+	var newDeploymentID uuid.UUID
+	if newDeployment != nil {
+		newDeploymentID = newDeployment.DeploymentID
+	}
 	s.logger.Info("Proxy configuration updated and redeployed",
 		"environment", envName,
 		"proxyHandle", updatedProxy.Handle,
-		"newDeploymentID", newDeployment.DeploymentID)
+		"newDeploymentID", newDeploymentID)
 
 	// Persist updated PolicyConfiguration to DB.
 	existingMapping.PolicyConfiguration = models.LLMPolicies(envMapping.Configuration.Policies)
@@ -2167,7 +2169,7 @@ func (s *agentConfigurationService) processEnvProxyUpdate(
 		}
 		return rollbackResource{
 			proxyHandle:         proxyHandle,
-			deploymentID:        newDeployment.DeploymentID,
+			deploymentID:        newDeploymentID,
 			gatewayID:           gateway.UUID.String(),
 			priorProxyConfig:    existingMapping.LLMProxy,
 			providerUUID:        providerUUID,
@@ -2175,7 +2177,7 @@ func (s *agentConfigurationService) processEnvProxyUpdate(
 		}, fmt.Errorf("failed to update policy configuration for environment %s: %w", envName, err)
 	}
 
-	if existingDeployment != nil && existingDeployment.DeploymentID != newDeployment.DeploymentID {
+	if existingDeployment != nil && newDeployment != nil && existingDeployment.DeploymentID != newDeploymentID {
 		if err := s.llmProxyDeploymentService.DeleteLLMProxyDeployment(updatedProxy.Handle, existingDeployment.DeploymentID.String(), ouID); err != nil {
 			s.logger.Warn("Failed to clean up old deployment after redeployment",
 				"environment", envName,

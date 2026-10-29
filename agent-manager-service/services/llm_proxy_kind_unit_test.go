@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/reconcile"
@@ -58,7 +59,7 @@ func goldenProxyKind(proxy *models.LLMProxy) *LLMProxyKind {
 		load: func(context.Context, models.ArtifactRef) (*models.LLMProxy, *models.LLMProvider, error) {
 			return proxy, goldenProvider(), nil
 		},
-		vhostOf: func(models.ArtifactRef) string { return proxyVhost(proxy) },
+		vhostOf: func(*gorm.DB, models.ArtifactRef) string { return proxyVhost(proxy) },
 	}
 }
 

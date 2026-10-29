@@ -160,15 +160,15 @@ func (s *LLMProviderDeploymentService) DeployLLMProvider(providerID string, req 
 		return nil, utils.ErrLLMProviderNotFound
 	}
 
-	existing, err := s.deploymentRepo.GetDeployedGatewaysByProvider(provider.UUID, ouID)
+	ctx := context.Background()
+	existing, err := s.deploymentRepo.PlacedGateways(ctx, ouID, provider.UUID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list existing provider deployments: %w", err)
+		return nil, fmt.Errorf("failed to list the gateways the provider is placed on: %w", err)
 	}
 	if err := validateEgressPlacement(s.gatewayRepo, gateway, existing); err != nil {
 		return nil, fmt.Errorf("%w: %w", utils.ErrInvalidInput, err)
 	}
 
-	ctx := context.Background()
 	var applied *reconcile.Applied
 	err = s.tx(ctx, func(tx *gorm.DB) error {
 		applied, err = s.core.Deploy(ctx, tx, providerPlacement(provider, ouID, gatewayUUID))

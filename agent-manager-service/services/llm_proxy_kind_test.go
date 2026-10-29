@@ -199,3 +199,92 @@ func TestPlacementPassPlacesAnAgentConfigProxy(t *testing.T) {
 	require.NotNil(t, row)
 	assert.Equal(t, models.DeploymentStatusDeploying, row.Status)
 }
+
+// An agent-config save after the proxy was undeployed from its environment's gateway through the public route has
+// nothing placed to refresh there: it saves.
+func TestAgentConfigProxyUpdateAfterAPublicUndeploySaves(t *testing.T) {
+	f := newProxyFixture(t)
+	proxy := f.newProxy(t)
+	env := uuid.New()
+	gateway := f.mapGateway(t, env)
+	f.mapToAgent(t, proxy, env)
+	deployed, err := f.proxies.DeployForEnvironment(context.Background(), proxy, f.sync.ouID, env, gateway)
+	require.NoError(t, err)
+	_, err = f.proxies.UndeployLLMProxyDeployment(context.Background(), proxy.Handle,
+		deployed.DeploymentID.String(), gateway.String(), f.sync.ouID)
+	require.NoError(t, err)
+
+	gormDB := db.GetDB()
+	mappings := repositories.NewEnvAgentModelMappingRepository(gormDB)
+	var mapping models.EnvAgentModelMapping
+	require.NoError(t, gormDB.Preload("LLMProxy").Where("llm_proxy_uuid = ?", proxy.UUID).First(&mapping).Error)
+	mapping.LLMProxy.Handle = proxy.Handle
+	svc := &agentConfigurationService{
+		db:                        gormDB,
+		envMappingRepo:            mappings,
+		llmProviderRepo:           repositories.NewLLMProviderRepo(gormDB),
+		gatewayRepo:               repositories.NewGatewayRepo(gormDB),
+		llmProxyService:           NewLLMProxyService(repositories.NewLLMProxyRepo(gormDB), repositories.NewLLMProviderRepo(gormDB), make([]byte, 32)),
+		llmProxyDeploymentService: f.proxies,
+		logger:                    slog.New(slog.DiscardHandler),
+	}
+	config := &models.AgentConfiguration{OUID: f.sync.ouID, AgentID: "a"}
+	request := models.EnvModelConfigRequest{ProviderName: f.provider.Configuration.Handle}
+
+	rollback, err := svc.processEnvProxyUpdate(context.Background(), config, nil, env, "dev", request, &mapping, f.sync.ouID)
+
+	require.NoError(t, err)
+	assert.Equal(t, uuid.Nil, rollback.deploymentID)
+	assert.Equal(t, models.DeploymentStatusUndeployed, f.row(t, proxy, gateway).StatusDesired, "nothing is re-placed")
+}
+
+// A public deploy is refused on a second gateway of an environment the artifact is already placed in, before the
+// first placement's ack.
+func TestPublicDeployRefusesASecondGatewayOfAPlacedEnvironment(t *testing.T) {
+	f := newProxyFixture(t)
+	env := uuid.New()
+	first, second := f.mapGateway(t, env), f.mapGateway(t, env)
+
+	t.Run("LLM proxy", func(t *testing.T) {
+		proxy := f.newProxy(t)
+		_, err := f.proxies.DeployLLMProxy(proxy.Handle, &models.DeployAPIRequest{GatewayID: first.String()}, f.sync.ouID)
+		require.NoError(t, err)
+		require.Equal(t, models.DeploymentStatusDeploying, f.row(t, proxy, first).Status)
+
+		_, err = f.proxies.DeployLLMProxy(proxy.Handle, &models.DeployAPIRequest{GatewayID: second.String()}, f.sync.ouID)
+
+		assert.ErrorIs(t, err, utils.ErrInvalidInput)
+	})
+	t.Run("LLM provider", func(t *testing.T) {
+		_, err := f.deployment.DeployLLMProvider(f.provider.UUID.String(),
+			&models.DeployAPIRequest{GatewayID: first.String()}, f.sync.ouID)
+		require.NoError(t, err)
+
+		_, err = f.deployment.DeployLLMProvider(f.provider.UUID.String(),
+			&models.DeployAPIRequest{GatewayID: second.String()}, f.sync.ouID)
+
+		assert.ErrorIs(t, err, utils.ErrInvalidInput)
+	})
+}
+
+// A proxy's deploy event reads the vhost in the deploying transaction, so a vhost saved in it reaches the event.
+func TestLLMProxyEventReadsTheVhostInTheDeployingTransaction(t *testing.T) {
+	f := newProxyFixture(t)
+	proxy := f.newProxy(t)
+	env := uuid.New()
+	gateway := f.mapGateway(t, env)
+	vhost := "saved-" + uuid.NewString()[:8] + ".example.com"
+
+	err := NewTxRunner(db.GetDB())(context.Background(), func(tx *gorm.DB) error {
+		proxy.Configuration.Vhost = &vhost
+		if err := repositories.NewLLMProxyRepo(tx).Update(proxy, proxy.Handle, f.sync.ouID); err != nil {
+			return err
+		}
+		_, err := f.proxies.core.Deploy(context.Background(), tx, proxyPlacement(proxy, proxy.Handle, f.sync.ouID, gateway))
+		return err
+	})
+
+	require.NoError(t, err)
+	require.NotEmpty(t, f.hub.published)
+	assert.Contains(t, f.hub.published[len(f.hub.published)-1].EventData, vhost)
+}

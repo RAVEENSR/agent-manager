@@ -149,15 +149,15 @@ func (s *LLMProxyDeploymentService) DeployLLMProxy(proxyID string, req *models.D
 
 	slog.Info("LLMProxyDeploymentService.DeployLLMProxy: proxy retrieved", "proxyID", proxyID, "proxyUUID", proxy.UUID)
 
-	existing, err := s.deploymentRepo.GetDeployedGatewaysByProvider(proxy.UUID, ouID)
+	ctx := context.Background()
+	existing, err := s.deploymentRepo.PlacedGateways(ctx, ouID, proxy.UUID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list existing proxy deployments: %w", err)
+		return nil, fmt.Errorf("failed to list the gateways the proxy is placed on: %w", err)
 	}
 	if err := validateEgressPlacement(s.gatewayRepo, gateway, existing); err != nil {
 		return nil, fmt.Errorf("%w: %w", utils.ErrInvalidInput, err)
 	}
 
-	ctx := context.Background()
 	var applied *reconcile.Applied
 	err = s.tx(ctx, func(tx *gorm.DB) error {
 		applied, err = s.core.Deploy(ctx, tx, proxyPlacement(proxy, proxyID, ouID, gatewayUUID))

@@ -39,7 +39,7 @@ type LLMProxyKind struct {
 	gatewayRepo    repositories.GatewayRepository
 	deploymentRepo repositories.DeploymentRepository
 	load           func(ctx context.Context, artifact models.ArtifactRef) (*models.LLMProxy, *models.LLMProvider, error)
-	vhostOf        func(artifact models.ArtifactRef) string
+	vhostOf        func(tx *gorm.DB, artifact models.ArtifactRef) string
 }
 
 // NewLLMProxyKind reads proxies and their providers through the request's transaction when there is one.
@@ -87,9 +87,12 @@ func (k *LLMProxyKind) Render(ctx context.Context, artifact models.ArtifactRef) 
 	return renderedDeployment(artifact.Handle, []byte(content)), nil
 }
 
-// proxyEventVhost is the vhost a proxy's events carry: the proxy row's, read when the event is built.
-func proxyEventVhost(artifact models.ArtifactRef) string {
-	proxy, err := repositories.NewLLMProxyRepo(db.GetDB()).GetByIDCtx(context.Background(), artifact.Handle, artifact.OUID)
+// proxyEventVhost is the vhost a proxy's events carry: the proxy row's, read in the event's transaction.
+func proxyEventVhost(tx *gorm.DB, artifact models.ArtifactRef) string {
+	if tx == nil {
+		return ""
+	}
+	proxy, err := repositories.NewLLMProxyRepo(tx).GetByIDCtx(context.Background(), artifact.Handle, artifact.OUID)
 	if err != nil {
 		return ""
 	}
@@ -101,7 +104,7 @@ func (k *LLMProxyKind) DeployEvent(ref reconcile.EventRef) eventhub.Event {
 		ProxyID:        ref.Handle,
 		DeploymentID:   ref.DeploymentID,
 		PerformedAt:    ref.PerformedAt,
-		Vhost:          k.vhost(ref.ArtifactRef),
+		Vhost:          k.vhost(ref),
 		Environment:    "production",
 		GatewayID:      ref.GatewayUUID.String(),
 		OrganizationID: ref.OUID,
@@ -114,7 +117,7 @@ func (k *LLMProxyKind) UndeployEvent(ref reconcile.EventRef) eventhub.Event {
 	payload := &models.LLMProxyUndeploymentEvent{
 		ProxyID:        ref.Handle,
 		PerformedAt:    ref.PerformedAt,
-		Vhost:          k.vhost(ref.ArtifactRef),
+		Vhost:          k.vhost(ref),
 		Environment:    "production",
 		GatewayID:      ref.GatewayUUID.String(),
 		OrganizationID: ref.OUID,
@@ -128,11 +131,11 @@ func (k *LLMProxyKind) DeleteEvent(artifact models.ArtifactRef) eventhub.Event {
 	return eventhub.NewGatewayEvent("llmproxy.deleted", "DELETE", payload.ProxyID, payload)
 }
 
-func (k *LLMProxyKind) vhost(artifact models.ArtifactRef) string {
+func (k *LLMProxyKind) vhost(ref reconcile.EventRef) string {
 	if k.vhostOf == nil {
 		return ""
 	}
-	return k.vhostOf(artifact)
+	return k.vhostOf(ref.Tx, ref.ArtifactRef)
 }
 
 // monitorEnvironmentUUID reads a monitor's environment id, stored as text, as a UUID; NULL when it isn't one.

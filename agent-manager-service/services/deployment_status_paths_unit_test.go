@@ -60,6 +60,7 @@ func newStatusPathFixture(t *testing.T, artifactUUID uuid.UUID) *statusPathFixtu
 	f.row = models.DeploymentStatusRecord{PerformedAt: models.NewPerformedAt(time.Now())}
 	f.repo = &repomocks.DeploymentRepositoryMock{
 		GetDeployedGatewaysByProviderFunc: func(uuid.UUID, string) ([]string, error) { return nil, nil },
+		PlacedGatewaysFunc:                func(context.Context, string, uuid.UUID) ([]string, error) { return nil, nil },
 		GetWithContentFunc: func(string, string, string) (*models.Deployment, error) {
 			return f.deployment, nil
 		},
@@ -155,7 +156,7 @@ func proxyKindOf(proxy *models.LLMProxy) *LLMProxyKind {
 		load: func(context.Context, models.ArtifactRef) (*models.LLMProxy, *models.LLMProvider, error) {
 			return proxy, renderableProvider(), nil
 		},
-		vhostOf: func(models.ArtifactRef) string { return proxyVhost(proxy) },
+		vhostOf: func(*gorm.DB, models.ArtifactRef) string { return proxyVhost(proxy) },
 	}
 }
 

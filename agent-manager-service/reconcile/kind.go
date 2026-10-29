@@ -43,6 +43,8 @@ type EventRef struct {
 	DeploymentID   string
 	DeploymentName string
 	PerformedAt    time.Time
+	// Tx is the transaction the event is written in: a kind reading its own tables for the event reads through it.
+	Tx *gorm.DB
 }
 
 // Kind is what a gateway artifact kind supplies to the core.

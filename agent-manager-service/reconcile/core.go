@@ -237,7 +237,7 @@ func (c *Core) Restore(ctx context.Context, tx *gorm.DB, p models.Placement, dep
 		return err
 	}
 	return c.publish(ctx, tx, p.GatewayUUID, kind.DeployEvent(EventRef{
-		Placement: p, DeploymentID: deploymentID.String(), DeploymentName: deployment.Name, PerformedAt: performedAt,
+		Placement: p, DeploymentID: deploymentID.String(), DeploymentName: deployment.Name, PerformedAt: performedAt, Tx: tx,
 	}))
 }
 
@@ -405,7 +405,7 @@ func (c *Core) abandon(ctx context.Context, kind Kind, claim models.ClaimedRende
 func (c *Core) publishDeploy(ctx context.Context, tx *gorm.DB, kind Kind, p models.Placement, deployment *models.Deployment) error {
 	return c.publish(ctx, tx, p.GatewayUUID, kind.DeployEvent(EventRef{
 		Placement: p, DeploymentID: deployment.DeploymentID.String(), DeploymentName: deployment.Name,
-		PerformedAt: *deployment.UpdatedAt,
+		PerformedAt: *deployment.UpdatedAt, Tx: tx,
 	}))
 }
 
@@ -414,7 +414,7 @@ func (c *Core) publishUndeploy(ctx context.Context, tx *gorm.DB, kind Kind, p mo
 	if err != nil {
 		return err
 	}
-	return c.publish(ctx, tx, p.GatewayUUID, kind.UndeployEvent(EventRef{Placement: p, PerformedAt: performedAt}))
+	return c.publish(ctx, tx, p.GatewayUUID, kind.UndeployEvent(EventRef{Placement: p, PerformedAt: performedAt, Tx: tx}))
 }
 
 // performedAt reads back the transition the caller just started in tx, for its event.
