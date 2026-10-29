@@ -36,6 +36,7 @@ import (
 
 	"github.com/wso2/agent-manager/agent-manager-service/clients/thundersvc"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/wso2/agent-manager/agent-manager-service/reconcile"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 	"github.com/wso2/agent-manager/agent-manager-service/utils/ssrf"
@@ -89,6 +90,8 @@ type MCPProxyService struct {
 	logger                 *slog.Logger
 	encryptionKey          []byte
 	resolver               thundersvc.EnvThunderResolver
+	core                   *reconcile.Core
+	kind                   *MCPProxyKind
 }
 
 // NewMCPProxyService creates a new MCP proxy service.
@@ -108,8 +111,12 @@ func NewMCPProxyService(
 	encryptionKey []byte,
 	mcpProxyScopeRepo repositories.MCPProxyScopeRepository,
 	resolver thundersvc.EnvThunderResolver,
+	core *reconcile.Core,
+	kind *MCPProxyKind,
 ) *MCPProxyService {
 	return &MCPProxyService{
+		core:                 core,
+		kind:                 kind,
 		db:                   db,
 		tx:                   NewTxRunner(db),
 		repo:                 repo,

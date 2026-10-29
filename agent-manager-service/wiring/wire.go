@@ -411,6 +411,7 @@ var repositoryProviderSet = wire.NewSet(
 var reconcileProviderSet = wire.NewSet(
 	services.NewLLMProviderKind,
 	services.NewLLMProxyKind,
+	services.NewMCPProxyKind,
 	ProvideReconcileKinds,
 	ProvideReconcileCore,
 	reconcile.NewWorker,
@@ -483,8 +484,10 @@ func ProvideDeploymentAckHandler(deploymentRepo repositories.DeploymentRepositor
 }
 
 // ProvideReconcileKinds lists the gateway artifact kinds the reconcile core deploys.
-func ProvideReconcileKinds(llmProvider *services.LLMProviderKind, llmProxy *services.LLMProxyKind) reconcile.Kinds {
-	return reconcile.Kinds{llmProvider, llmProxy}
+func ProvideReconcileKinds(
+	llmProvider *services.LLMProviderKind, llmProxy *services.LLMProxyKind, mcp *services.MCPProxyKind,
+) reconcile.Kinds {
+	return reconcile.Kinds{llmProvider, llmProxy, mcp}
 }
 
 // ProvideReconcileCore builds the reconcile core with the worker's intervals, lease and attempt budget from cfg.

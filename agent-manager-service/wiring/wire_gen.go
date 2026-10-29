@@ -92,12 +92,13 @@ func InitializeAppParamsWithEnvThunderEndpoints(cfg *config.Config, db *gorm.DB,
 	envThunderSystemClientRepository := ProvideEnvThunderSystemClientRepository(db)
 	readSystemClientFunc := ProvideEnvThunderSecretReader(envThunderSystemClientRepository, v)
 	envThunderResolver := ProvideEnvThunderResolverWithEndpoints(readSystemClientFunc, readThunderURLFunc, endpointResolver)
-	mcpProxyService := services.NewMCPProxyService(db, mcpProxyRepository, mcpProxyEndpointRepository, deploymentRepository, gatewayRepository, envAgentMCPMappingRepository, agentConfigurationRepository, gatewayEventsService, apiKeyRepository, infraResourceManager, agentIdentityInjectionService, logger, v, mcpProxyScopeRepository, envThunderResolver)
-	txRunner := ProvideTxRunner(db)
 	llmProviderKind := services.NewLLMProviderKind()
 	llmProxyKind := services.NewLLMProxyKind(gatewayRepository, deploymentRepository)
-	kinds := ProvideReconcileKinds(llmProviderKind, llmProxyKind)
+	mcpProxyKind := services.NewMCPProxyKind(gatewayRepository, deploymentRepository)
+	kinds := ProvideReconcileKinds(llmProviderKind, llmProxyKind, mcpProxyKind)
 	core := ProvideReconcileCore(db, deploymentRepository, eventHub, kinds, cfg, logger)
+	mcpProxyService := services.NewMCPProxyService(db, mcpProxyRepository, mcpProxyEndpointRepository, deploymentRepository, gatewayRepository, envAgentMCPMappingRepository, agentConfigurationRepository, gatewayEventsService, apiKeyRepository, infraResourceManager, agentIdentityInjectionService, logger, v, mcpProxyScopeRepository, envThunderResolver, core, mcpProxyKind)
+	txRunner := ProvideTxRunner(db)
 	llmProxyDeploymentService := services.NewLLMProxyDeploymentService(txRunner, deploymentRepository, llmProxyRepository, llmProviderRepository, gatewayRepository, gatewayEventsService, core, llmProxyKind)
 	llmProxyAPIKeyService := services.NewLLMProxyAPIKeyService(llmProxyRepository, gatewayRepository, gatewayEventsService, apiKeyRepository, openChoreoClient)
 	llmProviderAPIKeyService := services.NewLLMProviderAPIKeyService(llmProviderRepository, gatewayRepository, gatewayEventsService, apiKeyRepository)
@@ -299,12 +300,13 @@ func InitializeTestAppParamsWithClientMocks(cfg *config.Config, db *gorm.DB, aut
 	envThunderSystemClientRepository := ProvideEnvThunderSystemClientRepository(db)
 	readSystemClientFunc := ProvideEnvThunderSecretReader(envThunderSystemClientRepository, v)
 	envThunderResolver := ProvideEnvThunderResolver(readSystemClientFunc, readThunderURLFunc)
-	mcpProxyService := services.NewMCPProxyService(db, mcpProxyRepository, mcpProxyEndpointRepository, deploymentRepository, gatewayRepository, envAgentMCPMappingRepository, agentConfigurationRepository, gatewayEventsService, apiKeyRepository, infraResourceManager, agentIdentityInjectionService, logger, v, mcpProxyScopeRepository, envThunderResolver)
-	txRunner := ProvideTxRunner(db)
 	llmProviderKind := services.NewLLMProviderKind()
 	llmProxyKind := services.NewLLMProxyKind(gatewayRepository, deploymentRepository)
-	kinds := ProvideReconcileKinds(llmProviderKind, llmProxyKind)
+	mcpProxyKind := services.NewMCPProxyKind(gatewayRepository, deploymentRepository)
+	kinds := ProvideReconcileKinds(llmProviderKind, llmProxyKind, mcpProxyKind)
 	core := ProvideReconcileCore(db, deploymentRepository, eventHub, kinds, cfg, logger)
+	mcpProxyService := services.NewMCPProxyService(db, mcpProxyRepository, mcpProxyEndpointRepository, deploymentRepository, gatewayRepository, envAgentMCPMappingRepository, agentConfigurationRepository, gatewayEventsService, apiKeyRepository, infraResourceManager, agentIdentityInjectionService, logger, v, mcpProxyScopeRepository, envThunderResolver, core, mcpProxyKind)
+	txRunner := ProvideTxRunner(db)
 	llmProxyDeploymentService := services.NewLLMProxyDeploymentService(txRunner, deploymentRepository, llmProxyRepository, llmProviderRepository, gatewayRepository, gatewayEventsService, core, llmProxyKind)
 	llmProxyAPIKeyService := services.NewLLMProxyAPIKeyService(llmProxyRepository, gatewayRepository, gatewayEventsService, apiKeyRepository, openChoreoClient)
 	llmProviderAPIKeyService := services.NewLLMProviderAPIKeyService(llmProviderRepository, gatewayRepository, gatewayEventsService, apiKeyRepository)
@@ -718,7 +720,7 @@ var repositoryProviderSet = wire.NewSet(
 	ProvideEnvThunderURLRepository, repositories.NewMCPProxyScopeRepository,
 )
 
-var reconcileProviderSet = wire.NewSet(services.NewLLMProviderKind, services.NewLLMProxyKind, ProvideReconcileKinds,
+var reconcileProviderSet = wire.NewSet(services.NewLLMProviderKind, services.NewLLMProxyKind, services.NewMCPProxyKind, ProvideReconcileKinds,
 	ProvideReconcileCore, reconcile.NewWorker,
 )
 
@@ -787,8 +789,10 @@ func ProvideDeploymentAckHandler(deploymentRepo repositories.DeploymentRepositor
 }
 
 // ProvideReconcileKinds lists the gateway artifact kinds the reconcile core deploys.
-func ProvideReconcileKinds(llmProvider *services.LLMProviderKind, llmProxy *services.LLMProxyKind) reconcile.Kinds {
-	return reconcile.Kinds{llmProvider, llmProxy}
+func ProvideReconcileKinds(
+	llmProvider *services.LLMProviderKind, llmProxy *services.LLMProxyKind, mcp *services.MCPProxyKind,
+) reconcile.Kinds {
+	return reconcile.Kinds{llmProvider, llmProxy, mcp}
 }
 
 // ProvideReconcileCore builds the reconcile core with the worker's intervals, lease and attempt budget from cfg.

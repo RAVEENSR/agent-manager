@@ -90,6 +90,15 @@ type MCPProxyDeploymentEvent struct {
 	PerformedAt  time.Time `json:"performedAt"`
 }
 
+// MCPProxyUndeploymentEvent represents an MCP proxy undeployment event, matching the gateway's
+// MCPProxyUndeployedEventPayload. DeploymentID is always empty: the gateway then undeploys whatever version of the
+// proxy it holds.
+type MCPProxyUndeploymentEvent struct {
+	ProxyID      string    `json:"proxyId"`
+	DeploymentID string    `json:"deploymentId"`
+	PerformedAt  time.Time `json:"performedAt"`
+}
+
 // MCPProxyDeletionEvent represents an MCP proxy deletion event.
 type MCPProxyDeletionEvent struct {
 	ProxyID string `json:"proxyId"`

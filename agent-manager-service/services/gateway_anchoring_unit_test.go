@@ -26,7 +26,9 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/config"
+	"github.com/wso2/agent-manager/agent-manager-service/eventhub"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/wso2/agent-manager/agent-manager-service/reconcile"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories/repomocks"
 )
 
@@ -57,6 +59,25 @@ func startDeployStub(_ context.Context, _ *gorm.DB, _ models.Placement, deployme
 	performedAt := models.NewPerformedAt(time.Now())
 	deployment.Status, deployment.UpdatedAt = &deploying, &performedAt
 	return nil
+}
+
+// withMCPCore gives svc a reconcile core over its deployment repository and event hub, with an MCP kind that
+// renders a minimal artifact for whatever binding it is asked for.
+func withMCPCore(svc *MCPProxyService) {
+	svc.kind = &MCPProxyKind{load: func(_ context.Context, ref models.ArtifactRef) (*mcpArtifact, error) {
+		return &mcpArtifact{proxyHandle: "proxy-handle", deployable: &models.MCPProxy{
+			UUID: ref.ArtifactUUID, Handle: ref.Handle,
+			Configuration: models.MCPProxyConfig{Upstream: models.UpstreamConfig{
+				Main: &models.UpstreamEndpoint{URL: "https://upstream.example.com"},
+			}},
+		}}, nil
+	}}
+	var hub eventhub.EventHub
+	if svc.gatewayEventsService != nil {
+		hub = svc.gatewayEventsService.hub
+	}
+	svc.core = reconcile.NewCore(nil, svc.deploymentRepo, hub, reconcile.Kinds{svc.kind}, reconcile.Config{},
+		discardLogger())
 }
 
 func TestAnchoring_MCPProxyUpdate(t *testing.T) {
@@ -104,6 +125,7 @@ func TestAnchoring_MCPProxyUpdate(t *testing.T) {
 			logger:               discardLogger(),
 		}
 
+		withMCPCore(svc)
 		err := svc.deployMCPProxyEndpoints(context.Background(), newProxy(), "org")
 		require.NoError(t, err)
 		// The deployment event's GatewayID is the anchoring signal: a second egress
@@ -126,6 +148,7 @@ func TestAnchoring_MCPProxyUpdate(t *testing.T) {
 			logger: discardLogger(),
 		}
 
+		withMCPCore(svc)
 		err := svc.deployMCPProxyEndpoints(context.Background(), newProxy(), "org")
 		require.ErrorIs(t, err, errAmbiguousEgressGateway)
 	})
@@ -153,6 +176,7 @@ func TestAnchoring_MCPProxyUpdate(t *testing.T) {
 		p := newProxy()
 		p.Endpoints[0].Environments[0].RequestedGatewayUUID = &requested
 
+		withMCPCore(svc)
 		err := svc.deployMCPProxyEndpoints(context.Background(), p, "org")
 		require.NoError(t, err)
 		require.Len(t, hub.published, 1)
@@ -177,6 +201,7 @@ func TestAnchoring_MCPProxyUpdate(t *testing.T) {
 		p := newProxy()
 		p.Endpoints[0].Environments[0].RequestedGatewayUUID = &requested
 
+		withMCPCore(svc)
 		err := svc.deployMCPProxyEndpoints(context.Background(), p, "org")
 		require.ErrorIs(t, err, errPlacementFixed)
 	})
