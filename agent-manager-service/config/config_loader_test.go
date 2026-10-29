@@ -1155,3 +1155,18 @@ func TestValidateReconcileConfig(t *testing.T) {
 		t.Fatalf("got %v, want one RECONCILE_RENDER_ATTEMPT_BUDGET error", r.errors)
 	}
 }
+
+func TestRequirePositiveReportsEachNonPositiveField(t *testing.T) {
+	r := &configReader{}
+	requirePositive(r, positiveField{"A", 1}, positiveField{"B", 0}, positiveField{"C", -2})
+
+	want := []string{"B must be greater than 0, got 0", "C must be greater than 0, got -2"}
+	if len(r.errors) != len(want) {
+		t.Fatalf("got %v, want %v", r.errors, want)
+	}
+	for i, msg := range want {
+		if r.errors[i].Error() != msg {
+			t.Errorf("error %d = %q, want %q", i, r.errors[i], msg)
+		}
+	}
+}

@@ -442,41 +442,40 @@ func validateSecretManagerConfig(cfg *Config, r *configReader) {
 	}
 }
 
+type positiveField struct {
+	name  string
+	value int
+}
+
+func requirePositive(r *configReader, fields ...positiveField) {
+	for _, field := range fields {
+		if field.value <= 0 {
+			r.errors = append(r.errors, fmt.Errorf("%s must be greater than 0, got %d", field.name, field.value))
+		}
+	}
+}
+
+func validateDeploymentTimeoutConfig(cfg *Config, r *configReader) {
+	requirePositive(r,
+		positiveField{"DEPLOYMENT_TIMEOUT_SWEEP_INTERVAL_SECONDS", cfg.DeploymentTimeout.SweepIntervalSeconds},
+		positiveField{"DEPLOYMENT_TIMEOUT_SECONDS", cfg.DeploymentTimeout.TimeoutSeconds},
+	)
+}
+
+func validateReconcileConfig(cfg *Config, r *configReader) {
+	requirePositive(r,
+		positiveField{"RECONCILE_RENDER_INTERVAL_SECONDS", cfg.Reconcile.RenderIntervalSeconds},
+		positiveField{"RECONCILE_PLACE_INTERVAL_SECONDS", cfg.Reconcile.PlaceIntervalSeconds},
+		positiveField{"RECONCILE_DRIFT_INTERVAL_SECONDS", cfg.Reconcile.DriftIntervalSeconds},
+		positiveField{"RECONCILE_RENDER_LEASE_SECONDS", cfg.Reconcile.RenderLeaseSeconds},
+		positiveField{"RECONCILE_RENDER_ATTEMPT_BUDGET", cfg.Reconcile.RenderAttemptBudget},
+	)
+}
+
 // validGatewayManifestCacheBackends is the set of backends services.ProvideGatewayManifestCacheBackend
 // (wiring) knows how to construct. Kept as an explicit allowlist so a typo fails config
 // load with a clear message instead of silently falling back to "memory" in an HA
 // deployment that meant to opt into "redis".
-func validateDeploymentTimeoutConfig(cfg *Config, r *configReader) {
-	for _, field := range []struct {
-		name  string
-		value int
-	}{
-		{"DEPLOYMENT_TIMEOUT_SWEEP_INTERVAL_SECONDS", cfg.DeploymentTimeout.SweepIntervalSeconds},
-		{"DEPLOYMENT_TIMEOUT_SECONDS", cfg.DeploymentTimeout.TimeoutSeconds},
-	} {
-		if field.value <= 0 {
-			r.errors = append(r.errors, fmt.Errorf("%s must be greater than 0, got %d", field.name, field.value))
-		}
-	}
-}
-
-func validateReconcileConfig(cfg *Config, r *configReader) {
-	for _, field := range []struct {
-		name  string
-		value int
-	}{
-		{"RECONCILE_RENDER_INTERVAL_SECONDS", cfg.Reconcile.RenderIntervalSeconds},
-		{"RECONCILE_PLACE_INTERVAL_SECONDS", cfg.Reconcile.PlaceIntervalSeconds},
-		{"RECONCILE_DRIFT_INTERVAL_SECONDS", cfg.Reconcile.DriftIntervalSeconds},
-		{"RECONCILE_RENDER_LEASE_SECONDS", cfg.Reconcile.RenderLeaseSeconds},
-		{"RECONCILE_RENDER_ATTEMPT_BUDGET", cfg.Reconcile.RenderAttemptBudget},
-	} {
-		if field.value <= 0 {
-			r.errors = append(r.errors, fmt.Errorf("%s must be greater than 0, got %d", field.name, field.value))
-		}
-	}
-}
-
 var validGatewayManifestCacheBackends = map[string]bool{
 	"memory": true,
 	"redis":  true,
