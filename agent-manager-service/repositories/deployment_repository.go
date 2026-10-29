@@ -51,6 +51,7 @@ type DeploymentRepository interface {
 	StartDeploy(ctx context.Context, tx *gorm.DB, placement models.Placement, deployment *models.Deployment) error
 	StartRestore(ctx context.Context, tx *gorm.DB, placement models.Placement, deploymentID uuid.UUID) error
 	BeginUndeploy(ctx context.Context, tx *gorm.DB, placement models.Placement) (sendEvent bool, err error)
+	LockStatusRows(ctx context.Context, tx *gorm.DB, ouID string, artifactUUIDs []uuid.UUID) error
 
 	// Render queue. InsertPending places an artifact; QueueRender marks a deploy owed; a claim's write-back
 	// (CompleteRender, RecordRenderOutcome, AbandonRender) applies only while the row holds the claim's token, and

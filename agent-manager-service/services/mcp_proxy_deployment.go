@@ -230,6 +230,9 @@ func (s *MCPProxyService) deployMCPProxyEndpoints(ctx context.Context, tx *gorm.
 			return fmt.Errorf("%s: %w", d.label, err)
 		}
 	}
+	if err := s.lockMCPStatusRows(ctx, tx, deploys, ouID); err != nil {
+		return err
+	}
 	sort.SliceStable(deploys, func(i, j int) bool { return gatewayOrderKey(deploys[i].gateway) < gatewayOrderKey(deploys[j].gateway) })
 	for _, d := range deploys {
 		if err := s.deployMCPArtifact(ctx, tx, d.artifact, ouID, d.env, d.gateway); err != nil {
@@ -237,6 +240,19 @@ func (s *MCPProxyService) deployMCPProxyEndpoints(ctx context.Context, tx *gorm.
 		}
 	}
 	return nil
+}
+
+// lockMCPStatusRows takes the save's status-row locks before its first event takes a gateway's, the order a render of
+// one binding takes: deploying binding a publishes on the gateway before binding b's row is written.
+func (s *MCPProxyService) lockMCPStatusRows(ctx context.Context, tx *gorm.DB, deploys []mcpEnvDeploy, ouID string) error {
+	if s.deploymentRepo == nil {
+		return nil
+	}
+	artifactUUIDs := make([]uuid.UUID, 0, len(deploys))
+	for _, d := range deploys {
+		artifactUUIDs = append(artifactUUIDs, d.artifact.UUID)
+	}
+	return s.deploymentRepo.LockStatusRows(ctx, tx, ouID, artifactUUIDs)
 }
 
 // mcpEnvGateway is the gateway the binding deploys on: anchored on the gateway it is already placed on, whatever the

@@ -80,6 +80,9 @@ import (
 //			ListForGatewaySyncFunc: func(ctx context.Context, ouID string, gatewayID string) ([]models.GatewaySyncRow, error) {
 //				panic("mock out the ListForGatewaySync method")
 //			},
+//			LockStatusRowsFunc: func(ctx context.Context, tx *gorm.DB, ouID string, artifactUUIDs []uuid.UUID) error {
+//				panic("mock out the LockStatusRows method")
+//			},
 //			PlacedGatewaysFunc: func(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error) {
 //				panic("mock out the PlacedGateways method")
 //			},
@@ -170,6 +173,9 @@ type DeploymentRepositoryMock struct {
 
 	// ListForGatewaySyncFunc mocks the ListForGatewaySync method.
 	ListForGatewaySyncFunc func(ctx context.Context, ouID string, gatewayID string) ([]models.GatewaySyncRow, error)
+
+	// LockStatusRowsFunc mocks the LockStatusRows method.
+	LockStatusRowsFunc func(ctx context.Context, tx *gorm.DB, ouID string, artifactUUIDs []uuid.UUID) error
 
 	// PlacedGatewaysFunc mocks the PlacedGateways method.
 	PlacedGatewaysFunc func(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error)
@@ -397,6 +403,17 @@ type DeploymentRepositoryMock struct {
 			// GatewayID is the gatewayID argument value.
 			GatewayID string
 		}
+		// LockStatusRows holds details about calls to the LockStatusRows method.
+		LockStatusRows []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// Tx is the tx argument value.
+			Tx *gorm.DB
+			// OuID is the ouID argument value.
+			OuID string
+			// ArtifactUUIDs is the artifactUUIDs argument value.
+			ArtifactUUIDs []uuid.UUID
+		}
 		// PlacedGateways holds details about calls to the PlacedGateways method.
 		PlacedGateways []struct {
 			// Ctx is the ctx argument value.
@@ -498,6 +515,7 @@ type DeploymentRepositoryMock struct {
 	lockListContentForGateway      sync.RWMutex
 	lockListDeployedForDrift       sync.RWMutex
 	lockListForGatewaySync         sync.RWMutex
+	lockLockStatusRows             sync.RWMutex
 	lockPlacedGateways             sync.RWMutex
 	lockQueueRender                sync.RWMutex
 	lockRecordRenderOutcome        sync.RWMutex
@@ -1345,6 +1363,50 @@ func (mock *DeploymentRepositoryMock) ListForGatewaySyncCalls() []struct {
 	mock.lockListForGatewaySync.RLock()
 	calls = mock.calls.ListForGatewaySync
 	mock.lockListForGatewaySync.RUnlock()
+	return calls
+}
+
+// LockStatusRows calls LockStatusRowsFunc.
+func (mock *DeploymentRepositoryMock) LockStatusRows(ctx context.Context, tx *gorm.DB, ouID string, artifactUUIDs []uuid.UUID) error {
+	if mock.LockStatusRowsFunc == nil {
+		panic("DeploymentRepositoryMock.LockStatusRowsFunc: method is nil but DeploymentRepository.LockStatusRows was just called")
+	}
+	callInfo := struct {
+		Ctx           context.Context
+		Tx            *gorm.DB
+		OuID          string
+		ArtifactUUIDs []uuid.UUID
+	}{
+		Ctx:           ctx,
+		Tx:            tx,
+		OuID:          ouID,
+		ArtifactUUIDs: artifactUUIDs,
+	}
+	mock.lockLockStatusRows.Lock()
+	mock.calls.LockStatusRows = append(mock.calls.LockStatusRows, callInfo)
+	mock.lockLockStatusRows.Unlock()
+	return mock.LockStatusRowsFunc(ctx, tx, ouID, artifactUUIDs)
+}
+
+// LockStatusRowsCalls gets all the calls that were made to LockStatusRows.
+// Check the length with:
+//
+//	len(mockedDeploymentRepository.LockStatusRowsCalls())
+func (mock *DeploymentRepositoryMock) LockStatusRowsCalls() []struct {
+	Ctx           context.Context
+	Tx            *gorm.DB
+	OuID          string
+	ArtifactUUIDs []uuid.UUID
+} {
+	var calls []struct {
+		Ctx           context.Context
+		Tx            *gorm.DB
+		OuID          string
+		ArtifactUUIDs []uuid.UUID
+	}
+	mock.lockLockStatusRows.RLock()
+	calls = mock.calls.LockStatusRows
+	mock.lockLockStatusRows.RUnlock()
 	return calls
 }
 

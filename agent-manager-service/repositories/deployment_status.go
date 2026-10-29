@@ -90,6 +90,22 @@ func (r *DeploymentRepo) upsertStatus(ctx context.Context, tx *gorm.DB, p models
 	return performedAt, nil
 }
 
+// LockStatusRows locks the artifacts' existing status rows in tx, in gateway, then artifact order. A transaction
+// deploying several artifacts takes them all before its first event locks a gateway, the order a render takes.
+func (r *DeploymentRepo) LockStatusRows(ctx context.Context, tx *gorm.DB, ouID string, artifactUUIDs []uuid.UUID) error {
+	if len(artifactUUIDs) == 0 {
+		return nil
+	}
+	var locked []uuid.UUID
+	if err := r.on(ctx, tx).Raw(`SELECT artifact_uuid FROM deployment_status
+		WHERE ou_id = ? AND artifact_uuid IN ?
+		ORDER BY gateway_uuid, artifact_uuid
+		FOR UPDATE`, ouID, artifactUUIDs).Scan(&locked).Error; err != nil {
+		return fmt.Errorf("failed to lock status rows: %w", err)
+	}
+	return nil
+}
+
 // BeginUndeploy starts an undeploy transition. A row never sent to the gateway (PENDING) is undeployed at once and
 // needs no event; any other row heading for DEPLOYED goes UNDEPLOYING and the caller sends the undeploy event. A row
 // already heading for UNDEPLOYED with a deploy owed only loses its queue, with no event: the undeploy supersedes the

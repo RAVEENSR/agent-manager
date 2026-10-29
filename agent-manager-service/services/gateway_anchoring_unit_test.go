@@ -64,10 +64,15 @@ func startDeployStub(_ context.Context, _ *gorm.DB, _ models.Placement, deployme
 }
 
 // withMCPCore gives svc a reconcile core over its deployment repository and event hub, with an MCP kind that
-// renders a minimal artifact for whatever binding it is asked for.
+// renders a minimal artifact for whatever binding it is asked for. A mock repository locks status rows as a no-op.
 func withMCPCore(svc *MCPProxyService) {
-	if deployments, ok := svc.deploymentRepo.(*repomocks.DeploymentRepositoryMock); ok && deployments.WithTxFunc == nil {
-		deployments.WithTxFunc = func(*gorm.DB) repositories.DeploymentRepository { return deployments }
+	if deployments, ok := svc.deploymentRepo.(*repomocks.DeploymentRepositoryMock); ok {
+		if deployments.WithTxFunc == nil {
+			deployments.WithTxFunc = func(*gorm.DB) repositories.DeploymentRepository { return deployments }
+		}
+		if deployments.LockStatusRowsFunc == nil {
+			deployments.LockStatusRowsFunc = func(context.Context, *gorm.DB, string, []uuid.UUID) error { return nil }
+		}
 	}
 	svc.kind = &MCPProxyKind{load: func(_ context.Context, ref models.ArtifactRef) (*mcpArtifact, error) {
 		return &mcpArtifact{proxyHandle: "proxy-handle", deployable: &models.MCPProxy{
@@ -210,6 +215,64 @@ func TestAnchoring_MCPProxyUpdate(t *testing.T) {
 		err := svc.deployMCPProxyEndpoints(context.Background(), txSentinel, p, "org")
 		require.ErrorIs(t, err, errPlacementFixed)
 	})
+}
+
+// orderedEventHub records each publish in a log shared with the test's other fakes.
+type orderedEventHub struct {
+	stubEventHub
+	log *[]string
+}
+
+func (h *orderedEventHub) PublishEventTx(ctx context.Context, tx *gorm.DB, gatewayID string, e eventhub.Event) error {
+	*h.log = append(*h.log, "publish")
+	return h.stubEventHub.PublishEventTx(ctx, tx, gatewayID, e)
+}
+
+// An MCP save locks every binding's status row before its first event locks a gateway, the order a render of one
+// binding takes, so a concurrent render can't deadlock with it.
+func TestMCPSaveLocksItsStatusRowsBeforeTheFirstEvent(t *testing.T) {
+	env := uuid.New()
+	gateway := newGateway(t, models.GatewayRoleEgress, true)
+	binding := func(handle string) models.MCPProxyEndpoint {
+		return models.MCPProxyEndpoint{
+			UUID: uuid.New(), Handle: handle,
+			Configuration: models.MCPEndpointConfig{Upstream: &models.UpstreamEndpoint{URL: "https://upstream.example.com"}},
+			Environments:  []models.MCPProxyEndpointEnvironment{{EnvironmentUUID: env, ArtifactUUID: uuid.New()}},
+		}
+	}
+	proxy := &models.MCPProxy{UUID: uuid.New(), Handle: "proxy-handle",
+		Endpoints: []models.MCPProxyEndpoint{binding("a"), binding("b")}}
+
+	var log []string
+	var lockedArtifacts []uuid.UUID
+	svc := &MCPProxyService{
+		gatewayRepo: gatewayFixtureRepo(t, env.String(), []*models.Gateway{gateway}),
+		deploymentRepo: &repomocks.DeploymentRepositoryMock{
+			PlacedGatewaysFunc: func(context.Context, string, uuid.UUID) ([]string, error) {
+				return []string{gateway.UUID.String()}, nil
+			},
+			LockStatusRowsFunc: func(_ context.Context, _ *gorm.DB, _ string, artifactUUIDs []uuid.UUID) error {
+				log = append(log, "lock")
+				lockedArtifacts = artifactUUIDs
+				return nil
+			},
+			StartDeployFunc: func(ctx context.Context, tx *gorm.DB, p models.Placement, d *models.Deployment) error {
+				log = append(log, "start")
+				return startDeployStub(ctx, tx, p, d)
+			},
+		},
+		tx:                   sentinelTx,
+		gatewayEventsService: &GatewayEventsService{hub: &orderedEventHub{log: &log}},
+		logger:               discardLogger(),
+	}
+	withMCPCore(svc)
+
+	require.NoError(t, svc.deployMCPProxyEndpoints(context.Background(), txSentinel, proxy, "org"))
+
+	assert.Equal(t, []string{"lock", "start", "publish", "start", "publish"}, log)
+	assert.ElementsMatch(t, []uuid.UUID{
+		proxy.Endpoints[0].Environments[0].ArtifactUUID, proxy.Endpoints[1].Environments[0].ArtifactUUID,
+	}, lockedArtifacts)
 }
 
 func TestAnchoring_MonitorRunAgainstDeployedProxy(t *testing.T) {

@@ -618,3 +618,27 @@ func TestDeleteKeepsTheStatusRow(t *testing.T) {
 	assert.Equal(t, models.DeploymentStatusUndeployed, row.Status)
 	assert.Nil(t, row.DeploymentID)
 }
+
+// LockStatusRows holds the artifacts' rows until its transaction ends.
+func TestLockStatusRows(t *testing.T) {
+	p := seedPlacement(t, models.KindLLMProvider)
+	startDeploy(t, p)
+	other := seedPlacement(t, models.KindLLMProvider)
+	startDeploy(t, other)
+	gdb := db.GetDB()
+
+	locked := gdb.Begin()
+	t.Cleanup(func() { locked.Rollback() })
+	require.NoError(t, NewDeploymentRepo(gdb).LockStatusRows(context.Background(), locked, p.OUID,
+		[]uuid.UUID{p.ArtifactUUID, uuid.New()}))
+
+	tryLock := func(target models.Placement) error {
+		return gdb.Transaction(func(tx *gorm.DB) error {
+			return tx.Exec(`SELECT 1 FROM deployment_status WHERE artifact_uuid = ? FOR UPDATE NOWAIT`,
+				target.ArtifactUUID).Error
+		})
+	}
+	assert.Error(t, tryLock(p), "the row is held")
+	assert.NoError(t, tryLock(other), "another artifact's row is not")
+	assert.NoError(t, NewDeploymentRepo(gdb).LockStatusRows(context.Background(), locked, p.OUID, nil))
+}
