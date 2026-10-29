@@ -21,6 +21,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -141,7 +142,7 @@ func (h *proxyHarness) assertNothingWritten(t *testing.T) {
 	assert.Empty(t, h.txCards.DeleteForAgentEnvCalls())
 	assert.Empty(t, h.txExposures.UpsertCalls())
 	assert.Empty(t, h.txExposures.DeleteForAgentEnvCalls())
-	assert.Empty(t, h.txDeployments.DeleteForArtifactCalls())
+	assert.Empty(t, h.deployments.BeginUndeployCalls())
 }
 
 // acceptsWrites lets every write a transition may make succeed, inside the transaction only.
@@ -157,7 +158,25 @@ func (h *proxyHarness) acceptsWrites() {
 	h.txExposures.DeleteForAgentEnvFunc = func(context.Context, string, string, string, uuid.UUID) error { return nil }
 	h.txDeployments.DeleteForArtifactFunc = func(context.Context, uuid.UUID, string) error { return nil }
 	h.artifacts.CreateFunc = func(*gorm.DB, *models.Artifact) error { return nil }
+	h.artifacts.DeleteFunc = func(*gorm.DB, string) error { return nil }
+	h.txDeployments.PlacedGatewaysFunc = func(context.Context, string, uuid.UUID) ([]string, error) {
+		return []string{proxyTestGateway.String()}, nil
+	}
+	h.txDeployments.SentGatewaysFunc = func(context.Context, string, uuid.UUID) ([]string, error) {
+		return []string{proxyTestGateway.String()}, nil
+	}
+	h.txDeployments.GetStatusRecordFunc = func(context.Context, models.Placement) (*models.DeploymentStatusRecord, error) {
+		return &models.DeploymentStatusRecord{PerformedAt: models.NewPerformedAt(time.Now())}, nil
+	}
+	h.deployments.BeginUndeployFunc = func(context.Context, *gorm.DB, models.Placement) (bool, error) { return true, nil }
+	h.deployments.QueueRenderFunc = func(context.Context, *gorm.DB, string, uuid.UUID, []uuid.UUID, string,
+		repositories.QueueScope) (int64, error) {
+		return 0, nil
+	}
 }
+
+// proxyTestGateway is the gateway the proxied environment's agent is placed on.
+var proxyTestGateway = uuid.New()
 
 func decryptForTest(t *testing.T, secretRef string) string {
 	t.Helper()
@@ -515,16 +534,19 @@ func TestDeleteA2AProxySwitchesOnlyThatEnvironmentToDirect(t *testing.T) {
 
 	require.NoError(t, h.svc.DeleteA2AProxy(tierGrantedCtx(t), "org-1", "checkout", "weather", "dev"))
 
-	deployments := h.txDeployments.DeleteForArtifactCalls()
-	require.Len(t, deployments, 1)
-	assert.Equal(t, h.artifactUUID, deployments[0].ArtifactUUID)
+	undeploys := h.deployments.BeginUndeployCalls()
+	require.Len(t, undeploys, 1, "the agent is undeployed from its gateway, before the proxy row goes")
+	assert.Equal(t, h.artifactUUID, undeploys[0].Placement.ArtifactUUID)
+	assert.Equal(t, proxyTestGateway, undeploys[0].Placement.GatewayUUID)
+	assert.Same(t, txSentinel, undeploys[0].Tx)
 	exposures := h.txExposures.DeleteForAgentEnvCalls()
 	require.Len(t, exposures, 1)
 	assert.Equal(t, uuid.MustParse(proxyTestEnvUUID), exposures[0].EnvironmentUUID)
 	require.Len(t, h.txProxies.DeleteCalls(), 1)
 	require.Len(t, h.txCards.ClearCardCalls(), 1, "the gateway's card goes")
 	require.Len(t, h.txCards.RequeueCalls(), 1, "and the origin's is fetched directly")
-	require.Len(t, h.hub.published, 1, "the gateway is told once the transaction committed")
+	require.Len(t, h.hub.published, 1, "the undeploy event is written in the transaction")
+	assert.Same(t, txSentinel, h.hub.txs[0])
 	assert.Equal(t, h.artifactUUID.String(), undeployedAgentID(t, h.hub.published[0]))
 }
 
@@ -585,8 +607,10 @@ func TestSetA2AProxyDropsItsWritesWhenTheAgentIsDeletedMeanwhile(t *testing.T) {
 	assert.ErrorIs(t, err, utils.ErrAgentNotFound)
 	assert.Len(t, h.artifacts.DeleteCalls(), 1)
 	assert.Len(t, h.txProxies.DeleteCalls(), 1)
-	assert.Len(t, h.txExposures.DeleteForAgentEnvCalls(), 1)
 	assert.Len(t, h.txCards.DeleteForAgentEnvCalls(), 1, "the card row the proxy service may have written goes too")
+	require.NotEmpty(t, h.hub.published)
+	last := h.hub.published[len(h.hub.published)-1]
+	assert.Equal(t, "agent.deleted", string(last.EventType), "the artifact's delete event is written with the delete")
 }
 
 // captureRecorder keeps every audit event so a test can read the outcome a completion recorded.

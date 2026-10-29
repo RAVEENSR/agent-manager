@@ -81,6 +81,10 @@ func deploySettingsMocks(t *testing.T) *publisherMocks {
 		return m.proxies
 	}
 	m.proxies.LockAgentEnvFunc = func(context.Context, string, string, string, uuid.UUID) error { return nil }
+	m.deployments.QueueRenderFunc = func(context.Context, *gorm.DB, string, uuid.UUID, []uuid.UUID, string,
+		repositories.QueueScope) (int64, error) {
+		return 0, nil
+	}
 	return m
 }
 
@@ -110,6 +114,8 @@ func TestUpdateAgentDeploySettingsDecidesAProxiedExternalAgentUnderTheLock(t *te
 	assert.False(t, txConfigs.UpsertCalls()[0].Config.EnableApiKeySecurity)
 	assert.Equal(t, []string{"read-proxy", "lock", "read-proxy"}, steps,
 		"the pre-check reads unlocked; the save re-decides under the lock")
+	require.Len(t, m.deployments.QueueRenderCalls(), 1, "the proxied agent's placed rows re-render after the save")
+	assert.Equal(t, repositories.QueueScopePlaced, m.deployments.QueueRenderCalls()[0].Scope)
 }
 
 // A proxied external agent takes A2A CORS whatever subtype it was created with.

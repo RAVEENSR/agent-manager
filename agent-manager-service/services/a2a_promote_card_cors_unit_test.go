@@ -23,10 +23,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/clients/clientmocks"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories/repomocks"
 	"github.com/wso2/agent-manager/agent-manager-service/spec"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
@@ -126,7 +128,9 @@ func TestPromoteAgent_A2AInheritsSourceCardCORSAndRepublishes(t *testing.T) {
 			return nil
 		},
 	}
-	s.a2aPublisher = NewA2APublisher(nil, pubRepo, &repomocks.A2AProxyRepositoryMock{}, nil, nil, nil, nil, nil, testLogger())
+	pubRepo.WithTxFunc = func(*gorm.DB) repositories.PlatformAgentExposureRepository { return pubRepo }
+	s.a2aPublisher = withA2ACore(NewA2APublisher(sentinelTx, pubRepo, &repomocks.A2AProxyRepositoryMock{}, nil, nil,
+		a2aRenderQueue(), a2aIngressGateways(), nil, testLogger(), nil, nil))
 
 	err := s.PromoteAgent(tierGrantedCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
 		SourceEnvironment: "dev",

@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/clients/clientmocks"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
@@ -32,9 +33,28 @@ import (
 
 // a2aPublishingAgentService is an agentManagerService whose only A2A collaborator is the publisher.
 func a2aPublishingAgentService(pubs *repomocks.PlatformAgentExposureRepositoryMock, proxies *repomocks.A2AProxyRepositoryMock) *agentManagerService {
-	publisher := NewA2APublisher(nil, pubs, proxies, nil, nil, nil, nil, nil, testLogger())
+	pubs.WithTxFunc = func(*gorm.DB) repositories.PlatformAgentExposureRepository { return pubs }
+	publisher := withA2ACore(NewA2APublisher(sentinelTx, pubs, proxies, nil, nil, a2aRenderQueue(), a2aIngressGateways(), nil,
+		testLogger(), nil, nil))
 	return NewAgentManagerService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 		publisher, nil, nil, nil, testLogger()).(*agentManagerService)
+}
+
+// a2aRenderQueue accepts every PENDING row a deploy owes.
+func a2aRenderQueue() *repomocks.DeploymentRepositoryMock {
+	return &repomocks.DeploymentRepositoryMock{
+		InsertPendingFunc: func(context.Context, *gorm.DB, models.Placement, string) (bool, error) { return true, nil },
+	}
+}
+
+// a2aIngressGateways maps one ingress gateway to every environment.
+func a2aIngressGateways() *repomocks.GatewayRepositoryMock {
+	gateway := &models.Gateway{UUID: uuid.New(), GatewayFunctionalityType: models.GatewayRoleIngress}
+	return &repomocks.GatewayRepositoryMock{
+		ListWithFiltersFunc: func(repositories.GatewayFilterOptions) ([]*models.Gateway, error) {
+			return []*models.Gateway{gateway}, nil
+		},
+	}
 }
 
 // A deploy records that the agent is exposed in the environment, against its per-environment artifact.
@@ -51,7 +71,7 @@ func TestExposeA2AAgentRecordsTheArtifactUUID(t *testing.T) {
 	envUUID := uuid.New()
 	artifactUUID := uuid.New()
 	agentUUID := uuid.New()
-	svc.exposeA2AAgent(context.Background(), a2aPublicationKey{OUID: "org-1", ProjectName: "checkout", AgentName: "trip-planner", EnvironmentName: "dev", EnvironmentUUID: envUUID, AgentUUID: &agentUUID}, artifactUUID)
+	svc.exposeA2AAgent(context.Background(), a2aPublicationKey{OUID: "org-1", ProjectName: "checkout", AgentName: "trip-planner", EnvironmentName: "dev", EnvironmentUUID: envUUID, AgentUUID: &agentUUID}, models.ArtifactRef{ArtifactUUID: artifactUUID})
 
 	require.Len(t, enqueued, 1)
 	assert.Equal(t, "trip-planner", enqueued[0].AgentName)
@@ -70,7 +90,7 @@ func TestExposeA2AAgentSurvivesRepoFailure(t *testing.T) {
 	}
 	svc := a2aPublishingAgentService(repo, &repomocks.A2AProxyRepositoryMock{})
 	assert.NotPanics(t, func() {
-		svc.exposeA2AAgent(context.Background(), a2aPublicationKey{OUID: "org-1", ProjectName: "checkout", AgentName: "trip-planner", EnvironmentName: "dev", EnvironmentUUID: uuid.New()}, uuid.New())
+		svc.exposeA2AAgent(context.Background(), a2aPublicationKey{OUID: "org-1", ProjectName: "checkout", AgentName: "trip-planner", EnvironmentName: "dev", EnvironmentUUID: uuid.New()}, models.ArtifactRef{ArtifactUUID: uuid.New()})
 	})
 }
 

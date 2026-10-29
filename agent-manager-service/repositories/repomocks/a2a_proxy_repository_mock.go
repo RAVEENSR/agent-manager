@@ -31,6 +31,9 @@ import (
 //			GetFunc: func(ctx context.Context, ouID string, projectName string, agentName string, environmentName string) (*models.A2AProxy, error) {
 //				panic("mock out the Get method")
 //			},
+//			GetByArtifactFunc: func(ctx context.Context, ouID string, artifactUUID uuid.UUID) (*models.A2AProxy, error) {
+//				panic("mock out the GetByArtifact method")
+//			},
 //			GetByEnvUUIDFunc: func(ctx context.Context, ouID string, projectName string, agentName string, environmentUUID uuid.UUID) (*models.A2AProxy, error) {
 //				panic("mock out the GetByEnvUUID method")
 //			},
@@ -64,6 +67,9 @@ type A2AProxyRepositoryMock struct {
 
 	// GetFunc mocks the Get method.
 	GetFunc func(ctx context.Context, ouID string, projectName string, agentName string, environmentName string) (*models.A2AProxy, error)
+
+	// GetByArtifactFunc mocks the GetByArtifact method.
+	GetByArtifactFunc func(ctx context.Context, ouID string, artifactUUID uuid.UUID) (*models.A2AProxy, error)
 
 	// GetByEnvUUIDFunc mocks the GetByEnvUUID method.
 	GetByEnvUUIDFunc func(ctx context.Context, ouID string, projectName string, agentName string, environmentUUID uuid.UUID) (*models.A2AProxy, error)
@@ -128,6 +134,15 @@ type A2AProxyRepositoryMock struct {
 			// EnvironmentName is the environmentName argument value.
 			EnvironmentName string
 		}
+		// GetByArtifact holds details about calls to the GetByArtifact method.
+		GetByArtifact []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// OuID is the ouID argument value.
+			OuID string
+			// ArtifactUUID is the artifactUUID argument value.
+			ArtifactUUID uuid.UUID
+		}
 		// GetByEnvUUID holds details about calls to the GetByEnvUUID method.
 		GetByEnvUUID []struct {
 			// Ctx is the ctx argument value.
@@ -180,6 +195,7 @@ type A2AProxyRepositoryMock struct {
 	lockDeleteForAgent       sync.RWMutex
 	lockDeleteForEnvironment sync.RWMutex
 	lockGet                  sync.RWMutex
+	lockGetByArtifact        sync.RWMutex
 	lockGetByEnvUUID         sync.RWMutex
 	lockListEnvironmentUUIDs sync.RWMutex
 	lockLockAgentEnv         sync.RWMutex
@@ -364,6 +380,46 @@ func (mock *A2AProxyRepositoryMock) GetCalls() []struct {
 	mock.lockGet.RLock()
 	calls = mock.calls.Get
 	mock.lockGet.RUnlock()
+	return calls
+}
+
+// GetByArtifact calls GetByArtifactFunc.
+func (mock *A2AProxyRepositoryMock) GetByArtifact(ctx context.Context, ouID string, artifactUUID uuid.UUID) (*models.A2AProxy, error) {
+	if mock.GetByArtifactFunc == nil {
+		panic("A2AProxyRepositoryMock.GetByArtifactFunc: method is nil but A2AProxyRepository.GetByArtifact was just called")
+	}
+	callInfo := struct {
+		Ctx          context.Context
+		OuID         string
+		ArtifactUUID uuid.UUID
+	}{
+		Ctx:          ctx,
+		OuID:         ouID,
+		ArtifactUUID: artifactUUID,
+	}
+	mock.lockGetByArtifact.Lock()
+	mock.calls.GetByArtifact = append(mock.calls.GetByArtifact, callInfo)
+	mock.lockGetByArtifact.Unlock()
+	return mock.GetByArtifactFunc(ctx, ouID, artifactUUID)
+}
+
+// GetByArtifactCalls gets all the calls that were made to GetByArtifact.
+// Check the length with:
+//
+//	len(mockedA2AProxyRepository.GetByArtifactCalls())
+func (mock *A2AProxyRepositoryMock) GetByArtifactCalls() []struct {
+	Ctx          context.Context
+	OuID         string
+	ArtifactUUID uuid.UUID
+} {
+	var calls []struct {
+		Ctx          context.Context
+		OuID         string
+		ArtifactUUID uuid.UUID
+	}
+	mock.lockGetByArtifact.RLock()
+	calls = mock.calls.GetByArtifact
+	mock.lockGetByArtifact.RUnlock()
 	return calls
 }
 

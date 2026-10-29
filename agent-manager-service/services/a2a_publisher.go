@@ -21,11 +21,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/wso2/agent-manager/agent-manager-service/reconcile"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
@@ -39,14 +41,6 @@ type a2aPublicationKey struct {
 	EnvironmentUUID uuid.UUID
 	// AgentUUID is nil when unknown; the reconciler then checks the agent by name.
 	AgentUUID *uuid.UUID
-}
-
-// a2aTeardown is an environment's gateway withdrawal, sent once its DB work has committed.
-type a2aTeardown struct {
-	artifactUUID uuid.UUID
-	gatewayIDs   []string
-	// dropsArtifact deletes the gateway's Agent with its API keys; otherwise it is undeployed and keeps them.
-	dropsArtifact bool
 }
 
 // TxRunner opens one database transaction and runs fn inside it, so a unit test can hand fn a sentinel.
@@ -70,6 +64,8 @@ type A2APublisher struct {
 	gatewayRepo    repositories.GatewayRepository
 	events         *GatewayEventsService
 	logger         *slog.Logger
+	core           *reconcile.Core
+	kind           *A2AAgentKind
 }
 
 // NewA2APublisher creates an A2APublisher.
@@ -83,8 +79,12 @@ func NewA2APublisher(
 	gatewayRepo repositories.GatewayRepository,
 	events *GatewayEventsService,
 	logger *slog.Logger,
+	core *reconcile.Core,
+	kind *A2AAgentKind,
 ) *A2APublisher {
 	return &A2APublisher{
+		core:           core,
+		kind:           kind,
 		tx:             tx,
 		exposureRepo:   exposureRepo,
 		proxyRepo:      proxyRepo,
@@ -134,30 +134,70 @@ func (p *A2APublisher) ShouldPublish(
 	return true, nil
 }
 
-// SaveAndRepublish runs save in one transaction with the republish the agent's environment is owed afterwards, if
-// any. An external agent is decided under its environment's transition lock, so a concurrent switch to direct cannot
-// leave an external publication behind, and a save whose republish cannot be queued is rolled back whole.
+// SaveAndRepublish runs save in one transaction with the redeploy the agent's environment is owed afterwards, if
+// any. A platform agent's exposure is written and its render queued in that transaction. An external agent is
+// decided under its environment's transition lock, so a concurrent switch to direct cannot be missed; while proxied,
+// its placed rows are marked stale once the save commits.
 func (p *A2APublisher) SaveAndRepublish(
-	ctx context.Context, agent *models.AgentResponse, key a2aPublicationKey, artifactUUID uuid.UUID, save func(tx *gorm.DB) error,
+	ctx context.Context, agent *models.AgentResponse, key a2aPublicationKey, artifact models.ArtifactRef, save func(tx *gorm.DB) error,
 ) error {
-	return p.tx(ctx, func(tx *gorm.DB) error {
-		if isExternalProvisioned(agent) {
+	external := isExternalProvisioned(agent)
+	var publish bool
+	err := p.tx(ctx, func(tx *gorm.DB) error {
+		if external {
 			if err := lockA2AProxyEnv(ctx, p.proxies(tx), key); err != nil {
 				return err
 			}
 		}
-		publish, err := p.ShouldPublish(ctx, tx, agent, key.OUID, key.ProjectName, key.EnvironmentUUID)
-		if err != nil {
+		var err error
+		if publish, err = p.ShouldPublish(ctx, tx, agent, key.OUID, key.ProjectName, key.EnvironmentUUID); err != nil {
 			return err
 		}
 		if err := save(tx); err != nil {
 			return err
 		}
-		if !publish || isExternalProvisioned(agent) {
+		if !publish || external {
 			return nil
 		}
-		return p.Expose(ctx, tx, key, artifactUUID)
+		return p.Publish(ctx, tx, key, artifact)
 	})
+	if err != nil || !publish {
+		return err
+	}
+	if external {
+		return p.MarkStale(ctx, artifact, "the agent's deploy settings changed")
+	}
+	p.Nudge()
+	return nil
+}
+
+// Publish exposes a platform agent in the environment and queues its render on the environment's ingress gateway,
+// in tx. A row already there, whatever its status, is made due now: an agent deploy or promote is when its endpoint
+// is about to appear. The caller nudges the worker after commit.
+func (p *A2APublisher) Publish(ctx context.Context, tx *gorm.DB, key a2aPublicationKey, artifact models.ArtifactRef) error {
+	if err := p.Expose(ctx, tx, key, artifact.ArtifactUUID); err != nil {
+		return err
+	}
+	return p.DeployRecord(ctx, tx, key, artifact)
+}
+
+// DeployRecord queues the render of the agent's artifact in the environment, in tx.
+func (p *A2APublisher) DeployRecord(ctx context.Context, tx *gorm.DB, key a2aPublicationKey, artifact models.ArtifactRef) error {
+	_, err := p.core.DeployRecord(ctx, tx, p.kind, reconcile.Record{ArtifactRef: artifact, EnvironmentUUID: key.EnvironmentUUID})
+	if err != nil {
+		return fmt.Errorf("failed to queue the A2A agent's gateway deploy: %w", err)
+	}
+	return nil
+}
+
+// MarkStale re-renders the agent's artifact wherever it is placed, because an input outside it changed.
+func (p *A2APublisher) MarkStale(ctx context.Context, artifact models.ArtifactRef, reason string) error {
+	return p.core.MarkStale(ctx, models.KindAgent, artifact.OUID, artifact.ArtifactUUID, nil, reason)
+}
+
+// Nudge wakes the worker for a render a committed request queued.
+func (p *A2APublisher) Nudge() {
+	p.core.Nudge()
 }
 
 // GatewayURL is where the environment's ingress gateway serves the agent, or "" while none is mapped to it yet.
@@ -169,46 +209,41 @@ func (p *A2APublisher) GatewayURL(ouID string, envUUID uuid.UUID, agentName stri
 	return a2aGatewayURL(gateway, agentName), nil
 }
 
-// TeardownEnv drops one environment's exposure and gateway deployments in tx but keeps the artifact and its API keys; send the result after commit.
-func (p *A2APublisher) TeardownEnv(
-	ctx context.Context, tx *gorm.DB, key a2aPublicationKey, artifactUUID uuid.UUID,
-) (a2aTeardown, error) {
-	// Read first: the deployment rows name the gateways holding the Agent.
-	gatewayIDs := collectA2AAgentDeletionTargets(p.deploymentRepo, p.gatewayRepo, artifactUUID, key.OUID, true, p.logger)
-	if artifactUUID != uuid.Nil {
-		if err := p.deploymentRepo.WithTx(tx).DeleteForArtifact(ctx, artifactUUID, key.OUID); err != nil {
-			return a2aTeardown{}, fmt.Errorf("failed to delete the A2A agent's gateway deployments: %w", err)
+// TeardownEnv undeploys one environment's artifact from every gateway it is placed on and drops its exposure, in tx.
+// The artifact and its API keys stay for a later redeploy. The undeploy events are written in tx.
+func (p *A2APublisher) TeardownEnv(ctx context.Context, tx *gorm.DB, key a2aPublicationKey, artifact models.ArtifactRef) error {
+	if artifact.ArtifactUUID != uuid.Nil {
+		gateways, err := p.deploymentRepo.WithTx(tx).PlacedGateways(ctx, key.OUID, artifact.ArtifactUUID)
+		if err != nil {
+			return fmt.Errorf("failed to list the A2A agent's gateways: %w", err)
+		}
+		slices.Sort(gateways)
+		for _, gateway := range gateways {
+			placement := models.Placement{ArtifactRef: artifact, GatewayUUID: uuid.MustParse(gateway)}
+			if err := p.core.Undeploy(ctx, tx, placement); err != nil {
+				return fmt.Errorf("failed to undeploy the A2A agent: %w", err)
+			}
 		}
 	}
 	err := p.exposures(tx).DeleteForAgentEnv(ctx, key.OUID, key.ProjectName, key.AgentName, key.EnvironmentUUID)
 	if err != nil {
-		return a2aTeardown{}, fmt.Errorf("failed to delete the A2A agent's exposure: %w", err)
+		return fmt.Errorf("failed to delete the A2A agent's exposure: %w", err)
 	}
-	return a2aTeardown{artifactUUID: artifactUUID, gatewayIDs: gatewayIDs}, nil
+	return nil
 }
 
-// TeardownEnvAndDropArtifact is TeardownEnv that also deletes the artifact (uuid.Nil: none), so its API keys go too.
-func (p *A2APublisher) TeardownEnvAndDropArtifact(
-	ctx context.Context, tx *gorm.DB, key a2aPublicationKey, artifactUUID uuid.UUID,
-) (a2aTeardown, error) {
-	teardown, err := p.TeardownEnv(ctx, tx, key, artifactUUID)
+// DropArtifact deletes the agent's per-environment artifact (its exposure, deployments and API keys cascade) and
+// writes its delete events to every gateway it was sent, in tx.
+func (p *A2APublisher) DropArtifact(ctx context.Context, tx *gorm.DB, artifact models.ArtifactRef) error {
+	events, err := p.core.PrepareDelete(ctx, tx, artifact)
 	if err != nil {
-		return a2aTeardown{}, err
+		return err
 	}
-	teardown.dropsArtifact = true
-	if artifactUUID == uuid.Nil {
-		return teardown, nil
-	}
-	err = p.artifactRepo.Delete(tx, artifactUUID.String())
+	err = p.artifactRepo.Delete(tx, artifact.ArtifactUUID.String())
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return a2aTeardown{}, fmt.Errorf("failed to delete the agent's API artifact: %w", err)
+		return fmt.Errorf("failed to delete the agent's API artifact: %w", err)
 	}
-	return teardown, nil
-}
-
-// SendTeardown tells each gateway to stop serving the torn-down Agent; best effort.
-func (p *A2APublisher) SendTeardown(ctx context.Context, t a2aTeardown) {
-	sendA2AAgentWithdrawal(ctx, p.events, t.artifactUUID, t.gatewayIDs, !t.dropsArtifact, p.logger)
+	return events.Publish(ctx, tx)
 }
 
 // DeleteForAgent drops the agent's exposure and proxy rows; deleteAgentAPIArtifact tells the gateways.
@@ -223,39 +258,38 @@ func (p *A2APublisher) DeleteForAgent(ctx context.Context, ouID, projectName, ag
 	return errors.Join(errs...)
 }
 
-// TeardownEnvironment removes a deleted environment's A2A rows, deployments and A2A agent artifacts, then tells the
-// gateways; one failure does not stop the rest. Call it before the environment's card rows go: they name the agents.
+// TeardownEnvironment removes a deleted environment's A2A rows and A2A agent artifacts, each artifact in one
+// transaction with its delete events; one failure does not stop the rest. Call it before the environment's card rows
+// go: they name the agents whose artifacts no exposure covers.
 func (p *A2APublisher) TeardownEnvironment(ctx context.Context, ouID string, envUUID uuid.UUID) error {
 	exposures, err := p.exposureRepo.ListForEnvironment(ctx, ouID, envUUID)
 	if err != nil {
 		return fmt.Errorf("failed to list the environment's A2A agent exposures: %w", err)
 	}
 	var errs []error
-	var teardowns []a2aTeardown
+	dropped := map[uuid.UUID]struct{}{}
 	for _, exposure := range exposures {
-		teardown, err := p.teardownDeletedEnv(ctx, exposure)
-		if err != nil {
-			errs = append(errs, err)
+		artifact := models.ArtifactRef{OUID: ouID, ArtifactUUID: exposure.ArtifactUUID, Kind: models.KindAgent}
+		if err := p.dropArtifact(ctx, artifact); err != nil {
+			errs = append(errs, fmt.Errorf("agent %s: %w", exposure.AgentName, err))
+			continue
 		}
-		teardowns = append(teardowns, teardown)
+		dropped[exposure.ArtifactUUID] = struct{}{}
 	}
-	// External agents have no exposure, and a switch to direct keeps the artifact, so find the rest through the card rows.
-	swept, err := p.dropLeftoverArtifacts(ctx, ouID, envUUID, teardowns)
-	if err != nil {
+	if err := p.dropLeftoverArtifacts(ctx, ouID, envUUID, dropped); err != nil {
 		errs = append(errs, err)
 	}
-	teardowns = append(teardowns, swept...)
-	// Rows a failed teardown left, and proxies that never published, go regardless: the environment is gone.
 	if err := p.exposureRepo.DeleteForEnvironment(ctx, ouID, envUUID); err != nil {
 		errs = append(errs, fmt.Errorf("failed to delete the environment's A2A agent exposures: %w", err))
 	}
 	if err := p.proxyRepo.DeleteForEnvironment(ctx, ouID, envUUID); err != nil {
 		errs = append(errs, fmt.Errorf("failed to delete the environment's A2A proxies: %w", err))
 	}
-	for _, teardown := range teardowns {
-		p.SendTeardown(ctx, teardown)
-	}
 	return errors.Join(errs...)
+}
+
+func (p *A2APublisher) dropArtifact(ctx context.Context, artifact models.ArtifactRef) error {
+	return p.tx(ctx, func(tx *gorm.DB) error { return p.DropArtifact(ctx, tx, artifact) })
 }
 
 // EnvironmentUUIDs lists every environment UUID with exposure or proxy rows recorded under name, even when one listing fails.
@@ -272,43 +306,15 @@ func (p *A2APublisher) EnvironmentUUIDs(ctx context.Context, ouID, name string) 
 	return append(exposed, proxies...), errors.Join(errs...)
 }
 
-// teardownDeletedEnv removes one exposure together with its artifact, which a deleted environment no longer needs.
-// On failure it still returns the teardown to send; agent deletion sweeps the artifact left behind.
-func (p *A2APublisher) teardownDeletedEnv(ctx context.Context, exposure models.PlatformAgentExposure) (a2aTeardown, error) {
-	key := a2aPublicationKey{
-		OUID: exposure.OUID, ProjectName: exposure.ProjectName, AgentName: exposure.AgentName,
-		EnvironmentName: exposure.EnvironmentName, EnvironmentUUID: exposure.EnvironmentUUID,
-	}
-	var teardown a2aTeardown
-	err := p.tx(ctx, func(tx *gorm.DB) error {
-		var err error
-		teardown, err = p.TeardownEnvAndDropArtifact(ctx, tx, key, exposure.ArtifactUUID)
-		return err
-	})
-	if err != nil {
-		// The environment's rows go regardless, so the gateways must drop the Agent now or never.
-		return a2aTeardown{
-			artifactUUID:  exposure.ArtifactUUID,
-			gatewayIDs:    collectA2AAgentDeletionTargets(p.deploymentRepo, p.gatewayRepo, exposure.ArtifactUUID, exposure.OUID, true, p.logger),
-			dropsArtifact: true,
-		}, fmt.Errorf("agent %s: %w", exposure.AgentName, err)
-	}
-	return teardown, nil
-}
-
-// dropLeftoverArtifacts deletes the artifacts of the environment's A2A agents that no exposure teardown covered.
-// The card rows name those agents; a REST or chat agent's artifact for the environment is not touched.
-func (p *A2APublisher) dropLeftoverArtifacts(ctx context.Context, ouID string, envUUID uuid.UUID, done []a2aTeardown) ([]a2aTeardown, error) {
+// dropLeftoverArtifacts deletes the artifacts of the environment's A2A agents that no exposure covered: external
+// agents, and platform agents left by a switch to direct. The card rows name those agents; a REST or chat agent's
+// artifact for the environment is not touched.
+func (p *A2APublisher) dropLeftoverArtifacts(ctx context.Context, ouID string, envUUID uuid.UUID, dropped map[uuid.UUID]struct{}) error {
 	cards, err := p.cardRepo.ListForEnvironment(ctx, ouID, envUUID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list the environment's A2A agent cards: %w", err)
-	}
-	covered := make(map[uuid.UUID]struct{}, len(done))
-	for _, t := range done {
-		covered[t.artifactUUID] = struct{}{}
+		return fmt.Errorf("failed to list the environment's A2A agent cards: %w", err)
 	}
 	var errs []error
-	var teardowns []a2aTeardown
 	for _, card := range cards {
 		artifact, err := agentEnvAPIArtifact(p.artifactRepo, ouID, card.ProjectName, card.AgentName, envUUID.String())
 		if errors.Is(err, utils.ErrArtifactNotFound) {
@@ -318,19 +324,15 @@ func (p *A2APublisher) dropLeftoverArtifacts(ctx context.Context, ouID string, e
 			errs = append(errs, fmt.Errorf("failed to read agent %s's artifact: %w", card.AgentName, err))
 			continue
 		}
-		if _, ok := covered[artifact.UUID]; ok {
+		if _, ok := dropped[artifact.UUID]; ok {
 			continue
 		}
-		// Read before the delete: the deployment rows cascade with the artifact.
-		gatewayIDs := collectA2AAgentDeletionTargets(p.deploymentRepo, p.gatewayRepo, artifact.UUID, ouID, true, p.logger)
-		err = p.tx(ctx, func(tx *gorm.DB) error { return p.artifactRepo.Delete(tx, artifact.UUID.String()) })
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		ref := models.ArtifactRef{OUID: ouID, ArtifactUUID: artifact.UUID, Kind: models.KindAgent, Handle: artifact.Handle}
+		if err := p.dropArtifact(ctx, ref); err != nil {
 			errs = append(errs, fmt.Errorf("failed to delete agent artifact %s: %w", artifact.Handle, err))
-			continue
 		}
-		teardowns = append(teardowns, a2aTeardown{artifactUUID: artifact.UUID, gatewayIDs: gatewayIDs, dropsArtifact: true})
 	}
-	return teardowns, errors.Join(errs...)
+	return errors.Join(errs...)
 }
 
 func (p *A2APublisher) exposures(tx *gorm.DB) repositories.PlatformAgentExposureRepository {
