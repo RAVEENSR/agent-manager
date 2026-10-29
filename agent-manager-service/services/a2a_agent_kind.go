@@ -280,7 +280,8 @@ func (k *A2AAgentKind) DeleteEvent(artifact models.ArtifactRef) eventhub.Event {
 	return eventhub.NewGatewayEvent("agent.deleted", "DELETE", payload.AgentID, payload)
 }
 
-// UnplacedRecords are the exposures and proxies whose artifact has no row yet, in environments with a gateway.
+// UnplacedRecords are the exposures and proxies whose artifact has no row yet,
+// in environments with a gateway of the kind's role.
 func (k *A2AAgentKind) UnplacedRecords(
 	ctx context.Context, ouID string, env *uuid.UUID, afterKey string, limit int,
 ) ([]reconcile.Record, error) {

@@ -293,10 +293,16 @@ func TryLockDriftScan(conn *gorm.DB) (bool, error) {
 	return locked, nil
 }
 
-// UnlockDriftScan releases the lock TryLockDriftScan took, on the same pinned connection.
+// UnlockDriftScan releases the lock TryLockDriftScan took, on the same pinned connection. An error means the
+// lock may still be held by that connection's session.
 func UnlockDriftScan(conn *gorm.DB) error {
-	if err := conn.Exec("SELECT pg_advisory_unlock(?, hashtext(?))", DriftScanLockNamespace, driftScanLockKey).Error; err != nil {
+	var released bool
+	if err := conn.Raw("SELECT pg_advisory_unlock(?, hashtext(?))", DriftScanLockNamespace, driftScanLockKey).
+		Scan(&released).Error; err != nil {
 		return fmt.Errorf("failed to release the drift scan lock: %w", err)
+	}
+	if !released {
+		return errors.New("the drift scan lock was not held by this connection")
 	}
 	return nil
 }

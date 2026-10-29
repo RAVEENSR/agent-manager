@@ -287,9 +287,9 @@ func (r *GatewayRepo) buildFilterQuery(filters GatewayFilterOptions) *gorm.DB {
 // Delete soft-deletes a gateway with organization isolation (sets deleted_at).
 // Soft delete does not trigger FK ON DELETE CASCADE, so active tokens are
 // revoked and its deployments and status rows are removed explicitly here, except UNDEPLOYED status
-// rows of a finished undeploy (nothing owed): they are kept with no deployment so the user's undeploy outlives the gateway. Other child
-// tables (environment mappings, identity providers) are left in place and must be
-// filtered by gateways.deleted_at at the read site.
+// rows of a finished undeploy (nothing owed): they are kept with no deployment so the user's undeploy
+// outlives the gateway. Other child tables (environment mappings, identity providers) are left in place and
+// must be filtered by gateways.deleted_at at the read site.
 func (r *GatewayRepo) Delete(gatewayID, ouID string) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		result := tx.Where("uuid = ? AND ou_id = ?", gatewayID, ouID).
@@ -625,7 +625,7 @@ func (r *GatewayRepo) ListIdentityProvidersByOrg(ouID string) ([]IdentityProvide
 	return results, err
 }
 
-// Advisory lock namespaces, one per pg_advisory_xact_lock user, so their keys cannot collide.
+// Advisory lock namespaces, one per advisory lock user, so their keys cannot collide.
 const (
 	gatewayEnvLockNamespace    = 4711
 	a2aProxyLockNamespace      = 4712

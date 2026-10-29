@@ -136,7 +136,8 @@ func (k *MCPProxyKind) DeleteEvent(artifact models.ArtifactRef) eventhub.Event {
 	return eventhub.NewGatewayEvent("mcpproxy.deleted", "DELETE", payload.ProxyID, payload)
 }
 
-// UnplacedRecords are the (endpoint, environment) bindings with no row yet, in environments with a gateway.
+// UnplacedRecords are the (endpoint, environment) bindings with no row yet,
+// in environments with a gateway of the kind's role.
 func (k *MCPProxyKind) UnplacedRecords(
 	ctx context.Context, ouID string, env *uuid.UUID, afterKey string, limit int,
 ) ([]reconcile.Record, error) {

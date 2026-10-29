@@ -18,7 +18,10 @@ package reconcile
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -31,9 +34,10 @@ import (
 )
 
 const (
-	renderBatch = 20
-	placeBatch  = 100
-	driftBatch  = 100
+	renderBatch        = 20
+	placeBatch         = 100
+	driftBatch         = 100
+	driftUnlockTimeout = 5 * time.Second
 	// placeQueue is how many requested placements wait for the worker; past it the slow placement pass covers them.
 	placeQueue = 64
 	// placedReason is what a user is shown while a row the placement pass placed is rendered.
@@ -281,11 +285,28 @@ func (w *Worker) CheckDrift(ctx context.Context) (scanned bool, err error) {
 	return scanned, err
 }
 
-// unlockDriftScan ignores ctx's cancellation: a scan cut short by it must still release the lock.
+// unlockDriftScan ignores ctx's cancellation: a scan cut short by it must still release the lock. A lock that
+// won't release would outlive the scan on its pooled connection, so that connection is discarded.
 func (w *Worker) unlockDriftScan(ctx context.Context, conn *gorm.DB) {
-	if err := repositories.UnlockDriftScan(conn.WithContext(context.WithoutCancel(ctx))); err != nil {
-		w.logger.Warn("Failed to release the drift scan lock; it stays with its pooled connection until that closes", "error", err)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), driftUnlockTimeout)
+	defer cancel()
+	err := repositories.UnlockDriftScan(conn.WithContext(ctx))
+	if err == nil {
+		return
 	}
+	w.logger.Warn("Failed to release the drift scan lock; discarding its connection", "error", err)
+	if err := discardConnection(conn); err != nil {
+		w.logger.Error("Failed to discard the connection holding the drift scan lock; the lock stays until it closes", "error", err)
+	}
+}
+
+// discardConnection makes database/sql close a pinned connection instead of pooling it, which ends its session.
+func discardConnection(conn *gorm.DB) error {
+	pinned, ok := conn.Statement.ConnPool.(*sql.Conn)
+	if !ok {
+		return fmt.Errorf("pinned connection is a %T, not a *sql.Conn", conn.Statement.ConnPool)
+	}
+	return pinned.Raw(func(any) error { return driver.ErrBadConn })
 }
 
 func (w *Worker) scanForDrift(ctx context.Context) error {

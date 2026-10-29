@@ -142,7 +142,8 @@ func (k *LLMProxyKind) vhost(ref reconcile.EventRef) string {
 const monitorEnvironmentUUID = `(CASE WHEN mon.environment_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 	THEN mon.environment_id::uuid END)`
 
-// UnplacedRecords are the agents' and monitors' proxies with no row yet, in environments with a gateway.
+// UnplacedRecords are the agents' and monitors' proxies with no row yet,
+// in environments with a gateway of the kind's role.
 func (k *LLMProxyKind) UnplacedRecords(
 	ctx context.Context, ouID string, env *uuid.UUID, afterKey string, limit int,
 ) ([]reconcile.Record, error) {

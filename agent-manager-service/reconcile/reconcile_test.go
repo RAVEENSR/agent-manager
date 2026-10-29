@@ -900,6 +900,25 @@ func TestUnplacedRecordsNeedAGatewayOfTheKindsRole(t *testing.T) {
 	assert.Len(t, records, 1)
 }
 
+func TestUnplacedIngressRecordsNeedAnIngressGateway(t *testing.T) {
+	kind := newFakeEnvKind(true)
+	kind.roles = models.IngressGatewayRoles
+	ouID, env := testOU(), uuid.New()
+	ref := seedArtifact(t, ouID, fakeEnvKindName)
+	seedRecord(t, nil, ref, env)
+	seedGatewayWithRole(t, ouID, models.GatewayRoleEgress, env)
+
+	records, err := kind.UnplacedRecords(context.Background(), ouID, &env, "", 10)
+	require.NoError(t, err)
+	assert.Empty(t, records, "an egress-only environment can't place an ingress kind")
+
+	seedGatewayWithRole(t, ouID, models.GatewayRoleIngress, env)
+
+	records, err = kind.UnplacedRecords(context.Background(), ouID, &env, "", 10)
+	require.NoError(t, err)
+	assert.Len(t, records, 1)
+}
+
 func TestGatewayDeleteKeepsAUserUndeploy(t *testing.T) {
 	for name, sent := range map[string]bool{"undeployed after a deploy": true, "undeployed from PENDING": false} {
 		t.Run(name, func(t *testing.T) {
@@ -1123,6 +1142,25 @@ func TestDriftScanReleasesTheLockOnError(t *testing.T) {
 	scanned, err = second.CheckDrift(context.Background())
 	require.NoError(t, err)
 	assert.True(t, scanned, "the failed scan released the lock")
+}
+
+// An unlock that fails ends the pinned connection's session, which releases the lock with it.
+func TestDriftUnlockFailureDiscardsTheConnection(t *testing.T) {
+	_, worker := newWorker(t)
+	var pid int
+	err := db.DB(context.Background()).Connection(func(conn *gorm.DB) error {
+		require.NoError(t, conn.Raw("SELECT pg_backend_pid()").Scan(&pid).Error)
+		require.Error(t, repositories.UnlockDriftScan(conn), "the lock was never taken")
+		worker.unlockDriftScan(context.Background(), conn)
+		return nil
+	})
+	require.NoError(t, err)
+
+	assert.Eventually(t, func() bool {
+		var sessions int64
+		require.NoError(t, db.DB(context.Background()).Raw("SELECT count(*) FROM pg_stat_activity WHERE pid = ?", pid).Scan(&sessions).Error)
+		return sessions == 0
+	}, 5*time.Second, 50*time.Millisecond)
 }
 
 // MarkStale touches only placed rows.
