@@ -126,7 +126,7 @@ func TestAnchoring_MCPProxyUpdate(t *testing.T) {
 		}
 
 		withMCPCore(svc)
-		err := svc.deployMCPProxyEndpoints(context.Background(), newProxy(), "org")
+		err := svc.deployMCPProxyEndpoints(context.Background(), txSentinel, newProxy(), "org")
 		require.NoError(t, err)
 		// The deployment event's GatewayID is the anchoring signal: a second egress
 		// gateway must never steal an already-deployed (endpoint, environment) binding.
@@ -149,7 +149,7 @@ func TestAnchoring_MCPProxyUpdate(t *testing.T) {
 		}
 
 		withMCPCore(svc)
-		err := svc.deployMCPProxyEndpoints(context.Background(), newProxy(), "org")
+		err := svc.deployMCPProxyEndpoints(context.Background(), txSentinel, newProxy(), "org")
 		require.ErrorIs(t, err, errAmbiguousEgressGateway)
 	})
 
@@ -177,7 +177,7 @@ func TestAnchoring_MCPProxyUpdate(t *testing.T) {
 		p.Endpoints[0].Environments[0].RequestedGatewayUUID = &requested
 
 		withMCPCore(svc)
-		err := svc.deployMCPProxyEndpoints(context.Background(), p, "org")
+		err := svc.deployMCPProxyEndpoints(context.Background(), txSentinel, p, "org")
 		require.NoError(t, err)
 		require.Len(t, hub.published, 1)
 		require.Equal(t, egress.UUID.String(), hub.published[0].GatewayID)
@@ -202,7 +202,7 @@ func TestAnchoring_MCPProxyUpdate(t *testing.T) {
 		p.Endpoints[0].Environments[0].RequestedGatewayUUID = &requested
 
 		withMCPCore(svc)
-		err := svc.deployMCPProxyEndpoints(context.Background(), p, "org")
+		err := svc.deployMCPProxyEndpoints(context.Background(), txSentinel, p, "org")
 		require.ErrorIs(t, err, errPlacementFixed)
 	})
 }

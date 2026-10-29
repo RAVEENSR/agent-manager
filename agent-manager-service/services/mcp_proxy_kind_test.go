@@ -33,6 +33,7 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/reconcile"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
+	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
 
 // mcpFixture is an org with an MCP proxy whose one endpoint is bound to env, and the MCP service over the real
@@ -58,7 +59,8 @@ func newMCPFixture(t *testing.T) *mcpFixture {
 		db: gormDB, tx: NewTxRunner(gormDB), repo: repositories.NewMCPProxyRepo(gormDB), deploymentRepo: f.sync.repo,
 		gatewayRepo: gateways, artifactRepo: repositories.NewArtifactRepo(gormDB),
 		mcpProxyScopeRepo: repositories.NewMCPProxyScopeRepository(gormDB), logger: slog.New(slog.DiscardHandler),
-		core: core, kind: kind,
+		endpointRepo: repositories.NewMCPProxyEndpointRepository(gormDB), core: core, kind: kind,
+		envMCPMappingRepo: repositories.NewEnvAgentMCPMappingRepository(gormDB),
 	}
 
 	proxy, _ := goldenMCPProxy()
@@ -88,6 +90,14 @@ func newMCPFixture(t *testing.T) *mcpFixture {
 	return f
 }
 
+// deploy deploys the fixture proxy's bindings as a save does, in one transaction.
+func (f *mcpFixture) deploy(t *testing.T) error {
+	t.Helper()
+	return NewTxRunner(db.GetDB())(context.Background(), func(tx *gorm.DB) error {
+		return f.svc.deployMCPProxyEndpoints(context.Background(), tx, f.proxy, f.sync.ouID)
+	})
+}
+
 func (f *mcpFixture) mcpRow(t *testing.T, gateway uuid.UUID) *models.DeploymentStatusRecord {
 	t.Helper()
 	return f.row(t, &models.LLMProxy{UUID: f.artifact}, gateway)
@@ -101,7 +111,7 @@ func TestMCPRequestedGatewayBecomesTheRowsGateway(t *testing.T) {
 	requestedID := requested.String()
 	f.proxy.Endpoints[0].Environments[0].RequestedGatewayUUID = &requestedID
 
-	require.NoError(t, f.svc.deployMCPProxyEndpoints(context.Background(), f.proxy, f.sync.ouID))
+	require.NoError(t, f.deploy(t))
 
 	row := f.mcpRow(t, requested)
 	require.NotNil(t, row)
@@ -115,7 +125,7 @@ func TestMCPRequestedGatewayBecomesTheRowsGateway(t *testing.T) {
 func TestMCPScopeChangeReRendersInline(t *testing.T) {
 	f := newMCPFixture(t)
 	gateway := f.mapGateway(t, f.env)
-	require.NoError(t, f.svc.deployMCPProxyEndpoints(context.Background(), f.proxy, f.sync.ouID))
+	require.NoError(t, f.deploy(t))
 	before := *f.mcpRow(t, gateway).DeploymentID
 	require.NoError(t, db.GetDB().Create(&models.MCPProxyScope{
 		MCPProxyUUID: f.proxy.UUID, Action: "read", Tools: []string{"get_forecast"},
@@ -140,7 +150,7 @@ func TestMCPScopeChangeReRendersInline(t *testing.T) {
 // delete event in the deleting transaction.
 func TestMCPPlacementAndDelete(t *testing.T) {
 	f := newMCPFixture(t)
-	require.NoError(t, f.svc.deployMCPProxyEndpoints(context.Background(), f.proxy, f.sync.ouID))
+	require.NoError(t, f.deploy(t))
 	gateway := f.mapGateway(t, f.env)
 	assert.Nil(t, f.mcpRow(t, gateway), "no gateway, no row")
 
@@ -154,4 +164,65 @@ func TestMCPPlacementAndDelete(t *testing.T) {
 	assert.Equal(t, "mcpproxy.deleted", string(last.EventType))
 	assert.Equal(t, gateway.String(), last.GatewayID)
 	assert.Nil(t, f.mcpRow(t, gateway))
+}
+
+// invalidMCPRequest is a proxy whose one endpoint, bound to env, takes its API key from a cookie: it only fails
+// when rendered.
+func invalidMCPRequest(handle string, env uuid.UUID) *models.MCPProxyDTO {
+	enabled := true
+	return &models.MCPProxyDTO{
+		ID: handle, Name: handle, Version: "v1.0",
+		Endpoints: []models.MCPProxyEndpointDTO{{
+			ID:           "primary",
+			Upstream:     models.UpstreamConfig{Main: &models.UpstreamEndpoint{URL: "https://1.1.1.1/mcp"}},
+			Security:     &models.SecurityConfig{Enabled: &enabled, APIKey: &models.APIKeySecurity{Enabled: &enabled, In: "cookie"}},
+			Environments: []models.MCPEndpointEnvironmentDTO{{EnvironmentUUID: env.String()}},
+		}},
+	}
+}
+
+// An MCP save whose artifact can't render is refused with a 4xx and commits nothing, with or without a gateway.
+func TestMCPSaveThatCannotRenderCommitsNothing(t *testing.T) {
+	for _, withGateway := range []bool{false, true} {
+		name := map[bool]string{false: "without a gateway", true: "with a gateway"}[withGateway]
+		t.Run("create "+name, func(t *testing.T) {
+			f := newMCPFixture(t)
+			env := uuid.New()
+			if withGateway {
+				f.mapGateway(t, env)
+			}
+			handle := "bad-" + uuid.NewString()[:8]
+			t.Cleanup(func() { db.GetDB().Exec(`DELETE FROM artifacts WHERE handle LIKE ?`, handle+"%") })
+			published := len(f.hub.published)
+
+			_, err := f.svc.Create(context.Background(), f.sync.ouID, "me", invalidMCPRequest(handle, env))
+
+			assert.ErrorIs(t, err, utils.ErrInvalidInput)
+			var artifacts int64
+			require.NoError(t, db.GetDB().Table("artifacts").Where("handle LIKE ?", handle+"%").Count(&artifacts).Error)
+			assert.Zero(t, artifacts, "neither the proxy nor its environment artifact is committed")
+			assert.Len(t, f.hub.published, published, "no event")
+		})
+		t.Run("update "+name, func(t *testing.T) {
+			f := newMCPFixture(t)
+			if withGateway {
+				f.mapGateway(t, f.env)
+			}
+			published := len(f.hub.published)
+
+			handle := mcpSourceHandle(f.proxy)
+			_, err := f.svc.Update(context.Background(), f.sync.ouID, handle, invalidMCPRequest(handle, f.env))
+
+			assert.ErrorIs(t, err, utils.ErrInvalidInput)
+			stored, err := f.svc.repo.GetByUUID(context.Background(), f.proxy.UUID.String(), f.sync.ouID)
+			require.NoError(t, err)
+			require.Len(t, stored.Endpoints, 1)
+			assert.Equal(t, f.proxy.Endpoints[0].UUID, stored.Endpoints[0].UUID, "the endpoint set is not replaced")
+			var rows int64
+			require.NoError(t, db.GetDB().Model(&models.DeploymentStatusRecord{}).
+				Where("artifact_uuid = ?", f.artifact).Count(&rows).Error)
+			assert.Zero(t, rows)
+			assert.Len(t, f.hub.published, published, "no event")
+		})
+	}
 }
