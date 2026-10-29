@@ -119,6 +119,9 @@ import (
 //			RecordRenderOutcomeFunc: func(ctx context.Context, claim models.ClaimedRender, outcome repositories.RenderOutcome) error {
 //				panic("mock out the RecordRenderOutcome method")
 //			},
+//			SentGatewaysFunc: func(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error) {
+//				panic("mock out the SentGateways method")
+//			},
 //			SetCurrentFunc: func(artifactUUID string, orgUUID string, gatewayID string, deploymentID string, status models.DeploymentStatus) (time.Time, error) {
 //				panic("mock out the SetCurrent method")
 //			},
@@ -242,6 +245,9 @@ type DeploymentRepositoryMock struct {
 
 	// RecordRenderOutcomeFunc mocks the RecordRenderOutcome method.
 	RecordRenderOutcomeFunc func(ctx context.Context, claim models.ClaimedRender, outcome repositories.RenderOutcome) error
+
+	// SentGatewaysFunc mocks the SentGateways method.
+	SentGatewaysFunc func(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error)
 
 	// SetCurrentFunc mocks the SetCurrent method.
 	SetCurrentFunc func(artifactUUID string, orgUUID string, gatewayID string, deploymentID string, status models.DeploymentStatus) (time.Time, error)
@@ -582,6 +588,15 @@ type DeploymentRepositoryMock struct {
 			// Outcome is the outcome argument value.
 			Outcome repositories.RenderOutcome
 		}
+		// SentGateways holds details about calls to the SentGateways method.
+		SentGateways []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// OuID is the ouID argument value.
+			OuID string
+			// ArtifactUUID is the artifactUUID argument value.
+			ArtifactUUID uuid.UUID
+		}
 		// SetCurrent holds details about calls to the SetCurrent method.
 		SetCurrent []struct {
 			// ArtifactUUID is the artifactUUID argument value.
@@ -680,6 +695,7 @@ type DeploymentRepositoryMock struct {
 	lockPlacedGateways                  sync.RWMutex
 	lockQueueRender                     sync.RWMutex
 	lockRecordRenderOutcome             sync.RWMutex
+	lockSentGateways                    sync.RWMutex
 	lockSetCurrent                      sync.RWMutex
 	lockSetCurrentCtx                   sync.RWMutex
 	lockStartDeploy                     sync.RWMutex
@@ -2049,6 +2065,46 @@ func (mock *DeploymentRepositoryMock) RecordRenderOutcomeCalls() []struct {
 	mock.lockRecordRenderOutcome.RLock()
 	calls = mock.calls.RecordRenderOutcome
 	mock.lockRecordRenderOutcome.RUnlock()
+	return calls
+}
+
+// SentGateways calls SentGatewaysFunc.
+func (mock *DeploymentRepositoryMock) SentGateways(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error) {
+	if mock.SentGatewaysFunc == nil {
+		panic("DeploymentRepositoryMock.SentGatewaysFunc: method is nil but DeploymentRepository.SentGateways was just called")
+	}
+	callInfo := struct {
+		Ctx          context.Context
+		OuID         string
+		ArtifactUUID uuid.UUID
+	}{
+		Ctx:          ctx,
+		OuID:         ouID,
+		ArtifactUUID: artifactUUID,
+	}
+	mock.lockSentGateways.Lock()
+	mock.calls.SentGateways = append(mock.calls.SentGateways, callInfo)
+	mock.lockSentGateways.Unlock()
+	return mock.SentGatewaysFunc(ctx, ouID, artifactUUID)
+}
+
+// SentGatewaysCalls gets all the calls that were made to SentGateways.
+// Check the length with:
+//
+//	len(mockedDeploymentRepository.SentGatewaysCalls())
+func (mock *DeploymentRepositoryMock) SentGatewaysCalls() []struct {
+	Ctx          context.Context
+	OuID         string
+	ArtifactUUID uuid.UUID
+} {
+	var calls []struct {
+		Ctx          context.Context
+		OuID         string
+		ArtifactUUID uuid.UUID
+	}
+	mock.lockSentGateways.RLock()
+	calls = mock.calls.SentGateways
+	mock.lockSentGateways.RUnlock()
 	return calls
 }
 

@@ -276,11 +276,17 @@ func (r *DeploymentRepo) LiveGateways(ctx context.Context, ouID string, artifact
 	return r.gatewaysWhere(ctx, ouID, artifactUUID, "status = ?", models.DeploymentStatusDeployed)
 }
 
-func (r *DeploymentRepo) gatewaysWhere(ctx context.Context, ouID string, artifactUUID uuid.UUID, condition string, arg any) ([]string, error) {
+// SentGateways returns the gateways the artifact was ever sent, in gateway order: its row names a deployment,
+// whatever its status. An undeployed artifact is still on the gateway, so a delete goes to these.
+func (r *DeploymentRepo) SentGateways(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error) {
+	return r.gatewaysWhere(ctx, ouID, artifactUUID, "deployment_id IS NOT NULL")
+}
+
+func (r *DeploymentRepo) gatewaysWhere(ctx context.Context, ouID string, artifactUUID uuid.UUID, condition string, args ...any) ([]string, error) {
 	var gatewayUUIDs []string
 	err := r.db.WithContext(ctx).Table("deployment_status").
 		Where("artifact_uuid = ? AND ou_id = ?", artifactUUID, ouID).
-		Where(condition, arg).
+		Where(condition, args...).
 		Order("gateway_uuid").
 		Pluck("gateway_uuid", &gatewayUUIDs).Error
 	if err != nil {

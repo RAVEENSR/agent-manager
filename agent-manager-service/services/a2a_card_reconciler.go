@@ -32,6 +32,7 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
+	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
 
 const (
@@ -308,11 +309,7 @@ func (s *a2aCardReconcilerService) logSuperseded(row models.A2AAgentCard) {
 
 // a2aCardRetryIn is min(5s · 2^attempt, 60s).
 func a2aCardRetryIn(attempt int) time.Duration {
-	delay := a2aCardBaseBackoff
-	for i := 0; i < attempt && delay < a2aCardMaxBackoff; i++ {
-		delay *= 2
-	}
-	return min(delay, a2aCardMaxBackoff)
+	return utils.ExponentialBackoff(attempt, a2aCardBaseBackoff, a2aCardMaxBackoff)
 }
 
 // a2aCardHash is SHA-256 over the card re-encoded with sorted keys, so reformatting is not a change.

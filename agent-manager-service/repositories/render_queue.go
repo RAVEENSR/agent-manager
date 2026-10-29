@@ -290,3 +290,14 @@ func (r *DeploymentRepo) ListDeployedForDrift(ctx context.Context, kind string, 
 	}
 	return placements, nil
 }
+
+// TryLockDriftScan claims this interval's drift scan for the caller's transaction, until it ends. false means
+// another replica holds it.
+func TryLockDriftScan(tx *gorm.DB) (bool, error) {
+	var locked bool
+	if err := tx.Raw("SELECT pg_try_advisory_xact_lock(?, hashtext(?))", driftScanLockNamespace, "drift").
+		Scan(&locked).Error; err != nil {
+		return false, fmt.Errorf("failed to try the drift scan lock: %w", err)
+	}
+	return locked, nil
+}

@@ -92,6 +92,7 @@ type DeploymentRepository interface {
 	GetPullable(ctx context.Context, ouID string, artifactUUID uuid.UUID, gatewayID string) (*models.Deployment, error)
 	PlacedGateways(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error)
 	LiveGateways(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error)
+	SentGateways(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error)
 	GetStatusRecord(ctx context.Context, placement models.Placement) (*models.DeploymentStatusRecord, error)
 
 	// Gateway startup sync.

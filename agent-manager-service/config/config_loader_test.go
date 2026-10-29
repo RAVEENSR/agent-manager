@@ -1135,3 +1135,23 @@ func TestValidateDeploymentTimeoutConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateReconcileConfig(t *testing.T) {
+	valid := ReconcileConfig{
+		RenderIntervalSeconds: 5, PlaceIntervalSeconds: 600, DriftIntervalSeconds: 300,
+		RenderLeaseSeconds: 120, RenderAttemptBudget: 30,
+	}
+	r := &configReader{}
+	validateReconcileConfig(&Config{Reconcile: valid}, r)
+	if len(r.errors) != 0 {
+		t.Fatalf("defaults rejected: %v", r.errors)
+	}
+
+	zeroBudget := valid
+	zeroBudget.RenderAttemptBudget = 0
+	r = &configReader{}
+	validateReconcileConfig(&Config{Reconcile: zeroBudget}, r)
+	if len(r.errors) != 1 || !strings.Contains(r.errors[0].Error(), "RECONCILE_RENDER_ATTEMPT_BUDGET") {
+		t.Fatalf("got %v, want one RECONCILE_RENDER_ATTEMPT_BUDGET error", r.errors)
+	}
+}

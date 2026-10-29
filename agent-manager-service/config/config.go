@@ -152,6 +152,10 @@ type Config struct {
 	// DeploymentTimeout configures the sweeper that fails gateway deploys and undeploys the gateway never acked.
 	DeploymentTimeout DeploymentTimeoutConfig
 
+	// Reconcile configures the gateway reconcile worker: rendering owed deploys, placing environment-addressed
+	// artifacts on their gateways, and checking deployed artifacts for drift.
+	Reconcile ReconcileConfig
+
 	// GatewayFailureThresholdSeconds is how long a gateway must have been
 	// disconnected (is_active false) before it counts as failed. Configurable
 	// rather than a constant because the SLO differs per deployment shape, and
@@ -223,6 +227,20 @@ type Config struct {
 type DeploymentTimeoutConfig struct {
 	SweepIntervalSeconds int
 	TimeoutSeconds       int
+}
+
+// ReconcileConfig sets the reconcile worker's intervals, the render claim's lease and the render attempt budget.
+type ReconcileConfig struct {
+	// RenderIntervalSeconds is how often due renders are claimed; a save also nudges the worker.
+	RenderIntervalSeconds int
+	// PlaceIntervalSeconds is how often the fleet-wide placement pass runs; mapping a gateway places at once.
+	PlaceIntervalSeconds int
+	// DriftIntervalSeconds is how often one replica checks deployed artifacts for drift.
+	DriftIntervalSeconds int
+	// RenderLeaseSeconds is how long a claimed render is held before another replica may claim it again.
+	RenderLeaseSeconds int
+	// RenderAttemptBudget is how many failed renders give up a deploy. Waiting for an input never counts.
+	RenderAttemptBudget int
 }
 
 // GatewayManifestCacheConfig selects and configures the backend for the

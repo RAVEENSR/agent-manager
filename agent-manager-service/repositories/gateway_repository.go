@@ -611,6 +611,7 @@ const (
 	gatewayEnvLockNamespace    = 4711
 	a2aProxyLockNamespace      = 4712
 	agentVariableLockNamespace = 4713
+	driftScanLockNamespace     = 4714
 )
 
 // advisoryXactLock takes a transaction-scoped advisory lock on key within namespace, released on

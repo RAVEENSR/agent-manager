@@ -315,6 +315,14 @@ func loadEnvs() {
 		TimeoutSeconds:       int(r.readOptionalInt64("DEPLOYMENT_TIMEOUT_SECONDS", 300)),
 	}
 	validateDeploymentTimeoutConfig(config, r)
+	config.Reconcile = ReconcileConfig{
+		RenderIntervalSeconds: int(r.readOptionalInt64("RECONCILE_RENDER_INTERVAL_SECONDS", 5)),
+		PlaceIntervalSeconds:  int(r.readOptionalInt64("RECONCILE_PLACE_INTERVAL_SECONDS", 600)),
+		DriftIntervalSeconds:  int(r.readOptionalInt64("RECONCILE_DRIFT_INTERVAL_SECONDS", 300)),
+		RenderLeaseSeconds:    int(r.readOptionalInt64("RECONCILE_RENDER_LEASE_SECONDS", 120)),
+		RenderAttemptBudget:   int(r.readOptionalInt64("RECONCILE_RENDER_ATTEMPT_BUDGET", 30)),
+	}
+	validateReconcileConfig(config, r)
 	config.GatewayFailureThresholdSeconds = int(r.readOptionalInt64("GATEWAY_FAILURE_THRESHOLD_SECONDS", 300))
 	if config.GatewayFailureThresholdSeconds <= 0 {
 		r.errors = append(r.errors, fmt.Errorf(
@@ -445,6 +453,23 @@ func validateDeploymentTimeoutConfig(cfg *Config, r *configReader) {
 	}{
 		{"DEPLOYMENT_TIMEOUT_SWEEP_INTERVAL_SECONDS", cfg.DeploymentTimeout.SweepIntervalSeconds},
 		{"DEPLOYMENT_TIMEOUT_SECONDS", cfg.DeploymentTimeout.TimeoutSeconds},
+	} {
+		if field.value <= 0 {
+			r.errors = append(r.errors, fmt.Errorf("%s must be greater than 0, got %d", field.name, field.value))
+		}
+	}
+}
+
+func validateReconcileConfig(cfg *Config, r *configReader) {
+	for _, field := range []struct {
+		name  string
+		value int
+	}{
+		{"RECONCILE_RENDER_INTERVAL_SECONDS", cfg.Reconcile.RenderIntervalSeconds},
+		{"RECONCILE_PLACE_INTERVAL_SECONDS", cfg.Reconcile.PlaceIntervalSeconds},
+		{"RECONCILE_DRIFT_INTERVAL_SECONDS", cfg.Reconcile.DriftIntervalSeconds},
+		{"RECONCILE_RENDER_LEASE_SECONDS", cfg.Reconcile.RenderLeaseSeconds},
+		{"RECONCILE_RENDER_ATTEMPT_BUDGET", cfg.Reconcile.RenderAttemptBudget},
 	} {
 		if field.value <= 0 {
 			r.errors = append(r.errors, fmt.Errorf("%s must be greater than 0, got %d", field.name, field.value))
