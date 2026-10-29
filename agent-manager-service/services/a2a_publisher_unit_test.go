@@ -74,8 +74,12 @@ func (m *publisherMocks) tx() TxRunner {
 
 func newPublisherMocks(t *testing.T) *publisherMocks {
 	m := &publisherMocks{
-		txExposures:   &repomocks.PlatformAgentExposureRepositoryMock{},
-		proxies:       &repomocks.A2AProxyRepositoryMock{},
+		txExposures: &repomocks.PlatformAgentExposureRepositoryMock{},
+		proxies: &repomocks.A2AProxyRepositoryMock{
+			ListForEnvironmentFunc: func(context.Context, string, uuid.UUID) ([]models.A2AProxy, error) {
+				return []models.A2AProxy{}, nil
+			},
+		},
 		txDeployments: &repomocks.DeploymentRepositoryMock{},
 		gateways: &repomocks.GatewayRepositoryMock{
 			ListWithFiltersFunc: func(repositories.GatewayFilterOptions) ([]*models.Gateway, error) {
@@ -374,4 +378,34 @@ func TestA2APublisherTeardownEnvironmentDropsEachArtifactWithItsDeleteEvents(t *
 	assert.Equal(t, gateway.String(), m.hub.published[0].GatewayID)
 	assert.Same(t, txSentinel, m.hub.txs[0])
 	require.Len(t, m.artifacts.DeleteCalls(), 1)
+}
+
+// A deleted environment's proxied external agents are found by their proxy rows, card or no card, and lose their
+// artifacts with their delete events.
+func TestA2APublisherTeardownEnvironmentDropsAProxiedAgentsArtifact(t *testing.T) {
+	m := newPublisherMocks(t)
+	envUUID, artifactUUID, gateway := uuid.New(), uuid.New(), uuid.New()
+	m.exposures.ListForEnvironmentFunc = func(context.Context, string, uuid.UUID) ([]models.PlatformAgentExposure, error) {
+		return nil, nil
+	}
+	m.proxies.ListForEnvironmentFunc = func(context.Context, string, uuid.UUID) ([]models.A2AProxy, error) {
+		return []models.A2AProxy{{ProjectName: "checkout", AgentName: "weather"}}, nil
+	}
+	m.exposures.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
+	m.proxies.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
+	m.artifacts.GetByHandleFunc = func(handle, _ string) (*models.Artifact, error) {
+		assert.Equal(t, agentEnvAPIArtifactHandle("checkout", "weather", envUUID.String()), handle)
+		return &models.Artifact{UUID: artifactUUID, Handle: handle, Kind: models.KindAgent}, nil
+	}
+	m.txDeployments.DeleteEventGatewaysFunc = func(context.Context, string, uuid.UUID) ([]string, error) {
+		return []string{gateway.String()}, nil
+	}
+	m.artifacts.DeleteFunc = func(*gorm.DB, string) error { return nil }
+
+	require.NoError(t, m.publisher().TeardownEnvironment(context.Background(), "org-1", envUUID))
+
+	require.Len(t, m.artifacts.DeleteCalls(), 1)
+	assert.Equal(t, artifactUUID.String(), m.artifacts.DeleteCalls()[0].UUID)
+	require.Len(t, m.hub.published, 1)
+	assert.Equal(t, "agent.deleted", string(m.hub.published[0].EventType))
 }

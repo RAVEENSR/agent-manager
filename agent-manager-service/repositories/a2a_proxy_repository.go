@@ -62,6 +62,8 @@ type A2AProxyRepository interface {
 	DeleteForEnvironment(ctx context.Context, ouID string, environmentUUID uuid.UUID) error
 	// ListEnvironmentUUIDs returns the distinct environment UUIDs with rows recorded under environmentName.
 	ListEnvironmentUUIDs(ctx context.Context, ouID, environmentName string) ([]uuid.UUID, error)
+	// ListForEnvironment returns every agent's proxy in the environment, ordered by project and agent name.
+	ListForEnvironment(ctx context.Context, ouID string, environmentUUID uuid.UUID) ([]models.A2AProxy, error)
 }
 
 type a2aProxyRepository struct {
@@ -171,6 +173,10 @@ func (r *a2aProxyRepository) DeleteForAgent(ctx context.Context, ouID, projectNa
 
 func (r *a2aProxyRepository) DeleteForEnvironment(ctx context.Context, ouID string, environmentUUID uuid.UUID) error {
 	return deleteForEnvironment[models.A2AProxy](ctx, r.db, ouID, environmentUUID)
+}
+
+func (r *a2aProxyRepository) ListForEnvironment(ctx context.Context, ouID string, environmentUUID uuid.UUID) ([]models.A2AProxy, error) {
+	return listForEnvironment[models.A2AProxy](ctx, r.db, ouID, environmentUUID, "project_name ASC, agent_name ASC")
 }
 
 func (r *a2aProxyRepository) ListEnvironmentUUIDs(ctx context.Context, ouID, environmentName string) ([]uuid.UUID, error) {

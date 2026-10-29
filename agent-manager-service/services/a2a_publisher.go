@@ -304,12 +304,17 @@ func (p *A2APublisher) DeleteForAgent(ctx context.Context, ouID, projectName, ag
 }
 
 // TeardownEnvironment removes a deleted environment's A2A rows and A2A agent artifacts, each artifact in one
-// transaction with its delete events; one failure does not stop the rest. Call it before the environment's card rows
-// go: they name the agents whose artifacts no exposure covers.
+// transaction with its delete events; one failure does not stop the rest. Exposures name the platform agents and
+// proxies the external ones. Call it before the environment's card rows go: they name the agents left by a switch
+// to direct, whose artifacts neither covers.
 func (p *A2APublisher) TeardownEnvironment(ctx context.Context, ouID string, envUUID uuid.UUID) error {
 	exposures, err := p.exposureRepo.ListForEnvironment(ctx, ouID, envUUID)
 	if err != nil {
 		return fmt.Errorf("failed to list the environment's A2A agent exposures: %w", err)
+	}
+	proxies, err := p.proxyRepo.ListForEnvironment(ctx, ouID, envUUID)
+	if err != nil {
+		return fmt.Errorf("failed to list the environment's A2A proxies: %w", err)
 	}
 	var errs []error
 	dropped := map[uuid.UUID]struct{}{}
@@ -320,6 +325,13 @@ func (p *A2APublisher) TeardownEnvironment(ctx context.Context, ouID string, env
 			continue
 		}
 		dropped[exposure.ArtifactUUID] = struct{}{}
+	}
+	agents := make([]agentInEnvironment, 0, len(proxies))
+	for _, proxy := range proxies {
+		agents = append(agents, agentInEnvironment{projectName: proxy.ProjectName, agentName: proxy.AgentName})
+	}
+	if err := p.dropAgentsArtifacts(ctx, ouID, envUUID, agents, dropped); err != nil {
+		errs = append(errs, err)
 	}
 	if err := p.dropLeftoverArtifacts(ctx, ouID, envUUID, dropped); err != nil {
 		errs = append(errs, err)
@@ -351,22 +363,39 @@ func (p *A2APublisher) EnvironmentUUIDs(ctx context.Context, ouID, name string) 
 	return append(exposed, proxies...), errors.Join(errs...)
 }
 
-// dropLeftoverArtifacts deletes the artifacts of the environment's A2A agents that no exposure covered: external
-// agents, and platform agents left by a switch to direct. The card rows name those agents; a REST or chat agent's
-// artifact for the environment is not touched.
+// agentInEnvironment names an agent whose artifact in the environment is found by its handle.
+type agentInEnvironment struct {
+	projectName string
+	agentName   string
+}
+
+// dropLeftoverArtifacts deletes the artifacts of the environment's A2A agents that no exposure or proxy covered:
+// agents left by a switch to direct. The card rows name those agents; a REST or chat agent's artifact for the
+// environment is not touched.
 func (p *A2APublisher) dropLeftoverArtifacts(ctx context.Context, ouID string, envUUID uuid.UUID, dropped map[uuid.UUID]struct{}) error {
 	cards, err := p.cardRepo.ListForEnvironment(ctx, ouID, envUUID)
 	if err != nil {
 		return fmt.Errorf("failed to list the environment's A2A agent cards: %w", err)
 	}
-	var errs []error
+	agents := make([]agentInEnvironment, 0, len(cards))
 	for _, card := range cards {
-		artifact, err := agentEnvAPIArtifact(p.artifactRepo, ouID, card.ProjectName, card.AgentName, envUUID.String())
+		agents = append(agents, agentInEnvironment{projectName: card.ProjectName, agentName: card.AgentName})
+	}
+	return p.dropAgentsArtifacts(ctx, ouID, envUUID, agents, dropped)
+}
+
+// dropAgentsArtifacts deletes each agent's artifact in the environment that is not already in dropped, adding it.
+func (p *A2APublisher) dropAgentsArtifacts(
+	ctx context.Context, ouID string, envUUID uuid.UUID, agents []agentInEnvironment, dropped map[uuid.UUID]struct{},
+) error {
+	var errs []error
+	for _, agent := range agents {
+		artifact, err := agentEnvAPIArtifact(p.artifactRepo, ouID, agent.projectName, agent.agentName, envUUID.String())
 		if errors.Is(err, utils.ErrArtifactNotFound) {
 			continue
 		}
 		if err != nil {
-			errs = append(errs, fmt.Errorf("failed to read agent %s's artifact: %w", card.AgentName, err))
+			errs = append(errs, fmt.Errorf("failed to read agent %s's artifact: %w", agent.agentName, err))
 			continue
 		}
 		if _, ok := dropped[artifact.UUID]; ok {
@@ -375,7 +404,9 @@ func (p *A2APublisher) dropLeftoverArtifacts(ctx context.Context, ouID string, e
 		ref := models.ArtifactRef{OUID: ouID, ArtifactUUID: artifact.UUID, Kind: models.KindAgent, Handle: artifact.Handle}
 		if err := p.dropArtifact(ctx, ref); err != nil {
 			errs = append(errs, fmt.Errorf("failed to delete agent artifact %s: %w", artifact.Handle, err))
+			continue
 		}
+		dropped[artifact.UUID] = struct{}{}
 	}
 	return errors.Join(errs...)
 }
