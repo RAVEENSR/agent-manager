@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
@@ -225,16 +226,23 @@ func (w *Worker) place(ctx context.Context, ouID string, env *uuid.UUID) error {
 // placeRecord places one record on its gateway and renders it at once. A record whose environment has no
 // suitable gateway is left until one is mapped.
 func (w *Worker) placeRecord(ctx context.Context, kind EnvironmentKind, record Record) error {
-	gateway, ok, err := w.core.target(ctx, kind, record)
-	if err != nil || !ok {
+	var placed *models.Placement
+	err := w.core.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		gateway, ok, err := w.core.target(ctx, tx, kind, record)
+		if err != nil || !ok {
+			return err
+		}
+		p := models.Placement{ArtifactRef: record.ArtifactRef, GatewayUUID: gateway}
+		inserted, err := w.core.repo.InsertPending(ctx, tx, p, placedReason)
+		if inserted {
+			placed = &p
+		}
+		return err
+	})
+	if err != nil || placed == nil {
 		return err
 	}
-	p := models.Placement{ArtifactRef: record.ArtifactRef, GatewayUUID: gateway}
-	inserted, err := w.core.repo.InsertPending(ctx, nil, p, placedReason)
-	if err != nil || !inserted {
-		return err
-	}
-	return w.core.renderOwed(ctx, p.OUID, p.ArtifactUUID, []uuid.UUID{gateway}, ignoreRenderFailed)
+	return w.core.renderOwed(ctx, placed.OUID, placed.ArtifactUUID, []uuid.UUID{placed.GatewayUUID}, ignoreRenderFailed)
 }
 
 // driftLoop checks for drift on interval boundaries, so the replicas' ticks line up and the scan lock leaves

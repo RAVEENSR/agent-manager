@@ -18,6 +18,8 @@ package reconcile
 
 import (
 	"github.com/google/uuid"
+
+	"github.com/wso2/agent-manager/agent-manager-service/models"
 )
 
 // RecordColumns names the SQL expressions of a kind's record query that UnplacedCondition reads.
@@ -48,4 +50,13 @@ func UnplacedCondition(cols RecordColumns, ouID string, env *uuid.UUID) (string,
 		args = append(args, *env)
 	}
 	return condition, args
+}
+
+// PlacedCondition is the WHERE condition every PlacedOn shares: the record is in env, and its artifact has a row on
+// gateway that is to be deployed, whatever its status. A row the user undeployed doesn't count.
+func PlacedCondition(cols RecordColumns, env, gateway uuid.UUID) (string, []any) {
+	condition := cols.EnvironmentUUID + ` = ? AND EXISTS (SELECT 1 FROM deployment_status ds
+			WHERE ds.artifact_uuid = ` + cols.ArtifactUUID + ` AND ds.ou_id = ` + cols.OUID + `
+			AND ds.gateway_uuid = ? AND ds.status_desired = ?)`
+	return condition, []any{env, gateway, models.DeploymentStatusDeployed}
 }

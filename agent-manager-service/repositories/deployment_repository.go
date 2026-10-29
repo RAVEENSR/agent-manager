@@ -52,6 +52,9 @@ type DeploymentRepository interface {
 	StartRestore(ctx context.Context, tx *gorm.DB, placement models.Placement, deploymentID uuid.UUID) error
 	BeginUndeploy(ctx context.Context, tx *gorm.DB, placement models.Placement) (sendEvent bool, err error)
 	LockStatusRows(ctx context.Context, tx *gorm.DB, ouID string, artifactUUIDs []uuid.UUID) error
+	// LockEnvironmentMapping holds the gateway's mapping to the environment FOR SHARE until tx commits, so a
+	// placement on the gateway and the mapping's removal serialise; mapped is false when there is no mapping.
+	LockEnvironmentMapping(ctx context.Context, tx *gorm.DB, gatewayUUID, environmentUUID uuid.UUID) (mapped bool, err error)
 
 	// Render queue. InsertPending places an artifact; QueueRender marks a deploy owed; a claim's write-back
 	// (CompleteRender, RecordRenderOutcome, AbandonRender) applies only while the row holds the claim's token, and

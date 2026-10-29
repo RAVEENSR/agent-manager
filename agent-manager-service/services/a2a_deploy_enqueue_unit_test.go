@@ -40,10 +40,11 @@ func a2aPublishingAgentService(pubs *repomocks.PlatformAgentExposureRepositoryMo
 		publisher, nil, nil, nil, testLogger()).(*agentManagerService)
 }
 
-// a2aRenderQueue accepts every PENDING row a deploy owes.
+// a2aRenderQueue accepts every PENDING row a deploy owes, on a gateway mapped to every environment.
 func a2aRenderQueue() *repomocks.DeploymentRepositoryMock {
 	return &repomocks.DeploymentRepositoryMock{
-		InsertPendingFunc: func(context.Context, *gorm.DB, models.Placement, string) (bool, error) { return true, nil },
+		LockEnvironmentMappingFunc: mappedEverywhere,
+		InsertPendingFunc:          func(context.Context, *gorm.DB, models.Placement, string) (bool, error) { return true, nil },
 	}
 }
 

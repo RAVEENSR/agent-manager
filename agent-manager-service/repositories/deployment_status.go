@@ -106,6 +106,18 @@ func (r *DeploymentRepo) LockStatusRows(ctx context.Context, tx *gorm.DB, ouID s
 	return nil
 }
 
+// LockEnvironmentMapping holds the gateway's mapping to the environment FOR SHARE until tx commits; false when there
+// is no mapping.
+func (r *DeploymentRepo) LockEnvironmentMapping(ctx context.Context, tx *gorm.DB, gatewayUUID, environmentUUID uuid.UUID) (bool, error) {
+	var mapped []int
+	if err := r.on(ctx, tx).Raw(`SELECT 1 FROM gateway_environment_mappings
+		WHERE gateway_uuid = ? AND environment_uuid = ?
+		FOR SHARE`, gatewayUUID, environmentUUID).Scan(&mapped).Error; err != nil {
+		return false, fmt.Errorf("failed to lock gateway %s's mapping to environment %s: %w", gatewayUUID, environmentUUID, err)
+	}
+	return len(mapped) > 0, nil
+}
+
 // BeginUndeploy starts an undeploy transition. A row never sent to the gateway (PENDING) is undeployed at once and
 // needs no event; any other row heading for DEPLOYED goes UNDEPLOYING and the caller sends the undeploy event. A row
 // already heading for UNDEPLOYED with a deploy owed only loses its queue, with no event: the undeploy supersedes the

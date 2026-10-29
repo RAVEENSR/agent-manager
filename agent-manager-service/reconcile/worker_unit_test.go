@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // heldPlacementKind holds every environment's placement until released; the fleet-wide pass finds nothing.
@@ -46,6 +47,10 @@ func (k heldPlacementKind) UnplacedRecords(_ context.Context, _ string, env *uui
 
 func (heldPlacementKind) Targets(context.Context, Record) (uuid.UUID, bool, error) {
 	return uuid.Nil, false, nil
+}
+
+func (heldPlacementKind) PlacedOn(context.Context, *gorm.DB, uuid.UUID, uuid.UUID) (bool, error) {
+	return false, nil
 }
 
 // A requested placement runs on the worker, and Stop waits for one in progress.

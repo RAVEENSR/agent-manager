@@ -63,6 +63,11 @@ func startDeployStub(_ context.Context, _ *gorm.DB, _ models.Placement, deployme
 	return nil
 }
 
+// mappedEverywhere is LockEnvironmentMapping for gateways mapped to every environment.
+func mappedEverywhere(context.Context, *gorm.DB, uuid.UUID, uuid.UUID) (bool, error) {
+	return true, nil
+}
+
 // withMCPCore gives svc a reconcile core over its deployment repository and event hub, with an MCP kind that
 // renders a minimal artifact for whatever binding it is asked for. A mock repository locks status rows as a no-op.
 func withMCPCore(svc *MCPProxyService) {
@@ -128,7 +133,8 @@ func TestAnchoring_MCPProxyUpdate(t *testing.T) {
 				PlacedGatewaysFunc: func(context.Context, string, uuid.UUID) ([]string, error) {
 					return []string{both.UUID.String()}, nil
 				},
-				StartDeployFunc: startDeployStub,
+				LockEnvironmentMappingFunc: mappedEverywhere,
+				StartDeployFunc:            startDeployStub,
 			},
 			tx:                   sentinelTx,
 			gatewayEventsService: &GatewayEventsService{hub: hub},
@@ -175,7 +181,8 @@ func TestAnchoring_MCPProxyUpdate(t *testing.T) {
 				PlacedGatewaysFunc: func(context.Context, string, uuid.UUID) ([]string, error) {
 					return nil, nil
 				},
-				StartDeployFunc: startDeployStub,
+				LockEnvironmentMappingFunc: mappedEverywhere,
+				StartDeployFunc:            startDeployStub,
 			},
 			tx:                   sentinelTx,
 			gatewayEventsService: &GatewayEventsService{hub: hub},
@@ -253,6 +260,7 @@ func TestMCPSaveLocksItsStatusRowsBeforeTheFirstEvent(t *testing.T) {
 			PlacedGatewaysFunc: func(context.Context, string, uuid.UUID) ([]string, error) {
 				return []string{gateway.UUID.String()}, nil
 			},
+			LockEnvironmentMappingFunc: mappedEverywhere,
 			LockStatusRowsFunc: func(_ context.Context, _ *gorm.DB, _ string, artifactUUIDs []uuid.UUID) error {
 				log = append(log, "lock")
 				lockedArtifacts = artifactUUIDs

@@ -93,6 +93,9 @@ type EnvironmentKind interface {
 	UnplacedRecords(ctx context.Context, ouID string, env *uuid.UUID, afterKey string, limit int) ([]Record, error)
 	// Targets is the gateway the record goes to; ok is false when its environment has no suitable gateway.
 	Targets(ctx context.Context, record Record) (gateway uuid.UUID, ok bool, err error)
+	// PlacedOn reports whether any of the kind's records in env has its artifact placed on gateway
+	// (PlacedCondition), read through tx.
+	PlacedOn(ctx context.Context, tx *gorm.DB, env, gateway uuid.UUID) (bool, error)
 }
 
 // AfterLiveHook runs in the ack's transaction when a row moves to DEPLOYED. It must only touch the database.

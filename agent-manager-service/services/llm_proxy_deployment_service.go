@@ -192,6 +192,9 @@ func (s *LLMProxyDeploymentService) DeployForEnvironment(
 	if err != nil {
 		return nil, err
 	}
+	if applied.NoGateway {
+		return nil, fmt.Errorf("gateway %s is no longer mapped to environment %s", gateway, envUUID)
+	}
 	return applied.Deployment, nil
 }
 

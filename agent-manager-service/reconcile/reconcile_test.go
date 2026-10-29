@@ -177,6 +177,15 @@ func (k *fakeEnvKind) UnplacedRecords(ctx context.Context, ouID string, env *uui
 	return records, err
 }
 
+func (k *fakeEnvKind) PlacedOn(ctx context.Context, tx *gorm.DB, env, gateway uuid.UUID) (bool, error) {
+	condition, args := PlacedCondition(
+		RecordColumns{OUID: "r.ou_id", ArtifactUUID: "r.artifact_uuid", EnvironmentUUID: "r.environment_uuid"}, env, gateway)
+	var placed bool
+	err := tx.WithContext(ctx).Raw(`SELECT EXISTS (SELECT 1 FROM reconcile_fake_records r WHERE `+condition+`)`,
+		args...).Scan(&placed).Error
+	return placed, err
+}
+
 func (k *fakeEnvKind) Targets(ctx context.Context, record Record) (uuid.UUID, bool, error) {
 	if k.targets != nil {
 		return k.targets(record)
@@ -681,7 +690,8 @@ func TestDeployRecord(t *testing.T) {
 		kind.targets = func(Record) (uuid.UUID, bool, error) { panic("Targets isn't asked") }
 		core := newCore(t, kind)
 		ouID, env := testOU(), uuid.New()
-		requested := seedGateway(t, ouID)
+		seedGateway(t, ouID, env)
+		requested := seedGateway(t, ouID, env)
 		ref := seedArtifact(t, ouID, fakeEnvKindName)
 
 		require.NoError(t, inTx(t, func(tx *gorm.DB) error {
@@ -992,6 +1002,86 @@ func TestMarkStaleReturnsAFailedInlineRender(t *testing.T) {
 	assert.Equal(t, first, *row.DeploymentID, "no deployment was written")
 	assert.Equal(t, "invalid config", row.RenderReason)
 	assert.Len(t, eventsFor(t, p.GatewayUUID), 1, "only the first deploy's event")
+}
+
+var errServesEnvironment = errors.New("the gateway serves the environment")
+
+// unmapInTx removes the gateway's mapping to env in tx as the gateway service does: delete, then check.
+func unmapInTx(ctx context.Context, core *Core, tx *gorm.DB, gateway, env uuid.UUID) error {
+	if err := tx.Exec(`DELETE FROM gateway_environment_mappings WHERE gateway_uuid = ? AND environment_uuid = ?`,
+		gateway, env).Error; err != nil {
+		return err
+	}
+	serves, err := core.ServesEnvironment(ctx, tx, env, gateway)
+	if err != nil {
+		return err
+	}
+	if serves {
+		return errServesEnvironment
+	}
+	return nil
+}
+
+func notDoneWithin[T any](t *testing.T, ch <-chan T, what string) {
+	t.Helper()
+	select {
+	case got := <-ch:
+		t.Fatalf("%s didn't wait: %v", what, got)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// An unmap racing a placement on the gateway waits for it, then sees its row and is refused.
+func TestUnmapWaitsForAPlacementInProgress(t *testing.T) {
+	kind := newFakeEnvKind(false)
+	core := newCore(t, kind)
+	ouID, env := testOU(), uuid.New()
+	gateway := seedGateway(t, ouID, env)
+	record := seedRecord(t, nil, seedArtifact(t, ouID, fakeEnvKindName), env)
+	placing := db.GetDB().Begin()
+	defer placing.Rollback()
+	_, err := core.DeployRecord(context.Background(), placing, kind, record)
+	require.NoError(t, err)
+
+	unmapped := make(chan error, 1)
+	go func() {
+		unmapped <- db.GetDB().Transaction(func(tx *gorm.DB) error {
+			return unmapInTx(context.Background(), core, tx, gateway, env)
+		})
+	}()
+	notDoneWithin(t, unmapped, "the unmap")
+	require.NoError(t, placing.Commit().Error)
+
+	assert.ErrorIs(t, <-unmapped, errServesEnvironment)
+}
+
+// A placement racing an unmap of the environment's gateway waits for it, then finds no gateway and places nothing.
+func TestPlacementWaitsForAnUnmapInProgress(t *testing.T) {
+	kind := newFakeEnvKind(false)
+	core := newCore(t, kind)
+	ouID, env := testOU(), uuid.New()
+	gateway := seedGateway(t, ouID, env)
+	kind.targets = func(Record) (uuid.UUID, bool, error) { return gateway, true, nil }
+	record := seedRecord(t, nil, seedArtifact(t, ouID, fakeEnvKindName), env)
+	unmapping := db.GetDB().Begin()
+	defer unmapping.Rollback()
+	require.NoError(t, unmapInTx(context.Background(), core, unmapping, gateway, env))
+
+	placed := make(chan *Applied, 1)
+	go func() {
+		var applied *Applied
+		assert.NoError(t, inTx(t, func(tx *gorm.DB) error {
+			var err error
+			applied, err = core.DeployRecord(context.Background(), tx, kind, record)
+			return err
+		}))
+		placed <- applied
+	}()
+	notDoneWithin(t, placed, "the placement")
+	require.NoError(t, unmapping.Commit().Error)
+
+	assert.True(t, (<-placed).NoGateway)
+	assert.Nil(t, statusRow(t, models.Placement{ArtifactRef: record.ArtifactRef, GatewayUUID: gateway}))
 }
 
 // A record gone before its redeploy renders undeploys the row; that isn't a failure.

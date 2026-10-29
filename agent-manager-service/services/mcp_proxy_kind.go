@@ -168,6 +168,15 @@ func (k *MCPProxyKind) UnplacedRecords(
 	return records, nil
 }
 
+// PlacedOn: an (endpoint, environment) binding in env whose artifact is placed on gateway.
+func (k *MCPProxyKind) PlacedOn(ctx context.Context, tx *gorm.DB, env, gateway uuid.UUID) (bool, error) {
+	condition, args := reconcile.PlacedCondition(reconcile.RecordColumns{
+		OUID: "a.ou_id", ArtifactUUID: "a.uuid", EnvironmentUUID: "b.environment_uuid",
+	}, env, gateway)
+	return placedOn(ctx, tx, `SELECT 1 FROM mcp_proxy_endpoint_environments b JOIN artifacts a ON a.uuid = b.artifact_uuid
+		WHERE `+condition, args)
+}
+
 // Targets is the environment's egress gateway, anchored on where the artifact is already placed.
 func (k *MCPProxyKind) Targets(ctx context.Context, record reconcile.Record) (uuid.UUID, bool, error) {
 	deployments, gateways := placementReposIn(ctx, k.deploymentRepo, k.gatewayRepo)

@@ -200,6 +200,10 @@ var (
 	// an environment that already has one. Maps to 409.
 	ErrGatewayIngressCapExceeded = errors.New("environment already has an ingress gateway")
 
+	// ErrGatewayServesEnvironment is returned when unmapping a gateway from an environment whose
+	// agents, MCP proxies or LLM proxies are still placed on it. Maps to 409.
+	ErrGatewayServesEnvironment = errors.New("gateway still serves the environment's artifacts")
+
 	// LLM Provider-related errors
 	ErrProviderNotFound        = errors.New("provider not found")
 	ErrProviderAlreadyExists   = errors.New("provider already exists")

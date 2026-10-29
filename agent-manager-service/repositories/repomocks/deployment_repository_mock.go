@@ -80,6 +80,9 @@ import (
 //			ListForGatewaySyncFunc: func(ctx context.Context, ouID string, gatewayID string) ([]models.GatewaySyncRow, error) {
 //				panic("mock out the ListForGatewaySync method")
 //			},
+//			LockEnvironmentMappingFunc: func(ctx context.Context, tx *gorm.DB, gatewayUUID uuid.UUID, environmentUUID uuid.UUID) (bool, error) {
+//				panic("mock out the LockEnvironmentMapping method")
+//			},
 //			LockStatusRowsFunc: func(ctx context.Context, tx *gorm.DB, ouID string, artifactUUIDs []uuid.UUID) error {
 //				panic("mock out the LockStatusRows method")
 //			},
@@ -173,6 +176,9 @@ type DeploymentRepositoryMock struct {
 
 	// ListForGatewaySyncFunc mocks the ListForGatewaySync method.
 	ListForGatewaySyncFunc func(ctx context.Context, ouID string, gatewayID string) ([]models.GatewaySyncRow, error)
+
+	// LockEnvironmentMappingFunc mocks the LockEnvironmentMapping method.
+	LockEnvironmentMappingFunc func(ctx context.Context, tx *gorm.DB, gatewayUUID uuid.UUID, environmentUUID uuid.UUID) (bool, error)
 
 	// LockStatusRowsFunc mocks the LockStatusRows method.
 	LockStatusRowsFunc func(ctx context.Context, tx *gorm.DB, ouID string, artifactUUIDs []uuid.UUID) error
@@ -403,6 +409,17 @@ type DeploymentRepositoryMock struct {
 			// GatewayID is the gatewayID argument value.
 			GatewayID string
 		}
+		// LockEnvironmentMapping holds details about calls to the LockEnvironmentMapping method.
+		LockEnvironmentMapping []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// Tx is the tx argument value.
+			Tx *gorm.DB
+			// GatewayUUID is the gatewayUUID argument value.
+			GatewayUUID uuid.UUID
+			// EnvironmentUUID is the environmentUUID argument value.
+			EnvironmentUUID uuid.UUID
+		}
 		// LockStatusRows holds details about calls to the LockStatusRows method.
 		LockStatusRows []struct {
 			// Ctx is the ctx argument value.
@@ -515,6 +532,7 @@ type DeploymentRepositoryMock struct {
 	lockListContentForGateway      sync.RWMutex
 	lockListDeployedForDrift       sync.RWMutex
 	lockListForGatewaySync         sync.RWMutex
+	lockLockEnvironmentMapping     sync.RWMutex
 	lockLockStatusRows             sync.RWMutex
 	lockPlacedGateways             sync.RWMutex
 	lockQueueRender                sync.RWMutex
@@ -1363,6 +1381,50 @@ func (mock *DeploymentRepositoryMock) ListForGatewaySyncCalls() []struct {
 	mock.lockListForGatewaySync.RLock()
 	calls = mock.calls.ListForGatewaySync
 	mock.lockListForGatewaySync.RUnlock()
+	return calls
+}
+
+// LockEnvironmentMapping calls LockEnvironmentMappingFunc.
+func (mock *DeploymentRepositoryMock) LockEnvironmentMapping(ctx context.Context, tx *gorm.DB, gatewayUUID uuid.UUID, environmentUUID uuid.UUID) (bool, error) {
+	if mock.LockEnvironmentMappingFunc == nil {
+		panic("DeploymentRepositoryMock.LockEnvironmentMappingFunc: method is nil but DeploymentRepository.LockEnvironmentMapping was just called")
+	}
+	callInfo := struct {
+		Ctx             context.Context
+		Tx              *gorm.DB
+		GatewayUUID     uuid.UUID
+		EnvironmentUUID uuid.UUID
+	}{
+		Ctx:             ctx,
+		Tx:              tx,
+		GatewayUUID:     gatewayUUID,
+		EnvironmentUUID: environmentUUID,
+	}
+	mock.lockLockEnvironmentMapping.Lock()
+	mock.calls.LockEnvironmentMapping = append(mock.calls.LockEnvironmentMapping, callInfo)
+	mock.lockLockEnvironmentMapping.Unlock()
+	return mock.LockEnvironmentMappingFunc(ctx, tx, gatewayUUID, environmentUUID)
+}
+
+// LockEnvironmentMappingCalls gets all the calls that were made to LockEnvironmentMapping.
+// Check the length with:
+//
+//	len(mockedDeploymentRepository.LockEnvironmentMappingCalls())
+func (mock *DeploymentRepositoryMock) LockEnvironmentMappingCalls() []struct {
+	Ctx             context.Context
+	Tx              *gorm.DB
+	GatewayUUID     uuid.UUID
+	EnvironmentUUID uuid.UUID
+} {
+	var calls []struct {
+		Ctx             context.Context
+		Tx              *gorm.DB
+		GatewayUUID     uuid.UUID
+		EnvironmentUUID uuid.UUID
+	}
+	mock.lockLockEnvironmentMapping.RLock()
+	calls = mock.calls.LockEnvironmentMapping
+	mock.lockLockEnvironmentMapping.RUnlock()
 	return calls
 }
 

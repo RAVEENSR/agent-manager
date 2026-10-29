@@ -186,6 +186,23 @@ func (k *LLMProxyKind) UnplacedRecords(
 	return records, nil
 }
 
+// PlacedOn: an agent's or monitor's proxy in env placed on gateway. A proxy deployed by the public route has no
+// per-environment record, so it never counts.
+func (k *LLMProxyKind) PlacedOn(ctx context.Context, tx *gorm.DB, env, gateway uuid.UUID) (bool, error) {
+	agents, agentArgs := reconcile.PlacedCondition(reconcile.RecordColumns{
+		OUID: "a.ou_id", ArtifactUUID: "a.uuid", EnvironmentUUID: "m.environment_uuid",
+	}, env, gateway)
+	monitors, monitorArgs := reconcile.PlacedCondition(reconcile.RecordColumns{
+		OUID: "a.ou_id", ArtifactUUID: "a.uuid", EnvironmentUUID: monitorEnvironmentUUID,
+	}, env, gateway)
+	return placedOn(ctx, tx, `SELECT 1 FROM env_agent_model_mapping m JOIN artifacts a ON a.uuid = m.llm_proxy_uuid
+			WHERE `+agents+`
+		UNION ALL
+		SELECT 1 FROM monitor_llm_mapping m JOIN artifacts a ON a.uuid = m.llm_proxy_uuid
+			JOIN monitors mon ON mon.id = m.monitor_id
+			WHERE `+monitors, append(agentArgs, monitorArgs...))
+}
+
 // Targets is the environment's egress gateway, anchored on where the proxy, or else its provider, is placed, so
 // a proxy lands next to its provider.
 func (k *LLMProxyKind) Targets(ctx context.Context, record reconcile.Record) (uuid.UUID, bool, error) {

@@ -142,7 +142,7 @@ func (c *Core) Deploy(ctx context.Context, tx *gorm.DB, p models.Placement) (*Ap
 // can't deploy is still validated. A render error from an inline kind is returned for the caller to abort its
 // transaction with a 4xx; waiting for an input is not an error.
 func (c *Core) DeployRecord(ctx context.Context, tx *gorm.DB, kind EnvironmentKind, record Record) (*Applied, error) {
-	gateway, ok, err := c.target(db.CtxWithTx(ctx, tx), kind, record)
+	gateway, ok, err := c.target(ctx, tx, kind, record)
 	if err != nil {
 		return nil, err
 	}
@@ -157,16 +157,45 @@ func (c *Core) DeployRecord(ctx context.Context, tx *gorm.DB, kind EnvironmentKi
 	return c.deployTo(ctx, tx, kind, models.Placement{ArtifactRef: record.ArtifactRef, GatewayUUID: gateway})
 }
 
-// target is the gateway the record goes to. A save passes a ctx carrying its transaction, so Targets reads the save.
-func (c *Core) target(ctx context.Context, kind EnvironmentKind, record Record) (uuid.UUID, bool, error) {
-	if record.RequestedGateway != nil {
-		return *record.RequestedGateway, true, nil
+// target is the gateway the record goes to, read in tx, so Targets reads a save's own writes. The gateway's mapping
+// to the record's environment is held FOR SHARE until tx commits: unmapping the gateway waits for the placement and
+// then sees its row (ServesEnvironment), and a mapping already gone is no gateway.
+func (c *Core) target(ctx context.Context, tx *gorm.DB, kind EnvironmentKind, record Record) (uuid.UUID, bool, error) {
+	gateway := record.RequestedGateway
+	if gateway == nil {
+		targeted, ok, err := kind.Targets(db.CtxWithTx(ctx, tx), record)
+		if err != nil {
+			return uuid.Nil, false, fmt.Errorf("failed to find the gateway for %s: %w", record.Kind, err)
+		}
+		if !ok {
+			return uuid.Nil, false, nil
+		}
+		gateway = &targeted
 	}
-	gateway, ok, err := kind.Targets(ctx, record)
-	if err != nil {
-		return uuid.Nil, false, fmt.Errorf("failed to find the gateway for %s: %w", record.Kind, err)
+	mapped, err := c.repo.LockEnvironmentMapping(ctx, tx, *gateway, record.EnvironmentUUID)
+	if err != nil || !mapped {
+		return uuid.Nil, false, err
 	}
-	return gateway, ok, nil
+	return *gateway, true, nil
+}
+
+// ServesEnvironment reports whether gateway holds a placed row, read through tx, for any environment-addressed
+// record in env. Unmapping the gateway from env is refused while it does: nothing would move those records.
+func (c *Core) ServesEnvironment(ctx context.Context, tx *gorm.DB, env, gateway uuid.UUID) (bool, error) {
+	for _, k := range c.kinds {
+		kind, ok := k.(EnvironmentKind)
+		if !ok {
+			continue
+		}
+		placed, err := kind.PlacedOn(ctx, tx, env, gateway)
+		if err != nil {
+			return false, fmt.Errorf("failed to check %s placements on gateway %s: %w", kind.Name(), gateway, err)
+		}
+		if placed {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (c *Core) deployTo(ctx context.Context, tx *gorm.DB, kind Kind, p models.Placement) (*Applied, error) {

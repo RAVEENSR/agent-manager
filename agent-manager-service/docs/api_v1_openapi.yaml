@@ -2767,8 +2767,9 @@ paths:
 
         This makes the gateway unavailable in the specified environment.
 
-        **Warning:** If agents in this environment are using this gateway, they may
-        experience routing failures after this operation.
+        The mapping is not removed while any of the environment's agents, MCP proxies or
+        agent and monitor LLM proxies is deployed, or being deployed, on the gateway.
+        Undeploy them from this gateway first.
       operationId: removeGatewayFromEnvironment
       responses:
         "204":
@@ -2787,6 +2788,12 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Gateway, environment, or mapping not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: The gateway still serves the environment's agents or proxies; undeploy them from this gateway first
           content:
             application/json:
               schema:

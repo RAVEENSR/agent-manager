@@ -320,6 +320,21 @@ func (k *A2AAgentKind) UnplacedRecords(
 	return records, nil
 }
 
+// PlacedOn: an exposure or external agent proxy in env whose artifact is placed on gateway.
+func (k *A2AAgentKind) PlacedOn(ctx context.Context, tx *gorm.DB, env, gateway uuid.UUID) (bool, error) {
+	exposed, exposedArgs := reconcile.PlacedCondition(reconcile.RecordColumns{
+		OUID: "a.ou_id", ArtifactUUID: "a.uuid", EnvironmentUUID: "e.environment_uuid",
+	}, env, gateway)
+	proxied, proxiedArgs := reconcile.PlacedCondition(reconcile.RecordColumns{
+		OUID: "a.ou_id", ArtifactUUID: "a.uuid", EnvironmentUUID: "p.environment_uuid",
+	}, env, gateway)
+	return placedOn(ctx, tx, `SELECT 1 FROM platform_agent_exposures e JOIN artifacts a ON a.uuid = e.artifact_uuid
+			WHERE e.protocol = '`+string(models.AgentExposureProtocolA2A)+`' AND `+exposed+`
+		UNION ALL
+		SELECT 1 FROM a2a_proxies p `+repositories.A2AProxyArtifactJoin+`
+			WHERE `+proxied, append(exposedArgs, proxiedArgs...))
+}
+
 // Targets is the environment's ingress gateway.
 func (k *A2AAgentKind) Targets(ctx context.Context, record reconcile.Record) (uuid.UUID, bool, error) {
 	gateway, err := findIngressGateway(gatewaysIn(ctx, k.gatewayRepo), record.OUID, record.EnvironmentUUID)

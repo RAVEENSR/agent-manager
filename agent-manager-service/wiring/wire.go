@@ -508,11 +508,14 @@ func ProvideReconcileCore(
 	}, logger)
 }
 
-// ProvidePlatformGatewayService makes each new gateway-environment mapping place the environment's artifacts.
+// ProvidePlatformGatewayService makes each new gateway-environment mapping place the environment's artifacts, and
+// refuses to remove a mapping while the gateway serves the environment's artifacts.
 func ProvidePlatformGatewayService(
 	gatewayRepo repositories.GatewayRepository, gatewayApplier services.GatewayConfigApplier, worker *reconcile.Worker,
+	core *reconcile.Core,
 ) *services.PlatformGatewayService {
-	return services.NewPlatformGatewayService(gatewayRepo, gatewayApplier).WithEnvironmentPlacer(worker)
+	return services.NewPlatformGatewayService(gatewayRepo, gatewayApplier).WithEnvironmentPlacer(worker).
+		WithEnvironmentGuard(core)
 }
 
 func ProvideGatewayRepository(db *gorm.DB) repositories.GatewayRepository {

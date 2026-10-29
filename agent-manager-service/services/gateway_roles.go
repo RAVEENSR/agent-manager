@@ -161,6 +161,13 @@ func resolveEgressGatewayForArtifact(
 	return resolveEgressGatewayForEnvironment(repo, ouID, envUUID, requested)
 }
 
+// placedOn runs a kind's PlacedOn query, records whose artifacts PlacedCondition finds placed, through tx.
+func placedOn(ctx context.Context, tx *gorm.DB, records string, args []any) (bool, error) {
+	var placed bool
+	err := tx.WithContext(ctx).Raw(`SELECT EXISTS (`+records+`)`, args...).Scan(&placed).Error
+	return placed, err
+}
+
 // placementReposIn are the repositories bound to the transaction ctx carries, if any, so a placement made inside a
 // save reads the save's rows on its connection.
 func placementReposIn(
