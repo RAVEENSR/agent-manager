@@ -149,9 +149,13 @@ func (s *a2aProxyService) GetA2AProxy(ctx context.Context, ouID, projectName, ag
 	if err != nil {
 		return nil, err
 	}
-	// TODO: report the gateway's deployment status once A2A agents deploy through deployment_status.
+	shown, err := s.publisher.ShownStatus(ctx, t.key, gatewayURL != "")
+	if err != nil {
+		return nil, err
+	}
 	return &models.A2AProxyStatus{
-		Status:             models.A2APublicationStatusPending,
+		Status:             shown.Status,
+		StatusReason:       shown.Reason,
 		UpstreamAuthHeader: proxy.UpstreamAuthHeader,
 		GatewayURL:         gatewayURL,
 	}, nil

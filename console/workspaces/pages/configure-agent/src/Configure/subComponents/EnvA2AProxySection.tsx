@@ -36,10 +36,14 @@ const ProxySecurityDrawer = lazy(() =>
   import("@agent-management-platform/deploy").then((m) => ({ default: m.ProxySecurityDrawer })),
 );
 
-const PROXY_CHIP: Record<A2AProxyStatus, { label: string; color: "warning" | "success" | "error" }> = {
-  pending: { label: "Publishing to gateway", color: "warning" },
-  published: { label: "Routed through gateway", color: "success" },
-  failed: { label: "Gateway publish failed", color: "error" },
+type ChipColor = "default" | "warning" | "success" | "error";
+
+const PROXY_CHIP: Record<A2AProxyStatus, { label: string; color: ChipColor }> = {
+  DEPLOYING: { label: "Deploying to gateway", color: "warning" },
+  DEPLOYED: { label: "Routed through gateway", color: "success" },
+  UNDEPLOYING: { label: "Removing from gateway", color: "warning" },
+  UNDEPLOYED: { label: "Not on gateway", color: "default" },
+  FAILED: { label: "Gateway deploy failed", color: "error" },
 };
 
 interface EnvA2AProxySectionProps {
@@ -58,6 +62,19 @@ export function A2AProxyUnknown({ failed }: { failed: boolean }) {
     <Typography variant="body2" color="error" sx={{ mb: 2 }}>Couldn&apos;t load gateway routing.</Typography>
   ) : (
     <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Loading gateway routing…</Typography>
+  );
+}
+
+/** The proxied environment's gateway URL once deployed, otherwise why it isn't deployed yet. */
+function ProxyDetail({ proxy }: { proxy: A2AProxyResponse }) {
+  if (proxy.status === "DEPLOYED" || !proxy.gatewayUrl) {
+    return <GatewayUrl url={proxy.gatewayUrl} />;
+  }
+  if (proxy.status === "FAILED" || !proxy.statusReason) {
+    return null;
+  }
+  return (
+    <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{proxy.statusReason}</Typography>
   );
 }
 
@@ -161,8 +178,8 @@ export function EnvA2AProxySection({
           </Button>
         )}
       </Box>
-      {proxy?.status === "published" && <GatewayUrl url={proxy.gatewayUrl} />}
-      {proxy?.status === "failed" && (
+      {proxy && <ProxyDetail proxy={proxy} />}
+      {proxy?.status === "FAILED" && (
         <Alert
           severity="error"
           sx={{ mb: 1 }}
@@ -170,7 +187,7 @@ export function EnvA2AProxySection({
             <Button size="small" color="inherit" disabled={isRepublishing} onClick={() => republish(params)}>Retry</Button>
           }
         >
-          {proxy.lastError || "The gateway publish failed."}
+          {proxy.statusReason || "The gateway deploy failed."}
         </Alert>
       )}
       <A2AProxyFields

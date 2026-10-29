@@ -214,6 +214,36 @@ func (p *A2APublisher) GatewayURL(ouID string, envUUID uuid.UUID, agentName stri
 	return a2aGatewayURL(gateway, agentName), nil
 }
 
+const (
+	// noGatewayReason is shown for an exposed environment with no ingress gateway: nothing could place it.
+	noGatewayReason = "no gateway in this environment"
+	// notPlacedReason is shown while an environment with a gateway waits for the placement pass.
+	notPlacedReason = "waiting to be placed on the environment's gateway"
+)
+
+// ShownStatus is what the user is shown for the agent's deployment in the environment: its artifact's row on the
+// ingress gateway. With no row, an environment without a gateway is UNDEPLOYED with noGatewayReason, and one with a
+// gateway is still owed its deploy by the placement pass.
+func (p *A2APublisher) ShownStatus(ctx context.Context, key a2aPublicationKey, hasGateway bool) (models.UserStatus, error) {
+	var rows []models.DeploymentStatusRecord
+	artifact, err := agentEnvAPIArtifact(p.artifactRepo, key.OUID, key.ProjectName, key.AgentName, key.EnvironmentUUID.String())
+	switch {
+	case err == nil:
+		if rows, err = p.deploymentRepo.StatusRecords(ctx, key.OUID, artifact.UUID); err != nil {
+			return models.UserStatus{}, err
+		}
+	case !errors.Is(err, utils.ErrArtifactNotFound):
+		return models.UserStatus{}, fmt.Errorf("failed to read the A2A agent's artifact: %w", err)
+	}
+	if row := models.ShownStatusRecord(rows); row != nil {
+		return models.UserStatusOf(*row), nil
+	}
+	if !hasGateway {
+		return models.UserStatus{Status: models.DeploymentStatusUndeployed, Reason: noGatewayReason}, nil
+	}
+	return models.UserStatus{Status: models.DeploymentStatusDeploying, Reason: notPlacedReason}, nil
+}
+
 // TeardownEnv undeploys one environment's artifact from every gateway it is placed on and drops its exposure, in tx.
 // The artifact and its API keys stay for a later redeploy. The undeploy events are written in tx.
 func (p *A2APublisher) TeardownEnv(ctx context.Context, tx *gorm.DB, key a2aPublicationKey, artifact models.ArtifactRef) error {

@@ -477,39 +477,99 @@ func TestStoreCardSourceQueuesADirectEnvironmentsURL(t *testing.T) {
 	assert.Empty(t, h.txExposures.UpsertCalls())
 }
 
-// The proxy is read by the environment's UUID after resolving the agent and environment, as every other
-// operation does. Until A2A agents deploy through deployment_status, a proxied environment reads as pending.
-func TestGetA2AProxyReportsAProxiedEnvironmentAsPending(t *testing.T) {
+// A proxied environment reports what the user is shown for its artifact's row on the ingress gateway.
+func TestGetA2AProxyReportsItsDeploymentStatus(t *testing.T) {
+	due := time.Now()
+	for name, tc := range map[string]struct {
+		row  models.DeploymentStatusRecord
+		want models.UserStatus
+	}{
+		"waiting for its first render": {
+			models.DeploymentStatusRecord{Status: models.DeploymentStatusPending, StatusDesired: models.DeploymentStatusDeployed,
+				NextAttemptAt: &due, RenderReason: "the origin's card can't be fetched"},
+			models.UserStatus{Status: models.DeploymentStatusDeploying, Reason: "the origin's card can't be fetched"},
+		},
+		"deploying": {
+			models.DeploymentStatusRecord{Status: models.DeploymentStatusDeploying, StatusDesired: models.DeploymentStatusDeployed},
+			models.UserStatus{Status: models.DeploymentStatusDeploying},
+		},
+		"deployed": {
+			models.DeploymentStatusRecord{Status: models.DeploymentStatusDeployed, StatusDesired: models.DeploymentStatusDeployed},
+			models.UserStatus{Status: models.DeploymentStatusDeployed},
+		},
+		"failed": {
+			models.DeploymentStatusRecord{Status: models.DeploymentStatusFailed, StatusDesired: models.DeploymentStatusDeployed,
+				StatusReason: "DEPLOYMENT_TIMEOUT"},
+			models.UserStatus{Status: models.DeploymentStatusFailed, Reason: "DEPLOYMENT_TIMEOUT"},
+		},
+		"undeploying": {
+			models.DeploymentStatusRecord{Status: models.DeploymentStatusUndeploying, StatusDesired: models.DeploymentStatusUndeployed},
+			models.UserStatus{Status: models.DeploymentStatusUndeploying},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newProxyHarness(t)
+			h.proxied("X-Key", "c2VjcmV0")
+			h.gateways.ListWithFiltersFunc = func(f repositories.GatewayFilterOptions) ([]*models.Gateway, error) {
+				require.NotNil(t, f.EnvironmentID)
+				assert.Equal(t, proxyTestEnvUUID, *f.EnvironmentID)
+				return []*models.Gateway{{Vhost: "agents.example.com", GatewayFunctionalityType: models.GatewayRoleIngress}}, nil
+			}
+			h.deployments.StatusRecordsFunc = func(_ context.Context, ouID string, artifactUUID uuid.UUID) ([]models.DeploymentStatusRecord, error) {
+				assert.Equal(t, "org-1", ouID)
+				assert.Equal(t, h.artifactUUID, artifactUUID)
+				row := tc.row
+				row.GatewayUUID = proxyTestGateway
+				return []models.DeploymentStatusRecord{row}, nil
+			}
+
+			got, err := h.svc.GetA2AProxy(tierOnlyCtx(), "org-1", "checkout", "weather", "dev")
+
+			require.NoError(t, err)
+			assert.Equal(t, &models.A2AProxyStatus{
+				Status: tc.want.Status, StatusReason: tc.want.Reason, UpstreamAuthHeader: "X-Key",
+				GatewayURL: "https://agents.example.com/weather",
+			}, got)
+			require.Len(t, h.proxies.GetByEnvUUIDCalls(), 1)
+			assert.Equal(t, uuid.MustParse(proxyTestEnvUUID), h.proxies.GetByEnvUUIDCalls()[0].EnvironmentUUID)
+			assert.Empty(t, h.proxies.GetCalls(), "the name-keyed lookup is not used")
+		})
+	}
+}
+
+// The bootstrap job maps the ingress gateway after the environment exists. Until then nothing is placed and there
+// is no URL to show: the environment reports that it has no gateway.
+func TestGetA2AProxyWithoutAnIngressGatewayReportsNoGateway(t *testing.T) {
 	h := newProxyHarness(t)
-	h.proxied("X-Key", "c2VjcmV0")
-	h.gateways.ListWithFiltersFunc = func(f repositories.GatewayFilterOptions) ([]*models.Gateway, error) {
-		require.NotNil(t, f.EnvironmentID)
-		assert.Equal(t, proxyTestEnvUUID, *f.EnvironmentID)
-		return []*models.Gateway{{Vhost: "agents.example.com", GatewayFunctionalityType: models.GatewayRoleIngress}}, nil
+	h.proxied("", "")
+	h.deployments.StatusRecordsFunc = func(context.Context, string, uuid.UUID) ([]models.DeploymentStatusRecord, error) {
+		return nil, nil
 	}
 
 	got, err := h.svc.GetA2AProxy(tierOnlyCtx(), "org-1", "checkout", "weather", "dev")
 
 	require.NoError(t, err)
-	assert.Equal(t, &models.A2AProxyStatus{
-		Status: models.A2APublicationStatusPending, UpstreamAuthHeader: "X-Key",
-		GatewayURL: "https://agents.example.com/weather",
-	}, got)
-	require.Len(t, h.proxies.GetByEnvUUIDCalls(), 1)
-	assert.Equal(t, uuid.MustParse(proxyTestEnvUUID), h.proxies.GetByEnvUUIDCalls()[0].EnvironmentUUID)
-	assert.Empty(t, h.proxies.GetCalls(), "the name-keyed lookup is not used")
+	assert.Empty(t, got.GatewayURL)
+	assert.Equal(t, models.DeploymentStatusUndeployed, got.Status)
+	assert.Equal(t, "no gateway in this environment", got.StatusReason)
 }
 
-// The bootstrap job maps the ingress gateway after the environment exists, so until then there is no URL to show.
-func TestGetA2AProxyWithoutAnIngressGatewayHasNoURL(t *testing.T) {
+// With a gateway mapped but no row yet, the placement pass still owes the environment its deploy.
+func TestGetA2AProxyNotYetPlacedIsDeploying(t *testing.T) {
 	h := newProxyHarness(t)
 	h.proxied("", "")
+	h.gateways.ListWithFiltersFunc = func(repositories.GatewayFilterOptions) ([]*models.Gateway, error) {
+		return []*models.Gateway{{Vhost: "agents.example.com", GatewayFunctionalityType: models.GatewayRoleIngress}}, nil
+	}
+	h.deployments.StatusRecordsFunc = func(context.Context, string, uuid.UUID) ([]models.DeploymentStatusRecord, error) {
+		return nil, nil
+	}
 
 	got, err := h.svc.GetA2AProxy(tierOnlyCtx(), "org-1", "checkout", "weather", "dev")
 
 	require.NoError(t, err)
-	assert.Empty(t, got.GatewayURL)
-	assert.Equal(t, models.A2APublicationStatusPending, got.Status)
+	assert.Equal(t, models.DeploymentStatusDeploying, got.Status)
+	assert.NotEmpty(t, got.StatusReason)
 }
 
 func TestGetA2AProxyReportsAGatewayLookupFailure(t *testing.T) {

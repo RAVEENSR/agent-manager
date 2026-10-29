@@ -439,3 +439,28 @@ func TestAPlatformAgentWithoutTheA2ASubtypeGetsNoExposure(t *testing.T) {
 	assert.ErrorIs(t, err, repositories.ErrPlatformAgentExposureNotFound)
 	assert.Nil(t, f.row(t, artifact))
 }
+
+// GET a2a-proxy reports the environment's deployment: DEPLOYING while the deploy is owed and until the gateway acks
+// it, DEPLOYED after.
+func TestGetA2AProxyFollowsTheDeployment(t *testing.T) {
+	f := newA2AFixture(t)
+	f.registerCard(t)
+	status := func() *models.A2AProxyStatus {
+		t.Helper()
+		got, err := f.proxies.GetA2AProxy(tierOnlyCtx(), f.sync.ouID, "proj", f.external.Name, "dev")
+		require.NoError(t, err)
+		return got
+	}
+
+	artifact := f.proxy(t)
+	assert.Equal(t, models.DeploymentStatusDeploying, status().Status, "the deploy is owed to the worker")
+
+	f.render(t, artifact)
+	assert.Equal(t, models.DeploymentStatusDeploying, status().Status, "sent, not acked")
+
+	f.ack(t, artifact, "deploy")
+	got := status()
+	assert.Equal(t, models.DeploymentStatusDeployed, got.Status)
+	assert.Empty(t, got.StatusReason)
+	assert.NotEmpty(t, got.GatewayURL)
+}
