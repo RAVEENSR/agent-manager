@@ -393,6 +393,14 @@ func deploy(t *testing.T, core *Core, p models.Placement) *Applied {
 	return applied
 }
 
+func insertPending(t *testing.T, p models.Placement) {
+	t.Helper()
+	require.NoError(t, inTx(t, func(tx *gorm.DB) error {
+		_, err := repositories.NewDeploymentRepo(db.GetDB()).InsertPending(context.Background(), tx, p, "placed")
+		return err
+	}))
+}
+
 func ack(t *testing.T, core *Core, p models.Placement, deploymentID uuid.UUID, status string) bool {
 	t.Helper()
 	applied, err := repositories.NewDeploymentRepo(db.GetDB()).ApplyAck(context.Background(), p.GatewayUUID.String(),
@@ -883,40 +891,32 @@ func TestUnplacedRecordsExcludeSoftDeletedGateways(t *testing.T) {
 }
 
 func TestUnplacedRecordsNeedAGatewayOfTheKindsRole(t *testing.T) {
-	kind := newFakeEnvKind(true)
-	ouID, env := testOU(), uuid.New()
-	ref := seedArtifact(t, ouID, fakeEnvKindName)
-	seedRecord(t, nil, ref, env)
-	seedGatewayWithRole(t, ouID, models.GatewayRoleIngress, env)
+	for name, tc := range map[string]struct {
+		roles               []string
+		wrongRole, kindRole string
+	}{
+		"egress kind":  {roles: models.EgressGatewayRoles, wrongRole: models.GatewayRoleIngress, kindRole: models.GatewayRoleEgress},
+		"ingress kind": {roles: models.IngressGatewayRoles, wrongRole: models.GatewayRoleEgress, kindRole: models.GatewayRoleIngress},
+	} {
+		t.Run(name, func(t *testing.T) {
+			kind := newFakeEnvKind(true)
+			kind.roles = tc.roles
+			ouID, env := testOU(), uuid.New()
+			ref := seedArtifact(t, ouID, fakeEnvKindName)
+			seedRecord(t, nil, ref, env)
+			seedGatewayWithRole(t, ouID, tc.wrongRole, env)
 
-	records, err := kind.UnplacedRecords(context.Background(), ouID, &env, "", 10)
-	require.NoError(t, err)
-	assert.Empty(t, records, "an ingress-only environment can't place an egress kind")
+			records, err := kind.UnplacedRecords(context.Background(), ouID, &env, "", 10)
+			require.NoError(t, err)
+			assert.Empty(t, records, "an environment with only the other role can't place the kind")
 
-	seedGatewayWithRole(t, ouID, models.GatewayRoleEgress, env)
+			seedGatewayWithRole(t, ouID, tc.kindRole, env)
 
-	records, err = kind.UnplacedRecords(context.Background(), ouID, &env, "", 10)
-	require.NoError(t, err)
-	assert.Len(t, records, 1)
-}
-
-func TestUnplacedIngressRecordsNeedAnIngressGateway(t *testing.T) {
-	kind := newFakeEnvKind(true)
-	kind.roles = models.IngressGatewayRoles
-	ouID, env := testOU(), uuid.New()
-	ref := seedArtifact(t, ouID, fakeEnvKindName)
-	seedRecord(t, nil, ref, env)
-	seedGatewayWithRole(t, ouID, models.GatewayRoleEgress, env)
-
-	records, err := kind.UnplacedRecords(context.Background(), ouID, &env, "", 10)
-	require.NoError(t, err)
-	assert.Empty(t, records, "an egress-only environment can't place an ingress kind")
-
-	seedGatewayWithRole(t, ouID, models.GatewayRoleIngress, env)
-
-	records, err = kind.UnplacedRecords(context.Background(), ouID, &env, "", 10)
-	require.NoError(t, err)
-	assert.Len(t, records, 1)
+			records, err = kind.UnplacedRecords(context.Background(), ouID, &env, "", 10)
+			require.NoError(t, err)
+			assert.Len(t, records, 1)
+		})
+	}
 }
 
 func TestGatewayDeleteKeepsAUserUndeploy(t *testing.T) {
@@ -933,10 +933,7 @@ func TestGatewayDeleteKeepsAUserUndeploy(t *testing.T) {
 			if sent {
 				deploy(t, core, p)
 			} else {
-				require.NoError(t, inTx(t, func(tx *gorm.DB) error {
-					_, err := repo.InsertPending(context.Background(), tx, p, "placed")
-					return err
-				}))
+				insertPending(t, p)
 			}
 			require.NoError(t, inTx(t, func(tx *gorm.DB) error { return core.Undeploy(context.Background(), tx, p) }))
 			if sent {
@@ -973,13 +970,9 @@ func TestGatewayDeleteDropsAnUndeployOwedADeploy(t *testing.T) {
 	seedRecord(t, nil, ref, env)
 	old := seedGateway(t, ouID, env)
 	p := models.Placement{ArtifactRef: ref, GatewayUUID: old}
-	repo := repositories.NewDeploymentRepo(db.GetDB())
-	require.NoError(t, inTx(t, func(tx *gorm.DB) error {
-		_, err := repo.InsertPending(context.Background(), tx, p, "placed")
-		return err
-	}))
+	insertPending(t, p)
 	require.NoError(t, inTx(t, func(tx *gorm.DB) error { return core.Undeploy(context.Background(), tx, p) }))
-	_, err := repo.QueueRender(context.Background(), nil, ouID, ref.ArtifactUUID, nil, "redeploy", repositories.QueueScopeAny)
+	_, err := repositories.NewDeploymentRepo(db.GetDB()).QueueRender(context.Background(), nil, ouID, ref.ArtifactUUID, nil, "redeploy", repositories.QueueScopeAny)
 	require.NoError(t, err)
 	require.NotNil(t, statusRow(t, p).NextAttemptAt, "a deploy is owed on the undeployed row")
 
@@ -992,13 +985,9 @@ func TestGatewayDeleteDropsAnUndeployOwedADeploy(t *testing.T) {
 }
 
 func TestGatewayDeleteRemovesPendingRows(t *testing.T) {
-	core := newCore(t, newFakeEnvKind(true))
 	ouID := testOU()
 	p := models.Placement{ArtifactRef: seedArtifact(t, ouID, fakeEnvKindName), GatewayUUID: seedGateway(t, ouID)}
-	require.NoError(t, inTx(t, func(tx *gorm.DB) error {
-		_, err := core.repo.InsertPending(context.Background(), tx, p, "placed")
-		return err
-	}))
+	insertPending(t, p)
 	require.NotNil(t, statusRow(t, p))
 
 	require.NoError(t, repositories.NewGatewayRepo(db.GetDB()).Delete(p.GatewayUUID.String(), ouID))
@@ -1055,10 +1044,7 @@ func TestDriftRunsOnOneReplica(t *testing.T) {
 	kind := newFakeKind("FakeDrift", true)
 	core, first := newWorker(t, kind)
 	second := NewWorker(newCore(t, kind), testLogger())
-	p := models.Placement{ArtifactRef: seedArtifact(t, testOU(), "FakeDrift")}
-	p.GatewayUUID = seedGateway(t, p.OUID)
-	deployment := deploy(t, core, p).DeploymentID
-	ack(t, core, p, deployment, models.DeploymentAckStatusSuccess)
+	p := seedDeployedDriftPlacement(t, core)
 	entered, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	kind.drifted = func(got models.Placement) bool {
@@ -1107,8 +1093,8 @@ func TestDriftScanHoldsNoTransactionOpen(t *testing.T) {
 	kind.drifted = func(got models.Placement) bool {
 		if got == p {
 			db.GetDB().Raw(`SELECT s.state FROM pg_locks l JOIN pg_stat_activity s USING (pid)
-				WHERE l.locktype = 'advisory' AND l.classid = ? AND l.objid = hashtext('drift')::oid`,
-				repositories.DriftScanLockNamespace).Scan(&states)
+				WHERE l.locktype = 'advisory' AND l.classid = ? AND l.objid = hashtext(?)::oid`,
+				repositories.DriftScanLockNamespace, repositories.DriftScanLockKey).Scan(&states)
 		}
 		return false
 	}
@@ -1321,10 +1307,7 @@ func TestPrepareDeleteSendsToEveryGatewaySentTheArtifactAndEveryActiveGateway(t 
 	deploy(t, core, p)
 	deploy(t, core, undeployed)
 	require.NoError(t, inTx(t, func(tx *gorm.DB) error { return core.Undeploy(context.Background(), tx, undeployed) }))
-	require.NoError(t, inTx(t, func(tx *gorm.DB) error {
-		_, err := repositories.NewDeploymentRepo(db.GetDB()).InsertPending(context.Background(), tx, pending, "placed")
-		return err
-	}))
+	insertPending(t, pending)
 
 	require.NoError(t, inTx(t, func(tx *gorm.DB) error {
 		events, err := core.PrepareDelete(context.Background(), tx, p.ArtifactRef)

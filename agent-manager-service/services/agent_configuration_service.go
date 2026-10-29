@@ -5549,13 +5549,11 @@ func (s *agentConfigurationService) restorePriorDeployment(res rollbackResource,
 			"supersededDeploymentID", res.supersededDeploymentID, "error", err)
 		return
 	}
+	outcome := "Restored prior deployment during rollback"
 	if err != nil {
-		s.logger.Info("Prior deployment was already deployed during rollback",
-			"proxyHandle", res.proxyHandle, "deploymentID", res.restoreDeploymentID)
-	} else {
-		s.logger.Info("Restored prior deployment during rollback",
-			"proxyHandle", res.proxyHandle, "deploymentID", res.restoreDeploymentID)
+		outcome = "Prior deployment was already deployed during rollback"
 	}
+	s.logger.Info(outcome, "proxyHandle", res.proxyHandle, "deploymentID", res.restoreDeploymentID)
 
 	if res.supersededDeploymentID == uuid.Nil || res.supersededDeploymentID == res.restoreDeploymentID {
 		return

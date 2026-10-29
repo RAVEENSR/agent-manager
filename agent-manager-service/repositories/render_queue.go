@@ -280,13 +280,14 @@ func (r *DeploymentRepo) ListDeployedForDrift(ctx context.Context, kind string, 
 	return placements, nil
 }
 
-const driftScanLockKey = "drift"
+// DriftScanLockKey is the drift scan's advisory lock key within DriftScanLockNamespace.
+const DriftScanLockKey = "drift"
 
 // TryLockDriftScan claims this interval's drift scan on conn's session, until UnlockDriftScan or the
 // connection closes. false means another replica holds it. conn must be pinned with gorm.DB.Connection.
 func TryLockDriftScan(conn *gorm.DB) (bool, error) {
 	var locked bool
-	if err := conn.Raw("SELECT pg_try_advisory_lock(?, hashtext(?))", DriftScanLockNamespace, driftScanLockKey).
+	if err := conn.Raw("SELECT pg_try_advisory_lock(?, hashtext(?))", DriftScanLockNamespace, DriftScanLockKey).
 		Scan(&locked).Error; err != nil {
 		return false, fmt.Errorf("failed to try the drift scan lock: %w", err)
 	}
@@ -297,7 +298,7 @@ func TryLockDriftScan(conn *gorm.DB) (bool, error) {
 // lock may still be held by that connection's session.
 func UnlockDriftScan(conn *gorm.DB) error {
 	var released bool
-	if err := conn.Raw("SELECT pg_advisory_unlock(?, hashtext(?))", DriftScanLockNamespace, driftScanLockKey).
+	if err := conn.Raw("SELECT pg_advisory_unlock(?, hashtext(?))", DriftScanLockNamespace, DriftScanLockKey).
 		Scan(&released).Error; err != nil {
 		return fmt.Errorf("failed to release the drift scan lock: %w", err)
 	}

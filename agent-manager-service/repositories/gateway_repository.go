@@ -313,16 +313,16 @@ func (r *GatewayRepo) Delete(gatewayID, ouID string) error {
 		// A finished undeploy outlives the gateway, detached from its deployment: with no row at
 		// all the placement pass would deploy the artifact again on another gateway. A row still
 		// owed a deploy goes, so the artifact is placed again.
-		const finishedUndeploy = "status = ? AND next_attempt_at IS NULL"
+		finished, undeployed := finishedUndeploy()
 		if err := tx.Model(&models.DeploymentStatusRecord{}).
-			Where("gateway_uuid = ? AND ou_id = ? AND "+finishedUndeploy, gatewayID, ouID, models.DeploymentStatusUndeployed).
+			Where("gateway_uuid = ? AND ou_id = ? AND "+finished, gatewayID, ouID, undeployed).
 			UpdateColumn("deployment_id", nil).Error; err != nil {
 			return err
 		}
 
 		// The other rows go: a PENDING row has no deployment to cascade with, and would keep
 		// rendering for a gateway that no longer exists.
-		if err := tx.Where("gateway_uuid = ? AND ou_id = ? AND NOT ("+finishedUndeploy+")", gatewayID, ouID, models.DeploymentStatusUndeployed).
+		if err := tx.Where("gateway_uuid = ? AND ou_id = ? AND NOT ("+finished+")", gatewayID, ouID, undeployed).
 			Delete(&models.DeploymentStatusRecord{}).Error; err != nil {
 			return err
 		}

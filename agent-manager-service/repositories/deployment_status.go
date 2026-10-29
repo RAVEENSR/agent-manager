@@ -118,6 +118,12 @@ func (r *DeploymentRepo) LockEnvironmentMapping(ctx context.Context, tx *gorm.DB
 	return len(mapped) > 0, nil
 }
 
+// finishedUndeploy is the condition, and its argument, on status rows of an undeploy the user still wants: UNDEPLOYED
+// with no deploy owed since.
+func finishedUndeploy() (string, models.DeploymentStatus) {
+	return "status = ? AND next_attempt_at IS NULL", models.DeploymentStatusUndeployed
+}
+
 // BeginUndeploy starts an undeploy transition. A row never sent to the gateway (PENDING) is undeployed at once and
 // needs no event; any other row heading for DEPLOYED goes UNDEPLOYING and the caller sends the undeploy event. A row
 // already heading for UNDEPLOYED with a deploy owed only loses its queue, with no event: the undeploy supersedes the
