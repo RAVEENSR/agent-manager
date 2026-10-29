@@ -51,3 +51,16 @@ type GatewaySyncRow struct {
 	State        string
 	DeployedAt   time.Time
 }
+
+// The states GET /deployments lists: the row's desired state, which is what the gateway reconciles towards.
+const (
+	GatewaySyncStateDeployed   = "deployed"
+	GatewaySyncStateUndeployed = "undeployed"
+)
+
+// GatewayDeploymentContent is one deployment a gateway fetches in its startup sync, with the artifact it belongs to.
+type GatewayDeploymentContent struct {
+	ArtifactRef
+	DeploymentID uuid.UUID
+	Content      []byte
+}

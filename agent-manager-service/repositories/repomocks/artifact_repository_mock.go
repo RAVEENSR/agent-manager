@@ -7,6 +7,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"gorm.io/gorm"
 )
@@ -38,10 +39,13 @@ import (
 //			ListByHandlePrefixFunc: func(ctx context.Context, kind string, handlePrefix string, orgUUID string) ([]*models.Artifact, error) {
 //				panic("mock out the ListByHandlePrefix method")
 //			},
+//			ListExistingFunc: func(ctx context.Context, ouID string, uuids []uuid.UUID, llmProxyHandles []string) ([]models.ArtifactRef, error) {
+//				panic("mock out the ListExisting method")
+//			},
 //			UpdateFunc: func(tx *gorm.DB, artifact *models.Artifact) error {
 //				panic("mock out the Update method")
 //			},
-//			UpdateCatalogStatusFunc: func(tx *gorm.DB, uuid string, organizationUUID string, inCatalog bool) error {
+//			UpdateCatalogStatusFunc: func(tx *gorm.DB, uuidMoqParam string, organizationUUID string, inCatalog bool) error {
 //				panic("mock out the UpdateCatalogStatus method")
 //			},
 //		}
@@ -72,11 +76,14 @@ type ArtifactRepositoryMock struct {
 	// ListByHandlePrefixFunc mocks the ListByHandlePrefix method.
 	ListByHandlePrefixFunc func(ctx context.Context, kind string, handlePrefix string, orgUUID string) ([]*models.Artifact, error)
 
+	// ListExistingFunc mocks the ListExisting method.
+	ListExistingFunc func(ctx context.Context, ouID string, uuids []uuid.UUID, llmProxyHandles []string) ([]models.ArtifactRef, error)
+
 	// UpdateFunc mocks the Update method.
 	UpdateFunc func(tx *gorm.DB, artifact *models.Artifact) error
 
 	// UpdateCatalogStatusFunc mocks the UpdateCatalogStatus method.
-	UpdateCatalogStatusFunc func(tx *gorm.DB, uuid string, organizationUUID string, inCatalog bool) error
+	UpdateCatalogStatusFunc func(tx *gorm.DB, uuidMoqParam string, organizationUUID string, inCatalog bool) error
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -135,6 +142,17 @@ type ArtifactRepositoryMock struct {
 			// OrgUUID is the orgUUID argument value.
 			OrgUUID string
 		}
+		// ListExisting holds details about calls to the ListExisting method.
+		ListExisting []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// OuID is the ouID argument value.
+			OuID string
+			// Uuids is the uuids argument value.
+			Uuids []uuid.UUID
+			// LlmProxyHandles is the llmProxyHandles argument value.
+			LlmProxyHandles []string
+		}
 		// Update holds details about calls to the Update method.
 		Update []struct {
 			// Tx is the tx argument value.
@@ -146,8 +164,8 @@ type ArtifactRepositoryMock struct {
 		UpdateCatalogStatus []struct {
 			// Tx is the tx argument value.
 			Tx *gorm.DB
-			// UUID is the uuid argument value.
-			UUID string
+			// UuidMoqParam is the uuidMoqParam argument value.
+			UuidMoqParam string
 			// OrganizationUUID is the organizationUUID argument value.
 			OrganizationUUID string
 			// InCatalog is the inCatalog argument value.
@@ -161,6 +179,7 @@ type ArtifactRepositoryMock struct {
 	lockGetByHandle         sync.RWMutex
 	lockGetByUUID           sync.RWMutex
 	lockListByHandlePrefix  sync.RWMutex
+	lockListExisting        sync.RWMutex
 	lockUpdate              sync.RWMutex
 	lockUpdateCatalogStatus sync.RWMutex
 }
@@ -429,6 +448,50 @@ func (mock *ArtifactRepositoryMock) ListByHandlePrefixCalls() []struct {
 	return calls
 }
 
+// ListExisting calls ListExistingFunc.
+func (mock *ArtifactRepositoryMock) ListExisting(ctx context.Context, ouID string, uuids []uuid.UUID, llmProxyHandles []string) ([]models.ArtifactRef, error) {
+	if mock.ListExistingFunc == nil {
+		panic("ArtifactRepositoryMock.ListExistingFunc: method is nil but ArtifactRepository.ListExisting was just called")
+	}
+	callInfo := struct {
+		Ctx             context.Context
+		OuID            string
+		Uuids           []uuid.UUID
+		LlmProxyHandles []string
+	}{
+		Ctx:             ctx,
+		OuID:            ouID,
+		Uuids:           uuids,
+		LlmProxyHandles: llmProxyHandles,
+	}
+	mock.lockListExisting.Lock()
+	mock.calls.ListExisting = append(mock.calls.ListExisting, callInfo)
+	mock.lockListExisting.Unlock()
+	return mock.ListExistingFunc(ctx, ouID, uuids, llmProxyHandles)
+}
+
+// ListExistingCalls gets all the calls that were made to ListExisting.
+// Check the length with:
+//
+//	len(mockedArtifactRepository.ListExistingCalls())
+func (mock *ArtifactRepositoryMock) ListExistingCalls() []struct {
+	Ctx             context.Context
+	OuID            string
+	Uuids           []uuid.UUID
+	LlmProxyHandles []string
+} {
+	var calls []struct {
+		Ctx             context.Context
+		OuID            string
+		Uuids           []uuid.UUID
+		LlmProxyHandles []string
+	}
+	mock.lockListExisting.RLock()
+	calls = mock.calls.ListExisting
+	mock.lockListExisting.RUnlock()
+	return calls
+}
+
 // Update calls UpdateFunc.
 func (mock *ArtifactRepositoryMock) Update(tx *gorm.DB, artifact *models.Artifact) error {
 	if mock.UpdateFunc == nil {
@@ -466,25 +529,25 @@ func (mock *ArtifactRepositoryMock) UpdateCalls() []struct {
 }
 
 // UpdateCatalogStatus calls UpdateCatalogStatusFunc.
-func (mock *ArtifactRepositoryMock) UpdateCatalogStatus(tx *gorm.DB, uuid string, organizationUUID string, inCatalog bool) error {
+func (mock *ArtifactRepositoryMock) UpdateCatalogStatus(tx *gorm.DB, uuidMoqParam string, organizationUUID string, inCatalog bool) error {
 	if mock.UpdateCatalogStatusFunc == nil {
 		panic("ArtifactRepositoryMock.UpdateCatalogStatusFunc: method is nil but ArtifactRepository.UpdateCatalogStatus was just called")
 	}
 	callInfo := struct {
 		Tx               *gorm.DB
-		UUID             string
+		UuidMoqParam     string
 		OrganizationUUID string
 		InCatalog        bool
 	}{
 		Tx:               tx,
-		UUID:             uuid,
+		UuidMoqParam:     uuidMoqParam,
 		OrganizationUUID: organizationUUID,
 		InCatalog:        inCatalog,
 	}
 	mock.lockUpdateCatalogStatus.Lock()
 	mock.calls.UpdateCatalogStatus = append(mock.calls.UpdateCatalogStatus, callInfo)
 	mock.lockUpdateCatalogStatus.Unlock()
-	return mock.UpdateCatalogStatusFunc(tx, uuid, organizationUUID, inCatalog)
+	return mock.UpdateCatalogStatusFunc(tx, uuidMoqParam, organizationUUID, inCatalog)
 }
 
 // UpdateCatalogStatusCalls gets all the calls that were made to UpdateCatalogStatus.
@@ -493,13 +556,13 @@ func (mock *ArtifactRepositoryMock) UpdateCatalogStatus(tx *gorm.DB, uuid string
 //	len(mockedArtifactRepository.UpdateCatalogStatusCalls())
 func (mock *ArtifactRepositoryMock) UpdateCatalogStatusCalls() []struct {
 	Tx               *gorm.DB
-	UUID             string
+	UuidMoqParam     string
 	OrganizationUUID string
 	InCatalog        bool
 } {
 	var calls []struct {
 		Tx               *gorm.DB
-		UUID             string
+		UuidMoqParam     string
 		OrganizationUUID string
 		InCatalog        bool
 	}

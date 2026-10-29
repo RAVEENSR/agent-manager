@@ -304,3 +304,80 @@ func (r *DeploymentRepo) GetStatusRecord(ctx context.Context, p models.Placement
 	}
 	return &row, nil
 }
+
+// syncRow is a deployment_status row the gateway has been sent something for, joined to its artifact.
+type syncRow struct {
+	ArtifactUUID  uuid.UUID               `gorm:"column:artifact_uuid"`
+	OUID          string                  `gorm:"column:ou_id"`
+	Kind          string                  `gorm:"column:kind"`
+	Handle        string                  `gorm:"column:handle"`
+	DeploymentID  uuid.UUID               `gorm:"column:deployment_id"`
+	StatusDesired models.DeploymentStatus `gorm:"column:status_desired"`
+	PerformedAt   time.Time               `gorm:"column:performed_at"`
+}
+
+// ListForGatewaySync lists what the gateway should hold, as it stored it: each row it was ever sent something for,
+// in its desired state. A row heading for UNDEPLOYED lists an empty deployment id, because undeploy events carry
+// one and the gateway stores it. DeployedAt is the performedAt the gateway was sent. The gateway orders the
+// fetches itself, so there is no ORDER BY.
+func (r *DeploymentRepo) ListForGatewaySync(ctx context.Context, ouID, gatewayID string) ([]models.GatewaySyncRow, error) {
+	var rows []syncRow
+	err := r.db.WithContext(ctx).Raw(`
+		SELECT s.artifact_uuid, s.ou_id, a.kind, a.handle, s.deployment_id, s.status_desired, s.performed_at
+		FROM deployment_status s
+		INNER JOIN artifacts a ON a.uuid = s.artifact_uuid AND a.ou_id = s.ou_id
+		WHERE s.gateway_uuid = ? AND s.ou_id = ? AND s.deployment_id IS NOT NULL`,
+		gatewayID, ouID).Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("failed to list deployments for gateway sync: %w", err)
+	}
+	synced := make([]models.GatewaySyncRow, 0, len(rows))
+	for _, row := range rows {
+		entry := models.GatewaySyncRow{
+			ArtifactRef: models.ArtifactRef{OUID: row.OUID, ArtifactUUID: row.ArtifactUUID, Kind: row.Kind, Handle: row.Handle},
+			State:       models.GatewaySyncStateUndeployed,
+			DeployedAt:  row.PerformedAt,
+		}
+		if row.StatusDesired == models.DeploymentStatusDeployed {
+			entry.State, entry.DeploymentID = models.GatewaySyncStateDeployed, row.DeploymentID.String()
+		}
+		synced = append(synced, entry)
+	}
+	return synced, nil
+}
+
+// ListContentForGateway returns the deployments among deploymentIDs that belong to the gateway in ouID, with their
+// artifacts. Any other id is left out.
+func (r *DeploymentRepo) ListContentForGateway(
+	ctx context.Context, ouID, gatewayID string, deploymentIDs []uuid.UUID,
+) ([]models.GatewayDeploymentContent, error) {
+	if len(deploymentIDs) == 0 {
+		return nil, nil
+	}
+	var rows []struct {
+		ArtifactUUID uuid.UUID `gorm:"column:artifact_uuid"`
+		OUID         string    `gorm:"column:ou_id"`
+		Kind         string    `gorm:"column:kind"`
+		Handle       string    `gorm:"column:handle"`
+		DeploymentID uuid.UUID `gorm:"column:deployment_id"`
+		Content      []byte    `gorm:"column:content"`
+	}
+	err := r.db.WithContext(ctx).Raw(`
+		SELECT d.artifact_uuid, d.ou_id, a.kind, a.handle, d.deployment_id, d.content
+		FROM deployments d
+		INNER JOIN artifacts a ON a.uuid = d.artifact_uuid AND a.ou_id = d.ou_id
+		WHERE d.deployment_id IN ? AND d.ou_id = ? AND d.gateway_uuid = ?`,
+		deploymentIDs, ouID, gatewayID).Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("failed to get deployment content for gateway: %w", err)
+	}
+	contents := make([]models.GatewayDeploymentContent, 0, len(rows))
+	for _, row := range rows {
+		contents = append(contents, models.GatewayDeploymentContent{
+			ArtifactRef:  models.ArtifactRef{OUID: row.OUID, ArtifactUUID: row.ArtifactUUID, Kind: row.Kind, Handle: row.Handle},
+			DeploymentID: row.DeploymentID,
+			Content:      row.Content,
+		})
+	}
+	return contents, nil
+}

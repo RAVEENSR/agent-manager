@@ -110,3 +110,19 @@ type DeploymentAck struct {
 	PerformedAt  time.Time `json:"performedAt"`
 	ErrorCode    string    `json:"errorCode,omitempty"`
 }
+
+// ControlPlaneDeployment is one GET /api/internal/v1/deployments entry, in the gateway's shape.
+type ControlPlaneDeployment struct {
+	ArtifactID   string    `json:"artifactId"`
+	DeploymentID string    `json:"deploymentId"`
+	Kind         string    `json:"kind"`
+	State        string    `json:"state"`
+	DeployedAt   time.Time `json:"deployedAt"`
+	Etag         string    `json:"etag"`
+}
+
+// ArtifactExistence answers POST /api/internal/v1/artifacts/exists for one artifact id.
+type ArtifactExistence struct {
+	ArtifactID string `json:"artifactId"`
+	Exists     bool   `json:"exists"`
+}

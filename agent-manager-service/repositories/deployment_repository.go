@@ -82,6 +82,10 @@ type DeploymentRepository interface {
 	LiveGateways(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error)
 	GetStatusRecord(ctx context.Context, placement models.Placement) (*models.DeploymentStatusRecord, error)
 
+	// Gateway startup sync.
+	ListForGatewaySync(ctx context.Context, ouID, gatewayID string) ([]models.GatewaySyncRow, error)
+	ListContentForGateway(ctx context.Context, ouID, gatewayID string, deploymentIDs []uuid.UUID) ([]models.GatewayDeploymentContent, error)
+
 	// DeleteForArtifact removes every deployment of the artifact; their deployment_status rows cascade.
 	DeleteForArtifact(ctx context.Context, artifactUUID uuid.UUID, orgUUID string) error
 	// WithTx returns the repository bound to tx.

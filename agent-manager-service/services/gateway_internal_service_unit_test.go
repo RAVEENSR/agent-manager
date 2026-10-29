@@ -58,7 +58,7 @@ var activeDeploymentLookups = []struct {
 const testArtifactID = "0192f4c1-9a7d-7c3e-b4f2-1a2b3c4d5e6f"
 
 func newGatewayInternalServiceWithDeployments(repo *repomocks.DeploymentRepositoryMock) *GatewayInternalAPIService {
-	return NewGatewayInternalAPIService(nil, nil, repo, nil, nil, nil)
+	return NewGatewayInternalAPIService(nil, nil, repo, nil, nil, nil, nil)
 }
 
 func TestActiveArtifactDeploymentByGatewayReturnsYamlKeyedByID(t *testing.T) {
@@ -138,7 +138,7 @@ func TestActiveAgentDeploymentDecryptsTheUpstreamSecret(t *testing.T) {
 			return &models.Deployment{Content: []byte(stored)}, nil
 		},
 	}
-	svc := NewGatewayInternalAPIService(nil, nil, repo, nil, nil, key)
+	svc := NewGatewayInternalAPIService(nil, nil, repo, nil, nil, nil, key)
 
 	got, err := svc.GetActiveAgentDeploymentByGateway(context.Background(), testArtifactID, "ou-1", "gw-1")
 	require.NoError(t, err)
