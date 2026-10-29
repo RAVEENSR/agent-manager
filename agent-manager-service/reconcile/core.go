@@ -52,6 +52,7 @@ type Kinds []Kind
 type Applied struct {
 	Placement    models.Placement
 	DeploymentID uuid.UUID
+	Deployment   *models.Deployment
 	NoGateway    bool
 	Nudge        bool
 }
@@ -185,7 +186,7 @@ func (c *Core) deployTo(ctx context.Context, tx *gorm.DB, kind Kind, p models.Pl
 	if err := c.publishDeploy(ctx, tx, kind, p, deployment); err != nil {
 		return nil, err
 	}
-	return &Applied{Placement: p, DeploymentID: deployment.DeploymentID}, nil
+	return &Applied{Placement: p, DeploymentID: deployment.DeploymentID, Deployment: deployment}, nil
 }
 
 // owe leaves the render to the worker: a new PENDING row, or the queue due on the existing one.
@@ -314,6 +315,11 @@ func (c *Core) renderOwed(ctx context.Context, ouID string, artifactUUID uuid.UU
 		errs = append(errs, c.renderClaim(ctx, claim))
 	}
 	return errors.Join(errs...)
+}
+
+// Nudge wakes the worker for a render a committed request left owed (Applied.Nudge).
+func (c *Core) Nudge() {
+	c.nudge()
 }
 
 // Status is what the user is shown for the artifact on the gateway; ErrNotPlaced when it has no row there.

@@ -134,7 +134,8 @@ func InitializeAppParamsWithEnvThunderEndpoints(cfg *config.Config, db *gorm.DB,
 	prober := thundersvc.NewProber()
 	environmentService := services.NewEnvironmentService(logger, gatewayRepository, openChoreoClient, prober, agentConfigurationService, envThunderSystemClientRepository, envThunderURLRepository, v, a2AAgentCardRepository, a2APublisher, agentConfigRepository)
 	environmentController := controllers.NewEnvironmentController(environmentService)
-	kinds := ProvideReconcileKinds()
+	llmProviderKind := services.NewLLMProviderKind()
+	kinds := ProvideReconcileKinds(llmProviderKind)
 	core := ProvideReconcileCore(db, deploymentRepository, eventHub, kinds, cfg, logger)
 	worker := reconcile.NewWorker(core, logger)
 	platformGatewayService := ProvidePlatformGatewayService(gatewayRepository, gatewayApplier, worker)
@@ -143,7 +144,7 @@ func InitializeAppParamsWithEnvThunderEndpoints(cfg *config.Config, db *gorm.DB,
 	llmTemplateStore := services.NewLLMTemplateStore()
 	llmProviderTemplateService := services.NewLLMProviderTemplateService(llmProviderTemplateRepository, llmTemplateStore)
 	llmProviderService := services.NewLLMProviderService(db, llmProviderRepository, llmProviderTemplateRepository, llmTemplateStore, llmProxyRepository, artifactRepository, v, gatewayRepository, deploymentRepository, envAgentModelMappingRepository, monitorLLMMappingRepository, llmProviderAPIKeyService)
-	llmProviderDeploymentService := services.NewLLMProviderDeploymentService(txRunner, deploymentRepository, llmProviderRepository, llmProviderTemplateRepository, gatewayRepository, gatewayEventsService)
+	llmProviderDeploymentService := services.NewLLMProviderDeploymentService(txRunner, deploymentRepository, llmProviderRepository, llmProviderTemplateRepository, gatewayRepository, gatewayEventsService, core)
 	llmController := controllers.NewLLMController(llmProviderTemplateService, llmProviderService, llmProxyService, llmProviderDeploymentService, llmProxyDeploymentService, artifactRepository, openChoreoClient)
 	llmDeploymentController := controllers.NewLLMDeploymentController(llmProviderDeploymentService)
 	llmProviderAPIKeyController := controllers.NewLLMProviderAPIKeyController(llmProviderAPIKeyService)
@@ -338,7 +339,8 @@ func InitializeTestAppParamsWithClientMocks(cfg *config.Config, db *gorm.DB, aut
 	prober := thundersvc.NewProber()
 	environmentService := services.NewEnvironmentService(logger, gatewayRepository, openChoreoClient, prober, agentConfigurationService, envThunderSystemClientRepository, envThunderURLRepository, v, a2AAgentCardRepository, a2APublisher, agentConfigRepository)
 	environmentController := controllers.NewEnvironmentController(environmentService)
-	kinds := ProvideReconcileKinds()
+	llmProviderKind := services.NewLLMProviderKind()
+	kinds := ProvideReconcileKinds(llmProviderKind)
 	core := ProvideReconcileCore(db, deploymentRepository, eventHub, kinds, cfg, logger)
 	worker := reconcile.NewWorker(core, logger)
 	platformGatewayService := ProvidePlatformGatewayService(gatewayRepository, gatewayApplier, worker)
@@ -347,7 +349,7 @@ func InitializeTestAppParamsWithClientMocks(cfg *config.Config, db *gorm.DB, aut
 	llmTemplateStore := services.NewLLMTemplateStore()
 	llmProviderTemplateService := services.NewLLMProviderTemplateService(llmProviderTemplateRepository, llmTemplateStore)
 	llmProviderService := services.NewLLMProviderService(db, llmProviderRepository, llmProviderTemplateRepository, llmTemplateStore, llmProxyRepository, artifactRepository, v, gatewayRepository, deploymentRepository, envAgentModelMappingRepository, monitorLLMMappingRepository, llmProviderAPIKeyService)
-	llmProviderDeploymentService := services.NewLLMProviderDeploymentService(txRunner, deploymentRepository, llmProviderRepository, llmProviderTemplateRepository, gatewayRepository, gatewayEventsService)
+	llmProviderDeploymentService := services.NewLLMProviderDeploymentService(txRunner, deploymentRepository, llmProviderRepository, llmProviderTemplateRepository, gatewayRepository, gatewayEventsService, core)
 	llmController := controllers.NewLLMController(llmProviderTemplateService, llmProviderService, llmProxyService, llmProviderDeploymentService, llmProxyDeploymentService, artifactRepository, openChoreoClient)
 	llmDeploymentController := controllers.NewLLMDeploymentController(llmProviderDeploymentService)
 	llmProviderAPIKeyController := controllers.NewLLMProviderAPIKeyController(llmProviderAPIKeyService)
@@ -714,8 +716,7 @@ var repositoryProviderSet = wire.NewSet(
 	ProvideEnvThunderURLRepository, repositories.NewMCPProxyScopeRepository,
 )
 
-var reconcileProviderSet = wire.NewSet(
-	ProvideReconcileKinds,
+var reconcileProviderSet = wire.NewSet(services.NewLLMProviderKind, ProvideReconcileKinds,
 	ProvideReconcileCore, reconcile.NewWorker,
 )
 
@@ -784,8 +785,8 @@ func ProvideDeploymentAckHandler(deploymentRepo repositories.DeploymentRepositor
 }
 
 // ProvideReconcileKinds lists the gateway artifact kinds the reconcile core deploys.
-func ProvideReconcileKinds() reconcile.Kinds {
-	return nil
+func ProvideReconcileKinds(llmProvider *services.LLMProviderKind) reconcile.Kinds {
+	return reconcile.Kinds{llmProvider}
 }
 
 // ProvideReconcileCore builds the reconcile core with the worker's intervals, lease and attempt budget from cfg.

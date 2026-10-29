@@ -131,25 +131,10 @@ func validateProviderVersion(version string) error {
 	return nil
 }
 
-// rollbackCreatedProvider removes a provider whose every gateway deployment failed,
-// so a failed CreateAndDeploy leaves nothing behind. The rollback error is returned
-// as well as logged: it is not the error the caller reports — the deployment failure
-// explains what went wrong — but a rollback that failed means the provider survived,
-// and a caller told only "deployments failed" would retry the same handle and be
-// rejected with ErrLLMProviderExists by a provider it does not know exists.
-func (s *LLMProviderService) rollbackCreatedProvider(
-	ctx context.Context, created *models.LLMProvider, ouID string,
-	deploymentService *LLMProviderDeploymentService,
-) error {
-	if err := s.Delete(ctx, created.UUID.String(), ouID, deploymentService); err != nil {
-		slog.Error("LLMProviderService.CreateAndDeploy: failed to roll back provider after deployment failure",
-			"ouID", ouID, "providerUUID", created.UUID, "error", err)
-		return fmt.Errorf("failed to roll back provider %s: %w", created.UUID, err)
-	}
-	slog.Info("LLMProviderService.CreateAndDeploy: rolled back provider after deployment failure",
-		"ouID", ouID, "providerUUID", created.UUID)
-	return nil
-}
+// providerDeployFailure aborts a CreateAndDeploy whose every gateway deployment failed, rolling back the provider.
+type providerDeployFailure struct{ message string }
+
+func (e *providerDeployFailure) Error() string { return e.message }
 
 // summarizeDeploymentFailures joins the per-gateway errors so the caller learns why
 // the deployments failed instead of only that they did.
@@ -281,11 +266,19 @@ func applyDefaultProxyAPIKeyHeader(provider *models.LLMProvider) {
 
 // Create creates a new LLM provider
 func (s *LLMProviderService) Create(ctx context.Context, ouID, createdBy string, provider *models.LLMProvider) (*models.LLMProvider, error) {
+	if err := s.prepareProvider(ouID, createdBy, provider); err != nil {
+		return nil, err
+	}
+	return s.insertProvider(ouID, provider, func(*gorm.DB) error { return nil })
+}
+
+// prepareProvider validates a new provider, fills its defaults from its template and encrypts its upstream key.
+func (s *LLMProviderService) prepareProvider(ouID, createdBy string, provider *models.LLMProvider) error {
 	slog.Info("LLMProviderService.Create: starting", "ouID", ouID, "createdBy", createdBy)
 
 	if provider == nil {
 		slog.Error("LLMProviderService.Create: provider is nil", "ouID", ouID)
-		return nil, utils.ErrInvalidInput
+		return utils.ErrInvalidInput
 	}
 
 	// Extract handle, name, and version from configuration
@@ -300,25 +293,25 @@ func (s *LLMProviderService) Create(ctx context.Context, ouID, createdBy string,
 
 	if handle == "" || name == "" || version == "" {
 		slog.Error("LLMProviderService.Create: missing required fields", "ouID", ouID, "handle", handle, "name", name, "version", version)
-		return nil, utils.ErrInvalidInput
+		return utils.ErrInvalidInput
 	}
 
 	// Fail fast if a provider with this handle already exists, before touching KV.
 	if _, err := s.providerRepo.GetByHandle(handle, ouID); err == nil {
 		slog.Warn("LLMProviderService.Create: provider already exists", "ouID", ouID, "handle", handle)
-		return nil, utils.ErrLLMProviderExists
+		return utils.ErrLLMProviderExists
 	}
 
 	// Validate template exists
 	template := provider.Configuration.Template
 	if template == "" {
 		slog.Error("LLMProviderService.Create: template not specified", "ouID", ouID, "handle", handle)
-		return nil, utils.ErrInvalidInput
+		return utils.ErrInvalidInput
 	}
 
 	if err := validateProxyAPIKeyLocation(provider); err != nil {
 		slog.Warn("LLMProviderService.Create: unsupported api key location", "ouID", ouID, "handle", handle, "error", err)
-		return nil, err
+		return err
 	}
 
 	// Set default values
@@ -337,7 +330,7 @@ func (s *LLMProviderService) Create(ctx context.Context, ouID, createdBy string,
 		modelListBytes, err := json.Marshal(provider.ModelProviders)
 		if err != nil {
 			slog.Error("LLMProviderService.Create: failed to serialize model providers", "ouID", ouID, "handle", handle, "error", err)
-			return nil, fmt.Errorf("failed to serialize model providers: %w", err)
+			return fmt.Errorf("failed to serialize model providers: %w", err)
 		}
 		provider.ModelList = string(modelListBytes)
 	}
@@ -349,7 +342,7 @@ func (s *LLMProviderService) Create(ctx context.Context, ouID, createdBy string,
 	resolvedTemplate, err := s.resolveTemplate(template, ouID)
 	if err != nil {
 		slog.Warn("LLMProviderService.Create: template unusable", "ouID", ouID, "handle", handle, "template", template, "error", err)
-		return nil, err
+		return err
 	}
 
 	// Set template handle in provider
@@ -359,7 +352,7 @@ func (s *LLMProviderService) Create(ctx context.Context, ouID, createdBy string,
 
 	if err := validateProviderVersion(version); err != nil {
 		slog.Warn("LLMProviderService.Create: invalid version", "ouID", ouID, "handle", handle, "version", version)
-		return nil, err
+		return err
 	}
 
 	// Validate mutual exclusivity of Auth.Value and Auth.SecretRef
@@ -367,12 +360,12 @@ func (s *LLMProviderService) Create(ctx context.Context, ouID, createdBy string,
 		provider.Configuration.Upstream.Main != nil &&
 		provider.Configuration.Upstream.Main.Auth != nil {
 		if err := provider.Configuration.Upstream.Main.Auth.Validate(); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	if err := provider.Configuration.Resilience.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %w", utils.ErrInvalidInput, err)
+		return fmt.Errorf("%w: %w", utils.ErrInvalidInput, err)
 	}
 
 	// Encrypt upstream API key if provided
@@ -385,7 +378,7 @@ func (s *LLMProviderService) Create(ctx context.Context, ouID, createdBy string,
 		if err != nil {
 			slog.Error("LLMProviderService.Create: failed to encrypt upstream key",
 				"ouID", ouID, "handle", handle, "error", err)
-			return nil, fmt.Errorf("failed to encrypt upstream API key: %w", err)
+			return fmt.Errorf("failed to encrypt upstream API key: %w", err)
 		}
 
 		// Replace plaintext with encrypted reference
@@ -396,11 +389,19 @@ func (s *LLMProviderService) Create(ctx context.Context, ouID, createdBy string,
 			"ouID", ouID, "handle", handle)
 	}
 
-	// Create provider in transaction with validation
-	slog.Info("LLMProviderService.Create: creating provider in database", "ouID", ouID, "handle", handle, "name", name, "version", version)
-	err = s.db.Transaction(func(tx *gorm.DB) error {
+	return nil
+}
+
+// insertProvider stores a prepared provider and runs then in the same transaction, then reads it back.
+func (s *LLMProviderService) insertProvider(ouID string, provider *models.LLMProvider, then func(tx *gorm.DB) error) (*models.LLMProvider, error) {
+	handle := provider.Configuration.Handle
+	slog.Info("LLMProviderService.Create: creating provider in database", "ouID", ouID, "handle", handle)
+	err := s.db.Transaction(func(tx *gorm.DB) error {
 		// Create provider - uniqueness enforced by DB constraint
-		return s.providerRepo.Create(tx, provider, handle, name, version, ouID)
+		if err := s.providerRepo.Create(tx, provider, handle, provider.Configuration.Name, provider.Configuration.Version, ouID); err != nil {
+			return err
+		}
+		return then(tx)
 	})
 	if err != nil {
 		// Check for unique constraint violation
@@ -409,8 +410,8 @@ func (s *LLMProviderService) Create(ctx context.Context, ouID, createdBy string,
 			slog.Warn("LLMProviderService.Create: provider already exists (unique constraint)", "ouID", ouID, "handle", handle)
 			return nil, utils.ErrLLMProviderExists
 		}
-		// Return template not found error directly
-		if errors.Is(err, utils.ErrLLMProviderTemplateNotFound) {
+		var deployFailure *providerDeployFailure
+		if errors.Is(err, utils.ErrLLMProviderTemplateNotFound) || errors.As(err, &deployFailure) {
 			return nil, err
 		}
 		slog.Error("LLMProviderService.Create: failed to create provider", "ouID", ouID, "handle", handle, "error", err)
@@ -769,12 +770,6 @@ func (s *LLMProviderService) Delete(ctx context.Context, providerID, ouID string
 		return utils.ErrLLMProviderHasProxies
 	}
 
-	// Resolve all cleanup targets before any irreversible gateway or database changes.
-	deletionGatewayIDs, err := deploymentService.GatewayIDsForProviderDeletion(ctx, providerUUID, ouID)
-	if err != nil {
-		return fmt.Errorf("resolve provider deletion gateways: %w", err)
-	}
-
 	deployedGatewayIDs, err := deploymentService.deploymentRepo.GetDeployedGatewaysByProvider(providerUUID, ouID)
 	if err != nil {
 		slog.Error("LLMProviderService.Delete: failed to get deployed gateways", "ouID", ouID, "providerID", providerID, "error", err)
@@ -846,9 +841,21 @@ func (s *LLMProviderService) Delete(ctx context.Context, providerID, ouID string
 	}
 	defer deleteCancel()
 
-	// Now delete the provider from database (cascade deletes mappings)
+	// The delete event drops the config the undeploy above kept on the gateway, with its keys and policies. It is
+	// written in the deleting transaction, built before the provider's status rows cascade away.
 	slog.Info("LLMProviderService.Delete: deleting provider from database", "ouID", ouID, "providerID", providerID)
-	if err := s.providerRepo.DeleteCtx(deleteCtx, provider.UUID.String(), ouID); err != nil {
+	ref := providerPlacement(provider, ouID, uuid.Nil).ArtifactRef
+	err = deploymentService.tx(deleteCtx, func(tx *gorm.DB) error {
+		events, err := deploymentService.core.PrepareDelete(deleteCtx, tx, ref)
+		if err != nil {
+			return err
+		}
+		if err := s.providerRepo.DeleteTx(deleteCtx, tx, provider.UUID.String(), ouID); err != nil {
+			return err
+		}
+		return events.Publish(deleteCtx, tx)
+	})
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			slog.Warn("LLMProviderService.Delete: provider not found", "ouID", ouID, "providerID", providerID)
 			return utils.ErrLLMProviderNotFound
@@ -857,22 +864,6 @@ func (s *LLMProviderService) Delete(ctx context.Context, providerID, ouID string
 		return fmt.Errorf("failed to delete provider: %w", err)
 	}
 	deleteCommitted = true
-
-	// No KV cleanup needed — encrypted value is stored in the DB and deleted with the provider record
-
-	// The undeploy above only flips the gateway's desired state — it deliberately
-	// preserves the config, its keys and its policies. This is the event that makes
-	// the gateway actually drop the config; without it every deleted provider leaves
-	// its policy chains in the gateway's xDS snapshot forever. Sent only after the
-	// delete is committed, and best-effort: a committed delete must not be failed
-	// because a gateway is unreachable.
-	cleanupCtx := deleteCtx
-	cleanupCancel := func() {}
-	if successfulUndeployments == 0 {
-		cleanupCtx, cleanupCancel = context.WithTimeout(context.WithoutCancel(ctx), gatewayDeletionTimeout)
-	}
-	defer cleanupCancel()
-	deploymentService.BroadcastLLMProviderDeletion(cleanupCtx, provider.UUID.String(), ouID, deletionGatewayIDs)
 
 	slog.Info("LLMProviderService.Delete: completed successfully", "ouID", ouID, "providerID", providerID)
 	return nil
@@ -981,7 +972,6 @@ func (s *LLMProviderService) UpdateAndSync(ctx context.Context, providerID, ouID
 	// Deploy to newly added gateways and track results
 	deploymentResults := make([]DeploymentResult, 0)
 	deploymentResults = append(deploymentResults, invalidGatewayResults...)
-	deploymentIndex := 1
 	successfulDeployments := 0
 	attemptedDeployments := 0
 
@@ -991,16 +981,7 @@ func (s *LLMProviderService) UpdateAndSync(ctx context.Context, providerID, ouID
 			attemptedDeployments++
 			slog.Info("LLMProviderService.UpdateAndSync: deploying to new gateway", "providerID", providerID, "gatewayID", gatewayID)
 
-			deploymentName := fmt.Sprintf("%s-deployment-%d", updated.Configuration.Name, deploymentIndex)
-			deployReq := &models.DeployAPIRequest{
-				Name:      deploymentName,
-				Base:      "current",
-				GatewayID: gatewayID,
-				Metadata: map[string]interface{}{
-					"auto_deployed": true,
-					"sync_update":   true,
-				},
-			}
+			deployReq := &models.DeployAPIRequest{GatewayID: gatewayID}
 
 			if _, err := deploymentService.DeployLLMProvider(providerID, deployReq, ouID); err != nil {
 				slog.Error("LLMProviderService.UpdateAndSync: failed to deploy to new gateway", "providerID", providerID, "gatewayID", gatewayID, "error", err)
@@ -1017,35 +998,10 @@ func (s *LLMProviderService) UpdateAndSync(ctx context.Context, providerID, ouID
 					Success:   true,
 				})
 			}
-			deploymentIndex++
 		} else {
 			attemptedDeployments++
 			slog.Info("LLMProviderService.UpdateAndSync: updating the current deployment", "providerID", providerID, "gatewayID", gatewayID)
-			currentDeployment, err := deploymentService.deploymentRepo.GetPullable(ctx, ouID, providerUUID, gatewayID)
-			if err == nil && currentDeployment == nil {
-				err = utils.ErrDeploymentNotActive
-			}
-			if err != nil {
-				deploymentResults = append(deploymentResults, DeploymentResult{
-					GatewayID: gatewayID,
-					Success:   false,
-					Error:     err.Error(),
-				})
-				continue
-			}
-
-			deployReq := &models.DeployAPIRequest{
-				Name: currentDeployment.Name,
-				// Use "current" so the deployment YAML is regenerated from the latest provider
-				// configuration (including updated policies). Using the old deployment UUID as Base
-				// would copy the stale YAML content, missing any policy or config changes.
-				Base:      "current",
-				GatewayID: gatewayID,
-				Metadata: map[string]interface{}{
-					"auto_deployed": true,
-					"sync_update":   true,
-				},
-			}
+			deployReq := &models.DeployAPIRequest{GatewayID: gatewayID}
 
 			if _, err := deploymentService.DeployLLMProvider(providerID, deployReq, ouID); err != nil {
 				slog.Error("LLMProviderService.UpdateAndSync: failed to update deployment in gateway", "providerID", providerID, "gatewayID", gatewayID, "error", err)
@@ -1062,7 +1018,6 @@ func (s *LLMProviderService) UpdateAndSync(ctx context.Context, providerID, ouID
 					Success:   true,
 				})
 			}
-			deploymentIndex++
 		}
 	}
 
@@ -1638,70 +1593,39 @@ func (s *LLMProviderService) CreateAndDeploy(ctx context.Context, ouID, createdB
 		return nil, fmt.Errorf("all %d gateway IDs are invalid", len(gatewayIDs))
 	}
 
-	// Create the provider using the existing Create method
-	created, err := s.Create(ctx, ouID, createdBy, provider)
-	if err != nil {
+	if err := s.prepareProvider(ouID, createdBy, provider); err != nil {
 		slog.Error("LLMProviderService.CreateAndDeploy: failed to create provider", "ouID", ouID, "error", err)
 		return nil, err
 	}
 
-	slog.Info("LLMProviderService.CreateAndDeploy: provider created successfully", "ouID", ouID, "providerUUID", created.UUID)
-
-	// Deploy to each valid gateway and track results
+	// The provider and its deployments commit together: if no gateway takes it, nothing is left behind. Gateways
+	// are deployed in id order, the order their event locks must be taken in.
+	slices.Sort(validGatewayIDs)
 	successfulDeployments := 0
-	for i, gatewayID := range validGatewayIDs {
-		slog.Info("LLMProviderService.CreateAndDeploy: deploying to gateway", "ouID", ouID, "providerUUID", created.UUID, "gatewayID", gatewayID, "index", i+1, "total", len(validGatewayIDs))
-
-		// Generate deployment name: provider-name-gateway-index
-		deploymentName := fmt.Sprintf("%s-deployment-%d", created.Configuration.Name, i+1)
-
-		// Create deployment request
-		deployReq := &models.DeployAPIRequest{
-			Name:      deploymentName,
-			Base:      "current", // Use current provider configuration
-			GatewayID: gatewayID,
-			Metadata: map[string]interface{}{
-				"auto_deployed": true,
-				"gateway_index": i + 1,
-			},
-		}
-
-		// Deploy to gateway
-		deployment, err := deploymentService.DeployLLMProvider(created.UUID.String(), deployReq, ouID)
-		if err != nil {
-			slog.Error("LLMProviderService.CreateAndDeploy: failed to deploy to gateway", "ouID", ouID, "providerUUID", created.UUID, "gatewayID", gatewayID, "error", err)
-			deploymentResults = append(deploymentResults, DeploymentResult{
-				GatewayID: gatewayID,
-				Success:   false,
-				Error:     err.Error(),
+	created, err := s.insertProvider(ouID, provider, func(tx *gorm.DB) error {
+		for _, gatewayID := range validGatewayIDs {
+			placement := providerPlacement(provider, ouID, uuid.MustParse(gatewayID))
+			err := tx.Transaction(func(tx *gorm.DB) error {
+				_, err := deploymentService.core.Deploy(ctx, tx, placement)
+				return err
 			})
-			continue
+			if err != nil {
+				slog.Error("LLMProviderService.CreateAndDeploy: failed to deploy to gateway", "ouID", ouID, "providerUUID", provider.UUID, "gatewayID", gatewayID, "error", err)
+				deploymentResults = append(deploymentResults, DeploymentResult{GatewayID: gatewayID, Success: false, Error: err.Error()})
+				continue
+			}
+			successfulDeployments++
+			deploymentResults = append(deploymentResults, DeploymentResult{GatewayID: gatewayID, Success: true})
 		}
-
-		slog.Info("LLMProviderService.CreateAndDeploy: deployed to gateway successfully", "ouID", ouID, "providerUUID", created.UUID, "gatewayID", gatewayID, "deploymentID", deployment.DeploymentID)
-		successfulDeployments++
-		deploymentResults = append(deploymentResults, DeploymentResult{
-			GatewayID: gatewayID,
-			Success:   true,
-		})
-	}
-
-	// Fail if ALL deployments failed (but only if we had valid gateways to deploy to).
-	// The provider row is rolled back first: leaving it behind meant the caller saw a
-	// failure and got an undeployed provider anyway, invisible until the next list.
-	if len(validGatewayIDs) > 0 && successfulDeployments == 0 {
-		slog.Error("LLMProviderService.CreateAndDeploy: all deployments failed", "ouID", ouID, "providerUUID", created.UUID, "attempted", len(validGatewayIDs))
-		failure := fmt.Sprintf("all %d gateway deployments failed: %s",
-			len(validGatewayIDs), summarizeDeploymentFailures(deploymentResults))
-
-		// The rollback error is carried as text rather than wrapped: the caller maps
-		// the HTTP status off this error, and a Delete sentinel in the chain would let
-		// an unrelated rollback sub-failure choose the status for a failed create.
-		if rollbackErr := s.rollbackCreatedProvider(ctx, created, ouID, deploymentService); rollbackErr != nil {
-			return nil, fmt.Errorf("%s (provider %q was created and could not be rolled back, delete it manually: %s)",
-				failure, created.Configuration.Handle, rollbackErr.Error())
+		if len(validGatewayIDs) > 0 && successfulDeployments == 0 {
+			return &providerDeployFailure{message: fmt.Sprintf("all %d gateway deployments failed: %s",
+				len(validGatewayIDs), summarizeDeploymentFailures(deploymentResults))}
 		}
-		return nil, errors.New(failure)
+		return nil
+	})
+	if err != nil {
+		slog.Error("LLMProviderService.CreateAndDeploy: failed to create provider", "ouID", ouID, "error", err)
+		return nil, err
 	}
 
 	slog.Info("LLMProviderService.CreateAndDeploy: completed", "ouID", ouID, "providerUUID", created.UUID, "successfulDeployments", successfulDeployments, "totalAttempted", len(validGatewayIDs))

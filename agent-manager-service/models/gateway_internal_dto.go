@@ -69,10 +69,11 @@ type GatewayDeploymentResponse struct {
 	Created      bool   `json:"created"`
 }
 
-// DeployAPIRequest represents the request to deploy an API
+// DeployAPIRequest represents the request to deploy an API. Name and Metadata are accepted and ignored: the
+// deployment is named by its kind.
 type DeployAPIRequest struct {
-	Name       string                 `json:"name" binding:"required"`
-	Base       string                 `json:"base" binding:"required"` // "current" or deployment ID
+	Name       string                 `json:"name,omitempty"`
+	Base       string                 `json:"base,omitempty"` // omitted or "current"
 	GatewayID  string                 `json:"gatewayId" binding:"required"`
 	Metadata   map[string]interface{} `json:"metadata,omitempty"`
 	Properties map[string]interface{} `json:"properties,omitempty"`

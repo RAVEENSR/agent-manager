@@ -79,15 +79,6 @@ func TestDeletionDiscoveryFailurePreventsDelete(t *testing.T) {
 			err := svc.Delete(context.Background(), "proxy", "org", &LLMProxyDeploymentService{deploymentRepo: deployments, gatewayRepo: gateways})
 			require.ErrorIs(t, err, cause)
 			assert.Empty(t, proxies.DeleteInProjectCalls())
-			provider, deployment := serviceForRollback(createdProvider(), nil)
-			deployment.deploymentRepo = deployments
-			deployment.gatewayRepo = gateways
-			err = provider.Delete(context.Background(), createdProvider().UUID.String(), "org", deployment)
-			require.ErrorIs(t, err, cause)
-			providerRepo := provider.providerRepo.(*repomocks.LLMProviderRepositoryMock)
-			assert.Empty(t, providerRepo.DeleteCtxCalls())
-			require.Len(t, providerRepo.ClearDeletingCalls(), 1)
-			assert.Empty(t, deployments.GetDeployedGatewaysByProviderCalls(), "no undeploy before discovery succeeds")
 		})
 	}
 }

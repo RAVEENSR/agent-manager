@@ -19,6 +19,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,7 @@ import (
 
 	"github.com/wso2/agent-manager/agent-manager-service/eventhub"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/wso2/agent-manager/agent-manager-service/reconcile"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories/repomocks"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
@@ -115,11 +117,36 @@ func (f *statusPathFixture) payload(t *testing.T) (eventhub.Event, map[string]an
 	return f.hub.published[0], dto.Payload
 }
 
+// core reconciles kinds against the fixture's repository and hub.
+func (f *statusPathFixture) core(kinds ...reconcile.Kind) *reconcile.Core {
+	return reconcile.NewCore(nil, f.repo, f.hub, kinds, reconcile.Config{}, slog.New(slog.DiscardHandler))
+}
+
+// providerKindOf renders provider whatever artifact it is asked for.
+func providerKindOf(provider *models.LLMProvider) *LLMProviderKind {
+	return &LLMProviderKind{load: func(context.Context, models.ArtifactRef) (*models.LLMProvider, error) {
+		return provider, nil
+	}}
+}
+
+// renderableProvider is the least a provider needs to render.
+func renderableProvider() *models.LLMProvider {
+	return &models.LLMProvider{
+		UUID:           uuid.New(),
+		TemplateHandle: "openai",
+		Artifact:       &models.Artifact{Handle: "provider-handle"},
+		Configuration: models.LLMProviderConfig{
+			Handle: "provider-handle", Name: "Provider", Version: "v1.0",
+			Upstream: &models.UpstreamConfig{Main: &models.UpstreamEndpoint{URL: "https://api.openai.com/v1"}},
+		},
+	}
+}
+
 func (f *statusPathFixture) providerService(provider *models.LLMProvider) *LLMProviderDeploymentService {
 	return NewLLMProviderDeploymentService(sentinelTx, f.repo, &repomocks.LLMProviderRepositoryMock{
 		GetByUUIDFunc:   func(string, string) (*models.LLMProvider, error) { return provider, nil },
 		GetByHandleFunc: func(string, string) (*models.LLMProvider, error) { return provider, nil },
-	}, nil, f.gatewayRepo(), NewGatewayEventsService(f.hub))
+	}, nil, f.gatewayRepo(), NewGatewayEventsService(f.hub), f.core(providerKindOf(provider)))
 }
 
 func (f *statusPathFixture) proxyService(proxy *models.LLMProxy) *LLMProxyDeploymentService {
@@ -138,15 +165,20 @@ func assertPerformedAt(t *testing.T, want time.Time, payload map[string]any) {
 
 // A provider addressed by handle is still sent to the gateway by UUID, which is what the gateway stores it under.
 func TestDeployLLMProviderStartsDeployingAndSendsTheUUID(t *testing.T) {
-	provider := &models.LLMProvider{UUID: uuid.New()}
+	provider := renderableProvider()
 	f := newStatusPathFixture(t, provider.UUID)
 
 	got, err := f.providerService(provider).DeployLLMProvider("provider-handle", &models.DeployAPIRequest{
-		Name: "d", Base: uuid.NewString(), GatewayID: f.gateway.UUID.String(),
+		Name: "ignored", Metadata: map[string]any{"ignored": true}, GatewayID: f.gateway.UUID.String(),
 	}, "ou-1")
 
 	require.NoError(t, err)
 	assert.Equal(t, models.DeploymentStatusDeploying, *got.Status)
+	assert.Regexp(t, `^provider-handle-[0-9a-f]{8}$`, got.Name, "the kind names the deployment")
+	assert.Nil(t, got.Metadata)
+	want, err := renderLLMProvider(provider)
+	require.NoError(t, err)
+	assert.Equal(t, want, string(got.Content), "the deployment holds the current configuration")
 	require.Len(t, f.repo.StartDeployCalls(), 1)
 	placement := f.repo.StartDeployCalls()[0].Placement
 	assert.Equal(t, provider.UUID, placement.ArtifactUUID)
@@ -156,6 +188,41 @@ func TestDeployLLMProviderStartsDeployingAndSendsTheUUID(t *testing.T) {
 	assert.Equal(t, provider.UUID.String(), payload["providerId"])
 	assert.Equal(t, got.DeploymentID.String(), payload["deploymentId"])
 	assertPerformedAt(t, f.row.PerformedAt, payload)
+}
+
+func TestDeployLLMProviderAcceptsOnlyTheCurrentBase(t *testing.T) {
+	for _, base := range []string{"", "current"} {
+		provider := renderableProvider()
+		f := newStatusPathFixture(t, provider.UUID)
+		_, err := f.providerService(provider).DeployLLMProvider("provider-handle", &models.DeployAPIRequest{
+			Base: base, GatewayID: f.gateway.UUID.String(),
+		}, "ou-1")
+		assert.NoError(t, err, "base %q", base)
+	}
+	for _, base := range []string{uuid.NewString(), "not-a-uuid"} {
+		provider := renderableProvider()
+		f := newStatusPathFixture(t, provider.UUID)
+		_, err := f.providerService(provider).DeployLLMProvider("provider-handle", &models.DeployAPIRequest{
+			Base: base, GatewayID: f.gateway.UUID.String(),
+		}, "ou-1")
+		assert.ErrorIs(t, err, utils.ErrDeploymentBaseNotCurrent, "base %q", base)
+		assert.Empty(t, f.repo.StartDeployCalls())
+	}
+}
+
+func TestRestoreOfAnUnknownDeploymentIsNotFound(t *testing.T) {
+	provider := renderableProvider()
+	f := newStatusPathFixture(t, provider.UUID)
+	f.repo.GetWithContentFunc = func(string, string, string) (*models.Deployment, error) {
+		return nil, utils.ErrDeploymentNotFound
+	}
+	svc := f.providerService(provider)
+
+	_, err := svc.RestoreLLMProviderDeployment("provider-handle", uuid.NewString(), f.gateway.UUID.String(), "ou-1")
+	assert.ErrorIs(t, err, utils.ErrDeploymentNotFound)
+	_, err = svc.RestoreLLMProviderDeployment("provider-handle", "not-a-uuid", f.gateway.UUID.String(), "ou-1")
+	assert.ErrorIs(t, err, utils.ErrDeploymentNotFound)
+	assert.Empty(t, f.repo.StartRestoreCalls())
 }
 
 func TestUndeployLLMProviderSendsAnEmptyDeploymentID(t *testing.T) {

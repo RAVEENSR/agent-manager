@@ -75,19 +75,8 @@ func (c *llmDeploymentController) DeployLLMProvider(w http.ResponseWriter, r *ht
 	}
 
 	log.Info("DeployLLMProvider: request decoded", "ouID", ouID, "providerID", providerID,
-		"deploymentName", req.Name, "base", req.Base, "gatewayID", req.GatewayID)
+		"base", req.Base, "gatewayID", req.GatewayID)
 
-	// Validate required fields
-	if req.Name == "" {
-		log.Error("DeployLLMProvider: deployment name is required", "ouID", ouID, "providerID", providerID)
-		utils.WriteErrorResponse(w, http.StatusBadRequest, "name is required")
-		return
-	}
-	if req.Base == "" {
-		log.Error("DeployLLMProvider: base is required", "ouID", ouID, "providerID", providerID)
-		utils.WriteErrorResponse(w, http.StatusBadRequest, "base is required (use 'current' or a deploymentId)")
-		return
-	}
 	if req.GatewayID == "" {
 		log.Error("DeployLLMProvider: gateway ID is required", "ouID", ouID, "providerID", providerID)
 		utils.WriteErrorResponse(w, http.StatusBadRequest, "gatewayId is required")
@@ -95,7 +84,7 @@ func (c *llmDeploymentController) DeployLLMProvider(w http.ResponseWriter, r *ht
 	}
 
 	log.Info("DeployLLMProvider: calling service layer", "ouID", ouID, "providerID", providerID,
-		"deploymentName", req.Name, "gatewayID", req.GatewayID)
+		"gatewayID", req.GatewayID)
 
 	deployment, err := c.deploymentService.DeployLLMProvider(providerID, &req, ouID)
 	if err != nil {
@@ -108,17 +97,9 @@ func (c *llmDeploymentController) DeployLLMProvider(w http.ResponseWriter, r *ht
 			log.Warn("DeployLLMProvider: gateway not found", "ouID", ouID, "providerID", providerID, "gatewayID", req.GatewayID)
 			utils.WriteErrorResponse(w, http.StatusNotFound, "Gateway not found")
 			return
-		case errors.Is(err, utils.ErrBaseDeploymentNotFound):
-			log.Warn("DeployLLMProvider: base deployment not found", "ouID", ouID, "providerID", providerID, "base", req.Base)
-			utils.WriteErrorResponse(w, http.StatusNotFound, "Base deployment not found")
-			return
-		case errors.Is(err, utils.ErrDeploymentNameRequired):
-			log.Error("DeployLLMProvider: deployment name required", "ouID", ouID, "providerID", providerID)
-			utils.WriteErrorResponse(w, http.StatusBadRequest, "Deployment name is required")
-			return
-		case errors.Is(err, utils.ErrDeploymentBaseRequired):
-			log.Error("DeployLLMProvider: base required", "ouID", ouID, "providerID", providerID)
-			utils.WriteErrorResponse(w, http.StatusBadRequest, "Base is required (use 'current' or a deploymentId)")
+		case errors.Is(err, utils.ErrDeploymentBaseNotCurrent):
+			log.Warn("DeployLLMProvider: base is not current", "ouID", ouID, "providerID", providerID, "base", req.Base)
+			utils.WriteErrorResponse(w, http.StatusBadRequest, utils.ErrDeploymentBaseNotCurrent.Error())
 			return
 		case errors.Is(err, utils.ErrDeploymentGatewayIDRequired):
 			log.Error("DeployLLMProvider: gateway ID required", "ouID", ouID, "providerID", providerID)

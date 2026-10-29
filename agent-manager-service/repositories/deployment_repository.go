@@ -191,7 +191,7 @@ func (r *DeploymentRepo) GetWithContent(deploymentID, artifactUUID, orgUUID stri
 		First(&deployment).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("deployment not found")
+			return nil, utils.ErrDeploymentNotFound
 		}
 		return nil, err
 	}
