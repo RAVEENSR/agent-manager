@@ -366,23 +366,23 @@ func TestUndeployLLMProxy(t *testing.T) {
 	})
 }
 
-// A deployment the gateway is to serve can't be deleted, whatever its status: deleting a DEPLOYING or failed
-// deployment would orphan it on the gateway. Undeployed and archived deployments can be.
-func TestDeleteRefusesThePlacedDeployment(t *testing.T) {
+// A deployment the gateway is to serve, or may still hold, can't be deleted: the status row would cascade away with it
+// and orphan the artifact on the gateway. Only undeployed and archived deployments can be.
+func TestDeleteRefusesThePlacedOrHeldDeployment(t *testing.T) {
 	type rowShape struct {
 		status, desired models.DeploymentStatus
 		archived        bool
 	}
 	placed := map[string]rowShape{
-		"deploying":     {status: models.DeploymentStatusDeploying, desired: models.DeploymentStatusDeployed},
-		"deployed":      {status: models.DeploymentStatusDeployed, desired: models.DeploymentStatusDeployed},
-		"failed deploy": {status: models.DeploymentStatusFailed, desired: models.DeploymentStatusDeployed},
+		"deploying":       {status: models.DeploymentStatusDeploying, desired: models.DeploymentStatusDeployed},
+		"deployed":        {status: models.DeploymentStatusDeployed, desired: models.DeploymentStatusDeployed},
+		"failed deploy":   {status: models.DeploymentStatusFailed, desired: models.DeploymentStatusDeployed},
+		"undeploying":     {status: models.DeploymentStatusUndeploying, desired: models.DeploymentStatusUndeployed},
+		"failed undeploy": {status: models.DeploymentStatusFailed, desired: models.DeploymentStatusUndeployed},
 	}
 	notPlaced := map[string]rowShape{
-		"undeploying":     {status: models.DeploymentStatusUndeploying, desired: models.DeploymentStatusUndeployed},
-		"undeployed":      {status: models.DeploymentStatusUndeployed, desired: models.DeploymentStatusUndeployed},
-		"failed undeploy": {status: models.DeploymentStatusFailed, desired: models.DeploymentStatusUndeployed},
-		"archived":        {archived: true},
+		"undeployed": {status: models.DeploymentStatusUndeployed, desired: models.DeploymentStatusUndeployed},
+		"archived":   {archived: true},
 	}
 	withRow := func(f *statusPathFixture, shape rowShape) {
 		if shape.archived {

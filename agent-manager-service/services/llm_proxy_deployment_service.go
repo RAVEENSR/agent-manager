@@ -471,8 +471,9 @@ func (s *LLMProxyDeploymentService) DeleteLLMProxyDeployment(proxyID, deployment
 	if deployment == nil {
 		return utils.ErrDeploymentNotFound
 	}
-	// The gateway is to serve a placed deployment, whatever its status; deleting it would orphan it there.
-	if deployment.Placed() {
+	// The gateway is to serve the current deployment, or may still hold it; deleting it would drop its status row
+	// and orphan it there.
+	if deployment.Current() {
 		return utils.ErrDeploymentIsDeployed
 	}
 

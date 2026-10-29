@@ -303,7 +303,7 @@ func (c *llmProxyDeploymentController) DeleteLLMProxyDeployment(w http.ResponseW
 			return
 		case errors.Is(err, utils.ErrDeploymentIsDeployed):
 			log.Warn("DeleteLLMProxyDeployment: deployment is active", "ouID", ouID, "proxyID", proxyID, "deploymentID", deploymentID)
-			utils.WriteErrorResponse(w, http.StatusConflict, "Cannot delete an active deployment - undeploy it first")
+			utils.WriteErrorResponse(w, http.StatusConflict, "Cannot delete the gateway's current deployment - undeploy it and wait until it is UNDEPLOYED")
 			return
 		default:
 			log.Error("DeleteLLMProxyDeployment: failed to delete", "ouID", ouID, "proxyID", proxyID, "deploymentID", deploymentID, "error", err)

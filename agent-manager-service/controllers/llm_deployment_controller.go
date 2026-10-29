@@ -303,7 +303,7 @@ func (c *llmDeploymentController) DeleteLLMProviderDeployment(w http.ResponseWri
 			return
 		case errors.Is(err, utils.ErrDeploymentIsDeployed):
 			log.Warn("DeleteLLMProviderDeployment: deployment is active", "ouID", ouID, "providerID", providerID, "deploymentID", deploymentID)
-			utils.WriteErrorResponse(w, http.StatusConflict, "Cannot delete an active deployment - undeploy it first")
+			utils.WriteErrorResponse(w, http.StatusConflict, "Cannot delete the gateway's current deployment - undeploy it and wait until it is UNDEPLOYED")
 			return
 		default:
 			log.Error("DeleteLLMProviderDeployment: failed to delete", "ouID", ouID, "providerID", providerID, "deploymentID", deploymentID, "error", err)

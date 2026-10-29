@@ -37,7 +37,7 @@ func (r ApiDeleteLLMProviderDeploymentRequest) Execute() (*http.Response, error)
 /*
 DeleteLLMProviderDeployment Delete LLM provider deployment
 
-Delete a deployment the gateway isn't to serve. The gateway's current deployment, in any status heading for DEPLOYED, must be undeployed first.
+Delete a deployment the gateway doesn't hold. The gateway's current deployment must be undeployed first, and the undeploy must have completed (UNDEPLOYED).
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name/handle
@@ -192,7 +192,7 @@ func (r ApiDeleteLLMProxyDeploymentRequest) Execute() (*http.Response, error) {
 /*
 DeleteLLMProxyDeployment Delete LLM proxy deployment
 
-Delete a deployment the gateway isn't to serve. The gateway's current deployment, in any status heading for DEPLOYED, must be undeployed first.
+Delete a deployment the gateway doesn't hold. The gateway's current deployment must be undeployed first, and the undeploy must have completed (UNDEPLOYED).
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name/handle

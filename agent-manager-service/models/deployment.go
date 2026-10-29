@@ -41,7 +41,7 @@ type Deployment struct {
 	// Read-only fields - populated via JOIN, never inserted/updated directly
 	Status    *DeploymentStatus `gorm:"column:status;->" json:"status,omitempty"`
 	UpdatedAt *time.Time        `gorm:"column:status_updated_at;->" json:"updatedAt,omitempty"`
-	// The rest of the status row, for UserStatus and Placed.
+	// The rest of the status row, for UserStatus.
 	StatusDesired *DeploymentStatus `gorm:"column:status_desired;->" json:"-"`
 	StatusReason  *string           `gorm:"column:status_reason;->" json:"-"`
 	NextAttemptAt *time.Time        `gorm:"column:next_attempt_at;->" json:"-"`
@@ -57,10 +57,10 @@ func (d *Deployment) SetStatusRow(row *DeploymentStatusRecord) {
 	d.RenderReason = &row.RenderReason
 }
 
-// Placed reports whether a status row points at the deployment and heads for DEPLOYED, in any status: the gateway
-// is to serve it.
-func (d *Deployment) Placed() bool {
-	return d.StatusDesired != nil && *d.StatusDesired == DeploymentStatusDeployed
+// Current reports whether a status row points at the deployment and it isn't UNDEPLOYED: the gateway is to serve
+// it, or may still hold it (an undeploy in flight or failed). Deleting it would cascade the row away.
+func (d *Deployment) Current() bool {
+	return d.Status != nil && *d.Status != DeploymentStatusArchived && *d.Status != DeploymentStatusUndeployed
 }
 
 // UserStatus is what the user is shown for the deployment: ARCHIVED when no status row points at it, otherwise
