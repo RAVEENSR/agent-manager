@@ -728,12 +728,10 @@ func ProvideTestSecretManagementClient(testClients TestClients) secretmanagersvc
 
 // ProvideEventHub creates and initializes the EventHub backed by PostgreSQL.
 func ProvideEventHub(db *gorm.DB, logger *slog.Logger) (eventhub.EventHub, error) {
-	sqlDB, err := db.DB()
+	hub, err := eventhub.NewSQLBackend(db, logger, eventhub.DefaultSQLBackendConfig())
 	if err != nil {
 		return nil, err
 	}
-	cfg := eventhub.DefaultSQLBackendConfig()
-	hub := eventhub.NewSQLBackend(sqlDB, logger, cfg)
 	if err := hub.Initialize(); err != nil {
 		return nil, err
 	}

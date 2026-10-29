@@ -24,6 +24,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/eventhub"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
@@ -35,12 +36,18 @@ import (
 type recordingEventHub struct {
 	published []eventhub.Event
 	contexts  []context.Context
+	txs       []*gorm.DB // the caller's transaction per event; nil for PublishEvent
 	onPublish func()
 }
 
 func (h *recordingEventHub) PublishEvent(ctx context.Context, gatewayID string, evt eventhub.Event) error {
+	return h.PublishEventTx(ctx, nil, gatewayID, evt)
+}
+
+func (h *recordingEventHub) PublishEventTx(ctx context.Context, tx *gorm.DB, gatewayID string, evt eventhub.Event) error {
 	h.published = append(h.published, evt)
 	h.contexts = append(h.contexts, ctx)
+	h.txs = append(h.txs, tx)
 	if h.onPublish != nil {
 		h.onPublish()
 	}

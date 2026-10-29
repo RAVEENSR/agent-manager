@@ -50,6 +50,10 @@ func (s *stubEventHub) PublishEvent(_ context.Context, _ string, e eventhub.Even
 	return nil
 }
 
+func (s *stubEventHub) PublishEventTx(ctx context.Context, _ *gorm.DB, gatewayID string, e eventhub.Event) error {
+	return s.PublishEvent(ctx, gatewayID, e)
+}
+
 func (s *stubEventHub) Subscribe(string) (<-chan eventhub.Event, error) {
 	ch := make(chan eventhub.Event)
 	close(ch)
