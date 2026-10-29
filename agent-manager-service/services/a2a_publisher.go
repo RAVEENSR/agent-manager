@@ -62,7 +62,6 @@ type A2APublisher struct {
 	artifactRepo   repositories.ArtifactRepository
 	deploymentRepo repositories.DeploymentRepository
 	gatewayRepo    repositories.GatewayRepository
-	events         *GatewayEventsService
 	logger         *slog.Logger
 	core           *reconcile.Core
 	kind           *A2AAgentKind
@@ -77,7 +76,6 @@ func NewA2APublisher(
 	artifactRepo repositories.ArtifactRepository,
 	deploymentRepo repositories.DeploymentRepository,
 	gatewayRepo repositories.GatewayRepository,
-	events *GatewayEventsService,
 	logger *slog.Logger,
 	core *reconcile.Core,
 	kind *A2AAgentKind,
@@ -92,7 +90,6 @@ func NewA2APublisher(
 		artifactRepo:   artifactRepo,
 		deploymentRepo: deploymentRepo,
 		gatewayRepo:    gatewayRepo,
-		events:         events,
 		logger:         logger,
 	}
 }

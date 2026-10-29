@@ -117,8 +117,7 @@ func newPublisherMocks(t *testing.T) *publisherMocks {
 }
 
 func (m *publisherMocks) publisher() *A2APublisher {
-	return withA2ACore(NewA2APublisher(m.tx(), m.exposures, m.proxies, m.envCards, m.artifacts, m.deployments, m.gateways,
-		NewGatewayEventsService(m.hub), testLogger(), nil, nil))
+	return withA2ACore(NewA2APublisher(m.tx(), m.exposures, m.proxies, m.envCards, m.artifacts, m.deployments, m.gateways, testLogger(), nil, nil), m.hub)
 }
 
 func testA2AKey() a2aPublicationKey {
@@ -313,15 +312,11 @@ func TestA2APublisherEnvironmentUUIDsListsProxiesWhenPublicationsFail(t *testing
 	assert.Contains(t, ids, id)
 }
 
-// withA2ACore gives p a reconcile core over its deployment repository, event hub and gateways.
-func withA2ACore(p *A2APublisher) *A2APublisher {
+// withA2ACore gives p a reconcile core over its deployment repository, hub and gateways.
+func withA2ACore(p *A2APublisher, hub eventhub.EventHub) *A2APublisher {
 	p.kind = &A2AAgentKind{
 		exposureRepo: p.exposureRepo, proxyRepo: p.proxyRepo, cardRepo: p.cardRepo, gatewayRepo: p.gatewayRepo,
 		deploymentRepo: p.deploymentRepo, logger: testLogger(),
-	}
-	var hub eventhub.EventHub
-	if p.events != nil {
-		hub = p.events.hub
 	}
 	p.core = reconcile.NewCore(nil, p.deploymentRepo, hub, reconcile.Kinds{p.kind}, reconcile.Config{}, testLogger())
 	return p

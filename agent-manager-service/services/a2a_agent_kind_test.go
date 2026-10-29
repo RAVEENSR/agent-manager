@@ -102,7 +102,7 @@ func newA2AFixture(t *testing.T) *a2aFixture {
 		reconcile.Config{Lease: time.Minute, AttemptBudget: 3}, slog.New(slog.DiscardHandler))
 	f.worker = reconcile.NewWorker(f.core, slog.New(slog.DiscardHandler))
 	f.publisher = NewA2APublisher(tx, exposures, proxies, cards, repositories.NewArtifactRepo(gormDB), f.sync.repo,
-		gateways, nil, testLogger(), f.core, kind)
+		gateways, testLogger(), f.core, kind)
 	f.proxies = NewA2AProxyService(tx, proxies, cards, repositories.NewAgentConfigRepo(gormDB),
 		repositories.NewArtifactRepo(gormDB), f.publisher, oc, make([]byte, 32), testLogger())
 	t.Cleanup(func() {

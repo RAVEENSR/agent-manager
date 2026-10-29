@@ -56,15 +56,6 @@ type A2AProxyAuthUpdate struct {
 	Value  *string
 }
 
-// A2APublicationStatus is a proxied environment's gateway publication state as the A2A proxy API reports it.
-type A2APublicationStatus string
-
-const (
-	A2APublicationStatusPending   A2APublicationStatus = "pending"
-	A2APublicationStatusPublished A2APublicationStatus = "published"
-	A2APublicationStatusFailed    A2APublicationStatus = "failed"
-)
-
 // A2AProxyStatus is a proxied environment's deployment to its ingress gateway as the A2A proxy API reports it; the
 // secret is never part of it.
 type A2AProxyStatus struct {

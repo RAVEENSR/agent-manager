@@ -238,12 +238,9 @@ var (
 	ErrURLUnreachable            = errors.New("URL unreachable")
 	ErrMCPServerUnauthorized     = errors.New("MCP server unauthorized")
 	ErrMCPResponseTooLarge       = errors.New("MCP response body too large")
-	ErrBaseDeploymentNotFound    = errors.New("base deployment not found")
 	ErrDeploymentIsDeployed      = errors.New("deployment is currently deployed")
 	ErrDeploymentAlreadyDeployed = errors.New("deployment already deployed")
 	ErrGatewayIDMismatch         = errors.New("gateway ID mismatch")
-	ErrDeploymentNameRequired    = errors.New("deployment name required")
-	ErrDeploymentBaseRequired    = errors.New("deployment base required")
 	ErrDeploymentBaseNotCurrent  = errors.New(`base must be omitted or "current"; ` +
 		"redeploy an earlier deployment with POST .../deployments/{deploymentId}/restore")
 	ErrDeploymentGatewayIDRequired = errors.New("deployment gateway ID required")
