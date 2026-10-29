@@ -150,13 +150,13 @@ func (s *a2aCardReconcilerService) RunOnce(ctx context.Context) {
 func (s *a2aCardReconcilerService) fetchOne(ctx context.Context, row models.A2AAgentCard) {
 	attemptCtx, ctx, cancel := a2aAttemptContexts(ctx, s.attemptTimeout)
 	defer cancel()
-	if s.agentReplaced(attemptCtx, row) {
-		s.dropReplacedCard(ctx, row)
-		return
-	}
 	fetched, err := s.attemptFetch(attemptCtx, row)
 	if errors.Is(err, errA2ACardNotDeployed) {
-		s.dropUndeployedCard(ctx, row)
+		if s.agentReplaced(attemptCtx, row) {
+			s.dropReplacedCard(ctx, row)
+		} else {
+			s.dropUndeployedCard(ctx, row)
+		}
 		return
 	}
 	if err != nil {
@@ -166,6 +166,10 @@ func (s *a2aCardReconcilerService) fetchOne(ctx context.Context, row models.A2AA
 	hash, err := a2aCardHash(fetched.body)
 	if err != nil {
 		s.recordAttemptFailure(ctx, row, fetched.releaseName, err)
+		return
+	}
+	if s.agentReplaced(attemptCtx, row) {
+		s.dropReplacedCard(ctx, row)
 		return
 	}
 	err = s.cardRepo.MarkFetched(ctx, row, fetched.body, hash, fetched.url, fetched.releaseName)
@@ -187,7 +191,8 @@ func isUnstorableTextError(err error) bool {
 
 // agentReplaced reports a card whose agent was deleted, or replaced by a same-named one, since the card was queued:
 // the component's UUID no longer matches the one recorded on the card. A card with no recorded UUID, or a failed
-// lookup, is fetched as usual.
+// lookup, is treated as not replaced. It costs one lookup, so fetchOne asks only once the fetch has decided to
+// store or drop the card.
 func (s *a2aCardReconcilerService) agentReplaced(ctx context.Context, row models.A2AAgentCard) bool {
 	if row.AgentUUID == nil {
 		return false

@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -158,6 +159,43 @@ func TestCardReconcilerRetriesWhenNoEndpointIsReady(t *testing.T) {
 	retries := h.repo.MarkAttemptFailedCalls()
 	require.Len(t, retries, 1)
 	assert.WithinDuration(t, before.Add(5*time.Second), retries[0].NextAttemptAt, time.Second)
+}
+
+func TestCardReconcilerSkipsTheReplacementCheckOnAFailedAttempt(t *testing.T) {
+	h := newCardReconcilerHarness("")
+	row := pendingCard(models.A2AAgentCardSourcePlatform)
+	agentUUID := uuid.New()
+	row.AgentUUID = &agentUUID
+	h.ocClient.GetComponentFunc = func(context.Context, string, string, string) (*models.AgentResponse, error) {
+		return &models.AgentResponse{UUID: agentUUID.String()}, nil
+	}
+
+	h.svc.fetchOne(context.Background(), row)
+
+	assert.Len(t, h.repo.MarkAttemptFailedCalls(), 1)
+	assert.Empty(t, h.ocClient.GetComponentCalls())
+}
+
+func TestCardReconcilerDropsAReplacedAgentsUndeployedCardAsReplaced(t *testing.T) {
+	h := newCardReconcilerHarness("http://dev-org.gw.example/trip-planner/")
+	h.ocClient.GetReleaseBindingRolloutFunc = func(context.Context, string, string, string) (client.ReleaseBindingRollout, error) {
+		return client.ReleaseBindingRollout{}, nil
+	}
+	h.ocClient.GetComponentFunc = func(context.Context, string, string, string) (*models.AgentResponse, error) {
+		return nil, utils.ErrNotFound
+	}
+	h.repo.DeleteIfUnchangedFunc = func(context.Context, models.A2AAgentCard) error { return nil }
+	var logs strings.Builder
+	h.svc.logger = slog.New(slog.NewTextHandler(&logs, nil))
+	row := pendingCard(models.A2AAgentCardSourcePlatform)
+	agentUUID := uuid.New()
+	row.AgentUUID = &agentUUID
+
+	h.svc.fetchOne(context.Background(), row)
+
+	assert.Len(t, h.repo.DeleteIfUnchangedCalls(), 1)
+	assert.Contains(t, logs.String(), "deleted or replaced")
+	assert.NotContains(t, logs.String(), "not deployed in this environment")
 }
 
 func TestCardReconcilerBacksOffExponentially(t *testing.T) {
@@ -624,7 +662,7 @@ func TestCardReconcilerHidesInternalErrorsFromLastError(t *testing.T) {
 	assert.Equal(t, a2aCardInternalError, retries[0].LastErr)
 }
 
-// A card whose agent was deleted, or replaced by a same-named one, is dropped before any fetch; a card with no
+// A card whose agent was deleted, or replaced by a same-named one, is dropped once its fetch would have decided the card; a card with no
 // recorded component UUID is fetched as before.
 func TestCardReconcilerDropsTheCardOfAReplacedAgent(t *testing.T) {
 	recorded := uuid.New()
