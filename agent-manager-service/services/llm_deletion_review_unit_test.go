@@ -77,7 +77,7 @@ func TestProxyDeleteSendsItsDeleteEventsInTheDeletingTransaction(t *testing.T) {
 		},
 	}
 	deployments := &repomocks.DeploymentRepositoryMock{
-		SentGatewaysFunc: func(_ context.Context, org string, id uuid.UUID) ([]string, error) {
+		DeleteEventGatewaysFunc: func(_ context.Context, org string, id uuid.UUID) ([]string, error) {
 			assert.Equal(t, proxy.UUID, id)
 			return []string{gateway}, nil
 		},

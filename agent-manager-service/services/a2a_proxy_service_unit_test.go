@@ -162,7 +162,7 @@ func (h *proxyHarness) acceptsWrites() {
 	h.txDeployments.PlacedGatewaysFunc = func(context.Context, string, uuid.UUID) ([]string, error) {
 		return []string{proxyTestGateway.String()}, nil
 	}
-	h.txDeployments.SentGatewaysFunc = func(context.Context, string, uuid.UUID) ([]string, error) {
+	h.txDeployments.DeleteEventGatewaysFunc = func(context.Context, string, uuid.UUID) ([]string, error) {
 		return []string{proxyTestGateway.String()}, nil
 	}
 	h.txDeployments.GetStatusRecordFunc = func(context.Context, models.Placement) (*models.DeploymentStatusRecord, error) {

@@ -21,6 +21,7 @@ package services
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -131,4 +132,27 @@ func TestDeleteProviderSendsItsDeleteEventInTheDeletingTransaction(t *testing.T)
 	assert.Equal(t, "llmprovider.deleted", string(last.EventType))
 	assert.Equal(t, f.sync.gateway.String(), last.GatewayID)
 	assert.Equal(t, got.Provider.UUID.String(), last.EntityID)
+}
+
+// A delete reaches every active gateway of the org, not just the gateways the artifact's rows name: an artifact
+// left with no rows (a switch to direct under an older release deleted them) is still dropped everywhere. The
+// events go in gateway order.
+func TestDeleteReachesEveryActiveGatewayOfTheOrg(t *testing.T) {
+	f := newProviderFixture(t)
+	other := f.sync.seedGateway(t, f.sync.ouID)
+	inactive := f.sync.seedGateway(t, f.sync.ouID)
+	require.NoError(t, db.GetDB().Exec(`UPDATE gateways SET is_active = FALSE WHERE uuid = ?`, inactive).Error)
+	created, err := f.providers.Create(context.Background(), f.sync.ouID, "me", f.newProvider(t))
+	require.NoError(t, err)
+
+	require.NoError(t, f.providers.Delete(context.Background(), created.UUID.String(), f.sync.ouID, f.deployment))
+
+	var addressed []string
+	for _, evt := range f.hub.published {
+		require.Equal(t, "llmprovider.deleted", string(evt.EventType))
+		addressed = append(addressed, evt.GatewayID)
+	}
+	want := []string{f.sync.gateway.String(), other.String()}
+	slices.Sort(want)
+	assert.Equal(t, want, addressed)
 }

@@ -44,6 +44,9 @@ import (
 //			DeleteFunc: func(deploymentID string, artifactUUID string, orgUUID string) error {
 //				panic("mock out the Delete method")
 //			},
+//			DeleteEventGatewaysFunc: func(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error) {
+//				panic("mock out the DeleteEventGateways method")
+//			},
 //			DeleteForArtifactFunc: func(ctx context.Context, artifactUUID uuid.UUID, orgUUID string) error {
 //				panic("mock out the DeleteForArtifact method")
 //			},
@@ -170,6 +173,9 @@ type DeploymentRepositoryMock struct {
 
 	// DeleteFunc mocks the Delete method.
 	DeleteFunc func(deploymentID string, artifactUUID string, orgUUID string) error
+
+	// DeleteEventGatewaysFunc mocks the DeleteEventGateways method.
+	DeleteEventGatewaysFunc func(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error)
 
 	// DeleteForArtifactFunc mocks the DeleteForArtifact method.
 	DeleteForArtifactFunc func(ctx context.Context, artifactUUID uuid.UUID, orgUUID string) error
@@ -350,6 +356,15 @@ type DeploymentRepositoryMock struct {
 			ArtifactUUID string
 			// OrgUUID is the orgUUID argument value.
 			OrgUUID string
+		}
+		// DeleteEventGateways holds details about calls to the DeleteEventGateways method.
+		DeleteEventGateways []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// OuID is the ouID argument value.
+			OuID string
+			// ArtifactUUID is the artifactUUID argument value.
+			ArtifactUUID uuid.UUID
 		}
 		// DeleteForArtifact holds details about calls to the DeleteForArtifact method.
 		DeleteForArtifact []struct {
@@ -670,6 +685,7 @@ type DeploymentRepositoryMock struct {
 	lockCompleteRender                  sync.RWMutex
 	lockCreateWithLimitEnforcement      sync.RWMutex
 	lockDelete                          sync.RWMutex
+	lockDeleteEventGateways             sync.RWMutex
 	lockDeleteForArtifact               sync.RWMutex
 	lockDeleteStatus                    sync.RWMutex
 	lockFailStaleTransitional           sync.RWMutex
@@ -1041,6 +1057,46 @@ func (mock *DeploymentRepositoryMock) DeleteCalls() []struct {
 	mock.lockDelete.RLock()
 	calls = mock.calls.Delete
 	mock.lockDelete.RUnlock()
+	return calls
+}
+
+// DeleteEventGateways calls DeleteEventGatewaysFunc.
+func (mock *DeploymentRepositoryMock) DeleteEventGateways(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error) {
+	if mock.DeleteEventGatewaysFunc == nil {
+		panic("DeploymentRepositoryMock.DeleteEventGatewaysFunc: method is nil but DeploymentRepository.DeleteEventGateways was just called")
+	}
+	callInfo := struct {
+		Ctx          context.Context
+		OuID         string
+		ArtifactUUID uuid.UUID
+	}{
+		Ctx:          ctx,
+		OuID:         ouID,
+		ArtifactUUID: artifactUUID,
+	}
+	mock.lockDeleteEventGateways.Lock()
+	mock.calls.DeleteEventGateways = append(mock.calls.DeleteEventGateways, callInfo)
+	mock.lockDeleteEventGateways.Unlock()
+	return mock.DeleteEventGatewaysFunc(ctx, ouID, artifactUUID)
+}
+
+// DeleteEventGatewaysCalls gets all the calls that were made to DeleteEventGateways.
+// Check the length with:
+//
+//	len(mockedDeploymentRepository.DeleteEventGatewaysCalls())
+func (mock *DeploymentRepositoryMock) DeleteEventGatewaysCalls() []struct {
+	Ctx          context.Context
+	OuID         string
+	ArtifactUUID uuid.UUID
+} {
+	var calls []struct {
+		Ctx          context.Context
+		OuID         string
+		ArtifactUUID uuid.UUID
+	}
+	mock.lockDeleteEventGateways.RLock()
+	calls = mock.calls.DeleteEventGateways
+	mock.lockDeleteEventGateways.RUnlock()
 	return calls
 }
 

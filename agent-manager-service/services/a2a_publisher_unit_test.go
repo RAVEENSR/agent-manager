@@ -358,7 +358,7 @@ func TestA2APublisherTeardownEnvironmentDropsEachArtifactWithItsDeleteEvents(t *
 	}
 	m.exposures.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
 	m.proxies.DeleteForEnvironmentFunc = func(context.Context, string, uuid.UUID) error { return nil }
-	m.txDeployments.SentGatewaysFunc = func(context.Context, string, uuid.UUID) ([]string, error) {
+	m.txDeployments.DeleteEventGatewaysFunc = func(context.Context, string, uuid.UUID) ([]string, error) {
 		return []string{gateway.String()}, nil
 	}
 	m.artifacts.DeleteFunc = func(tx *gorm.DB, id string) error {

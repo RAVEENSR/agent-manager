@@ -263,14 +263,16 @@ func (d DeleteEvents) Publish(ctx context.Context, tx *gorm.DB) error {
 	return nil
 }
 
-// PrepareDelete builds the artifact's delete events for every gateway it was ever sent, before its row and status
-// rows cascade away. The caller deletes, then publishes them last in the same transaction.
+// PrepareDelete builds the artifact's delete events, before its row and status rows cascade away, for every
+// gateway it was ever sent and every active gateway of its org: an artifact whose rows an older release deleted is
+// still dropped everywhere, and a delete is a no-op on a gateway that never held it. The caller deletes, then
+// publishes them last in the same transaction, in gateway order.
 func (c *Core) PrepareDelete(ctx context.Context, tx *gorm.DB, ref models.ArtifactRef) (DeleteEvents, error) {
 	kind, err := c.kindOf(ref.Kind)
 	if err != nil {
 		return DeleteEvents{}, err
 	}
-	gateways, err := c.repo.WithTx(tx).SentGateways(ctx, ref.OUID, ref.ArtifactUUID)
+	gateways, err := c.repo.WithTx(tx).DeleteEventGateways(ctx, ref.OUID, ref.ArtifactUUID)
 	if err != nil {
 		return DeleteEvents{}, err
 	}

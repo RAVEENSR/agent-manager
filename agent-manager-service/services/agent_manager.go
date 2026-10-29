@@ -3158,8 +3158,8 @@ func (s *agentManagerService) cleanupAgentMonitors(ctx context.Context, ouID, pr
 // deleteAgentAPIArtifact removes the agent's per-environment API artifacts and
 // tells gateways holding an A2A Agent for them to drop it. It returns what it
 // could not remove; the component is already gone by then, so deleting the
-// agent again retries the rest. isA2AAgent is false when the agent could not be read;
-// deployment rows then stand in for it.
+// agent again retries the rest. isA2AAgent is false for a REST or chat agent, and when the agent could not be
+// read; deployment rows then stand in for it.
 func (s *agentManagerService) deleteAgentAPIArtifact(ctx context.Context, ouID, projectName, agentName string, isA2AAgent bool) error {
 	err := s.cleanUpAgentAPIArtifacts(ctx, ouID, projectName, agentName, isA2AAgent)
 	if err != nil {
@@ -3182,7 +3182,7 @@ func (s *agentManagerService) cleanUpAgentAPIArtifacts(ctx context.Context, ouID
 	var errs []error
 	for _, artifact := range artifacts {
 		key := a2aPublicationKey{OUID: ouID, ProjectName: projectName, AgentName: agentName}
-		if err := s.dropAgentArtifact(ctx, key, strings.TrimPrefix(artifact.Handle, prefix), artifact); err != nil {
+		if err := s.dropAgentArtifact(ctx, key, strings.TrimPrefix(artifact.Handle, prefix), artifact, isA2AAgent); err != nil {
 			errs = append(errs, fmt.Errorf("failed to delete agent API artifact %s: %w", artifact.Handle, err))
 		}
 	}
@@ -3205,7 +3205,9 @@ func (s *agentManagerService) cleanUpAgentAPIArtifacts(ctx context.Context, ouID
 
 // dropAgentArtifact deletes one per-environment agent artifact, with the agent's A2A rows in its environment, writing
 // its delete events in the same transaction. An artifact whose handle names no environment UUID goes alone.
-func (s *agentManagerService) dropAgentArtifact(ctx context.Context, key a2aPublicationKey, envID string, artifact *models.Artifact) error {
+func (s *agentManagerService) dropAgentArtifact(
+	ctx context.Context, key a2aPublicationKey, envID string, artifact *models.Artifact, isA2AAgent bool,
+) error {
 	if s.a2aPublisher == nil {
 		return s.artifactRepo.Delete(s.db, artifact.UUID.String())
 	}
@@ -3215,7 +3217,7 @@ func (s *agentManagerService) dropAgentArtifact(ctx context.Context, key a2aPubl
 		if envErr != nil {
 			return s.a2aPublisher.DropArtifact(ctx, tx, agentArtifactRef(artifact))
 		}
-		return s.a2aPublisher.DropAgentArtifact(ctx, tx, key, agentArtifactRef(artifact))
+		return s.a2aPublisher.DropAgentArtifact(ctx, tx, key, agentArtifactRef(artifact), isA2AAgent)
 	})
 }
 

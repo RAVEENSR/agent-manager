@@ -218,3 +218,24 @@ func TestAgentDeleteIsAtomicPerEnvironment(t *testing.T) {
 	last := f.hub.published[len(f.hub.published)-1]
 	assert.Equal(t, "agent.deleted", string(last.EventType))
 }
+
+// An A2A agent artifact with no rows, switched to direct under an older release that deleted them, still gets its
+// delete event on the org's gateways.
+func TestAgentDeleteReachesTheOrgsGatewaysForAnArtifactWithNoRows(t *testing.T) {
+	f := newA2AFixture(t)
+	artifact, key := f.platformAgent(t)
+	svc := &agentManagerService{
+		db: db.GetDB(), artifactRepo: repositories.NewArtifactRepo(db.GetDB()),
+		a2aCardRepo: repositories.NewA2AAgentCardRepository(db.GetDB()), a2aPublisher: f.publisher, logger: testLogger(),
+	}
+
+	require.NoError(t, svc.deleteAgentAPIArtifact(context.Background(), key.OUID, key.ProjectName, key.AgentName, true))
+
+	var addressed []string
+	for _, evt := range f.hub.published {
+		assert.Equal(t, "agent.deleted", string(evt.EventType))
+		assert.Equal(t, artifact.ArtifactUUID.String(), evt.EntityID)
+		addressed = append(addressed, evt.GatewayID)
+	}
+	assert.ElementsMatch(t, []string{f.gateway.String(), f.sync.gateway.String()}, addressed)
+}

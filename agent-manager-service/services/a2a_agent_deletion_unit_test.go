@@ -117,14 +117,20 @@ func newAgentArtifactDeletionFixture(t *testing.T, artifacts map[string]uuid.UUI
 			return nil
 		},
 	}
+	sentTo := func(id uuid.UUID) []string {
+		var sent []string
+		for _, label := range deployedTo[id] {
+			sent = append(sent, f.gateway(label))
+		}
+		return sent
+	}
 	deploymentRepo := &repomocks.DeploymentRepositoryMock{
 		SentGatewaysFunc: func(_ context.Context, _ string, id uuid.UUID) ([]string, error) {
+			return sentTo(id), nil
+		},
+		DeleteEventGatewaysFunc: func(_ context.Context, _ string, id uuid.UUID) ([]string, error) {
 			f.steps = append(f.steps, "collect")
-			var sent []string
-			for _, label := range deployedTo[id] {
-				sent = append(sent, f.gateway(label))
-			}
-			return sent, nil
+			return sentTo(id), nil
 		},
 	}
 	deploymentRepo.WithTxFunc = func(*gorm.DB) repositories.DeploymentRepository { return deploymentRepo }

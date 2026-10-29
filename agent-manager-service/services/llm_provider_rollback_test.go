@@ -70,7 +70,7 @@ func TestDelete_AlreadyUndeployedProviderBroadcastsCanonicalUUID(t *testing.T) {
 		GetDeployedGatewaysByProviderFunc: func(_ uuid.UUID, _ string) ([]string, error) {
 			return nil, nil
 		},
-		SentGatewaysFunc: func(_ context.Context, ouID string, providerUUID uuid.UUID) ([]string, error) {
+		DeleteEventGatewaysFunc: func(_ context.Context, ouID string, providerUUID uuid.UUID) ([]string, error) {
 			assert.Equal(t, created.UUID, providerUUID)
 			assert.Equal(t, "ou-acme", ouID)
 			return []string{trackedGatewayID}, nil
@@ -230,7 +230,7 @@ func TestDelete_CompletesAfterCancellationFollowingSuccessfulUndeploy(t *testing
 		Status:       &deployed,
 	}
 	deploymentRepo := &repomocks.DeploymentRepositoryMock{
-		SentGatewaysFunc: func(context.Context, string, uuid.UUID) ([]string, error) {
+		DeleteEventGatewaysFunc: func(context.Context, string, uuid.UUID) ([]string, error) {
 			return []string{gatewayID.String()}, nil
 		},
 		GetDeployedGatewaysByProviderFunc: func(uuid.UUID, string) ([]string, error) {

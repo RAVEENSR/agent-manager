@@ -160,9 +160,13 @@ func TestMCPPlacementAndDelete(t *testing.T) {
 
 	require.NoError(t, f.svc.deleteMCPProxyEnvironmentArtifacts(context.Background(), []uuid.UUID{f.artifact}, f.sync.ouID))
 
-	last := f.hub.published[len(f.hub.published)-1]
-	assert.Equal(t, "mcpproxy.deleted", string(last.EventType))
-	assert.Equal(t, gateway.String(), last.GatewayID)
+	deletedOn := map[string]bool{}
+	for _, evt := range f.hub.published {
+		if evt.EventType == "mcpproxy.deleted" {
+			deletedOn[evt.GatewayID] = true
+		}
+	}
+	assert.True(t, deletedOn[gateway.String()], "the gateway it was placed on is told")
 	assert.Nil(t, f.mcpRow(t, gateway))
 }
 

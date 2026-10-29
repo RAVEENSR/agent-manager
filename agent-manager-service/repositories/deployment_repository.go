@@ -93,6 +93,9 @@ type DeploymentRepository interface {
 	PlacedGateways(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error)
 	LiveGateways(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error)
 	SentGateways(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error)
+	// DeleteEventGateways are the gateways an artifact's delete events go to, in gateway order: every gateway it was
+	// ever sent, and every active gateway of its org, which also covers an artifact whose rows are gone.
+	DeleteEventGateways(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error)
 	GetStatusRecord(ctx context.Context, placement models.Placement) (*models.DeploymentStatusRecord, error)
 
 	// Gateway startup sync.

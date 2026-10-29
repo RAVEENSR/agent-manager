@@ -294,6 +294,19 @@ func (r *DeploymentRepo) SentGateways(ctx context.Context, ouID string, artifact
 	return r.gatewaysWhere(ctx, ouID, artifactUUID, "deployment_id IS NOT NULL")
 }
 
+func (r *DeploymentRepo) DeleteEventGateways(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error) {
+	var gatewayUUIDs []string
+	err := r.db.WithContext(ctx).Raw(`SELECT gateway_uuid::text FROM deployment_status
+		WHERE artifact_uuid = ? AND ou_id = ? AND deployment_id IS NOT NULL
+		UNION
+		SELECT uuid::text FROM gateways WHERE ou_id = ? AND is_active AND deleted_at IS NULL
+		ORDER BY 1`, artifactUUID, ouID, ouID).Scan(&gatewayUUIDs).Error
+	if err != nil {
+		return nil, fmt.Errorf("failed to list the gateways to send the delete to: %w", err)
+	}
+	return gatewayUUIDs, nil
+}
+
 func (r *DeploymentRepo) gatewaysWhere(ctx context.Context, ouID string, artifactUUID uuid.UUID, condition string, args ...any) ([]string, error) {
 	var gatewayUUIDs []string
 	err := r.db.WithContext(ctx).Table("deployment_status").

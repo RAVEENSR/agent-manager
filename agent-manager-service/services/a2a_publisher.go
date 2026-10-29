@@ -244,16 +244,27 @@ func (p *A2APublisher) DropArtifact(ctx context.Context, tx *gorm.DB, artifact m
 	if err != nil {
 		return err
 	}
-	err = p.artifactRepo.Delete(tx, artifact.ArtifactUUID.String())
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return fmt.Errorf("failed to delete the agent's API artifact: %w", err)
+	if err := p.deleteArtifact(tx, artifact); err != nil {
+		return err
 	}
 	return events.Publish(ctx, tx)
 }
 
+func (p *A2APublisher) deleteArtifact(tx *gorm.DB, artifact models.ArtifactRef) error {
+	err := p.artifactRepo.Delete(tx, artifact.ArtifactUUID.String())
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return fmt.Errorf("failed to delete the agent's API artifact: %w", err)
+	}
+	return nil
+}
+
 // DropAgentArtifact deletes one of a deleted agent's per-environment artifacts with its exposure, proxy and card
-// rows in that environment, and writes its delete events, in tx.
-func (p *A2APublisher) DropAgentArtifact(ctx context.Context, tx *gorm.DB, key a2aPublicationKey, artifact models.ArtifactRef) error {
+// rows in that environment, and writes its delete events, in tx. A REST or chat agent's artifact, never sent to a
+// gateway as an A2A Agent, gets no events; isA2AAgent is false also when the agent could not be read, and rows the
+// artifact was sent with then stand in for it.
+func (p *A2APublisher) DropAgentArtifact(
+	ctx context.Context, tx *gorm.DB, key a2aPublicationKey, artifact models.ArtifactRef, isA2AAgent bool,
+) error {
 	err := p.exposures(tx).DeleteForAgentEnv(ctx, key.OUID, key.ProjectName, key.AgentName, key.EnvironmentUUID)
 	if err != nil {
 		return fmt.Errorf("failed to delete the A2A agent's exposure: %w", err)
@@ -266,6 +277,15 @@ func (p *A2APublisher) DropAgentArtifact(ctx context.Context, tx *gorm.DB, key a
 		err := p.cardRepo.WithTx(tx).DeleteForAgentEnvUUID(ctx, key.OUID, key.ProjectName, key.AgentName, key.EnvironmentUUID)
 		if err != nil {
 			return fmt.Errorf("failed to delete the A2A agent card: %w", err)
+		}
+	}
+	if !isA2AAgent {
+		sent, err := p.deploymentRepo.WithTx(tx).SentGateways(ctx, artifact.OUID, artifact.ArtifactUUID)
+		if err != nil {
+			return fmt.Errorf("failed to list the agent's gateways: %w", err)
+		}
+		if len(sent) == 0 {
+			return p.deleteArtifact(tx, artifact)
 		}
 	}
 	return p.DropArtifact(ctx, tx, artifact)

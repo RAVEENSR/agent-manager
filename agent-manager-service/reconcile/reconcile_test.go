@@ -964,7 +964,7 @@ func TestMarkStaleTouchesOnlyPlacedRows(t *testing.T) {
 	assert.Len(t, eventsFor(t, undeployed.GatewayUUID), 2, "deploy and undeploy only")
 }
 
-func TestPrepareDeleteSendsToEveryGatewayThatWasSentTheArtifact(t *testing.T) {
+func TestPrepareDeleteSendsToEveryGatewaySentTheArtifactAndEveryActiveGateway(t *testing.T) {
 	kind := newFakeKind(fakeGatewayKind, true)
 	core := newCore(t, kind)
 	p := seedPlacement(t, fakeGatewayKind)
@@ -972,6 +972,9 @@ func TestPrepareDeleteSendsToEveryGatewayThatWasSentTheArtifact(t *testing.T) {
 	undeployed.GatewayUUID = seedGateway(t, p.OUID)
 	pending := p
 	pending.GatewayUUID = seedGateway(t, p.OUID)
+	require.NoError(t, db.GetDB().Exec(`UPDATE gateways SET is_active = FALSE WHERE uuid IN (?, ?)`,
+		undeployed.GatewayUUID, pending.GatewayUUID).Error)
+	bystander := seedGateway(t, p.OUID)
 	deploy(t, core, p)
 	deploy(t, core, undeployed)
 	require.NoError(t, inTx(t, func(tx *gorm.DB) error { return core.Undeploy(context.Background(), tx, undeployed) }))
@@ -991,12 +994,12 @@ func TestPrepareDeleteSendsToEveryGatewayThatWasSentTheArtifact(t *testing.T) {
 		return events.Publish(context.Background(), tx)
 	}))
 
-	for _, gateway := range []uuid.UUID{p.GatewayUUID, undeployed.GatewayUUID} {
+	for _, gateway := range []uuid.UUID{p.GatewayUUID, undeployed.GatewayUUID, bystander} {
 		events := eventsFor(t, gateway)
-		require.NotEmpty(t, events)
+		require.NotEmpty(t, events, "a gateway sent the artifact, or any active gateway of the org, is told")
 		assert.Equal(t, "fake.deleted", events[len(events)-1].Type)
 	}
-	assert.Empty(t, eventsFor(t, pending.GatewayUUID), "a gateway that was never sent the artifact isn't told")
+	assert.Empty(t, eventsFor(t, pending.GatewayUUID), "an inactive gateway that was never sent the artifact isn't told")
 }
 
 // A user undeploy supersedes a deploy owed on a row that is already undeployed: nothing is rendered or sent.
