@@ -20,6 +20,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"sync/atomic"
@@ -51,12 +52,19 @@ type a2aFixture struct {
 	core      *reconcile.Core
 	worker    *reconcile.Worker
 	publisher *A2APublisher
+	// proxies serves external agents; external is the agent OpenChoreo reports, with no subtype (#2184).
+	proxies  A2AProxyService
+	external *models.AgentResponse
 }
 
 func newA2AFixture(t *testing.T) *a2aFixture {
 	t.Helper()
 	f := &a2aFixture{sync: newSyncFixture(t), env: uuid.New(), hub: &recordingEventHub{}}
 	f.url.Store("")
+	f.external = &models.AgentResponse{
+		UUID: uuid.NewString(), Name: "ext-" + uuid.NewString()[:8], ProjectName: "proj",
+		Provisioning: models.Provisioning{Type: "external"}, Type: models.AgentType{Type: "external-agent-api"},
+	}
 	gormDB := db.GetDB()
 	f.gateway = f.sync.seedGateway(t, f.sync.ouID)
 	require.NoError(t, gormDB.Exec(`UPDATE gateways SET gateway_functionality_type = ? WHERE uuid = ?`,
@@ -66,6 +74,17 @@ func newA2AFixture(t *testing.T) *a2aFixture {
 	oc := &clientmocks.OpenChoreoClientMock{
 		GetReleaseBindingServiceURLFunc: func(context.Context, string, string, string) (string, error) {
 			return f.url.Load().(string), nil
+		},
+		GetComponentFunc: func(context.Context, string, string, string) (*models.AgentResponse, error) {
+			return f.external, nil
+		},
+		GetEnvironmentFunc: func(_ context.Context, _, name string) (*models.EnvironmentResponse, error) {
+			return &models.EnvironmentResponse{Name: name, UUID: f.env.String()}, nil
+		},
+	}
+	fetcher := &fakeA2ACardFetcher{
+		FetchOriginFunc: func(context.Context, string, *A2ACardFetchHeader) (json.RawMessage, error) {
+			return a2aTestCard(t, a2aIface("JSONRPC", "https://agent.example/team/a2a/jsonrpc")), nil
 		},
 	}
 	configs := &repomocks.AgentConfigRepositoryMock{
@@ -78,13 +97,66 @@ func newA2AFixture(t *testing.T) *a2aFixture {
 	proxies := repositories.NewA2AProxyRepository(gormDB)
 	cards := repositories.NewA2AAgentCardRepository(gormDB)
 	gateways := repositories.NewGatewayRepo(gormDB)
-	kind := NewA2AAgentKind(tx, exposures, proxies, cards, gateways, f.sync.repo, configs, oc, nil, nil, testLogger())
+	kind := NewA2AAgentKind(tx, exposures, proxies, cards, gateways, f.sync.repo, configs, oc, fetcher, nil, testLogger())
 	f.core = reconcile.NewCore(gormDB, f.sync.repo, f.hub, reconcile.Kinds{kind},
 		reconcile.Config{Lease: time.Minute, AttemptBudget: 3}, slog.New(slog.DiscardHandler))
 	f.worker = reconcile.NewWorker(f.core, slog.New(slog.DiscardHandler))
 	f.publisher = NewA2APublisher(tx, exposures, proxies, cards, repositories.NewArtifactRepo(gormDB), f.sync.repo,
 		gateways, nil, testLogger(), f.core, kind)
+	f.proxies = NewA2AProxyService(tx, proxies, cards, repositories.NewAgentConfigRepo(gormDB),
+		repositories.NewArtifactRepo(gormDB), f.publisher, oc, make([]byte, 32), testLogger())
+	t.Cleanup(func() {
+		for _, table := range []string{"a2a_proxies", "a2a_agent_cards", "agent_configs"} {
+			gormDB.Exec(`DELETE FROM `+table+` WHERE ou_id = ?`, f.sync.ouID)
+		}
+		gormDB.Exec(`DELETE FROM artifacts WHERE ou_id = ? AND kind = ?`, f.sync.ouID, models.KindAgent)
+	})
 	return f
+}
+
+// env is the fixture's environment as OpenChoreo reports it.
+func (f *a2aFixture) envResponse() *models.EnvironmentResponse {
+	return &models.EnvironmentResponse{Name: "dev", UUID: f.env.String()}
+}
+
+// registerCard registers the external agent's origin card URL while its environment is direct.
+func (f *a2aFixture) registerCard(t *testing.T) {
+	t.Helper()
+	require.NoError(t, f.proxies.StoreCardSource(context.Background(), f.external, f.sync.ouID, "proj", f.envResponse(),
+		originCardURL))
+}
+
+// proxy proxies the external agent's environment and returns its artifact.
+func (f *a2aFixture) proxy(t *testing.T) models.ArtifactRef {
+	t.Helper()
+	require.NoError(t, f.proxies.SetA2AProxy(tierGrantedCtx(t), f.sync.ouID, "proj", f.external.Name, "dev", nil))
+	return f.externalArtifact(t)
+}
+
+func (f *a2aFixture) externalArtifact(t *testing.T) models.ArtifactRef {
+	t.Helper()
+	artifact, err := agentEnvAPIArtifact(repositories.NewArtifactRepo(db.GetDB()), f.sync.ouID, "proj", f.external.Name,
+		f.env.String())
+	require.NoError(t, err)
+	return agentArtifactRef(artifact)
+}
+
+func (f *a2aFixture) render(t *testing.T, artifact models.ArtifactRef) {
+	t.Helper()
+	require.NoError(t, f.worker.RunOnceFor(context.Background(), artifact.OUID, artifact.ArtifactUUID))
+}
+
+func (f *a2aFixture) ack(t *testing.T, artifact models.ArtifactRef, action string) {
+	t.Helper()
+	row := f.row(t, artifact)
+	ack := models.DeploymentAck{ArtifactID: artifact.ArtifactUUID.String(), Action: action, Status: "success",
+		PerformedAt: row.PerformedAt}
+	if action == "deploy" {
+		ack.DeploymentID = row.DeploymentID.String()
+	}
+	applied, err := f.sync.repo.ApplyAck(context.Background(), f.gateway.String(), ack, f.core.AfterLive())
+	require.NoError(t, err)
+	require.True(t, applied)
 }
 
 // platformAgent is a platform agent's per-environment artifact and its publication key.
@@ -238,4 +310,132 @@ func TestAgentDeleteReachesTheOrgsGatewaysForAnArtifactWithNoRows(t *testing.T) 
 		addressed = append(addressed, evt.GatewayID)
 	}
 	assert.ElementsMatch(t, []string{f.gateway.String(), f.sync.gateway.String()}, addressed)
+}
+
+// Set proxy, switch to direct, set proxy again: the undeployed row is owed a deploy again and the worker deploys it.
+func TestExternalAgentProxiedAgainDeploysItsUndeployedRow(t *testing.T) {
+	f := newA2AFixture(t)
+	f.registerCard(t)
+	artifact := f.proxy(t)
+	f.render(t, artifact)
+	first := f.row(t, artifact)
+	require.Equal(t, models.DeploymentStatusDeploying, first.Status)
+	f.ack(t, artifact, "deploy")
+
+	require.NoError(t, f.proxies.DeleteA2AProxy(tierGrantedCtx(t), f.sync.ouID, "proj", f.external.Name, "dev"))
+	require.Equal(t, models.DeploymentStatusUndeploying, f.row(t, artifact).Status)
+	f.ack(t, artifact, "undeploy")
+	require.Equal(t, models.DeploymentStatusUndeployed, f.row(t, artifact).Status)
+
+	f.proxy(t)
+	owed := f.row(t, artifact)
+	assert.Equal(t, models.DeploymentStatusUndeployed, owed.Status, "set proxy owes the deploy; the worker does it")
+	require.NotNil(t, owed.NextAttemptAt, "the undeployed row is re-queued")
+
+	f.render(t, artifact)
+
+	row := f.row(t, artifact)
+	assert.Equal(t, models.DeploymentStatusDeploying, row.Status)
+	assert.Equal(t, models.DeploymentStatusDeployed, row.StatusDesired)
+	assert.NotEqual(t, *first.DeploymentID, *row.DeploymentID)
+	last := f.hub.published[len(f.hub.published)-1]
+	assert.Equal(t, "agent.deployed", string(last.EventType))
+}
+
+// Removing the card URL of a proxied environment undeploys the agent and deletes its proxy in one transaction: when
+// the undeploy can't be written, the proxy and card stay.
+func TestRemovingAProxiedEnvironmentsCardURLUndeploysAndDeletesTheProxyTogether(t *testing.T) {
+	f := newA2AFixture(t)
+	f.registerCard(t)
+	artifact := f.proxy(t)
+	f.render(t, artifact)
+	proxies := repositories.NewA2AProxyRepository(db.GetDB())
+	cards := repositories.NewA2AAgentCardRepository(db.GetDB())
+	f.hub.fail = func(evt eventhub.Event) error {
+		if evt.EventType == "agent.undeployed" {
+			return errors.New("event hub is down")
+		}
+		return nil
+	}
+
+	err := f.proxies.RemoveCardSource(tierGrantedCtx(t), f.external, f.sync.ouID, "proj", f.envResponse())
+
+	require.ErrorContains(t, err, "event hub is down")
+	_, err = proxies.GetByEnvUUID(context.Background(), f.sync.ouID, "proj", f.external.Name, f.env)
+	assert.NoError(t, err, "the proxy stays")
+	_, err = cards.Get(context.Background(), f.sync.ouID, "proj", f.external.Name, "dev")
+	assert.NoError(t, err, "the card stays")
+	assert.Equal(t, models.DeploymentStatusDeployed, f.row(t, artifact).StatusDesired)
+
+	f.hub.fail = nil
+	require.NoError(t, f.proxies.RemoveCardSource(tierGrantedCtx(t), f.external, f.sync.ouID, "proj", f.envResponse()))
+
+	_, err = proxies.GetByEnvUUID(context.Background(), f.sync.ouID, "proj", f.external.Name, f.env)
+	assert.ErrorIs(t, err, repositories.ErrA2AProxyNotFound)
+	row := f.row(t, artifact)
+	assert.Equal(t, models.DeploymentStatusUndeploying, row.Status)
+	last := f.hub.published[len(f.hub.published)-1]
+	assert.Equal(t, "agent.undeployed", string(last.EventType))
+}
+
+// The placement pass places an external agent from its proxy row alone.
+func TestPlacementPassPlacesAnExternalAgentFromItsProxyAlone(t *testing.T) {
+	f := newA2AFixture(t)
+	f.registerCard(t)
+	require.NoError(t, repositories.NewA2AProxyRepository(db.GetDB()).Upsert(context.Background(), &models.A2AProxy{
+		OUID: f.sync.ouID, ProjectName: "proj", AgentName: f.external.Name, EnvironmentName: "dev", EnvironmentUUID: f.env,
+	}))
+	_, err := ensureAgentEnvAPIArtifact(db.GetDB(), repositories.NewArtifactRepo(db.GetDB()), f.sync.ouID, "proj",
+		f.external.Name, f.env.String())
+	require.NoError(t, err)
+	artifact := f.externalArtifact(t)
+	require.Nil(t, f.row(t, artifact))
+
+	require.NoError(t, f.worker.PlaceEnv(context.Background(), f.sync.ouID, f.env))
+
+	row := f.row(t, artifact)
+	require.NotNil(t, row)
+	assert.Equal(t, models.DeploymentStatusDeploying, row.Status)
+}
+
+// #2184: an external agent created with no subtype is placed and deployed through its proxy.
+func TestAnExternalAgentWithNoSubtypeIsPlacedThroughItsProxy(t *testing.T) {
+	f := newA2AFixture(t)
+	require.Empty(t, f.external.Type.SubType)
+	f.registerCard(t)
+
+	artifact := f.proxy(t)
+	f.render(t, artifact)
+
+	row := f.row(t, artifact)
+	require.NotNil(t, row)
+	assert.Equal(t, models.DeploymentStatusDeploying, row.Status)
+	pulled, err := f.sync.repo.GetPullable(context.Background(), f.sync.ouID, artifact.ArtifactUUID, f.gateway.String())
+	require.NoError(t, err)
+	assert.Contains(t, string(pulled.Content), "url: https://agent.example/team", "fronts the card's origin")
+}
+
+// A platform agent built without the A2A subtype is deployed with no exposure, so nothing places it on a gateway.
+func TestAPlatformAgentWithoutTheA2ASubtypeGetsNoExposure(t *testing.T) {
+	f := newA2AFixture(t)
+	artifact, key := f.platformAgent(t)
+	svc := &agentManagerService{
+		db: db.GetDB(), agentConfigRepo: repositories.NewAgentConfigRepo(db.GetDB()),
+		artifactRepo: repositories.NewArtifactRepo(db.GetDB()), a2aPublisher: f.publisher, logger: testLogger(),
+	}
+	chat := &models.AgentResponse{UUID: uuid.NewString(), Name: key.AgentName, Provisioning: models.Provisioning{Type: "internal"},
+		Type: models.AgentType{Type: "agent-api", SubType: "chat-api"}}
+	cfg := &models.AgentConfig{OUID: key.OUID, ProjectName: key.ProjectName, AgentName: key.AgentName, EnvironmentName: "dev"}
+
+	require.NoError(t, svc.recordAgentEnvDeploy(context.Background(), chat, cfg, f.env.String(), func(*gorm.DB) (*models.Artifact, error) {
+		return &models.Artifact{UUID: artifact.ArtifactUUID, OUID: key.OUID, Handle: artifact.Handle, Kind: models.KindAgent}, nil
+	}))
+	svc.enqueueCreatedA2AAgent(context.Background(), "chat-api", key.OUID, key.ProjectName, key.AgentName, "dev",
+		f.env.String(), &models.Artifact{UUID: artifact.ArtifactUUID})
+	require.NoError(t, f.worker.PlaceEnv(context.Background(), f.sync.ouID, f.env))
+
+	_, err := repositories.NewPlatformAgentExposureRepository(db.GetDB()).GetByArtifact(context.Background(), key.OUID,
+		artifact.ArtifactUUID)
+	assert.ErrorIs(t, err, repositories.ErrPlatformAgentExposureNotFound)
+	assert.Nil(t, f.row(t, artifact))
 }

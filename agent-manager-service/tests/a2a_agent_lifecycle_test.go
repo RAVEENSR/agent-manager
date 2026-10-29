@@ -23,19 +23,27 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
+	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/db"
+	"github.com/wso2/agent-manager/agent-manager-service/eventhub"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/jwtassertion"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/wso2/agent-manager/agent-manager-service/reconcile"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
+	"github.com/wso2/agent-manager/agent-manager-service/services"
 	"github.com/wso2/agent-manager/agent-manager-service/tests/apitestutils"
 	"github.com/wso2/agent-manager/agent-manager-service/wiring"
 )
@@ -45,6 +53,51 @@ var (
 	a2aLifecycleProjName  = fmt.Sprintf("a2a-lc-proj-%s", uuid.New().String()[:5])
 	a2aLifecycleAgentName = fmt.Sprintf("a2a-lc-agent-%s", uuid.New().String()[:5])
 )
+
+const a2aLifecycleUpstream = "http://a2a-lc-agent.dp-default:9099"
+
+// lifecycleEventHub records what the test's reconcile core writes, so the event the gateway would act on can be
+// asserted without a live hub or a connected gateway. Only publication is exercised; the rest of the EventHub
+// surface is present to satisfy the interface.
+type lifecycleEventHub struct {
+	mu        sync.Mutex
+	published []eventhub.Event
+}
+
+func (h *lifecycleEventHub) PublishEvent(ctx context.Context, gatewayID string, evt eventhub.Event) error {
+	return h.PublishEventTx(ctx, nil, gatewayID, evt)
+}
+
+func (h *lifecycleEventHub) PublishEventTx(_ context.Context, _ *gorm.DB, _ string, evt eventhub.Event) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.published = append(h.published, evt)
+	return nil
+}
+
+func (h *lifecycleEventHub) events() []eventhub.Event {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]eventhub.Event(nil), h.published...)
+}
+
+func (h *lifecycleEventHub) Initialize() error                      { return nil }
+func (h *lifecycleEventHub) RegisterGateway(gatewayID string) error { return nil }
+
+func (h *lifecycleEventHub) Subscribe(gatewayID string) (<-chan eventhub.Event, error) {
+	return nil, nil //nolint:nilnil // the recorder never delivers; only publication is exercised
+}
+
+func (h *lifecycleEventHub) Unsubscribe(gatewayID string, subscriber <-chan eventhub.Event) error {
+	return nil
+}
+func (h *lifecycleEventHub) UnsubscribeAll(gatewayID string) error { return nil }
+func (h *lifecycleEventHub) CleanUpEvents() error                  { return nil }
+func (h *lifecycleEventHub) Close() error                          { return nil }
+
+func testLifecycleLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 // seedIngressGateway inserts a gateway and maps it to the environment, because
 // an A2A agent is published to its environment's INGRESS gateway and the test
@@ -70,12 +123,22 @@ func seedIngressGateway(t *testing.T, ouID string, environmentUUID uuid.UUID) uu
 	return gatewayID
 }
 
-// TestA2AAgentLifecycle drives create -> deploy -> deploy settings -> delete for an a2a-agent and checks the
-// record that says the agent is exposed through its environment's gateway.
+// TestA2AAgentLifecycle drives create -> deploy -> publish -> deploy settings -> delete for an a2a-agent through
+// the API and the reconcile model: the requests write the exposure and the owed row, and a worker over the same
+// database renders it. The worker isn't started by the app in tests, so the test builds one with its own event
+// recorder and renders the agent's artifact with RunOnceFor.
 func TestA2AAgentLifecycle(t *testing.T) {
 	authMiddleware := jwtassertion.NewMockMiddleware(t)
 
 	environmentUUID := uuid.New()
+	var serviceURL string
+	var serviceURLMu sync.Mutex
+	currentServiceURL := func() string {
+		serviceURLMu.Lock()
+		defer serviceURLMu.Unlock()
+		return serviceURL
+	}
+	agentUUID := uuid.New()
 
 	openChoreoClient := apitestutils.CreateMockOpenChoreoClient()
 	openChoreoClient.ComponentExistsFunc = func(ctx context.Context, orgName, projName, agentName string) (bool, error) {
@@ -86,7 +149,7 @@ func TestA2AAgentLifecycle(t *testing.T) {
 	// never record an exposure.
 	openChoreoClient.GetComponentFunc = func(ctx context.Context, namespaceName, projectName, componentName string) (*models.AgentResponse, error) {
 		return &models.AgentResponse{
-			UUID:         uuid.New().String(),
+			UUID:         agentUUID.String(),
 			Name:         componentName,
 			ProjectName:  projectName,
 			Provisioning: models.Provisioning{Type: "internal"},
@@ -99,6 +162,9 @@ func TestA2AAgentLifecycle(t *testing.T) {
 	openChoreoClient.GetEnvironmentFunc = func(ctx context.Context, namespaceName, environmentName string) (*models.EnvironmentResponse, error) {
 		return &models.EnvironmentResponse{UUID: environmentUUID.String(), Name: environmentName}, nil
 	}
+	openChoreoClient.GetReleaseBindingServiceURLFunc = func(ctx context.Context, ouID, componentName, environment string) (string, error) {
+		return currentServiceURL(), nil
+	}
 
 	app := apitestutils.MakeAppClientWithDeps(t, wiring.TestClients{
 		OpenChoreoClient: openChoreoClient,
@@ -107,13 +173,25 @@ func TestA2AAgentLifecycle(t *testing.T) {
 
 	gdb := db.GetDB()
 	exposureRepo := repositories.NewPlatformAgentExposureRepository(gdb)
+	cardRepo := repositories.NewA2AAgentCardRepository(gdb)
+	deploymentRepo := repositories.NewDeploymentRepo(gdb)
 	artifactRepo := repositories.NewArtifactRepo(gdb)
 	ouID := "mock-org-id"
 
-	seedIngressGateway(t, ouID, environmentUUID)
+	gatewayID := seedIngressGateway(t, ouID, environmentUUID)
+
+	hub := &lifecycleEventHub{}
+	tx := services.NewTxRunner(gdb)
+	kind := services.NewA2AAgentKind(tx, exposureRepo, repositories.NewA2AProxyRepository(gdb), cardRepo,
+		repositories.NewGatewayRepo(gdb), deploymentRepo, repositories.NewAgentConfigRepo(gdb), openChoreoClient,
+		services.NewA2ACardFetcher(), bytes.Repeat([]byte{7}, 32), testLifecycleLogger())
+	core := reconcile.NewCore(gdb, deploymentRepo, hub, reconcile.Kinds{kind},
+		reconcile.Config{Lease: time.Minute, AttemptBudget: 3}, testLifecycleLogger())
+	worker := reconcile.NewWorker(core, testLifecycleLogger())
 
 	t.Cleanup(func() {
 		_ = exposureRepo.DeleteForAgent(context.Background(), ouID, a2aLifecycleProjName, a2aLifecycleAgentName)
+		_ = cardRepo.DeleteForAgent(context.Background(), ouID, a2aLifecycleProjName, a2aLifecycleAgentName)
 	})
 
 	// exposure returns the agent's exposure in the environment, or nil.
@@ -124,6 +202,37 @@ func TestA2AAgentLifecycle(t *testing.T) {
 			return nil
 		}
 		return row
+	}
+	placement := func(t *testing.T) models.Placement {
+		t.Helper()
+		row := exposure(t)
+		require.NotNil(t, row)
+		return models.Placement{
+			ArtifactRef: models.ArtifactRef{OUID: ouID, ArtifactUUID: row.ArtifactUUID, Kind: models.KindAgent},
+			GatewayUUID: gatewayID,
+		}
+	}
+	statusRow := func(t *testing.T) *models.DeploymentStatusRecord {
+		t.Helper()
+		row, err := deploymentRepo.GetStatusRecord(context.Background(), placement(t))
+		require.NoError(t, err)
+		require.NotNil(t, row, "the exposure is placed on the environment's ingress gateway")
+		return row
+	}
+	render := func(t *testing.T) {
+		t.Helper()
+		p := placement(t)
+		require.NoError(t, worker.RunOnceFor(context.Background(), p.OUID, p.ArtifactUUID))
+	}
+	published := func(t *testing.T) services.A2AAgentDeploymentYAML {
+		t.Helper()
+		p := placement(t)
+		current, err := deploymentRepo.GetPullable(context.Background(), ouID, p.ArtifactUUID, gatewayID.String())
+		require.NoError(t, err)
+		require.NotNil(t, current, "the gateway fetches the Agent back out of this deployment")
+		var agent services.A2AAgentDeploymentYAML
+		require.NoError(t, yaml.Unmarshal(current.Content, &agent))
+		return agent
 	}
 
 	deployAgent := func(t *testing.T) {
@@ -170,46 +279,77 @@ func TestA2AAgentLifecycle(t *testing.T) {
 		require.Equal(t, http.StatusAccepted, rr.Code, "body: %s", rr.Body.String())
 	})
 
-	t.Run("deploy records the exposure and publishes nothing inline", func(t *testing.T) {
+	t.Run("deploy exposes the agent and waits for its endpoint", func(t *testing.T) {
 		deployAgent(t)
 
 		row := exposure(t)
 		require.NotNil(t, row, "the deploy recorded the exposure")
 		assert.Equal(t, models.AgentExposureProtocolA2A, row.Protocol)
-		assert.NotEqual(t, uuid.Nil, row.ArtifactUUID, "keyed on the artifact the gateway is told about")
 		require.NotNil(t, row.AgentUUID)
-
+		assert.Equal(t, agentUUID, *row.AgentUUID)
 		// The artifact the gateway is told about is the KindAgent row, which is
 		// also what the agent's API keys are bound to.
 		artifact, err := artifactRepo.GetByUUID(row.ArtifactUUID.String(), ouID)
 		require.NoError(t, err)
 		assert.Equal(t, models.KindAgent, artifact.Kind)
 
-		var deployments int64
-		require.NoError(t, gdb.Model(&models.Deployment{}).
-			Where("artifact_uuid = ? AND ou_id = ?", row.ArtifactUUID, ouID).Count(&deployments).Error)
-		assert.Zero(t, deployments, "the upstream is not readable until the release binding reconciles")
+		// The binding has published no ServiceURL, so an Agent with an empty upstream must never be emitted.
+		render(t)
+		status := statusRow(t)
+		assert.Equal(t, models.DeploymentStatusPending, status.Status)
+		shown := models.UserStatusOf(*status)
+		assert.Equal(t, models.DeploymentStatusDeploying, shown.Status)
+		assert.Equal(t, "waiting for the agent's endpoint", shown.Reason)
+		assert.Zero(t, status.AttemptCount, "a not-ready wait is not charged against the budget")
+		require.NotNil(t, status.NextAttemptAt)
+		assert.True(t, status.NextAttemptAt.After(time.Now()), "and the next try is scheduled forward")
+		assert.Empty(t, hub.events())
 	})
 
-	t.Run("redeploy keeps one exposure", func(t *testing.T) {
-		before := exposure(t)
-		require.NotNil(t, before)
+	t.Run("a redeploy once the endpoint appears publishes the Agent", func(t *testing.T) {
+		serviceURLMu.Lock()
+		serviceURL = a2aLifecycleUpstream
+		serviceURLMu.Unlock()
 
-		deployAgent(t)
+		deployAgent(t) // marks the backed-off row due now
+		render(t)
 
-		after := exposure(t)
-		require.NotNil(t, after)
-		assert.Equal(t, before.ID, after.ID)
-		assert.Equal(t, before.ArtifactUUID, after.ArtifactUUID)
+		status := statusRow(t)
+		assert.Equal(t, models.DeploymentStatusDeploying, status.Status)
+		agent := published(t)
+		assert.Equal(t, "Agent", agent.Kind)
+		assert.Equal(t, a2aLifecycleUpstream, agent.Spec.Upstream.URL)
+		require.NotNil(t, agent.Spec.A2A.AgentCard, "the card inherits the default agent CORS")
+		events := hub.events()
+		require.Len(t, events, 1)
+		assert.Equal(t, eventhub.EventType("agent.deployed"), events[0].EventType)
+		assert.Equal(t, placement(t).ArtifactUUID.String(), events[0].EntityID,
+			"the gateway fetches /agents/{agentId} by the artifact UUID")
+
+		applied, err := deploymentRepo.ApplyAck(context.Background(), gatewayID.String(), models.DeploymentAck{
+			DeploymentID: status.DeploymentID.String(), ArtifactID: placement(t).ArtifactUUID.String(),
+			Action: "deploy", Status: "success", PerformedAt: status.PerformedAt,
+		}, core.AfterLive())
+		require.NoError(t, err)
+		require.True(t, applied)
+		assert.Equal(t, models.DeploymentStatusDeployed, statusRow(t).Status)
+		card, err := cardRepo.Get(context.Background(), ouID, a2aLifecycleProjName, a2aLifecycleAgentName, exposure(t).EnvironmentName)
+		require.NoError(t, err, "going live queues the card fetch")
+		require.NotNil(t, card.AgentUUID)
+		assert.Equal(t, agentUUID, *card.AgentUUID)
 	})
 
-	t.Run("deploy settings keep the exposure", func(t *testing.T) {
-		before := exposure(t)
-		require.NotNil(t, before)
+	t.Run("deploy settings republish card CORS and A2A-Version", func(t *testing.T) {
+		before := statusRow(t)
 
 		body := new(bytes.Buffer)
 		require.NoError(t, json.NewEncoder(body).Encode(map[string]interface{}{
-			"environmentName": before.EnvironmentName,
+			"environmentName": exposure(t).EnvironmentName,
+			"corsConfig": map[string]interface{}{
+				"enabled":      true,
+				"allowOrigin":  []string{"https://client.example"},
+				"allowHeaders": []string{"Content-Type"},
+			},
 			"agentCardCorsConfig": map[string]interface{}{
 				"enabled":      true,
 				"allowOrigin":  []string{"*"},
@@ -223,13 +363,23 @@ func TestA2AAgentLifecycle(t *testing.T) {
 		rr := httptest.NewRecorder()
 		app.ServeHTTP(rr, req)
 		require.Equal(t, http.StatusNoContent, rr.Code, "body: %s", rr.Body.String())
+		require.NotNil(t, statusRow(t).NextAttemptAt, "a settings change owes a re-render")
 
-		after := exposure(t)
-		require.NotNil(t, after)
-		assert.Equal(t, before.ID, after.ID)
+		render(t)
+
+		after := statusRow(t)
+		assert.NotEqual(t, *before.DeploymentID, *after.DeploymentID, "the settings change rendered a new deployment")
+		agent := published(t)
+		opCORS := agent.Spec.A2A.OperationConfigs.Policies[0]["params"].(map[string]interface{})
+		assert.Equal(t, []interface{}{"https://client.example"}, opCORS["allowedOrigins"])
+		assert.Contains(t, opCORS["allowedHeaders"], "A2A-Version", "stored and published even though the request omitted it")
+		require.NotNil(t, agent.Spec.A2A.AgentCard)
+		cardCORS := agent.Spec.A2A.AgentCard.Public.Policies[0]["params"].(map[string]interface{})
+		assert.Equal(t, []interface{}{"*"}, cardCORS["allowedOrigins"])
 	})
 
-	t.Run("delete removes the exposure", func(t *testing.T) {
+	t.Run("delete removes the exposure, the artifact and its rows", func(t *testing.T) {
+		artifactUUID := placement(t).ArtifactUUID
 		url := fmt.Sprintf("/api/v1/orgs/%s/projects/%s/agents/%s",
 			a2aLifecycleOrgName, a2aLifecycleProjName, a2aLifecycleAgentName)
 		req := httptest.NewRequest(http.MethodDelete, url, nil)
@@ -238,10 +388,14 @@ func TestA2AAgentLifecycle(t *testing.T) {
 		require.Contains(t, []int{http.StatusOK, http.StatusAccepted, http.StatusNoContent}, rr.Code,
 			"body: %s", rr.Body.String())
 
-		// Deletion is asynchronous in places, so give the cleanup a moment.
 		require.Eventually(t, func() bool {
 			return exposure(t) == nil
-		}, 5*time.Second, 100*time.Millisecond,
-			"a deleted agent leaves no exposure behind")
+		}, 5*time.Second, 100*time.Millisecond, "a deleted agent leaves no exposure behind")
+		_, err := artifactRepo.GetByUUID(artifactUUID.String(), ouID)
+		assert.Error(t, err, "the artifact is gone")
+		var rows int64
+		require.NoError(t, gdb.Model(&models.DeploymentStatusRecord{}).Where("artifact_uuid = ?", artifactUUID).
+			Count(&rows).Error)
+		assert.Zero(t, rows, "its status rows went with it")
 	})
 }
