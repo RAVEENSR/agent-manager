@@ -286,8 +286,9 @@ func (r *GatewayRepo) buildFilterQuery(filters GatewayFilterOptions) *gorm.DB {
 
 // Delete soft-deletes a gateway with organization isolation (sets deleted_at).
 // Soft delete does not trigger FK ON DELETE CASCADE, so active tokens are
-// revoked and its deployments and status rows are removed explicitly here; other child tables
-// (environment mappings, identity providers) are left in place and must be
+// revoked and its deployments and status rows are removed explicitly here, except UNDEPLOYED status
+// rows: they are kept with no deployment so the user's undeploy outlives the gateway. Other child
+// tables (environment mappings, identity providers) are left in place and must be
 // filtered by gateways.deleted_at at the read site.
 func (r *GatewayRepo) Delete(gatewayID, ouID string) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
@@ -309,10 +310,20 @@ func (r *GatewayRepo) Delete(gatewayID, ouID string) error {
 			return err
 		}
 
-		// Status rows with no deployment (PENDING, or UNDEPLOYED from PENDING) don't go
-		// with the deployments below, and a PENDING row would keep rendering for a
-		// gateway that no longer exists.
-		if err := tx.Where("gateway_uuid = ? AND ou_id = ?", gatewayID, ouID).
+		// UNDEPLOYED rows are kept, detached from their deployments and with no deploy owed, so
+		// the user's undeploy outlives the gateway: with no row at all the placement pass would
+		// deploy the artifact again on another gateway.
+		if err := tx.Model(&models.DeploymentStatusRecord{}).
+			Where("gateway_uuid = ? AND ou_id = ? AND status = ?", gatewayID, ouID, models.DeploymentStatusUndeployed).
+			UpdateColumns(map[string]any{
+				"deployment_id": nil, "next_attempt_at": nil, "attempt_count": 0, "render_reason": "",
+			}).Error; err != nil {
+			return err
+		}
+
+		// The other rows go: a PENDING row has no deployment to cascade with, and would keep
+		// rendering for a gateway that no longer exists.
+		if err := tx.Where("gateway_uuid = ? AND ou_id = ? AND status <> ?", gatewayID, ouID, models.DeploymentStatusUndeployed).
 			Delete(&models.DeploymentStatusRecord{}).Error; err != nil {
 			return err
 		}

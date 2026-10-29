@@ -875,6 +875,67 @@ func TestUnplacedRecordsExcludeSoftDeletedGateways(t *testing.T) {
 	assert.Empty(t, records, "the mapping stays after a soft delete, but the gateway doesn't count")
 }
 
+func TestGatewayDeleteKeepsAUserUndeploy(t *testing.T) {
+	for name, sent := range map[string]bool{"undeployed after a deploy": true, "undeployed from PENDING": false} {
+		t.Run(name, func(t *testing.T) {
+			kind := newFakeEnvKind(true)
+			core, worker := newWorker(t, kind)
+			ouID, env := testOU(), uuid.New()
+			ref := seedArtifact(t, ouID, fakeEnvKindName)
+			seedRecord(t, nil, ref, env)
+			old := seedGateway(t, ouID, env)
+			p := models.Placement{ArtifactRef: ref, GatewayUUID: old}
+			repo := repositories.NewDeploymentRepo(db.GetDB())
+			if sent {
+				deploy(t, core, p)
+			} else {
+				require.NoError(t, inTx(t, func(tx *gorm.DB) error {
+					_, err := repo.InsertPending(context.Background(), tx, p, "placed")
+					return err
+				}))
+			}
+			require.NoError(t, inTx(t, func(tx *gorm.DB) error { return core.Undeploy(context.Background(), tx, p) }))
+			if sent {
+				acked, err := repo.ApplyAck(context.Background(), old.String(), models.DeploymentAck{
+					ArtifactID: ref.ArtifactUUID.String(), Action: models.DeploymentAckActionUndeploy, Status: models.DeploymentAckStatusSuccess,
+				}, core.AfterLive())
+				require.NoError(t, err)
+				require.True(t, acked)
+			}
+			require.Equal(t, models.DeploymentStatusUndeployed, statusRow(t, p).Status)
+
+			require.NoError(t, repositories.NewGatewayRepo(db.GetDB()).Delete(old.String(), ouID))
+			fresh := seedGateway(t, ouID, env)
+			require.NoError(t, worker.PlaceEnv(context.Background(), ouID, env))
+
+			row := statusRow(t, p)
+			require.NotNil(t, row, "the undeploy survives its gateway")
+			assert.Equal(t, models.DeploymentStatusUndeployed, row.Status)
+			assert.Nil(t, row.DeploymentID)
+			assert.Nil(t, statusRow(t, models.Placement{ArtifactRef: ref, GatewayUUID: fresh}), "not re-placed")
+			assert.Empty(t, eventsFor(t, fresh))
+			sentTo, err := repo.SentGateways(context.Background(), ouID, ref.ArtifactUUID)
+			require.NoError(t, err)
+			assert.Empty(t, sentTo, "no delete event goes to the dead gateway")
+		})
+	}
+}
+
+func TestGatewayDeleteRemovesPendingRows(t *testing.T) {
+	core := newCore(t, newFakeEnvKind(true))
+	ouID := testOU()
+	p := models.Placement{ArtifactRef: seedArtifact(t, ouID, fakeEnvKindName), GatewayUUID: seedGateway(t, ouID)}
+	require.NoError(t, inTx(t, func(tx *gorm.DB) error {
+		_, err := core.repo.InsertPending(context.Background(), tx, p, "placed")
+		return err
+	}))
+	require.NotNil(t, statusRow(t, p))
+
+	require.NoError(t, repositories.NewGatewayRepo(db.GetDB()).Delete(p.GatewayUUID.String(), ouID))
+
+	assert.Nil(t, statusRow(t, p))
+}
+
 // AfterLive runs exactly once per transition to DEPLOYED, late acks included; a hook error doesn't roll back the ack.
 func TestAfterLive(t *testing.T) {
 	t.Run("once per transition, late acks included", func(t *testing.T) {
