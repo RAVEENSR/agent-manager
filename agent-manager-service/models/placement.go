@@ -42,6 +42,11 @@ type ClaimedRender struct {
 	Placement
 	Token        time.Time
 	AttemptCount int
+	// ClaimedAt is the claim's now: the attempt's time, recorded with its outcome.
+	ClaimedAt time.Time
+	// LastDelay is how long the row waited before this claim, from its last outcome to when it fell due. A row that
+	// keeps waiting for an input doubles it; zero after a request queued the row.
+	LastDelay time.Duration
 }
 
 // GatewaySyncRow is one GET /deployments entry before the kind maps the artifact to the id the gateway stores.

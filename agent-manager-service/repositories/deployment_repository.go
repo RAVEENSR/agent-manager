@@ -72,6 +72,18 @@ type DeploymentRepository interface {
 	StartRestore(ctx context.Context, tx *gorm.DB, placement models.Placement, deploymentID uuid.UUID) error
 	BeginUndeploy(ctx context.Context, tx *gorm.DB, placement models.Placement) (sendEvent bool, err error)
 
+	// Render queue. InsertPending places an artifact; QueueRender marks a deploy owed; a claim's write-back
+	// (CompleteRender, RecordRenderOutcome, AbandonRender) applies only while the row holds the claim's token, and
+	// returns ErrRenderSuperseded otherwise.
+	InsertPending(ctx context.Context, tx *gorm.DB, placement models.Placement, reason string) (inserted bool, err error)
+	QueueRender(ctx context.Context, tx *gorm.DB, ouID string, artifactUUID uuid.UUID, gateways []uuid.UUID, reason string, scope QueueScope) (int64, error)
+	ClaimDueRenders(ctx context.Context, now time.Time, lease time.Duration, limit int) ([]models.ClaimedRender, error)
+	ClaimDueRendersOf(ctx context.Context, ouID string, artifactUUID uuid.UUID, gateways []uuid.UUID, now time.Time, lease time.Duration) ([]models.ClaimedRender, error)
+	CompleteRender(ctx context.Context, tx *gorm.DB, claim models.ClaimedRender, deployment *models.Deployment) error
+	RecordRenderOutcome(ctx context.Context, claim models.ClaimedRender, outcome RenderOutcome) error
+	AbandonRender(ctx context.Context, tx *gorm.DB, claim models.ClaimedRender) (sendEvent bool, err error)
+	ListDeployedForDrift(ctx context.Context, kind string, afterKey string, limit int) ([]models.Placement, error)
+
 	// Settling a transition; these never touch the render queue.
 	ApplyAck(ctx context.Context, gatewayID string, ack models.DeploymentAck, afterLive AfterLiveFunc) (applied bool, err error)
 	FailStaleTransitional(ctx context.Context, olderThan time.Time) (int64, error)

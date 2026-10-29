@@ -278,7 +278,7 @@ func (r *GatewayRepo) buildFilterQuery(filters GatewayFilterOptions) *gorm.DB {
 
 // Delete soft-deletes a gateway with organization isolation (sets deleted_at).
 // Soft delete does not trigger FK ON DELETE CASCADE, so active tokens are
-// revoked and deployment history is removed explicitly here; other child tables
+// revoked and its deployments and status rows are removed explicitly here; other child tables
 // (environment mappings, identity providers) are left in place and must be
 // filtered by gateways.deleted_at at the read site.
 func (r *GatewayRepo) Delete(gatewayID, ouID string) error {
@@ -301,9 +301,16 @@ func (r *GatewayRepo) Delete(gatewayID, ouID string) error {
 			return err
 		}
 
-		// DeleteGateway refuses a gateway that still has deployment_status rows, so
-		// only archived history is left. Without the cascade it would keep listing
-		// as ARCHIVED deployments on a gateway that no longer exists.
+		// Status rows with no deployment (PENDING, or UNDEPLOYED from PENDING) don't go
+		// with the deployments below, and a PENDING row would keep rendering for a
+		// gateway that no longer exists.
+		if err := tx.Where("gateway_uuid = ? AND ou_id = ?", gatewayID, ouID).
+			Delete(&models.DeploymentStatusRecord{}).Error; err != nil {
+			return err
+		}
+
+		// Without the cascade the deployments would keep listing as ARCHIVED on a
+		// gateway that no longer exists.
 		if err := tx.Where("gateway_uuid = ? AND ou_id = ?", gatewayID, ouID).
 			Delete(&models.Deployment{}).Error; err != nil {
 			return err
