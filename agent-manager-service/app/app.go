@@ -254,6 +254,12 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 		os.Exit(1)
 	}
 
+	reconcileWorkerCtx, reconcileWorkerCancel := context.WithCancel(backgroundCtx)
+	if err := dependencies.ReconcileWorker.Start(reconcileWorkerCtx); err != nil {
+		slog.Error("failed to start reconcile worker", "error", err)
+		os.Exit(1)
+	}
+
 	// Load built-in LLM provider templates into memory
 	if err := loadBuiltInLLMTemplates(dependencies); err != nil {
 		slog.Error("Failed to load built-in LLM provider templates", "error", err)
@@ -318,6 +324,11 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 		deploymentTimeoutSweeperCancel()
 		if err := dependencies.DeploymentTimeoutSweeper.Stop(); err != nil {
 			slog.Error("error stopping deployment timeout sweeper", "error", err)
+		}
+
+		reconcileWorkerCancel()
+		if err := dependencies.ReconcileWorker.Stop(); err != nil {
+			slog.Error("error stopping reconcile worker", "error", err)
 		}
 
 		// Shutdown WebSocket manager in a goroutine since it blocks

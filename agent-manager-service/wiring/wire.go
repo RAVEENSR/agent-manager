@@ -39,6 +39,7 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/instrumentation"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/jwtassertion"
+	"github.com/wso2/agent-manager/agent-manager-service/reconcile"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 	"github.com/wso2/agent-manager/agent-manager-service/services"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
@@ -92,7 +93,7 @@ var serviceProviderSet = wire.NewSet(
 	ProvideA2AProxyHooks,
 	services.NewEvaluatorManagerService,
 	services.NewEnvironmentService,
-	services.NewPlatformGatewayService,
+	ProvidePlatformGatewayService,
 	services.NewLLMProviderTemplateService,
 	services.NewLLMProviderService,
 	services.NewLLMProxyService,
@@ -407,6 +408,12 @@ var repositoryProviderSet = wire.NewSet(
 	repositories.NewMCPProxyScopeRepository,
 )
 
+var reconcileProviderSet = wire.NewSet(
+	ProvideReconcileKinds,
+	ProvideReconcileCore,
+	reconcile.NewWorker,
+)
+
 var websocketProviderSet = wire.NewSet(
 	ProvideEventHub,
 	ProvideWebSocketManager,
@@ -468,9 +475,36 @@ func ProvideWebSocketController(
 	return controllers.NewWebSocketController(manager, hub, gatewayService, ackHandler, rateLimitCount)
 }
 
-// ProvideDeploymentAckHandler creates a new deployment ack handler
-func ProvideDeploymentAckHandler(deploymentRepo repositories.DeploymentRepository) *services.DeploymentAckHandler {
-	return services.NewDeploymentAckHandler(deploymentRepo)
+// ProvideDeploymentAckHandler creates a new deployment ack handler that runs the reconcile kinds' after-live hooks.
+func ProvideDeploymentAckHandler(deploymentRepo repositories.DeploymentRepository, core *reconcile.Core) *services.DeploymentAckHandler {
+	return services.NewDeploymentAckHandler(deploymentRepo, core.AfterLive())
+}
+
+// ProvideReconcileKinds lists the gateway artifact kinds the reconcile core deploys.
+func ProvideReconcileKinds() reconcile.Kinds {
+	return nil
+}
+
+// ProvideReconcileCore builds the reconcile core with the worker's intervals, lease and attempt budget from cfg.
+func ProvideReconcileCore(
+	db *gorm.DB, deploymentRepo repositories.DeploymentRepository, hub eventhub.EventHub, kinds reconcile.Kinds,
+	cfg *config.Config, logger *slog.Logger,
+) *reconcile.Core {
+	seconds := func(n int) time.Duration { return time.Duration(n) * time.Second }
+	return reconcile.NewCore(db, deploymentRepo, hub, kinds, reconcile.Config{
+		RenderInterval: seconds(cfg.Reconcile.RenderIntervalSeconds),
+		PlaceInterval:  seconds(cfg.Reconcile.PlaceIntervalSeconds),
+		DriftInterval:  seconds(cfg.Reconcile.DriftIntervalSeconds),
+		Lease:          seconds(cfg.Reconcile.RenderLeaseSeconds),
+		AttemptBudget:  cfg.Reconcile.RenderAttemptBudget,
+	}, logger)
+}
+
+// ProvidePlatformGatewayService makes each new gateway-environment mapping place the environment's artifacts.
+func ProvidePlatformGatewayService(
+	gatewayRepo repositories.GatewayRepository, gatewayApplier services.GatewayConfigApplier, worker *reconcile.Worker,
+) *services.PlatformGatewayService {
+	return services.NewPlatformGatewayService(gatewayRepo, gatewayApplier).WithEnvironmentPlacer(worker)
 }
 
 func ProvideGatewayRepository(db *gorm.DB) repositories.GatewayRepository {
@@ -679,6 +713,7 @@ func InitializeAppParamsWithEnvThunderEndpoints(cfg *config.Config, db *gorm.DB,
 		loggerProviderSet,
 		repositoryProviderSet,
 		websocketProviderSet,
+		reconcileProviderSet,
 		serviceProviderSet,
 		instrumentationProviderSet,
 		controllerProviderSet,
@@ -703,6 +738,7 @@ func InitializeTestAppParamsWithClientMocks(
 		loggerProviderSet,
 		repositoryProviderSet,
 		websocketProviderSet,
+		reconcileProviderSet,
 		serviceProviderSet,
 		instrumentationProviderSet,
 		controllerProviderSet,

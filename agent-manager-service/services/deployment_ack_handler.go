@@ -28,12 +28,15 @@ import (
 // DeploymentAckHandler processes deployment acknowledgment messages from gateways
 type DeploymentAckHandler struct {
 	deploymentRepo repositories.DeploymentRepository
+	afterLive      repositories.AfterLiveFunc
 }
 
-// NewDeploymentAckHandler creates a new deployment ack handler
-func NewDeploymentAckHandler(deploymentRepo repositories.DeploymentRepository) *DeploymentAckHandler {
+// NewDeploymentAckHandler creates a new deployment ack handler. afterLive runs in the ack's transaction when a row
+// goes DEPLOYED (the reconcile core's kind hooks).
+func NewDeploymentAckHandler(deploymentRepo repositories.DeploymentRepository, afterLive repositories.AfterLiveFunc) *DeploymentAckHandler {
 	return &DeploymentAckHandler{
 		deploymentRepo: deploymentRepo,
+		afterLive:      afterLive,
 	}
 }
 
@@ -82,7 +85,7 @@ func (h *DeploymentAckHandler) handleDeploymentAck(gatewayID string, payload jso
 	// The gateway sends "agentproxy" for Agent acks up to v2026.09.24 and "Agent" after.
 	switch ack.ResourceType {
 	case "llmprovider", "llmproxy", "mcpproxy", "agentproxy", "Agent":
-		applied, err := h.deploymentRepo.ApplyAck(context.Background(), gatewayID, ack, nil)
+		applied, err := h.deploymentRepo.ApplyAck(context.Background(), gatewayID, ack, h.afterLive)
 		switch {
 		case err != nil:
 			log.Error("DeploymentAckHandler: failed to apply deployment ack", "error", err)

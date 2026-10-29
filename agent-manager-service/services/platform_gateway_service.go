@@ -47,6 +47,9 @@ type PlatformGatewayService struct {
 	gatewayRepo    repositories.GatewayRepository
 	tokenCache     *TokenCache
 	gatewayApplier GatewayConfigApplier
+	// placer places environment-addressed gateway artifacts once a gateway is mapped to their environment. Nil
+	// places nothing; the reconcile worker's slow placement pass still covers the mapping.
+	placer EnvironmentPlacer
 	// verifyTokenSfg serializes the DB lookup in VerifyToken per tokenPrefix, so a
 	// burst of concurrent requests for the same (often forged) prefix triggers one
 	// repository call instead of one per request. Different prefixes still run
@@ -70,6 +73,39 @@ func NewPlatformGatewayService(
 		tokenCache:     tokenCache,
 		gatewayApplier: gatewayApplier,
 	}
+}
+
+// EnvironmentPlacer places an environment's unplaced gateway artifacts on its gateways and renders them
+// (reconcile.Worker).
+type EnvironmentPlacer interface {
+	PlaceEnv(ctx context.Context, ouID string, env uuid.UUID) error
+}
+
+// WithEnvironmentPlacer makes every new gateway-environment mapping place the environment's artifacts after it
+// commits. It is set after construction because the placer's kinds are built from services.
+func (s *PlatformGatewayService) WithEnvironmentPlacer(placer EnvironmentPlacer) *PlatformGatewayService {
+	s.placer = placer
+	return s
+}
+
+// placeEnvironments runs the placement pass for environments just mapped to a gateway of ouID. It is detached from
+// the request: rendering can call out of AMS, and a failure is retried by the worker's slow pass.
+func (s *PlatformGatewayService) placeEnvironments(ouID string, environmentIDs []string) {
+	if s.placer == nil {
+		return
+	}
+	go func() {
+		for _, environmentID := range environmentIDs {
+			env, err := uuid.Parse(environmentID)
+			if err != nil {
+				continue
+			}
+			if err := s.placer.PlaceEnv(context.Background(), ouID, env); err != nil {
+				slog.Error("Failed to place gateway artifacts in a newly mapped environment; the placement pass will retry",
+					"ouID", ouID, "environmentID", env, "error", err)
+			}
+		}
+	}()
 }
 
 // GatewayResponse represents the gateway DTO
@@ -240,6 +276,7 @@ func (s *PlatformGatewayService) RegisterGateway(
 	}); err != nil {
 		return nil, err
 	}
+	s.placeEnvironments(gateway.OUID, uniqueEnvIDs)
 
 	response := &GatewayResponse{
 		ID:                gateway.UUID.String(),
@@ -1012,9 +1049,13 @@ func (s *PlatformGatewayService) AssignGatewayToEnvironment(gatewayID, environme
 	if gateway == nil {
 		return utils.ErrGatewayNotFound
 	}
-	return s.gatewayRepo.Transaction(func(tx *gorm.DB) error {
+	if err := s.gatewayRepo.Transaction(func(tx *gorm.DB) error {
 		return s.assignGatewayToEnvironmentTx(tx, gateway, environmentID)
-	})
+	}); err != nil {
+		return err
+	}
+	s.placeEnvironments(gateway.OUID, []string{environmentID})
+	return nil
 }
 
 // assignGatewayToEnvironmentTx performs the capped, locked mapping insert inside an
