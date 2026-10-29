@@ -1275,11 +1275,7 @@ func (s *agentConfigurationService) createLLMConfig(ctx context.Context, ouID, p
 		// Update the rollback entry with the proxy handle now that it was created.
 		rollbackResources[rbIdx].proxyHandle = proxy.Handle
 
-		deployment, err := s.llmProxyDeploymentService.DeployLLMProxy(proxy.Handle, &models.DeployAPIRequest{
-			Name:      fmt.Sprintf("%s-deployment", scopedID),
-			Base:      "current",
-			GatewayID: gateway.UUID.String(),
-		}, ouID)
+		deployment, err := s.llmProxyDeploymentService.DeployForEnvironment(ctx, proxy, ouID, envUUID, gateway.UUID)
 		if err != nil {
 			s.processRollBack(ctx, rollbackResources, ouID, config.UUID)
 			return nil, fmt.Errorf("failed to deploy proxy for environment %s: %w", envName, err)
@@ -1953,11 +1949,7 @@ func (s *agentConfigurationService) processEnvProviderChange(
 	}
 	rbRes.proxyHandle = proxy.Handle
 
-	deployment, err := s.llmProxyDeploymentService.DeployLLMProxy(proxy.Handle, &models.DeployAPIRequest{
-		Name:      fmt.Sprintf("%s-deployment", scopedID),
-		Base:      "current",
-		GatewayID: gateway.UUID.String(),
-	}, ouID)
+	deployment, err := s.llmProxyDeploymentService.DeployForEnvironment(ctx, proxy, ouID, envUUID, gateway.UUID)
 	if err != nil {
 		return "", rbRes, pendingAppBinding{}, fmt.Errorf("failed to deploy proxy for environment %s: %w", envName, err)
 	}
@@ -2130,31 +2122,21 @@ func (s *agentConfigurationService) processEnvProxyUpdate(
 	// pre-update snapshot) back to the caller — otherwise rollbackProxies has
 	// no way to restore it and the proxy is left holding the new config with
 	// no matching deployment.
-	gatewayID := gateway.UUID.String()
-	deployments, err := s.llmProxyDeploymentService.GetLLMProxyDeployments(updatedProxy.Handle, ouID, &gatewayID, nil)
+	// The deployment the gateway serves now: a failed save restores it.
+	existingDeployment, err := s.llmProxyDeploymentService.CurrentDeployment(ctx, updatedProxy, ouID, gateway.UUID)
 	if err != nil {
 		return rollbackResource{
 			proxyHandle:      proxyHandle,
 			priorProxyConfig: existingMapping.LLMProxy,
 			providerUUID:     providerUUID,
-		}, fmt.Errorf("failed to get deployments for environment %s: %w", envName, err)
+		}, fmt.Errorf("failed to get the current deployment for environment %s: %w", envName, err)
 	}
 
-	var existingDeployment *models.Deployment
-	for _, dep := range deployments {
-		if dep.Status != nil && *dep.Status == models.DeploymentStatusDeployed {
-			existingDeployment = dep
-			break
-		}
+	newDeployment, err := s.llmProxyDeploymentService.Redeploy(ctx, updatedProxy, ouID, gateway.UUID,
+		"the agent's model configuration changed")
+	if err == nil && newDeployment == nil {
+		err = utils.ErrDeploymentNotActive
 	}
-
-	deployBase := "current"
-	scopedID := scopedProxyIdentifier(config.ProjectName, config.AgentID, config.Name, env.Name)
-	newDeployment, err := s.llmProxyDeploymentService.DeployLLMProxy(updatedProxy.Handle, &models.DeployAPIRequest{
-		Name:      fmt.Sprintf("%s-deployment", scopedID),
-		Base:      deployBase,
-		GatewayID: gateway.UUID.String(),
-	}, ouID)
 	if err != nil {
 		return rollbackResource{
 			proxyHandle:      proxyHandle,
@@ -2248,11 +2230,7 @@ func (s *agentConfigurationService) processNewEnv(
 	}
 	rbRes.proxyHandle = proxy.Handle
 
-	deployment, err := s.llmProxyDeploymentService.DeployLLMProxy(proxy.Handle, &models.DeployAPIRequest{
-		Name:      fmt.Sprintf("%s-deployment", scopedID),
-		Base:      "current",
-		GatewayID: gateway.UUID.String(),
-	}, ouID)
+	deployment, err := s.llmProxyDeploymentService.DeployForEnvironment(ctx, proxy, ouID, envUUID, gateway.UUID)
 	if err != nil {
 		return rbRes, pendingAppBinding{}, fmt.Errorf("failed to deploy proxy for environment %s: %w", envName, err)
 	}

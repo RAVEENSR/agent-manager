@@ -94,7 +94,11 @@ func InitializeAppParamsWithEnvThunderEndpoints(cfg *config.Config, db *gorm.DB,
 	envThunderResolver := ProvideEnvThunderResolverWithEndpoints(readSystemClientFunc, readThunderURLFunc, endpointResolver)
 	mcpProxyService := services.NewMCPProxyService(db, mcpProxyRepository, mcpProxyEndpointRepository, deploymentRepository, gatewayRepository, envAgentMCPMappingRepository, agentConfigurationRepository, gatewayEventsService, apiKeyRepository, infraResourceManager, agentIdentityInjectionService, logger, v, mcpProxyScopeRepository, envThunderResolver)
 	txRunner := ProvideTxRunner(db)
-	llmProxyDeploymentService := services.NewLLMProxyDeploymentService(txRunner, deploymentRepository, llmProxyRepository, llmProviderRepository, gatewayRepository, gatewayEventsService)
+	llmProviderKind := services.NewLLMProviderKind()
+	llmProxyKind := services.NewLLMProxyKind(gatewayRepository, deploymentRepository)
+	kinds := ProvideReconcileKinds(llmProviderKind, llmProxyKind)
+	core := ProvideReconcileCore(db, deploymentRepository, eventHub, kinds, cfg, logger)
+	llmProxyDeploymentService := services.NewLLMProxyDeploymentService(txRunner, deploymentRepository, llmProxyRepository, llmProviderRepository, gatewayRepository, gatewayEventsService, core, llmProxyKind)
 	llmProxyAPIKeyService := services.NewLLMProxyAPIKeyService(llmProxyRepository, gatewayRepository, gatewayEventsService, apiKeyRepository, openChoreoClient)
 	llmProviderAPIKeyService := services.NewLLMProviderAPIKeyService(llmProviderRepository, gatewayRepository, gatewayEventsService, apiKeyRepository)
 	aiApplicationRepository := ProvideAIApplicationRepository(db)
@@ -134,9 +138,6 @@ func InitializeAppParamsWithEnvThunderEndpoints(cfg *config.Config, db *gorm.DB,
 	prober := thundersvc.NewProber()
 	environmentService := services.NewEnvironmentService(logger, gatewayRepository, openChoreoClient, prober, agentConfigurationService, envThunderSystemClientRepository, envThunderURLRepository, v, a2AAgentCardRepository, a2APublisher, agentConfigRepository)
 	environmentController := controllers.NewEnvironmentController(environmentService)
-	llmProviderKind := services.NewLLMProviderKind()
-	kinds := ProvideReconcileKinds(llmProviderKind)
-	core := ProvideReconcileCore(db, deploymentRepository, eventHub, kinds, cfg, logger)
 	worker := reconcile.NewWorker(core, logger)
 	platformGatewayService := ProvidePlatformGatewayService(gatewayRepository, gatewayApplier, worker)
 	gatewayController := controllers.NewGatewayController(platformGatewayService, openChoreoClient, agentConfigurationService)
@@ -300,7 +301,11 @@ func InitializeTestAppParamsWithClientMocks(cfg *config.Config, db *gorm.DB, aut
 	envThunderResolver := ProvideEnvThunderResolver(readSystemClientFunc, readThunderURLFunc)
 	mcpProxyService := services.NewMCPProxyService(db, mcpProxyRepository, mcpProxyEndpointRepository, deploymentRepository, gatewayRepository, envAgentMCPMappingRepository, agentConfigurationRepository, gatewayEventsService, apiKeyRepository, infraResourceManager, agentIdentityInjectionService, logger, v, mcpProxyScopeRepository, envThunderResolver)
 	txRunner := ProvideTxRunner(db)
-	llmProxyDeploymentService := services.NewLLMProxyDeploymentService(txRunner, deploymentRepository, llmProxyRepository, llmProviderRepository, gatewayRepository, gatewayEventsService)
+	llmProviderKind := services.NewLLMProviderKind()
+	llmProxyKind := services.NewLLMProxyKind(gatewayRepository, deploymentRepository)
+	kinds := ProvideReconcileKinds(llmProviderKind, llmProxyKind)
+	core := ProvideReconcileCore(db, deploymentRepository, eventHub, kinds, cfg, logger)
+	llmProxyDeploymentService := services.NewLLMProxyDeploymentService(txRunner, deploymentRepository, llmProxyRepository, llmProviderRepository, gatewayRepository, gatewayEventsService, core, llmProxyKind)
 	llmProxyAPIKeyService := services.NewLLMProxyAPIKeyService(llmProxyRepository, gatewayRepository, gatewayEventsService, apiKeyRepository, openChoreoClient)
 	llmProviderAPIKeyService := services.NewLLMProviderAPIKeyService(llmProviderRepository, gatewayRepository, gatewayEventsService, apiKeyRepository)
 	aiApplicationRepository := ProvideAIApplicationRepository(db)
@@ -339,9 +344,6 @@ func InitializeTestAppParamsWithClientMocks(cfg *config.Config, db *gorm.DB, aut
 	prober := thundersvc.NewProber()
 	environmentService := services.NewEnvironmentService(logger, gatewayRepository, openChoreoClient, prober, agentConfigurationService, envThunderSystemClientRepository, envThunderURLRepository, v, a2AAgentCardRepository, a2APublisher, agentConfigRepository)
 	environmentController := controllers.NewEnvironmentController(environmentService)
-	llmProviderKind := services.NewLLMProviderKind()
-	kinds := ProvideReconcileKinds(llmProviderKind)
-	core := ProvideReconcileCore(db, deploymentRepository, eventHub, kinds, cfg, logger)
 	worker := reconcile.NewWorker(core, logger)
 	platformGatewayService := ProvidePlatformGatewayService(gatewayRepository, gatewayApplier, worker)
 	gatewayController := controllers.NewGatewayController(platformGatewayService, openChoreoClient, agentConfigurationService)
@@ -716,7 +718,7 @@ var repositoryProviderSet = wire.NewSet(
 	ProvideEnvThunderURLRepository, repositories.NewMCPProxyScopeRepository,
 )
 
-var reconcileProviderSet = wire.NewSet(services.NewLLMProviderKind, ProvideReconcileKinds,
+var reconcileProviderSet = wire.NewSet(services.NewLLMProviderKind, services.NewLLMProxyKind, ProvideReconcileKinds,
 	ProvideReconcileCore, reconcile.NewWorker,
 )
 
@@ -785,8 +787,8 @@ func ProvideDeploymentAckHandler(deploymentRepo repositories.DeploymentRepositor
 }
 
 // ProvideReconcileKinds lists the gateway artifact kinds the reconcile core deploys.
-func ProvideReconcileKinds(llmProvider *services.LLMProviderKind) reconcile.Kinds {
-	return reconcile.Kinds{llmProvider}
+func ProvideReconcileKinds(llmProvider *services.LLMProviderKind, llmProxy *services.LLMProxyKind) reconcile.Kinds {
+	return reconcile.Kinds{llmProvider, llmProxy}
 }
 
 // ProvideReconcileCore builds the reconcile core with the worker's intervals, lease and attempt budget from cfg.

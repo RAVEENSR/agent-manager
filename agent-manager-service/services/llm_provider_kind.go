@@ -31,6 +31,7 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/reconcile"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
+	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
 
 // renderedDeployment names a rendered artifact after its handle and its content, so two renders of the same
@@ -74,7 +75,7 @@ func (k *LLMProviderKind) Render(ctx context.Context, artifact models.ArtifactRe
 	}
 	content, err := renderLLMProvider(provider)
 	if err != nil {
-		return reconcile.Rendered{}, fmt.Errorf("failed to generate deployment YAML: %w", err)
+		return reconcile.Rendered{}, reconcile.Permanent(fmt.Errorf("%w: invalid LLM provider configuration: %w", utils.ErrInvalidInput, err))
 	}
 	return renderedDeployment(provider.Configuration.Handle, []byte(content)), nil
 }

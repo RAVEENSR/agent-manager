@@ -75,19 +75,8 @@ func (c *llmProxyDeploymentController) DeployLLMProxy(w http.ResponseWriter, r *
 	}
 
 	log.Info("DeployLLMProxy: request decoded", "ouID", ouID, "proxyID", proxyID,
-		"deploymentName", req.Name, "base", req.Base, "gatewayID", req.GatewayID)
+		"base", req.Base, "gatewayID", req.GatewayID)
 
-	// Validate required fields
-	if req.Name == "" {
-		log.Error("DeployLLMProxy: deployment name is required", "ouID", ouID, "proxyID", proxyID)
-		utils.WriteErrorResponse(w, http.StatusBadRequest, "name is required")
-		return
-	}
-	if req.Base == "" {
-		log.Error("DeployLLMProxy: base is required", "ouID", ouID, "proxyID", proxyID)
-		utils.WriteErrorResponse(w, http.StatusBadRequest, "base is required (use 'current' or a deploymentId)")
-		return
-	}
 	if req.GatewayID == "" {
 		log.Error("DeployLLMProxy: gateway ID is required", "ouID", ouID, "proxyID", proxyID)
 		utils.WriteErrorResponse(w, http.StatusBadRequest, "gatewayId is required")
@@ -108,17 +97,9 @@ func (c *llmProxyDeploymentController) DeployLLMProxy(w http.ResponseWriter, r *
 			log.Warn("DeployLLMProxy: gateway not found", "ouID", ouID, "proxyID", proxyID, "gatewayID", req.GatewayID)
 			utils.WriteErrorResponse(w, http.StatusNotFound, "Gateway not found")
 			return
-		case errors.Is(err, utils.ErrBaseDeploymentNotFound):
-			log.Warn("DeployLLMProxy: base deployment not found", "ouID", ouID, "proxyID", proxyID, "base", req.Base)
-			utils.WriteErrorResponse(w, http.StatusNotFound, "Base deployment not found")
-			return
-		case errors.Is(err, utils.ErrDeploymentNameRequired):
-			log.Error("DeployLLMProxy: deployment name required", "ouID", ouID, "proxyID", proxyID)
-			utils.WriteErrorResponse(w, http.StatusBadRequest, "Deployment name is required")
-			return
-		case errors.Is(err, utils.ErrDeploymentBaseRequired):
-			log.Error("DeployLLMProxy: base required", "ouID", ouID, "proxyID", proxyID)
-			utils.WriteErrorResponse(w, http.StatusBadRequest, "Base is required (use 'current' or a deploymentId)")
+		case errors.Is(err, utils.ErrDeploymentBaseNotCurrent):
+			log.Warn("DeployLLMProxy: base is not current", "ouID", ouID, "base", req.Base)
+			utils.WriteErrorResponse(w, http.StatusBadRequest, utils.ErrDeploymentBaseNotCurrent.Error())
 			return
 		case errors.Is(err, utils.ErrDeploymentGatewayIDRequired):
 			log.Error("DeployLLMProxy: gateway ID required", "ouID", ouID, "proxyID", proxyID)

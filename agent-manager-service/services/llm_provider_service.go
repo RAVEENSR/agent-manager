@@ -1441,64 +1441,22 @@ func (s *LLMProviderService) syncProxyAuthHeader(
 		revokeMintedKey()
 	}
 
-	deployments, err := proxyDeploymentService.GetLLMProxyDeployments(proxy.Handle, ouID, nil, nil)
-	if err != nil {
+	// Every gateway the proxy is placed on re-renders from the stored config. A config that doesn't render is
+	// rejected before any gateway is touched; a later per-gateway failure stays on that gateway's row and is
+	// retried by the reconcile worker.
+	if err := proxyDeploymentService.RedeployEverywhere(ctx, proxy, ouID, "the provider's API key settings changed"); err != nil {
 		restoreStoredHeaders()
-		return false, fmt.Errorf("failed to list deployments for proxy %s: %w", proxy.Handle, err)
+		return false, fmt.Errorf("failed to redeploy proxy %s: %w", proxy.Handle, err)
 	}
 
-	redeployed := 0
-	var stragglers []error
-	var straggleGateways []string
-	for _, deployment := range deployments {
-		if deployment.Status == nil || *deployment.Status != models.DeploymentStatusDeployed {
-			continue
-		}
-		if _, err := proxyDeploymentService.DeployLLMProxy(proxy.Handle, &models.DeployAPIRequest{
-			Name:      deployment.Name,
-			Base:      "current",
-			GatewayID: deployment.GatewayUUID.String(),
-		}, ouID); err != nil {
-			// Nothing took the new config yet, so putting the store back leaves the
-			// proxy exactly as it was.
-			if redeployed == 0 && len(stragglers) == 0 {
-				restoreStoredHeaders()
-				return false, fmt.Errorf("failed to redeploy proxy %s on gateway %s: %w",
-					proxy.Handle, deployment.GatewayUUID, err)
-			}
-			// A gateway has already accepted the new config, so rolling back would
-			// strand it. Carry on so the rest converge; the errors name the stragglers.
-			stragglers = append(stragglers, fmt.Errorf("gateway %s: %w", deployment.GatewayUUID, err))
-			straggleGateways = append(straggleGateways, deployment.GatewayUUID.String())
-			continue
-		}
-		redeployed++
-	}
-
-	// Record the outcome so the stored row stops claiming a convergence it doesn't have.
-	// Without this a partial rollout reads as fully synced and no later sync retries the
-	// gateways still on the old policy.
-	if !slices.Equal(priorPending, straggleGateways) {
-		// Non-nil even when empty: nil reads as "not specified" and would preserve the
-		// stored list instead of clearing it after a rollout that fully succeeded.
-		proxy.Configuration.AuthRolloutPendingGateways = append([]string{}, straggleGateways...)
+	// Pending gateways were the old per-gateway rollout's bookkeeping; the render queue holds that now.
+	if len(priorPending) > 0 {
+		proxy.Configuration.AuthRolloutPendingGateways = []string{}
 		if _, err := proxyService.Update(proxy.Handle, ouID, proxy); err != nil {
-			slog.Error("syncProxyAuthHeader: failed to record rollout outcome",
-				"proxyHandle", proxy.Handle, "staleGateways", strings.Join(straggleGateways, ","),
-				"error", err)
+			slog.Error("syncProxyAuthHeader: failed to clear the rollout's pending gateways",
+				"proxyHandle", proxy.Handle, "error", err)
 		}
 	}
-
-	if len(stragglers) > 0 {
-		storedName, storedIn := ingress.APIKeyNameAndLocation(models.DefaultLLMProxyAPIKeyHeader)
-		slog.Error("syncProxyAuthHeader: proxy left serving different auth config per gateway",
-			"proxyHandle", proxy.Handle, "staleGateways", strings.Join(straggleGateways, ","),
-			"redeployedCount", redeployed, "storedHeader", storedName, "storedIn", storedIn,
-			"storedRequiresAPIKey", ingress.RequiresAPIKey())
-		return true, fmt.Errorf("proxy %s: %d of %d gateways left on the previous auth config: %w",
-			proxy.Handle, len(stragglers), redeployed+len(stragglers), errors.Join(stragglers...))
-	}
-
 	return true, nil
 }
 

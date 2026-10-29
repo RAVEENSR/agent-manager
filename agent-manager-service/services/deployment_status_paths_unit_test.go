@@ -149,11 +149,22 @@ func (f *statusPathFixture) providerService(provider *models.LLMProvider) *LLMPr
 	}, nil, f.gatewayRepo(), NewGatewayEventsService(f.hub), f.core(providerKindOf(provider)))
 }
 
+// proxyKindOf renders proxy, fronting a renderable provider, whatever artifact it is asked for.
+func proxyKindOf(proxy *models.LLMProxy) *LLMProxyKind {
+	return &LLMProxyKind{
+		load: func(context.Context, models.ArtifactRef) (*models.LLMProxy, *models.LLMProvider, error) {
+			return proxy, renderableProvider(), nil
+		},
+		vhostOf: func(models.ArtifactRef) string { return proxyVhost(proxy) },
+	}
+}
+
 func (f *statusPathFixture) proxyService(proxy *models.LLMProxy) *LLMProxyDeploymentService {
+	kind := proxyKindOf(proxy)
 	return NewLLMProxyDeploymentService(sentinelTx, f.repo, &repomocks.LLMProxyRepositoryMock{
 		GetByIDFunc:    func(string, string) (*models.LLMProxy, error) { return proxy, nil },
 		GetByIDCtxFunc: func(context.Context, string, string) (*models.LLMProxy, error) { return proxy, nil },
-	}, nil, f.gatewayRepo(), NewGatewayEventsService(f.hub))
+	}, nil, f.gatewayRepo(), NewGatewayEventsService(f.hub), f.core(kind), kind)
 }
 
 func assertPerformedAt(t *testing.T, want time.Time, payload map[string]any) {
@@ -309,7 +320,7 @@ func TestDeployLLMProxyStartsDeployingAndSendsTheHandle(t *testing.T) {
 	f := newStatusPathFixture(t, proxy.UUID)
 
 	got, err := f.proxyService(proxy).DeployLLMProxy("proxy-handle", &models.DeployAPIRequest{
-		Name: "d", Base: uuid.NewString(), GatewayID: f.gateway.UUID.String(),
+		Base: "current", GatewayID: f.gateway.UUID.String(),
 	}, "ou-1")
 
 	require.NoError(t, err)
