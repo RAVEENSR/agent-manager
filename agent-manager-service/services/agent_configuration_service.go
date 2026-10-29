@@ -36,6 +36,7 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/clients/secretmanagersvc"
 	"github.com/wso2/agent-manager/agent-manager-service/config"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/wso2/agent-manager/agent-manager-service/reconcile"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
@@ -3430,9 +3431,6 @@ func (s *agentConfigurationService) removeMCPMappingEnvironment(ctx context.Cont
 		}
 	}
 
-	if s.mcpProxyService != nil {
-		s.mcpProxyService.BroadcastMCPArtifactDeletion(ctx, mapping.ArtifactUUID, ouID)
-	}
 	s.cleanupMCPMappingCredentials(ctx, config, mapping, envName, ouID)
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		if err := s.envVariableRepo.DeleteByConfigAndEnv(ctx, tx, config.UUID, mapping.EnvironmentUUID); err != nil {
@@ -3441,16 +3439,39 @@ func (s *agentConfigurationService) removeMCPMappingEnvironment(ctx context.Cont
 		if err := s.envMCPMappingRepo.Delete(ctx, tx, mapping.ID); err != nil {
 			return err
 		}
-		if err := tx.Where("artifact_uuid = ? AND ou_id = ?", mapping.ArtifactUUID, ouID).
-			Delete(&models.DeploymentStatusRecord{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("artifact_uuid = ? AND ou_id = ?", mapping.ArtifactUUID, ouID).
-			Delete(&models.Deployment{}).Error; err != nil {
-			return err
-		}
-		return tx.Where("uuid = ?", mapping.ArtifactUUID).Delete(&models.Artifact{}).Error
+		return s.deleteMCPMappingArtifacts(ctx, tx, ouID, mapping.ArtifactUUID)
 	})
+}
+
+// deleteMCPMappingArtifacts deletes the mappings' gateway artifacts with their deployments and status rows in tx, the
+// deleting transaction, and writes their delete events last in it.
+func (s *agentConfigurationService) deleteMCPMappingArtifacts(ctx context.Context, tx *gorm.DB, ouID string, artifactUUIDs ...uuid.UUID) error {
+	var events []reconcile.DeleteEvents
+	if s.mcpProxyService != nil {
+		var err error
+		if events, err = s.mcpProxyService.prepareMCPArtifactDeletes(ctx, tx, ouID, artifactUUIDs); err != nil {
+			return err
+		}
+	}
+	for _, artifactUUID := range artifactUUIDs {
+		if err := deleteMCPArtifactRows(tx, artifactUUID, ouID); err != nil {
+			return err
+		}
+	}
+	for _, artifactEvents := range events {
+		if err := artifactEvents.Publish(ctx, tx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func mcpMappingArtifacts(mappings []models.EnvAgentMCPMapping) []uuid.UUID {
+	artifactUUIDs := make([]uuid.UUID, 0, len(mappings))
+	for _, mapping := range mappings {
+		artifactUUIDs = append(artifactUUIDs, mapping.ArtifactUUID)
+	}
+	return artifactUUIDs
 }
 
 // teardownMCPMappingKeepEnvVars removes an MCP mapping's gateway deployment and
@@ -3461,23 +3482,12 @@ func (s *agentConfigurationService) removeMCPMappingEnvironment(ctx context.Cont
 func (s *agentConfigurationService) teardownMCPMappingKeepEnvVars(ctx context.Context, config *models.AgentConfiguration,
 	mapping *models.EnvAgentMCPMapping, envName, ouID string,
 ) error {
-	if s.mcpProxyService != nil {
-		s.mcpProxyService.BroadcastMCPArtifactDeletion(ctx, mapping.ArtifactUUID, ouID)
-	}
 	s.cleanupMCPMappingCredentials(ctx, config, mapping, envName, ouID)
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		if err := s.envMCPMappingRepo.Delete(ctx, tx, mapping.ID); err != nil {
 			return err
 		}
-		if err := tx.Where("artifact_uuid = ? AND ou_id = ?", mapping.ArtifactUUID, ouID).
-			Delete(&models.DeploymentStatusRecord{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("artifact_uuid = ? AND ou_id = ?", mapping.ArtifactUUID, ouID).
-			Delete(&models.Deployment{}).Error; err != nil {
-			return err
-		}
-		return tx.Where("uuid = ?", mapping.ArtifactUUID).Delete(&models.Artifact{}).Error
+		return s.deleteMCPMappingArtifacts(ctx, tx, ouID, mapping.ArtifactUUID)
 	})
 }
 
@@ -4556,9 +4566,6 @@ func (s *agentConfigurationService) deleteMCPConfig(ctx context.Context, existin
 	}
 
 	for _, mapping := range mappings {
-		if s.mcpProxyService != nil {
-			s.mcpProxyService.BroadcastMCPArtifactDeletion(ctx, mapping.ArtifactUUID, ouID)
-		}
 		envName := envIDNameMap[mapping.EnvironmentUUID.String()]
 		s.cleanupMCPMappingCredentials(ctx, existingConfig, &mapping, envName, ouID)
 	}
@@ -4567,20 +4574,7 @@ func (s *agentConfigurationService) deleteMCPConfig(ctx context.Context, existin
 		if err := s.agentConfigRepo.Delete(ctx, tx, existingConfig.UUID, ouID); err != nil {
 			return err
 		}
-		for _, mapping := range mappings {
-			if err := tx.Where("artifact_uuid = ? AND ou_id = ?", mapping.ArtifactUUID, ouID).
-				Delete(&models.DeploymentStatusRecord{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("artifact_uuid = ? AND ou_id = ?", mapping.ArtifactUUID, ouID).
-				Delete(&models.Deployment{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("uuid = ?", mapping.ArtifactUUID).Delete(&models.Artifact{}).Error; err != nil {
-				return err
-			}
-		}
-		return nil
+		return s.deleteMCPMappingArtifacts(ctx, tx, ouID, mcpMappingArtifacts(mappings)...)
 	}); err != nil {
 		return fmt.Errorf("failed to delete MCP configuration: %w", err)
 	}
@@ -4623,9 +4617,6 @@ func (s *agentConfigurationService) deleteMCPConfigForAgentDeletion(ctx context.
 	}
 
 	for _, mapping := range mappings {
-		if s.mcpProxyService != nil {
-			s.mcpProxyService.BroadcastMCPArtifactDeletion(ctx, mapping.ArtifactUUID, ouID)
-		}
 		envName := envIDNameMap[mapping.EnvironmentUUID.String()]
 		s.cleanupMCPMappingCredentials(ctx, existingConfig, &mapping, envName, ouID)
 	}
@@ -4634,20 +4625,7 @@ func (s *agentConfigurationService) deleteMCPConfigForAgentDeletion(ctx context.
 		if err := s.agentConfigRepo.Delete(ctx, tx, existingConfig.UUID, ouID); err != nil {
 			return err
 		}
-		for _, mapping := range mappings {
-			if err := tx.Where("artifact_uuid = ? AND ou_id = ?", mapping.ArtifactUUID, ouID).
-				Delete(&models.DeploymentStatusRecord{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("artifact_uuid = ? AND ou_id = ?", mapping.ArtifactUUID, ouID).
-				Delete(&models.Deployment{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("uuid = ?", mapping.ArtifactUUID).Delete(&models.Artifact{}).Error; err != nil {
-				return err
-			}
-		}
-		return nil
+		return s.deleteMCPMappingArtifacts(ctx, tx, ouID, mcpMappingArtifacts(mappings)...)
 	}); err != nil {
 		return fmt.Errorf("failed to delete MCP configuration for agent deletion: %w", err)
 	}
@@ -5464,9 +5442,6 @@ func (s *agentConfigurationService) reconcileMCPMappingCredentials(ctx context.C
 // environment that was already promoted, and dropping its variable rows would strip the
 // agent's MCP variable names entirely, leaving it worse off than the failed binding.
 func (s *agentConfigurationService) cleanupNewMCPMapping(ctx context.Context, config *models.AgentConfiguration, mapping *models.EnvAgentMCPMapping, envName, ouID string, deleteEnvVars bool) {
-	if s.mcpProxyService != nil {
-		s.mcpProxyService.BroadcastMCPArtifactDeletion(ctx, mapping.ArtifactUUID, ouID)
-	}
 	s.cleanupMCPMappingCredentials(ctx, config, mapping, envName, ouID)
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if deleteEnvVars {
@@ -5479,15 +5454,7 @@ func (s *agentConfigurationService) cleanupNewMCPMapping(ctx context.Context, co
 				return err
 			}
 		}
-		if err := tx.Where("artifact_uuid = ? AND ou_id = ?", mapping.ArtifactUUID, ouID).
-			Delete(&models.DeploymentStatusRecord{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("artifact_uuid = ? AND ou_id = ?", mapping.ArtifactUUID, ouID).
-			Delete(&models.Deployment{}).Error; err != nil {
-			return err
-		}
-		return tx.Where("uuid = ?", mapping.ArtifactUUID).Delete(&models.Artifact{}).Error
+		return s.deleteMCPMappingArtifacts(ctx, tx, ouID, mapping.ArtifactUUID)
 	}); err != nil {
 		s.logger.Warn("failed to clean up new MCP mapping after partial failure", "environment", envName, "artifactUUID", mapping.ArtifactUUID, "err", err)
 	}
@@ -6018,13 +5985,6 @@ func (s *agentConfigurationService) processRollBack(ctx context.Context, rollbac
 }
 
 func (s *agentConfigurationService) cleanupMCPConfig(ctx context.Context, configUUID uuid.UUID, ouID string) {
-	if s.envMCPMappingRepo != nil && s.mcpProxyService != nil {
-		if mappings, err := s.envMCPMappingRepo.ListByConfig(ctx, configUUID); err == nil {
-			for _, mapping := range mappings {
-				s.mcpProxyService.BroadcastMCPArtifactDeletion(ctx, mapping.ArtifactUUID, ouID)
-			}
-		}
-	}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var mappings []models.EnvAgentMCPMapping
 		if s.envMCPMappingRepo != nil {
@@ -6037,20 +5997,7 @@ func (s *agentConfigurationService) cleanupMCPConfig(ctx context.Context, config
 		if err := s.agentConfigRepo.Delete(ctx, tx, configUUID, ouID); err != nil {
 			return err
 		}
-		for _, mapping := range mappings {
-			if err := tx.Where("artifact_uuid = ? AND ou_id = ?", mapping.ArtifactUUID, ouID).
-				Delete(&models.DeploymentStatusRecord{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("artifact_uuid = ? AND ou_id = ?", mapping.ArtifactUUID, ouID).
-				Delete(&models.Deployment{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("uuid = ?", mapping.ArtifactUUID).Delete(&models.Artifact{}).Error; err != nil {
-				return err
-			}
-		}
-		return nil
+		return s.deleteMCPMappingArtifacts(ctx, tx, ouID, mcpMappingArtifacts(mappings)...)
 	}); err != nil {
 		s.logger.Warn("failed to clean up MCP configuration", "configUUID", configUUID, "error", err)
 	}

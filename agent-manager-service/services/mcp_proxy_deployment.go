@@ -320,15 +320,7 @@ func (s *MCPProxyService) deleteMCPProxyEnvironmentArtifacts(ctx context.Context
 			if err != nil {
 				return err
 			}
-			if err := tx.Where("artifact_uuid = ? AND ou_id = ?", artifactUUID, ouID).
-				Delete(&models.DeploymentStatusRecord{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("artifact_uuid = ? AND ou_id = ?", artifactUUID, ouID).
-				Delete(&models.Deployment{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("uuid = ? AND ou_id = ?", artifactUUID, ouID).Delete(&models.Artifact{}).Error; err != nil {
+			if err := deleteMCPArtifactRows(tx, artifactUUID, ouID); err != nil {
 				return err
 			}
 			return events.Publish(ctx, tx)
@@ -339,19 +331,33 @@ func (s *MCPProxyService) deleteMCPProxyEnvironmentArtifacts(ctx context.Context
 	return errors.Join(errs...)
 }
 
-// BroadcastMCPArtifactDeletion tells every gateway the artifact was sent to that it is deleted, leaving its rows.
-func (s *MCPProxyService) BroadcastMCPArtifactDeletion(ctx context.Context, artifactUUID uuid.UUID, ouID string) {
-	ref := models.ArtifactRef{OUID: ouID, ArtifactUUID: artifactUUID, Kind: models.KindMCPMapping}
-	err := s.tx(ctx, func(tx *gorm.DB) error {
-		events, err := s.core.PrepareDelete(ctx, tx, ref)
-		if err != nil {
-			return err
-		}
-		return events.Publish(ctx, tx)
-	})
-	if err != nil {
-		s.logger.Warn("Failed to send MCP artifact deletion events", "artifactUUID", artifactUUID, "error", err)
+// deleteMCPArtifactRows deletes a per-environment gateway artifact with its deployments and status rows, in tx.
+func deleteMCPArtifactRows(tx *gorm.DB, artifactUUID uuid.UUID, ouID string) error {
+	if err := tx.Where("artifact_uuid = ? AND ou_id = ?", artifactUUID, ouID).
+		Delete(&models.DeploymentStatusRecord{}).Error; err != nil {
+		return err
 	}
+	if err := tx.Where("artifact_uuid = ? AND ou_id = ?", artifactUUID, ouID).
+		Delete(&models.Deployment{}).Error; err != nil {
+		return err
+	}
+	return tx.Where("uuid = ? AND ou_id = ?", artifactUUID, ouID).Delete(&models.Artifact{}).Error
+}
+
+// prepareMCPArtifactDeletes builds the artifacts' delete events in tx, before their rows are deleted.
+func (s *MCPProxyService) prepareMCPArtifactDeletes(
+	ctx context.Context, tx *gorm.DB, ouID string, artifactUUIDs []uuid.UUID,
+) ([]reconcile.DeleteEvents, error) {
+	events := make([]reconcile.DeleteEvents, 0, len(artifactUUIDs))
+	for _, artifactUUID := range artifactUUIDs {
+		ref := models.ArtifactRef{OUID: ouID, ArtifactUUID: artifactUUID, Kind: models.KindMCPMapping}
+		artifactEvents, err := s.core.PrepareDelete(ctx, tx, ref)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, artifactEvents)
+	}
+	return events, nil
 }
 
 func (s *MCPProxyService) generateMCPProxyDeploymentYAML(proxy *models.MCPProxy, proxyHandle string, scopes []models.MCPProxyScope) (string, error) {

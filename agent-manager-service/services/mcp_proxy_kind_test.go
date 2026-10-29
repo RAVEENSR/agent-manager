@@ -170,6 +170,38 @@ func TestMCPPlacementAndDelete(t *testing.T) {
 	assert.Nil(t, f.mcpRow(t, gateway))
 }
 
+// Tearing an agent's MCP binding down writes its delete events last in the transaction that deletes its artifact.
+func TestAgentMCPBindingTeardownDeletesInTheDeletingTransaction(t *testing.T) {
+	f := newMCPFixture(t)
+	gateway := f.mapGateway(t, f.env)
+	require.NoError(t, f.deploy(t))
+	published := len(f.hub.published)
+	var artifactsSeen []int64
+	f.hub.onPublish = func() {
+		tx := f.hub.txs[len(f.hub.txs)-1]
+		require.NotNil(t, tx)
+		var count int64
+		require.NoError(t, tx.Raw(`SELECT count(*) FROM artifacts WHERE uuid = ?`, f.artifact).Scan(&count).Error)
+		artifactsSeen = append(artifactsSeen, count)
+	}
+	svc := &agentConfigurationService{db: db.GetDB(), mcpProxyService: f.svc, logger: slog.New(slog.DiscardHandler)}
+
+	svc.cleanupNewMCPMapping(context.Background(), &models.AgentConfiguration{},
+		&models.EnvAgentMCPMapping{EnvironmentUUID: f.env, ArtifactUUID: f.artifact}, "", f.sync.ouID, false)
+
+	deletedOn := map[string]bool{}
+	for _, evt := range f.hub.published[published:] {
+		assert.Equal(t, "mcpproxy.deleted", string(evt.EventType))
+		deletedOn[evt.GatewayID] = true
+	}
+	assert.True(t, deletedOn[gateway.String()], "the gateway it was placed on is told")
+	require.NotEmpty(t, artifactsSeen)
+	for _, seen := range artifactsSeen {
+		assert.Zero(t, seen, "the events are written after the artifact is deleted, in its transaction")
+	}
+	assert.Nil(t, f.mcpRow(t, gateway))
+}
+
 // invalidMCPRequest is a proxy whose one endpoint, bound to env, takes its API key from a cookie: it only fails
 // when rendered.
 func invalidMCPRequest(handle string, env uuid.UUID) *models.MCPProxyDTO {
