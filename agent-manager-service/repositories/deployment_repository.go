@@ -96,6 +96,8 @@ type DeploymentRepository interface {
 	// ever sent, and every active gateway of its org, which also covers an artifact whose rows are gone.
 	DeleteEventGateways(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error)
 	GetStatusRecord(ctx context.Context, placement models.Placement) (*models.DeploymentStatusRecord, error)
+	// StatusRecords are the artifact's status rows on every gateway, in gateway order.
+	StatusRecords(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]models.DeploymentStatusRecord, error)
 
 	// Gateway startup sync.
 	ListForGatewaySync(ctx context.Context, ouID, gatewayID string) ([]models.GatewaySyncRow, error)

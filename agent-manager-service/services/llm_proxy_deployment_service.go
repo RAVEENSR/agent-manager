@@ -297,7 +297,7 @@ func (s *LLMProxyDeploymentService) UndeployLLMProxyDeployment(ctx context.Conte
 		return nil, fmt.Errorf("failed to undeploy: %w", err)
 	}
 
-	deployment.Status = &row.Status
+	deployment.SetStatusRow(row)
 	deployment.UpdatedAt = &row.PerformedAt
 	slog.Info("LLMProxyDeploymentService.UndeployLLMProxyDeployment: undeploy started", "proxyID", proxyID, "deploymentID", deploymentID)
 	return deployment, nil
@@ -331,8 +331,7 @@ func (s *LLMProxyDeploymentService) RestoreLLMProxyDeployment(proxyID, deploymen
 	if err != nil {
 		return nil, fmt.Errorf("failed to get deployment status: %w", err)
 	}
-	if current != nil && current.DeploymentID != nil && *current.DeploymentID == deployment.DeploymentID &&
-		current.Status == models.DeploymentStatusDeployed {
+	if restoresItself(current, deployment.DeploymentID) {
 		return nil, utils.ErrDeploymentAlreadyDeployed
 	}
 
@@ -341,7 +340,7 @@ func (s *LLMProxyDeploymentService) RestoreLLMProxyDeployment(proxyID, deploymen
 		return nil, fmt.Errorf("failed to restore deployment: %w", err)
 	}
 
-	deployment.Status = &row.Status
+	deployment.SetStatusRow(row)
 	deployment.UpdatedAt = &row.PerformedAt
 	return deployment, nil
 }

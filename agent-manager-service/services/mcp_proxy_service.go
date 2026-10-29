@@ -381,8 +381,8 @@ func (s *MCPProxyService) Get(ctx context.Context, orgUUID, proxyID string) (*mo
 	dto := convertModelMCPProxyToSpec(proxy)
 	if dto != nil && s.deploymentRepo != nil {
 		// Deployments are keyed by each (endpoint, environment) artifact UUID (the proxy's
-		// and endpoint's own UUIDs are never deployed), so aggregate deployed gateways across
-		// those artifacts and report a per-(endpoint,environment) Deployed/Undeployed status.
+		// and endpoint's own UUIDs are never deployed), so aggregate placed gateways across
+		// those artifacts and report each (endpoint, environment) binding's status in MCP's words.
 		gatewaySet := map[string]struct{}{}
 		// Map (endpoint index, env UUID) -> artifact UUID for status lookup.
 		artifactByEndpointEnv := map[uuid.UUID]map[string]uuid.UUID{}
@@ -401,18 +401,19 @@ func (s *MCPProxyService) Get(ctx context.Context, orgUUID, proxyID string) (*mo
 				status := models.MCPDeploymentStatusUndeployed
 				artifactUUID := byEnv[envBinding.EnvironmentUUID]
 				if artifactUUID != uuid.Nil {
-					gatewayIDs, err := s.deploymentRepo.PlacedGateways(ctx, orgUUID, artifactUUID)
+					rows, err := s.deploymentRepo.StatusRecords(ctx, orgUUID, artifactUUID)
 					if err != nil {
-						s.logger.Warn("Failed to list deployed gateways for MCP proxy endpoint environment",
+						s.logger.Warn("Failed to read the deployment status of an MCP proxy endpoint environment",
 							"proxyID", proxy.UUID, "endpoint", endpointDTO.ID, "environment", envBinding.EnvironmentUUID, "ouID", orgUUID, "error", err)
-					} else if len(gatewayIDs) > 0 {
-						status = models.MCPDeploymentStatusDeployed
-						for _, gatewayID := range gatewayIDs {
+					} else if row := models.ShownStatusRecord(rows); row != nil {
+						status = models.MCPDeploymentStatusOf(models.UserStatusOf(*row))
+						// One gateway per (artifact, environment) is the invariant, so the placed
+						// row names the binding's gateway.
+						if row.StatusDesired == models.DeploymentStatusDeployed {
+							gatewayID := row.GatewayUUID.String()
 							gatewaySet[gatewayID] = struct{}{}
+							envBinding.GatewayID = &gatewayID
 						}
-						// Exactly one gateway per (artifact, environment) is the invariant, so
-						// ids[0] is deterministic.
-						envBinding.GatewayID = &gatewayIDs[0]
 					}
 				}
 				envBinding.DeploymentStatus = status

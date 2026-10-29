@@ -321,6 +321,18 @@ func (r *DeploymentRepo) gatewaysWhere(ctx context.Context, ouID string, artifac
 	return gatewayUUIDs, nil
 }
 
+func (r *DeploymentRepo) StatusRecords(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]models.DeploymentStatusRecord, error) {
+	var rows []models.DeploymentStatusRecord
+	err := r.db.WithContext(ctx).
+		Where("artifact_uuid = ? AND ou_id = ?", artifactUUID, ouID).
+		Order("gateway_uuid").
+		Find(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("failed to list the artifact's status rows: %w", err)
+	}
+	return rows, nil
+}
+
 // GetStatusRecord returns the placement's status row, or nil when there is none.
 func (r *DeploymentRepo) GetStatusRecord(ctx context.Context, p models.Placement) (*models.DeploymentStatusRecord, error) {
 	var row models.DeploymentStatusRecord

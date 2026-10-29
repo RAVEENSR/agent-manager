@@ -421,3 +421,38 @@ func TestDeleteRefusesThePlacedDeployment(t *testing.T) {
 		})
 	}
 }
+
+// Restoring the deployment the gateway is already deploying or serving is refused, as in api-platform. A restore
+// over any other status goes ahead, and so does one that cancels a redeploy still owed.
+func TestRestoreOfTheCurrentDeployment(t *testing.T) {
+	due := time.Now()
+	for name, tc := range map[string]struct {
+		row     models.DeploymentStatusRecord
+		refused bool
+	}{
+		"deploying":               {models.DeploymentStatusRecord{Status: models.DeploymentStatusDeploying}, true},
+		"deployed":                {models.DeploymentStatusRecord{Status: models.DeploymentStatusDeployed}, true},
+		"deployed, redeploy owed": {models.DeploymentStatusRecord{Status: models.DeploymentStatusDeployed, NextAttemptAt: &due}, false},
+		"failed":                  {models.DeploymentStatusRecord{Status: models.DeploymentStatusFailed}, false},
+		"undeploying":             {models.DeploymentStatusRecord{Status: models.DeploymentStatusUndeploying}, false},
+		"undeployed":              {models.DeploymentStatusRecord{Status: models.DeploymentStatusUndeployed}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			provider := &models.LLMProvider{UUID: uuid.New()}
+			f := newStatusPathFixture(t, provider.UUID)
+			f.row = tc.row
+			f.row.DeploymentID = &f.deployment.DeploymentID
+
+			_, err := f.providerService(provider).RestoreLLMProviderDeployment("provider-handle",
+				f.deployment.DeploymentID.String(), f.gateway.UUID.String(), "ou-1")
+
+			if tc.refused {
+				assert.ErrorIs(t, err, utils.ErrDeploymentAlreadyDeployed)
+				assert.Empty(t, f.repo.StartRestoreCalls())
+				return
+			}
+			require.NoError(t, err)
+			assert.Len(t, f.repo.StartRestoreCalls(), 1)
+		})
+	}
+}

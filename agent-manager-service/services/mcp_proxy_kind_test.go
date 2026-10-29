@@ -230,3 +230,34 @@ func TestMCPSaveThatCannotRenderCommitsNothing(t *testing.T) {
 		})
 	}
 }
+
+// A binding shows MCP's word for the derived status: a fresh deploy is Deploying until the gateway acks it, and the
+// binding names its placed gateway at once.
+func TestMCPBindingShowsDeployingUntilTheGatewayAcks(t *testing.T) {
+	f := newMCPFixture(t)
+	gateway := f.mapGateway(t, f.env)
+	binding := func() models.MCPEndpointEnvironmentDTO {
+		t.Helper()
+		dto, err := f.svc.Get(context.Background(), f.sync.ouID, proxyHandleOf(f.proxy))
+		require.NoError(t, err)
+		require.Len(t, dto.Endpoints, 1)
+		require.Len(t, dto.Endpoints[0].Environments, 1)
+		return dto.Endpoints[0].Environments[0]
+	}
+	assert.Equal(t, models.MCPDeploymentStatusUndeployed, binding().DeploymentStatus, "nothing placed yet")
+
+	require.NoError(t, f.deploy(t))
+
+	got := binding()
+	assert.Equal(t, models.MCPDeploymentStatusDeploying, got.DeploymentStatus)
+	require.NotNil(t, got.GatewayID)
+	assert.Equal(t, gateway.String(), *got.GatewayID)
+
+	row := f.mcpRow(t, gateway)
+	_, err := f.sync.repo.ApplyAck(context.Background(), gateway.String(), models.DeploymentAck{
+		DeploymentID: row.DeploymentID.String(), Action: models.DeploymentAckActionDeploy,
+		Status: models.DeploymentAckStatusSuccess,
+	}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, models.MCPDeploymentStatusDeployed, binding().DeploymentStatus)
+}

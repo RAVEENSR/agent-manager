@@ -123,7 +123,7 @@ func (c *llmProxyDeploymentController) DeployLLMProxy(w http.ResponseWriter, r *
 	log.Info("DeployLLMProxy: deployment created successfully", "ouID", ouID, "proxyID", proxyID,
 		"deploymentID", deployment.DeploymentID, "gatewayID", req.GatewayID)
 
-	utils.WriteSuccessResponse(w, http.StatusCreated, deployment)
+	utils.WriteSuccessResponse(w, http.StatusCreated, utils.ConvertModelToSpecLLMDeploymentResponse(deployment))
 }
 
 func (c *llmProxyDeploymentController) UndeployLLMProxyDeployment(w http.ResponseWriter, r *http.Request) {
@@ -177,7 +177,8 @@ func (c *llmProxyDeploymentController) UndeployLLMProxyDeployment(w http.Respons
 			return
 		case errors.Is(err, utils.ErrDeploymentNotActive):
 			log.Warn("UndeployLLMProxyDeployment: deployment not active", "ouID", ouID, "proxyID", proxyID, "deploymentID", deploymentID)
-			utils.WriteErrorResponse(w, http.StatusConflict, "No active deployment found for this LLM proxy on the gateway")
+			utils.WriteErrorResponse(w, http.StatusConflict, "No active deployment found for this LLM proxy on the gateway. "+
+				"If an earlier undeploy failed, redeploy or restore the deployment, then undeploy it again")
 			return
 		case errors.Is(err, utils.ErrGatewayIDMismatch):
 			log.Error("UndeployLLMProxyDeployment: gateway ID mismatch", "ouID", ouID, "proxyID", proxyID, "deploymentID", deploymentID, "gatewayID", gatewayID)
@@ -247,7 +248,7 @@ func (c *llmProxyDeploymentController) RestoreLLMProxyDeployment(w http.Response
 			return
 		case errors.Is(err, utils.ErrDeploymentAlreadyDeployed):
 			log.Warn("RestoreLLMProxyDeployment: deployment already deployed", "ouID", ouID, "proxyID", proxyID, "deploymentID", deploymentID)
-			utils.WriteErrorResponse(w, http.StatusConflict, "Cannot restore currently deployed deployment")
+			utils.WriteErrorResponse(w, http.StatusConflict, "Cannot restore the deployment the gateway is already deploying or serving")
 			return
 		case errors.Is(err, utils.ErrGatewayIDMismatch):
 			log.Error("RestoreLLMProxyDeployment: gateway ID mismatch", "ouID", ouID, "proxyID", proxyID, "deploymentID", deploymentID, "gatewayID", gatewayID)
@@ -262,7 +263,7 @@ func (c *llmProxyDeploymentController) RestoreLLMProxyDeployment(w http.Response
 
 	log.Info("RestoreLLMProxyDeployment: restored successfully", "ouID", ouID, "proxyID", proxyID, "deploymentID", deploymentID)
 
-	utils.WriteSuccessResponse(w, http.StatusOK, deployment)
+	utils.WriteSuccessResponse(w, http.StatusOK, utils.ConvertModelToSpecLLMDeploymentResponse(deployment))
 }
 
 func (c *llmProxyDeploymentController) DeleteLLMProxyDeployment(w http.ResponseWriter, r *http.Request) {
@@ -360,7 +361,7 @@ func (c *llmProxyDeploymentController) GetLLMProxyDeployment(w http.ResponseWrit
 
 	log.Info("GetLLMProxyDeployment: retrieved successfully", "ouID", ouID, "proxyID", proxyID, "deploymentID", deploymentID)
 
-	utils.WriteSuccessResponse(w, http.StatusOK, deployment)
+	utils.WriteSuccessResponse(w, http.StatusOK, utils.ConvertModelToSpecLLMDeploymentResponse(deployment))
 }
 
 func (c *llmProxyDeploymentController) GetLLMProxyDeployments(w http.ResponseWriter, r *http.Request) {
@@ -416,5 +417,5 @@ func (c *llmProxyDeploymentController) GetLLMProxyDeployments(w http.ResponseWri
 
 	log.Info("GetLLMProxyDeployments: retrieved successfully", "ouID", ouID, "proxyID", proxyID, "count", len(deployments))
 
-	utils.WriteSuccessResponse(w, http.StatusOK, deployments)
+	utils.WriteSuccessResponse(w, http.StatusOK, utils.ConvertModelToSpecLLMDeploymentResponses(deployments))
 }

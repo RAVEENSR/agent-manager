@@ -263,7 +263,7 @@ func (s *LLMProviderDeploymentService) UndeployLLMProviderDeployment(providerID,
 		return nil, fmt.Errorf("failed to undeploy: %w", err)
 	}
 
-	deployment.Status = &row.Status
+	deployment.SetStatusRow(row)
 	deployment.UpdatedAt = &row.PerformedAt
 	slog.Info("LLMProviderDeploymentService.UndeployLLMProviderDeployment: undeploy started", "providerID", providerID, "deploymentID", deploymentID)
 	return deployment, nil
@@ -337,8 +337,7 @@ func (s *LLMProviderDeploymentService) RestoreLLMProviderDeployment(providerID, 
 	if err != nil {
 		return nil, fmt.Errorf("failed to get deployment status: %w", err)
 	}
-	if current != nil && current.DeploymentID != nil && *current.DeploymentID == deployment.DeploymentID &&
-		current.Status == models.DeploymentStatusDeployed {
+	if restoresItself(current, deployment.DeploymentID) {
 		return nil, utils.ErrDeploymentAlreadyDeployed
 	}
 
@@ -347,9 +346,19 @@ func (s *LLMProviderDeploymentService) RestoreLLMProviderDeployment(providerID, 
 		return nil, fmt.Errorf("failed to restore deployment: %w", err)
 	}
 
-	deployment.Status = &row.Status
+	deployment.SetStatusRow(row)
 	deployment.UpdatedAt = &row.PerformedAt
 	return deployment, nil
+}
+
+// restoresItself reports whether restoring deploymentID would redo what the gateway is already deploying or serving:
+// the row points at it, DEPLOYING or DEPLOYED, with no redeploy owed (as api-platform refuses). A restore over any
+// other status, or one that cancels an owed redeploy, goes ahead.
+func restoresItself(current *models.DeploymentStatusRecord, deploymentID uuid.UUID) bool {
+	if current == nil || current.DeploymentID == nil || *current.DeploymentID != deploymentID || current.NextAttemptAt != nil {
+		return false
+	}
+	return current.Status == models.DeploymentStatusDeployed || current.Status == models.DeploymentStatusDeploying
 }
 
 // restorableDeployment is the artifact's deployment deploymentID; ErrDeploymentNotFound when the id isn't one.

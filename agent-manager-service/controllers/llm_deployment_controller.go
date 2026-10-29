@@ -123,7 +123,7 @@ func (c *llmDeploymentController) DeployLLMProvider(w http.ResponseWriter, r *ht
 	log.Info("DeployLLMProvider: deployment created successfully", "ouID", ouID, "providerID", providerID,
 		"deploymentID", deployment.DeploymentID, "gatewayID", req.GatewayID)
 
-	utils.WriteSuccessResponse(w, http.StatusCreated, deployment)
+	utils.WriteSuccessResponse(w, http.StatusCreated, utils.ConvertModelToSpecLLMDeploymentResponse(deployment))
 }
 
 func (c *llmDeploymentController) UndeployLLMProviderDeployment(w http.ResponseWriter, r *http.Request) {
@@ -177,7 +177,8 @@ func (c *llmDeploymentController) UndeployLLMProviderDeployment(w http.ResponseW
 			return
 		case errors.Is(err, utils.ErrDeploymentNotActive):
 			log.Warn("UndeployLLMProviderDeployment: deployment not active", "ouID", ouID, "providerID", providerID, "deploymentID", deploymentID)
-			utils.WriteErrorResponse(w, http.StatusConflict, "No active deployment found for this LLM provider on the gateway")
+			utils.WriteErrorResponse(w, http.StatusConflict, "No active deployment found for this LLM provider on the gateway. "+
+				"If an earlier undeploy failed, redeploy or restore the deployment, then undeploy it again")
 			return
 		case errors.Is(err, utils.ErrGatewayIDMismatch):
 			log.Error("UndeployLLMProviderDeployment: gateway ID mismatch", "ouID", ouID, "providerID", providerID, "deploymentID", deploymentID, "gatewayID", gatewayID)
@@ -247,7 +248,7 @@ func (c *llmDeploymentController) RestoreLLMProviderDeployment(w http.ResponseWr
 			return
 		case errors.Is(err, utils.ErrDeploymentAlreadyDeployed):
 			log.Warn("RestoreLLMProviderDeployment: deployment already deployed", "ouID", ouID, "providerID", providerID, "deploymentID", deploymentID)
-			utils.WriteErrorResponse(w, http.StatusConflict, "Cannot restore currently deployed deployment")
+			utils.WriteErrorResponse(w, http.StatusConflict, "Cannot restore the deployment the gateway is already deploying or serving")
 			return
 		case errors.Is(err, utils.ErrGatewayIDMismatch):
 			log.Error("RestoreLLMProviderDeployment: gateway ID mismatch", "ouID", ouID, "providerID", providerID, "deploymentID", deploymentID, "gatewayID", gatewayID)
@@ -262,7 +263,7 @@ func (c *llmDeploymentController) RestoreLLMProviderDeployment(w http.ResponseWr
 
 	log.Info("RestoreLLMProviderDeployment: restored successfully", "ouID", ouID, "providerID", providerID, "deploymentID", deploymentID)
 
-	utils.WriteSuccessResponse(w, http.StatusOK, deployment)
+	utils.WriteSuccessResponse(w, http.StatusOK, utils.ConvertModelToSpecLLMDeploymentResponse(deployment))
 }
 
 func (c *llmDeploymentController) DeleteLLMProviderDeployment(w http.ResponseWriter, r *http.Request) {
@@ -360,7 +361,7 @@ func (c *llmDeploymentController) GetLLMProviderDeployment(w http.ResponseWriter
 
 	log.Info("GetLLMProviderDeployment: retrieved successfully", "ouID", ouID, "providerID", providerID, "deploymentID", deploymentID)
 
-	utils.WriteSuccessResponse(w, http.StatusOK, deployment)
+	utils.WriteSuccessResponse(w, http.StatusOK, utils.ConvertModelToSpecLLMDeploymentResponse(deployment))
 }
 
 func (c *llmDeploymentController) GetLLMProviderDeployments(w http.ResponseWriter, r *http.Request) {
@@ -416,5 +417,5 @@ func (c *llmDeploymentController) GetLLMProviderDeployments(w http.ResponseWrite
 
 	log.Info("GetLLMProviderDeployments: retrieved successfully", "ouID", ouID, "providerID", providerID, "count", len(deployments))
 
-	utils.WriteSuccessResponse(w, http.StatusOK, deployments)
+	utils.WriteSuccessResponse(w, http.StatusOK, utils.ConvertModelToSpecLLMDeploymentResponses(deployments))
 }

@@ -166,6 +166,21 @@ func UserStatusOf(r DeploymentStatusRecord) UserStatus {
 	}
 }
 
+// ShownStatusRecord is the row a reader of an environment-addressed artifact shows: the one heading for DEPLOYED
+// or owed a deploy (an artifact is placed on one gateway of its environment), else the first; nil when there is
+// none, which means no gateway in the environment took the artifact.
+func ShownStatusRecord(rows []DeploymentStatusRecord) *DeploymentStatusRecord {
+	for i := range rows {
+		if rows[i].StatusDesired == DeploymentStatusDeployed || rows[i].NextAttemptAt != nil {
+			return &rows[i]
+		}
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	return &rows[0]
+}
+
 // IsDeploymentStatusFilter reports whether status is one a deployments list can be filtered by: a stored status, or
 // ARCHIVED.
 func IsDeploymentStatusFilter(status string) bool {
