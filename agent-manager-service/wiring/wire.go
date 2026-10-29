@@ -511,9 +511,7 @@ func ProvideA2AProxyHooks(svc services.A2AProxyService) services.A2AProxyHooks {
 
 // ProvideTxRunner opens database transactions for the services that hold no *gorm.DB.
 func ProvideTxRunner(db *gorm.DB) services.TxRunner {
-	return func(ctx context.Context, fn func(tx *gorm.DB) error) error {
-		return db.WithContext(ctx).Transaction(fn)
-	}
+	return services.NewTxRunner(db)
 }
 
 func ProvidePlatformAgentExposureRepository(db *gorm.DB) repositories.PlatformAgentExposureRepository {

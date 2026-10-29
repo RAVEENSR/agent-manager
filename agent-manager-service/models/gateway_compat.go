@@ -61,7 +61,8 @@ type LLMProviderDeploymentEvent struct {
 	Status         string    `json:"status"`
 }
 
-// LLMProviderUndeploymentEvent represents an LLM provider undeployment event
+// LLMProviderUndeploymentEvent represents an LLM provider undeployment event. DeploymentID is always empty: the
+// gateway then undeploys whatever version of the provider it holds.
 type LLMProviderUndeploymentEvent struct {
 	ProviderID     string    `json:"providerId"`
 	DeploymentID   string    `json:"deploymentId"`
@@ -72,13 +73,14 @@ type LLMProviderUndeploymentEvent struct {
 
 // LLMProxyDeploymentEvent represents an LLM proxy deployment event
 type LLMProxyDeploymentEvent struct {
-	ProxyID        string `json:"proxyId"`
-	DeploymentID   string `json:"deploymentId"`
-	Vhost          string `json:"vhost"`
-	Environment    string `json:"environment"`
-	GatewayID      string `json:"gatewayId"`
-	OrganizationID string `json:"organizationId"`
-	Status         string `json:"status"`
+	ProxyID        string    `json:"proxyId"`
+	DeploymentID   string    `json:"deploymentId"`
+	PerformedAt    time.Time `json:"performedAt"`
+	Vhost          string    `json:"vhost"`
+	Environment    string    `json:"environment"`
+	GatewayID      string    `json:"gatewayId"`
+	OrganizationID string    `json:"organizationId"`
+	Status         string    `json:"status"`
 }
 
 // MCPProxyDeploymentEvent represents an MCP proxy deployment event.
@@ -113,13 +115,16 @@ type LLMProxyDeletionEvent struct {
 	ProxyID string `json:"proxyId"`
 }
 
-// LLMProxyUndeploymentEvent represents an LLM proxy undeployment event
+// LLMProxyUndeploymentEvent represents an LLM proxy undeployment event. DeploymentID is always empty: the gateway
+// then undeploys whatever version of the proxy it holds.
 type LLMProxyUndeploymentEvent struct {
-	ProxyID        string `json:"proxyId"`
-	Vhost          string `json:"vhost"`
-	Environment    string `json:"environment"`
-	GatewayID      string `json:"gatewayId"`
-	OrganizationID string `json:"organizationId"`
+	ProxyID        string    `json:"proxyId"`
+	DeploymentID   string    `json:"deploymentId"`
+	PerformedAt    time.Time `json:"performedAt"`
+	Vhost          string    `json:"vhost"`
+	Environment    string    `json:"environment"`
+	GatewayID      string    `json:"gatewayId"`
+	OrganizationID string    `json:"organizationId"`
 }
 
 // ApplicationAPIKeyMapping represents a single API key bound to an application.
@@ -151,7 +156,8 @@ type AgentDeploymentEvent struct {
 }
 
 // AgentUndeploymentEvent represents an A2A Agent undeployment event, matching the gateway's
-// AgentUndeployedEventPayload. The gateway keeps an undeployed Agent's API keys.
+// AgentUndeployedEventPayload. The gateway keeps an undeployed Agent's API keys. DeploymentID is always empty: the
+// gateway then undeploys whatever version of the Agent it holds.
 type AgentUndeploymentEvent struct {
 	AgentID      string    `json:"proxyId"`
 	DeploymentID string    `json:"deploymentId"`

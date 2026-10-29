@@ -26,8 +26,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories/repomocks"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
@@ -278,12 +280,19 @@ func TestDelete_CompletesAfterCancellationFollowingSuccessfulUndeploy(t *testing
 		GetWithStateFunc: func(string, string, string) (*models.Deployment, error) {
 			return deployment, nil
 		},
-		SetCurrentFunc: func(string, string, string, string, models.DeploymentStatus) (time.Time, error) {
+		BeginUndeployFunc: func(context.Context, *gorm.DB, models.Placement) (bool, error) {
 			cancel()
-			return time.Now(), nil
+			return true, nil
+		},
+		GetStatusRecordFunc: func(context.Context, models.Placement) (*models.DeploymentStatusRecord, error) {
+			return &models.DeploymentStatusRecord{
+				Status: models.DeploymentStatusUndeploying, PerformedAt: models.NewPerformedAt(time.Now()),
+			}, nil
 		},
 	}
+	deploymentRepo.WithTxFunc = func(*gorm.DB) repositories.DeploymentRepository { return deploymentRepo }
 	deploymentSvc := &LLMProviderDeploymentService{
+		tx:                   sentinelTx,
 		providerRepo:         providerRepo,
 		deploymentRepo:       deploymentRepo,
 		gatewayEventsService: NewGatewayEventsService(&stubEventHub{}),

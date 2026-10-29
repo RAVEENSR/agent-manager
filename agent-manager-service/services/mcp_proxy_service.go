@@ -72,6 +72,7 @@ const (
 // MCPProxyService handles MCP proxy operations.
 type MCPProxyService struct {
 	db                     *gorm.DB
+	tx                     TxRunner
 	repo                   repositories.MCPProxyRepository
 	endpointRepo           repositories.MCPProxyEndpointRepository
 	deploymentRepo         repositories.DeploymentRepository
@@ -110,6 +111,7 @@ func NewMCPProxyService(
 ) *MCPProxyService {
 	return &MCPProxyService{
 		db:                   db,
+		tx:                   NewTxRunner(db),
 		repo:                 repo,
 		endpointRepo:         endpointRepo,
 		deploymentRepo:       deploymentRepo,

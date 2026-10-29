@@ -19,9 +19,11 @@ package services
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/config"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
@@ -48,6 +50,14 @@ import (
 //   - sites 4 and 6 (resolveGatewayForMCPArtifact, agent_configuration_service.go): the
 //     unexported wrapper method, driven once per call site (update at :2288, create at
 //     :1342) since both are the identical resolver reached from different callers.
+
+// startDeployStub records nothing and marks the deployment DEPLOYING, as StartDeploy does.
+func startDeployStub(_ context.Context, _ *gorm.DB, _ models.Placement, deployment *models.Deployment) error {
+	deploying := models.DeploymentStatusDeploying
+	performedAt := models.NewPerformedAt(time.Now())
+	deployment.Status, deployment.UpdatedAt = &deploying, &performedAt
+	return nil
+}
 
 func TestAnchoring_MCPProxyUpdate(t *testing.T) {
 	env := uuid.New()
@@ -87,8 +97,9 @@ func TestAnchoring_MCPProxyUpdate(t *testing.T) {
 				GetDeployedGatewaysByProviderFunc: func(uuid.UUID, string) ([]string, error) {
 					return []string{both.UUID.String()}, nil
 				},
-				CreateWithLimitEnforcementFunc: func(*models.Deployment, int) error { return nil },
+				StartDeployFunc: startDeployStub,
 			},
+			tx:                   sentinelTx,
 			gatewayEventsService: &GatewayEventsService{hub: hub},
 			logger:               discardLogger(),
 		}
@@ -102,7 +113,7 @@ func TestAnchoring_MCPProxyUpdate(t *testing.T) {
 	})
 
 	t.Run("ambiguity fires only with no deployment", func(t *testing.T) {
-		// No gatewayEventsService/CreateWithLimitEnforcementFunc stubbed: if resolution
+		// No gatewayEventsService/StartDeployFunc stubbed: if resolution
 		// wrongly proceeded to deploy, the unstubbed moq call would panic.
 		svc := &MCPProxyService{
 			gatewayRepo:       gatewayFixtureRepo(t, env.String(), []*models.Gateway{both, egress}),
@@ -131,8 +142,9 @@ func TestAnchoring_MCPProxyUpdate(t *testing.T) {
 				GetDeployedGatewaysByProviderFunc: func(uuid.UUID, string) ([]string, error) {
 					return nil, nil
 				},
-				CreateWithLimitEnforcementFunc: func(*models.Deployment, int) error { return nil },
+				StartDeployFunc: startDeployStub,
 			},
+			tx:                   sentinelTx,
 			gatewayEventsService: &GatewayEventsService{hub: hub},
 			logger:               discardLogger(),
 		}

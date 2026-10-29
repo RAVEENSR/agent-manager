@@ -1021,13 +1021,17 @@ func (s *LLMProviderService) UpdateAndSync(ctx context.Context, providerID, ouID
 		} else {
 			attemptedDeployments++
 			slog.Info("LLMProviderService.UpdateAndSync: updating the current deployment", "providerID", providerID, "gatewayID", gatewayID)
-			currentDeployment, err := deploymentService.deploymentRepo.GetCurrentByGateway(providerID, gatewayID, ouID)
+			currentDeployment, err := deploymentService.deploymentRepo.GetPullable(ctx, ouID, providerUUID, gatewayID)
+			if err == nil && currentDeployment == nil {
+				err = utils.ErrDeploymentNotActive
+			}
 			if err != nil {
 				deploymentResults = append(deploymentResults, DeploymentResult{
 					GatewayID: gatewayID,
 					Success:   false,
 					Error:     err.Error(),
 				})
+				continue
 			}
 
 			deployReq := &models.DeployAPIRequest{

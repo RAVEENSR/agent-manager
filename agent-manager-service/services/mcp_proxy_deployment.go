@@ -93,41 +93,36 @@ type MCPProxyUpstream struct {
 // agent-configuration flow for agent-scoped mapping artifacts; callers pass the already
 // flattened single-environment artifact to deploy.
 func (s *MCPProxyService) deployMCPProxyToGateway(ctx context.Context, proxy *models.MCPProxy, ouID string, gateway *models.Gateway, proxyHandle string, scopes []models.MCPProxyScope) error {
-	_ = ctx
 	deploymentYAML, err := s.generateMCPProxyDeploymentYAML(proxy, proxyHandle, scopes)
 	if err != nil {
 		return fmt.Errorf("failed to generate deployment YAML: %w", err)
 	}
 
-	deploymentID := uuid.New()
-	deployed := models.DeploymentStatusDeployed
 	deployment := &models.Deployment{
-		DeploymentID: deploymentID,
+		DeploymentID: uuid.New(),
 		Name:         deploymentName(proxy),
-		ArtifactUUID: proxy.UUID,
-		OUID:         ouID,
-		GatewayUUID:  gateway.UUID,
 		Content:      []byte(deploymentYAML),
-		Status:       &deployed,
 	}
-
-	hardLimit := maxDeploymentsPerAPI + deploymentLimitBuffer
-	if err := s.deploymentRepo.CreateWithLimitEnforcement(deployment, hardLimit); err != nil {
-		return fmt.Errorf("failed to create deployment: %w", err)
+	placement := models.Placement{
+		ArtifactRef: models.ArtifactRef{
+			OUID: ouID, ArtifactUUID: proxy.UUID, Kind: models.KindMCPMapping, Handle: proxy.Handle,
+		},
+		GatewayUUID: gateway.UUID,
 	}
-
-	performedAt := time.Now().Truncate(time.Millisecond)
-	event := &models.MCPProxyDeploymentEvent{
-		ProxyID:      proxy.UUID.String(),
-		DeploymentID: deployment.DeploymentID.String(),
-		PerformedAt:  performedAt,
-	}
-	if err := s.gatewayEventsService.BroadcastMCPProxyDeploymentEvent(gateway.UUID.String(), event); err != nil {
-		s.logger.Warn("Failed to broadcast MCP proxy deployment event",
-			"proxyID", proxy.UUID, "deploymentID", deployment.DeploymentID, "gatewayID", gateway.UUID, "error", err)
-		return fmt.Errorf("failed to broadcast MCP proxy deployment event for deployment %s: %w", deployment.DeploymentID, err)
-	}
-	return nil
+	return s.tx(ctx, func(tx *gorm.DB) error {
+		if err := s.deploymentRepo.StartDeploy(ctx, tx, placement, deployment); err != nil {
+			return err
+		}
+		event := &models.MCPProxyDeploymentEvent{
+			ProxyID:      proxy.UUID.String(),
+			DeploymentID: deployment.DeploymentID.String(),
+			PerformedAt:  *deployment.UpdatedAt,
+		}
+		if err := s.gatewayEventsService.BroadcastMCPProxyDeploymentEvent(ctx, tx, gateway.UUID.String(), event); err != nil {
+			return fmt.Errorf("failed to write MCP proxy deployment event for deployment %s: %w", deployment.DeploymentID, err)
+		}
+		return nil
+	})
 }
 
 // mcpProxyEnvArtifactHandle builds the stable, org-unique handle/name for the single

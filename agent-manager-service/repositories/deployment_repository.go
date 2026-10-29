@@ -66,6 +66,22 @@ type DeploymentRepository interface {
 	IsProviderDeployedToGateway(artifactUUID uuid.UUID, gatewayUUID uuid.UUID, orgUUID string) (bool, error)
 	GetByArtifactAndGateway(artifactUUID, gatewayUUID, orgUUID string) (*models.Deployment, error)
 
+	// Transition starters: StartDeploy, StartRestore and BeginUndeploy are the only writers that reset the
+	// render queue. tx is the caller's transaction; the gateway event goes last in it.
+	StartDeploy(ctx context.Context, tx *gorm.DB, placement models.Placement, deployment *models.Deployment) error
+	StartRestore(ctx context.Context, tx *gorm.DB, placement models.Placement, deploymentID uuid.UUID) error
+	BeginUndeploy(ctx context.Context, tx *gorm.DB, placement models.Placement) (sendEvent bool, err error)
+
+	// Settling a transition; these never touch the render queue.
+	ApplyAck(ctx context.Context, gatewayID string, ack models.DeploymentAck, afterLive AfterLiveFunc) (applied bool, err error)
+	FailStaleTransitional(ctx context.Context, olderThan time.Time) (int64, error)
+
+	// Readers.
+	GetPullable(ctx context.Context, ouID string, artifactUUID uuid.UUID, gatewayID string) (*models.Deployment, error)
+	PlacedGateways(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error)
+	LiveGateways(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error)
+	GetStatusRecord(ctx context.Context, placement models.Placement) (*models.DeploymentStatusRecord, error)
+
 	// DeleteForArtifact removes every deployment of the artifact; their deployment_status rows cascade.
 	DeleteForArtifact(ctx context.Context, artifactUUID uuid.UUID, orgUUID string) error
 	// WithTx returns the repository bound to tx.
@@ -88,7 +104,9 @@ func NewDeploymentRepo(db *gorm.DB) DeploymentRepository {
 // the status and the desired status.
 var legacyStatusColumns = []string{"deployment_id", "status", "status_desired", "performed_at", "updated_at"}
 
-// CreateWithLimitEnforcement atomically creates a deployment with hard limit enforcement
+// CreateWithLimitEnforcement records an immutable deployment, first pruning the oldest archived deployments of the
+// artifact on the gateway once it has hardLimit of them. It writes no status: StartDeploy points the status row at
+// the new deployment.
 func (r *DeploymentRepo) CreateWithLimitEnforcement(deployment *models.Deployment, hardLimit int) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		// Generate UUID for deployment if not already set
@@ -96,15 +114,6 @@ func (r *DeploymentRepo) CreateWithLimitEnforcement(deployment *models.Deploymen
 			deployment.DeploymentID = uuid.New()
 		}
 		deployment.CreatedAt = time.Now()
-
-		// Status must be provided and should be DEPLOYED for new deployments
-		if deployment.Status == nil {
-			deployed := models.DeploymentStatusDeployed
-			deployment.Status = &deployed
-		}
-
-		updatedAt := time.Now()
-		deployment.UpdatedAt = &updatedAt
 
 		// Count total deployments for this artifact+Gateway
 		var count int64
@@ -141,27 +150,7 @@ func (r *DeploymentRepo) CreateWithLimitEnforcement(deployment *models.Deploymen
 			}
 		}
 
-		// Insert new deployment
-		if err := tx.Create(deployment).Error; err != nil {
-			return err
-		}
-
-		// Insert or update deployment status (UPSERT)
-		deploymentStatus := &models.DeploymentStatusRecord{
-			ArtifactUUID:  deployment.ArtifactUUID,
-			OUID:          deployment.OUID,
-			GatewayUUID:   deployment.GatewayUUID,
-			DeploymentID:  &deployment.DeploymentID,
-			Status:        *deployment.Status,
-			StatusDesired: *deployment.Status,
-			PerformedAt:   models.NewPerformedAt(updatedAt),
-			UpdatedAt:     *deployment.UpdatedAt,
-		}
-
-		return tx.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "artifact_uuid"}, {Name: "ou_id"}, {Name: "gateway_uuid"}},
-			DoUpdates: clause.AssignmentColumns(legacyStatusColumns),
-		}).Create(deploymentStatus).Error
+		return tx.Create(deployment).Error
 	})
 }
 
@@ -364,16 +353,8 @@ func (r *DeploymentRepo) GetWithStateCtx(ctx context.Context, deploymentID, arti
 
 // GetDeploymentsWithState retrieves deployments with their lifecycle states
 func (r *DeploymentRepo) GetDeploymentsWithState(artifactUUID, orgUUID string, gatewayID *string, status *string, maxPerAPIGW int) ([]*models.Deployment, error) {
-	// Validation Logic
-	if status != nil {
-		validStatuses := map[string]bool{
-			string(models.DeploymentStatusDeployed):   true,
-			string(models.DeploymentStatusUndeployed): true,
-			string(models.DeploymentStatusArchived):   true,
-		}
-		if !validStatuses[*status] {
-			return nil, fmt.Errorf("invalid deployment status: %s", *status)
-		}
+	if status != nil && !models.IsDeploymentStatusFilter(*status) {
+		return nil, fmt.Errorf("invalid deployment status: %s", *status)
 	}
 
 	// Build query with CTE for ranking

@@ -47,11 +47,18 @@ func seedAgentDeployment(t *testing.T) (artifactUUID uuid.UUID, ouID string) {
 		UUID: artifactUUID, Handle: "proj/agent/" + artifactUUID.String(), Name: "agent-" + artifactUUID.String()[:8],
 		Version: "v1.0", Kind: models.KindAgent, OUID: ouID,
 	}))
-	deployed := models.DeploymentStatusDeployed
-	require.NoError(t, NewDeploymentRepo(gdb).CreateWithLimitEnforcement(&models.Deployment{
-		Name: "agent-deployment", ArtifactUUID: artifactUUID, OUID: ouID, GatewayUUID: gatewayID,
-		Content: []byte("kind: Agent\n"), Status: &deployed,
-	}, 10))
+	placement := models.Placement{
+		ArtifactRef: models.ArtifactRef{OUID: ouID, ArtifactUUID: artifactUUID, Kind: models.KindAgent},
+		GatewayUUID: gatewayID,
+	}
+	deployment := &models.Deployment{Name: "agent-deployment", Content: []byte("kind: Agent\n")}
+	repo := NewDeploymentRepo(gdb)
+	require.NoError(t, repo.StartDeploy(context.Background(), nil, placement, deployment))
+	_, err := repo.ApplyAck(context.Background(), gatewayID.String(), models.DeploymentAck{
+		DeploymentID: deployment.DeploymentID.String(), Action: models.DeploymentAckActionDeploy,
+		Status: models.DeploymentAckStatusSuccess,
+	}, nil)
+	require.NoError(t, err)
 	t.Cleanup(func() {
 		gdb.Exec(`DELETE FROM artifacts WHERE uuid = ?`, artifactUUID)
 		gdb.Exec(`DELETE FROM gateways WHERE uuid = ?`, gatewayID)

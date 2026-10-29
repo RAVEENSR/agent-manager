@@ -97,3 +97,41 @@ func NewPerformedAt(t time.Time) time.Time {
 	}
 	return t.UTC().Truncate(time.Millisecond)
 }
+
+// UserStatus is what a user is shown for one artifact on one gateway.
+type UserStatus struct {
+	Status DeploymentStatus
+	Reason string
+}
+
+// UserStatusOf derives the shown status from a row; it is the only place that does. A deploy that is owed shows
+// DEPLOYING; a redeploy that was given up keeps the gateway's status with the reason it didn't happen. PENDING is
+// never shown.
+func UserStatusOf(r DeploymentStatusRecord) UserStatus {
+	redeployOwed := r.NextAttemptAt != nil
+	redeployGivenUp := !redeployOwed && r.RenderReason != ""
+	switch {
+	case redeployOwed:
+		return UserStatus{Status: DeploymentStatusDeploying, Reason: r.RenderReason}
+	case redeployGivenUp && r.Status == DeploymentStatusPending:
+		return UserStatus{Status: DeploymentStatusFailed, Reason: r.RenderReason}
+	case redeployGivenUp:
+		return UserStatus{Status: r.Status, Reason: r.RenderReason}
+	case r.Status == DeploymentStatusPending:
+		return UserStatus{Status: DeploymentStatusDeploying, Reason: r.StatusReason}
+	default:
+		return UserStatus{Status: r.Status, Reason: r.StatusReason}
+	}
+}
+
+// IsDeploymentStatusFilter reports whether status is one a deployments list can be filtered by: a stored status, or
+// ARCHIVED.
+func IsDeploymentStatusFilter(status string) bool {
+	switch DeploymentStatus(status) {
+	case DeploymentStatusPending, DeploymentStatusDeploying, DeploymentStatusDeployed, DeploymentStatusUndeploying,
+		DeploymentStatusUndeployed, DeploymentStatusFailed, DeploymentStatusArchived:
+		return true
+	default:
+		return false
+	}
+}

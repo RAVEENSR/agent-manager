@@ -91,8 +91,17 @@ type GatewayMessage struct {
 	Payload json.RawMessage `json:"payload"`
 }
 
-// DeploymentAckPayload represents the payload of a deployment acknowledgment from the gateway
-type DeploymentAckPayload struct {
+// Deployment ack actions and outcomes, as the gateway sends them.
+const (
+	DeploymentAckActionDeploy   = "deploy"
+	DeploymentAckActionUndeploy = "undeploy"
+	DeploymentAckStatusSuccess  = "success"
+	DeploymentAckStatusFailed   = "failed"
+)
+
+// DeploymentAck is the payload of a deployment acknowledgment from the gateway. The gateway echoes the event's
+// deploymentId, so an undeploy ack carries an empty one.
+type DeploymentAck struct {
 	DeploymentID string    `json:"deploymentId"`
 	ArtifactID   string    `json:"artifactId"`
 	ResourceType string    `json:"resourceType"` // "api", "llmprovider", "llmproxy", "mcpproxy", "agentproxy", "Agent"

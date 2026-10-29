@@ -57,3 +57,59 @@ func TestDeploymentStatusValues(t *testing.T) {
 func TestPlatformAgentExposureTable(t *testing.T) {
 	assert.Equal(t, "platform_agent_exposures", PlatformAgentExposure{}.TableName())
 }
+
+// UserStatusOf is the design's table of what a user is shown for each row shape.
+func TestUserStatusOf(t *testing.T) {
+	due := time.Now()
+	row := func(status DeploymentStatus, nextAttemptAt *time.Time, renderReason, statusReason string) DeploymentStatusRecord {
+		return DeploymentStatusRecord{
+			Status: status, NextAttemptAt: nextAttemptAt, RenderReason: renderReason, StatusReason: statusReason,
+		}
+	}
+	for name, tc := range map[string]struct {
+		row  DeploymentStatusRecord
+		want UserStatus
+	}{
+		"pending, queue due": {
+			row(DeploymentStatusPending, &due, "waiting for the agent's endpoint", ""),
+			UserStatus{DeploymentStatusDeploying, "waiting for the agent's endpoint"},
+		},
+		"pending, queue given up": {
+			row(DeploymentStatusPending, nil, "render failed", ""),
+			UserStatus{DeploymentStatusFailed, "render failed"},
+		},
+		"deployed, a redeploy is owed": {
+			row(DeploymentStatusDeployed, &due, "waiting for the agent's endpoint", ""),
+			UserStatus{DeploymentStatusDeploying, "waiting for the agent's endpoint"},
+		},
+		"failed, a redeploy is owed": {
+			row(DeploymentStatusFailed, &due, "", "GATEWAY_PROCESSING_ERROR"),
+			UserStatus{DeploymentStatusDeploying, ""},
+		},
+		"deployed, the redeploy was given up": {
+			row(DeploymentStatusDeployed, nil, "render failed", ""),
+			UserStatus{DeploymentStatusDeployed, "render failed"},
+		},
+		"failed by the gateway": {
+			row(DeploymentStatusFailed, nil, "", "GATEWAY_PROCESSING_ERROR"),
+			UserStatus{DeploymentStatusFailed, "GATEWAY_PROCESSING_ERROR"},
+		},
+		"timed out": {
+			row(DeploymentStatusFailed, nil, "", "DEPLOYMENT_TIMEOUT"),
+			UserStatus{DeploymentStatusFailed, "DEPLOYMENT_TIMEOUT"},
+		},
+		"deploying": {row(DeploymentStatusDeploying, nil, "", ""), UserStatus{DeploymentStatusDeploying, ""}},
+		"deployed":  {row(DeploymentStatusDeployed, nil, "", ""), UserStatus{DeploymentStatusDeployed, ""}},
+		"undeploying": {
+			row(DeploymentStatusUndeploying, nil, "", ""), UserStatus{DeploymentStatusUndeploying, ""},
+		},
+		"undeployed": {row(DeploymentStatusUndeployed, nil, "", ""), UserStatus{DeploymentStatusUndeployed, ""}},
+		"pending, never shown as pending": {
+			row(DeploymentStatusPending, nil, "", ""), UserStatus{DeploymentStatusDeploying, ""},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, UserStatusOf(tc.row))
+		})
+	}
+}

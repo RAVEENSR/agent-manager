@@ -52,6 +52,13 @@ type a2aTeardown struct {
 // TxRunner opens one database transaction and runs fn inside it, so a unit test can hand fn a sentinel.
 type TxRunner func(ctx context.Context, fn func(tx *gorm.DB) error) error
 
+// NewTxRunner runs each transaction on db.
+func NewTxRunner(db *gorm.DB) TxRunner {
+	return func(ctx context.Context, fn func(tx *gorm.DB) error) error {
+		return db.WithContext(ctx).Transaction(fn)
+	}
+}
+
 // A2APublisher holds the gateway-publication steps agentManagerService and a2aProxyService share.
 type A2APublisher struct {
 	tx             TxRunner

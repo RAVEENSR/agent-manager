@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
 
@@ -122,7 +123,11 @@ func (s *GatewayInternalAPIService) GetActiveAgentDeploymentByGateway(ctx contex
 func (s *GatewayInternalAPIService) getActiveArtifactDeploymentByGateway(
 	ctx context.Context, artifactID, ouID, gatewayID, kindLabel string, notFound error,
 ) (map[string]string, error) {
-	deployment, err := s.deploymentRepo.GetCurrentByGateway(artifactID, gatewayID, ouID)
+	artifactUUID, err := uuid.Parse(artifactID)
+	if err != nil {
+		return nil, notFound
+	}
+	deployment, err := s.deploymentRepo.GetPullable(ctx, ouID, artifactUUID, gatewayID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get deployment: %w", err)
 	}
@@ -142,8 +147,11 @@ func (s *GatewayInternalAPIService) getActiveArtifactDeploymentByGateway(
 
 // GetActiveDeploymentByGateway retrieves the currently deployed API artifact for a specific gateway
 func (s *GatewayInternalAPIService) GetActiveDeploymentByGateway(apiID, ouID, gatewayID string) (map[string]string, error) {
-	// Get the active deployment for this API on this gateway
-	deployment, err := s.deploymentRepo.GetCurrentByGateway(apiID, gatewayID, ouID)
+	apiUUID, err := uuid.Parse(apiID)
+	if err != nil {
+		return nil, utils.ErrDeploymentNotActive
+	}
+	deployment, err := s.deploymentRepo.GetPullable(context.Background(), ouID, apiUUID, gatewayID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get deployment: %w", err)
 	}
@@ -170,7 +178,7 @@ func (s *GatewayInternalAPIService) GetActiveLLMProviderDeploymentByGateway(ctx 
 		return nil, fmt.Errorf("LLM provider not found")
 	}
 
-	deployment, err := s.deploymentRepo.GetCurrentByGateway(provider.UUID.String(), gatewayID, ouID)
+	deployment, err := s.deploymentRepo.GetPullable(ctx, ouID, provider.UUID, gatewayID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get deployment: %w", err)
 	}
@@ -207,7 +215,7 @@ func (s *GatewayInternalAPIService) GetActiveLLMProxyDeploymentByGateway(ctx con
 		return nil, utils.ErrLLMProxyNotFound
 	}
 
-	deployment, err := s.deploymentRepo.GetCurrentByGateway(proxy.UUID.String(), gatewayID, ouID)
+	deployment, err := s.deploymentRepo.GetPullable(ctx, ouID, proxy.UUID, gatewayID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get deployment: %w", err)
 	}
