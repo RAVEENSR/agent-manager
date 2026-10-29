@@ -553,3 +553,33 @@ func TestGatewayDeleteRemovesItsStatusRows(t *testing.T) {
 		Where("gateway_uuid = ?", p.GatewayUUID).Count(&rows).Error)
 	assert.Zero(t, rows, "PENDING and UNDEPLOYED-from-PENDING rows go with the gateway, or they would keep rendering")
 }
+
+// A gateway with nothing held can be deleted (HasGatewayDeployments), but it may still have a deploy owed: a PENDING
+// row, or an UNDEPLOYED row re-queued. Its delete takes every status row with it, so nothing is left to render for
+// the deleted gateway.
+func TestGatewayDeleteLeavesNothingToRender(t *testing.T) {
+	pending := seedPlacement(t, models.KindLLMProxy)
+	require.True(t, insertPending(t, pending, "placed"))
+	owed := seedArtifactOn(t, pending, pending.OUID, models.KindLLMProxy)
+	startDeploy(t, owed)
+	_, err := beginUndeploy(t, owed)
+	require.NoError(t, err)
+	applyAck(t, owed, undeployAck(owed.ArtifactUUID.String(), models.DeploymentAckStatusSuccess), nil)
+	queue(t, owed, nil, QueueScopeAny)
+	has, err := NewGatewayRepo(db.GetDB()).HasGatewayDeployments(pending.GatewayUUID.String(), pending.OUID)
+	require.NoError(t, err)
+	require.False(t, has, "the gateway holds nothing, so it may be deleted")
+
+	require.NoError(t, NewGatewayRepo(db.GetDB()).Delete(pending.GatewayUUID.String(), pending.OUID))
+
+	for _, p := range []models.Placement{pending, owed} {
+		claims, err := renderQueue().ClaimDueRendersOf(context.Background(), p.OUID, p.ArtifactUUID, nil,
+			time.Now().Add(time.Hour), testLease)
+		require.NoError(t, err)
+		assert.Empty(t, claims, "nothing is owed to the deleted gateway")
+	}
+	var rows int64
+	require.NoError(t, db.GetDB().Model(&models.DeploymentStatusRecord{}).
+		Where("gateway_uuid = ?", pending.GatewayUUID).Count(&rows).Error)
+	assert.Zero(t, rows)
+}
