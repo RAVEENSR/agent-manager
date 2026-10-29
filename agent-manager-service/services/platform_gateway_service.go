@@ -75,10 +75,10 @@ func NewPlatformGatewayService(
 	}
 }
 
-// EnvironmentPlacer places an environment's unplaced gateway artifacts on its gateways and renders them
-// (reconcile.Worker).
+// EnvironmentPlacer queues placing an environment's unplaced gateway artifacts on its gateways, and rendering them,
+// without waiting for it (reconcile.Worker).
 type EnvironmentPlacer interface {
-	PlaceEnv(ctx context.Context, ouID string, env uuid.UUID) error
+	RequestPlaceEnv(ouID string, env uuid.UUID)
 }
 
 // WithEnvironmentPlacer makes every new gateway-environment mapping place the environment's artifacts after it
@@ -88,24 +88,17 @@ func (s *PlatformGatewayService) WithEnvironmentPlacer(placer EnvironmentPlacer)
 	return s
 }
 
-// placeEnvironments runs the placement pass for environments just mapped to a gateway of ouID. It is detached from
-// the request: rendering can call out of AMS, and a failure is retried by the worker's slow pass.
+// placeEnvironments asks the worker to place the environments just mapped to a gateway of ouID. The request doesn't
+// wait: rendering can call out of AMS, and a failure is retried by the worker's slow pass.
 func (s *PlatformGatewayService) placeEnvironments(ouID string, environmentIDs []string) {
 	if s.placer == nil {
 		return
 	}
-	go func() {
-		for _, environmentID := range environmentIDs {
-			env, err := uuid.Parse(environmentID)
-			if err != nil {
-				continue
-			}
-			if err := s.placer.PlaceEnv(context.Background(), ouID, env); err != nil {
-				slog.Error("Failed to place gateway artifacts in a newly mapped environment; the placement pass will retry",
-					"ouID", ouID, "environmentID", env, "error", err)
-			}
+	for _, environmentID := range environmentIDs {
+		if env, err := uuid.Parse(environmentID); err == nil {
+			s.placer.RequestPlaceEnv(ouID, env)
 		}
-	}()
+	}
 }
 
 // GatewayResponse represents the gateway DTO

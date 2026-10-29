@@ -33,6 +33,8 @@ const (
 	renderBatch = 20
 	placeBatch  = 100
 	driftBatch  = 100
+	// placeQueue is how many requested placements wait for the worker; past it the slow placement pass covers them.
+	placeQueue = 64
 	// placedReason is what a user is shown while a row the placement pass placed is rendered.
 	placedReason = "placed on the environment's gateway"
 )
@@ -44,27 +46,38 @@ type Worker struct {
 	logger *slog.Logger
 
 	nudgeCh  chan struct{}
+	placeCh  chan placeRequest
 	stopCh   chan struct{}
 	stopOnce sync.Once
 	done     sync.WaitGroup
 }
 
+// placeRequest is an environment a request just mapped a gateway to.
+type placeRequest struct {
+	ouID string
+	env  uuid.UUID
+}
+
 // NewWorker makes the core's nudges reach the worker.
 func NewWorker(core *Core, logger *slog.Logger) *Worker {
-	w := &Worker{core: core, logger: logger, nudgeCh: make(chan struct{}, 1), stopCh: make(chan struct{})}
+	w := &Worker{
+		core: core, logger: logger,
+		nudgeCh: make(chan struct{}, 1), placeCh: make(chan placeRequest, placeQueue), stopCh: make(chan struct{}),
+	}
 	core.nudge = w.Nudge
 	return w
 }
 
 // Start runs the render loop on its short interval and on nudges, the fleet-wide placement pass at once and then on
-// its slow interval, and the drift check on its own slow interval.
+// its slow interval, requested placements as they come, and the drift check on its own slow interval.
 func (w *Worker) Start(ctx context.Context) error {
-	w.done.Add(3)
+	w.done.Add(4)
 	go w.loop(ctx, w.core.cfg.RenderInterval, w.nudgeCh, w.RunOnce)
 	go func() {
 		w.placeAll(ctx)
 		w.loop(ctx, w.core.cfg.PlaceInterval, nil, w.placeAll)
 	}()
+	go w.placeRequested(ctx)
 	go w.driftLoop(ctx)
 	w.logger.Info("Reconcile worker started", "renderInterval", w.core.cfg.RenderInterval,
 		"placeInterval", w.core.cfg.PlaceInterval, "driftInterval", w.core.cfg.DriftInterval)
@@ -126,6 +139,35 @@ func (w *Worker) RunOnce(ctx context.Context) {
 		}
 		wg.Wait()
 		if len(claims) < renderBatch {
+			return
+		}
+	}
+}
+
+// RequestPlaceEnv queues a placement pass over the environment, which a gateway was just mapped to, without waiting
+// for it. A full queue drops the request: the slow placement pass places the environment.
+func (w *Worker) RequestPlaceEnv(ouID string, env uuid.UUID) {
+	select {
+	case w.placeCh <- placeRequest{ouID: ouID, env: env}:
+	default:
+		w.logger.Warn("Placement queue is full; the slow placement pass will place the environment",
+			"ouID", ouID, "environmentUUID", env)
+	}
+}
+
+// placeRequested runs requested placements one at a time; Stop waits for the one in progress.
+func (w *Worker) placeRequested(ctx context.Context) {
+	defer w.done.Done()
+	for {
+		select {
+		case req := <-w.placeCh:
+			if err := w.PlaceEnv(ctx, req.ouID, req.env); err != nil {
+				w.logger.Error("Failed to place gateway artifacts in a newly mapped environment; the placement pass will retry",
+					"ouID", req.ouID, "environmentUUID", req.env, "error", err)
+			}
+		case <-w.stopCh:
+			return
+		case <-ctx.Done():
 			return
 		}
 	}

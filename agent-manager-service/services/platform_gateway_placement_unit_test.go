@@ -17,7 +17,6 @@
 package services
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -38,9 +37,8 @@ type placedEnv struct {
 
 type recordingPlacer chan placedEnv
 
-func (p recordingPlacer) PlaceEnv(_ context.Context, ouID string, env uuid.UUID) error {
+func (p recordingPlacer) RequestPlaceEnv(ouID string, env uuid.UUID) {
 	p <- placedEnv{ouID: ouID, env: env}
-	return nil
 }
 
 // placed waits for the placements a mapping triggers after its transaction commits.
