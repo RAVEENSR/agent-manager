@@ -571,7 +571,7 @@ func TestGetPullable(t *testing.T) {
 	assert.Nil(t, pull(other))
 }
 
-func TestPlacedAndLiveGateways(t *testing.T) {
+func TestPlacedGateways(t *testing.T) {
 	repo := NewDeploymentRepo(db.GetDB())
 	p := seedPlacement(t, models.KindLLMProvider)
 	deployment := startDeploy(t, p)
@@ -579,14 +579,11 @@ func TestPlacedAndLiveGateways(t *testing.T) {
 	placed, err := repo.PlacedGateways(context.Background(), p.OUID, p.ArtifactUUID)
 	require.NoError(t, err)
 	assert.Equal(t, []string{p.GatewayUUID.String()}, placed)
-	live, err := repo.LiveGateways(context.Background(), p.OUID, p.ArtifactUUID)
-	require.NoError(t, err)
-	assert.Empty(t, live)
 
 	applyAck(t, p, deployAck(deployment.DeploymentID, models.DeploymentAckStatusSuccess, ""), nil)
-	live, err = repo.LiveGateways(context.Background(), p.OUID, p.ArtifactUUID)
+	placed, err = repo.PlacedGateways(context.Background(), p.OUID, p.ArtifactUUID)
 	require.NoError(t, err)
-	assert.Equal(t, []string{p.GatewayUUID.String()}, live)
+	assert.Equal(t, []string{p.GatewayUUID.String()}, placed)
 
 	_, err = beginUndeploy(t, p)
 	require.NoError(t, err)

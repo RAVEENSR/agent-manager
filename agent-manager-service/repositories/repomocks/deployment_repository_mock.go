@@ -80,9 +80,6 @@ import (
 //			ListForGatewaySyncFunc: func(ctx context.Context, ouID string, gatewayID string) ([]models.GatewaySyncRow, error) {
 //				panic("mock out the ListForGatewaySync method")
 //			},
-//			LiveGatewaysFunc: func(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error) {
-//				panic("mock out the LiveGateways method")
-//			},
 //			PlacedGatewaysFunc: func(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error) {
 //				panic("mock out the PlacedGateways method")
 //			},
@@ -173,9 +170,6 @@ type DeploymentRepositoryMock struct {
 
 	// ListForGatewaySyncFunc mocks the ListForGatewaySync method.
 	ListForGatewaySyncFunc func(ctx context.Context, ouID string, gatewayID string) ([]models.GatewaySyncRow, error)
-
-	// LiveGatewaysFunc mocks the LiveGateways method.
-	LiveGatewaysFunc func(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error)
 
 	// PlacedGatewaysFunc mocks the PlacedGateways method.
 	PlacedGatewaysFunc func(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error)
@@ -403,15 +397,6 @@ type DeploymentRepositoryMock struct {
 			// GatewayID is the gatewayID argument value.
 			GatewayID string
 		}
-		// LiveGateways holds details about calls to the LiveGateways method.
-		LiveGateways []struct {
-			// Ctx is the ctx argument value.
-			Ctx context.Context
-			// OuID is the ouID argument value.
-			OuID string
-			// ArtifactUUID is the artifactUUID argument value.
-			ArtifactUUID uuid.UUID
-		}
 		// PlacedGateways holds details about calls to the PlacedGateways method.
 		PlacedGateways []struct {
 			// Ctx is the ctx argument value.
@@ -513,7 +498,6 @@ type DeploymentRepositoryMock struct {
 	lockListContentForGateway      sync.RWMutex
 	lockListDeployedForDrift       sync.RWMutex
 	lockListForGatewaySync         sync.RWMutex
-	lockLiveGateways               sync.RWMutex
 	lockPlacedGateways             sync.RWMutex
 	lockQueueRender                sync.RWMutex
 	lockRecordRenderOutcome        sync.RWMutex
@@ -1361,46 +1345,6 @@ func (mock *DeploymentRepositoryMock) ListForGatewaySyncCalls() []struct {
 	mock.lockListForGatewaySync.RLock()
 	calls = mock.calls.ListForGatewaySync
 	mock.lockListForGatewaySync.RUnlock()
-	return calls
-}
-
-// LiveGateways calls LiveGatewaysFunc.
-func (mock *DeploymentRepositoryMock) LiveGateways(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error) {
-	if mock.LiveGatewaysFunc == nil {
-		panic("DeploymentRepositoryMock.LiveGatewaysFunc: method is nil but DeploymentRepository.LiveGateways was just called")
-	}
-	callInfo := struct {
-		Ctx          context.Context
-		OuID         string
-		ArtifactUUID uuid.UUID
-	}{
-		Ctx:          ctx,
-		OuID:         ouID,
-		ArtifactUUID: artifactUUID,
-	}
-	mock.lockLiveGateways.Lock()
-	mock.calls.LiveGateways = append(mock.calls.LiveGateways, callInfo)
-	mock.lockLiveGateways.Unlock()
-	return mock.LiveGatewaysFunc(ctx, ouID, artifactUUID)
-}
-
-// LiveGatewaysCalls gets all the calls that were made to LiveGateways.
-// Check the length with:
-//
-//	len(mockedDeploymentRepository.LiveGatewaysCalls())
-func (mock *DeploymentRepositoryMock) LiveGatewaysCalls() []struct {
-	Ctx          context.Context
-	OuID         string
-	ArtifactUUID uuid.UUID
-} {
-	var calls []struct {
-		Ctx          context.Context
-		OuID         string
-		ArtifactUUID uuid.UUID
-	}
-	mock.lockLiveGateways.RLock()
-	calls = mock.calls.LiveGateways
-	mock.lockLiveGateways.RUnlock()
 	return calls
 }
 
