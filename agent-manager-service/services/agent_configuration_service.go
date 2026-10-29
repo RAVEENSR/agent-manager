@@ -195,13 +195,13 @@ type rollbackResource struct {
 	// before this operation, so a later failure must restore its prior
 	// configuration instead of deleting it outright.
 	priorProxyConfig *models.LLMProxy
-	// restoreDeploymentID is the OLD deployment that was still Deployed before
-	// a new one superseded it (Scenario B only). Deploying the new "current"
-	// deployment atomically overwrites the shared deployment_status row, so the
-	// old deployment is left ARCHIVED even though it was never explicitly
-	// undeployed — on rollback it must be explicitly reactivated, not just left
-	// alone, or the proxy ends up with no live deployment on this gateway.
+	// restoreDeploymentID is the deployment the proxy was on before a Scenario-B
+	// redeploy (Scenario B only). The redeploy pointed the deployment_status row
+	// at the new deployment, and the rollback points it back.
 	restoreDeploymentID uuid.UUID
+	// supersededDeploymentID is the deployment a Scenario-B redeploy created; the
+	// rollback deletes it once restoreDeploymentID is current again.
+	supersededDeploymentID uuid.UUID
 }
 
 // pendingAppBinding captures the arguments for a deferred AIApplication
@@ -2158,23 +2158,22 @@ func (s *agentConfigurationService) processEnvProxyUpdate(
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		return s.envMappingRepo.Update(ctx, tx, existingMapping)
 	}); err != nil {
-		// Carry the new deployment's identity and the pre-update proxy snapshot
-		// back to the caller so rollbackProxies can remove the deployment that
-		// was just created and restore the proxy's prior configuration. Deploying
-		// newDeployment already superseded existingDeployment's Deployed status
-		// (see restoreDeploymentID doc comment), so its ID must travel too or the
-		// proxy is left with no live deployment after rollback.
+		// Carry the new deployment as superseded and the pre-update proxy snapshot
+		// back to the caller. rollbackProxies restores the prior config, restores
+		// the old deployment over the new one (deploying newDeployment already
+		// superseded existingDeployment's Deployed status, see restoreDeploymentID
+		// doc comment), then deletes the new one without undeploying the proxy.
 		var restoreDeploymentID uuid.UUID
 		if existingDeployment != nil {
 			restoreDeploymentID = existingDeployment.DeploymentID
 		}
 		return rollbackResource{
-			proxyHandle:         proxyHandle,
-			deploymentID:        newDeploymentID,
-			gatewayID:           gateway.UUID.String(),
-			priorProxyConfig:    existingMapping.LLMProxy,
-			providerUUID:        providerUUID,
-			restoreDeploymentID: restoreDeploymentID,
+			proxyHandle:            proxyHandle,
+			supersededDeploymentID: newDeploymentID,
+			gatewayID:              gateway.UUID.String(),
+			priorProxyConfig:       existingMapping.LLMProxy,
+			providerUUID:           providerUUID,
+			restoreDeploymentID:    restoreDeploymentID,
 		}, fmt.Errorf("failed to update policy configuration for environment %s: %w", envName, err)
 	}
 
@@ -5541,6 +5540,33 @@ func (s *agentConfigurationService) undeployAndDeleteDeployment(ctx context.Cont
 	}
 }
 
+// restorePriorDeployment points the gateway back at res.restoreDeploymentID and deletes the deployment it
+// replaced. The replaced one is kept when the restore fails, so the proxy is never left with nothing.
+func (s *agentConfigurationService) restorePriorDeployment(res rollbackResource, ouID string) {
+	if res.restoreDeploymentID == uuid.Nil {
+		return
+	}
+	_, err := s.llmProxyDeploymentService.RestoreLLMProxyDeployment(
+		res.proxyHandle, res.restoreDeploymentID.String(), res.gatewayID, ouID)
+	if err != nil && !errors.Is(err, utils.ErrDeploymentAlreadyDeployed) {
+		s.logger.Error("Failed to restore prior deployment during rollback",
+			"proxyHandle", res.proxyHandle, "deploymentID", res.restoreDeploymentID,
+			"supersededDeploymentID", res.supersededDeploymentID, "error", err)
+		return
+	}
+	s.logger.Info("Restored prior deployment during rollback",
+		"proxyHandle", res.proxyHandle, "deploymentID", res.restoreDeploymentID)
+
+	if res.supersededDeploymentID == uuid.Nil || res.supersededDeploymentID == res.restoreDeploymentID {
+		return
+	}
+	if err := s.llmProxyDeploymentService.DeleteLLMProxyDeployment(
+		res.proxyHandle, res.supersededDeploymentID.String(), ouID); err != nil {
+		s.logger.Error("Failed to delete superseded deployment during rollback",
+			"proxyHandle", res.proxyHandle, "deploymentID", res.supersededDeploymentID, "error", err)
+	}
+}
+
 // rollbackProxies cleans up created proxies, deployments, and API keys on failure
 func (s *agentConfigurationService) rollbackProxies(ctx context.Context, resources []rollbackResource, ouID string) {
 	s.logger.Warn("Rolling back created proxies and API keys", "count", len(resources))
@@ -5617,8 +5643,9 @@ func (s *agentConfigurationService) rollbackProxies(ctx context.Context, resourc
 		}
 
 		// Scenario B (in-place proxy update) rollback: the proxy pre-existed this
-		// operation, so restore its prior configuration instead of deleting it —
-		// the generic full-proxy teardown below assumes the proxy was newly created.
+		// operation, so restore its prior configuration, then point the gateway back at
+		// the old deployment without undeploying — the generic full-proxy teardown below
+		// assumes the proxy was newly created.
 		if res.priorProxyConfig != nil {
 			if _, err := s.llmProxyService.Update(res.proxyHandle, ouID, res.priorProxyConfig); err != nil {
 				s.logger.Error("Failed to restore prior proxy configuration during rollback",
@@ -5627,20 +5654,7 @@ func (s *agentConfigurationService) rollbackProxies(ctx context.Context, resourc
 				s.logger.Info("Restored prior proxy configuration during rollback",
 					"proxyHandle", res.proxyHandle)
 			}
-			// The old deployment was silently superseded (ARCHIVED) the instant
-			// the new deployment was created above — it was never explicitly
-			// undeployed, so it must be explicitly reactivated here.
-			if res.restoreDeploymentID != uuid.Nil {
-				if _, err := s.llmProxyDeploymentService.RestoreLLMProxyDeployment(
-					res.proxyHandle, res.restoreDeploymentID.String(), res.gatewayID, ouID,
-				); err != nil {
-					s.logger.Error("Failed to restore prior deployment during rollback",
-						"proxyHandle", res.proxyHandle, "deploymentID", res.restoreDeploymentID, "error", err)
-				} else {
-					s.logger.Info("Restored prior deployment during rollback",
-						"proxyHandle", res.proxyHandle, "deploymentID", res.restoreDeploymentID)
-				}
-			}
+			s.restorePriorDeployment(res, ouID)
 			continue
 		}
 

@@ -20,6 +20,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/db"
+	"github.com/wso2/agent-manager/agent-manager-service/eventhub"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/reconcile"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
@@ -344,4 +346,224 @@ func TestLLMProxyEventReadsTheVhostInTheDeployingTransaction(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, f.hub.published)
 	assert.Contains(t, f.hub.published[len(f.hub.published)-1].EventData, vhost)
+}
+
+// scenarioBRollback deploys a proxy, then changes its description and redeploys, as a Scenario-B update does. It
+// returns the service to roll back with, the proxy as it was before the change, and the old and new deployments.
+func scenarioBRollback(t *testing.T, f *proxyFixture) (
+	svc *agentConfigurationService, proxy, prior *models.LLMProxy, gateway uuid.UUID, old, next *models.Deployment,
+) {
+	t.Helper()
+	ctx := context.Background()
+	proxy = f.newProxy(t)
+	env := uuid.New()
+	gateway = f.mapGateway(t, env)
+	f.mapToAgent(t, proxy, env)
+	old, err := f.proxies.DeployForEnvironment(ctx, proxy, f.sync.ouID, env, gateway)
+	require.NoError(t, err)
+
+	gormDB := db.GetDB()
+	proxies := repositories.NewLLMProxyRepo(gormDB)
+	prior, err = proxies.GetByID(proxy.Handle, f.sync.ouID)
+	require.NoError(t, err)
+	prior.Handle = proxy.Handle
+
+	svc = &agentConfigurationService{
+		db:                        gormDB,
+		llmProxyService:           NewLLMProxyService(proxies, repositories.NewLLMProviderRepo(gormDB), make([]byte, 32)),
+		llmProxyDeploymentService: f.proxies,
+		logger:                    slog.New(slog.DiscardHandler),
+	}
+	changed, err := proxies.GetByID(proxy.Handle, f.sync.ouID)
+	require.NoError(t, err)
+	changed.Description = "changed-" + uuid.NewString()
+	updated, err := svc.llmProxyService.Update(proxy.Handle, f.sync.ouID, changed)
+	require.NoError(t, err)
+	updated.Handle = proxy.Handle
+	next, err = f.proxies.Redeploy(ctx, updated, f.sync.ouID, gateway, "scenario B update")
+	require.NoError(t, err)
+	require.NotEqual(t, old.DeploymentID, next.DeploymentID)
+	return svc, proxy, prior, gateway, old, next
+}
+
+// deploymentExists reads the deployments table directly: GetLLMProxyDeployment answers an empty deployment, not
+// ErrDeploymentNotFound, for an ID that is gone.
+func deploymentExists(t *testing.T, id uuid.UUID) bool {
+	t.Helper()
+	var count int64
+	require.NoError(t, db.GetDB().Model(&models.Deployment{}).Where("deployment_id = ?", id).Count(&count).Error)
+	return count == 1
+}
+
+func proxyEventsSince(f *proxyFixture, before int, proxy *models.LLMProxy) []eventhub.Event {
+	var events []eventhub.Event
+	for _, evt := range f.hub.published[before:] {
+		if evt.EntityID == proxy.Handle {
+			events = append(events, evt)
+		}
+	}
+	return events
+}
+
+// A failed Scenario-B update points the gateway back at the old deployment and drops the new one, without taking the
+// proxy off the gateway.
+func TestScenarioBRollbackRestoresTheOldDeploymentWithoutUndeploying(t *testing.T) {
+	f := newProxyFixture(t)
+	svc, proxy, prior, gateway, old, next := scenarioBRollback(t, f)
+	before := len(f.hub.published)
+
+	svc.rollbackProxies(context.Background(), []rollbackResource{{
+		proxyHandle: proxy.Handle, gatewayID: gateway.String(), priorProxyConfig: prior,
+		restoreDeploymentID: old.DeploymentID, supersededDeploymentID: next.DeploymentID,
+	}}, f.sync.ouID)
+
+	events := proxyEventsSince(f, before, proxy)
+	require.Len(t, events, 1)
+	assert.EqualValues(t, "llmproxy.deployed", events[0].EventType)
+	assert.Contains(t, events[0].EventData, old.DeploymentID.String())
+	row := f.row(t, proxy, gateway)
+	assert.Equal(t, old.DeploymentID, *row.DeploymentID)
+	assert.Equal(t, models.DeploymentStatusDeploying, row.Status)
+	assert.Equal(t, models.DeploymentStatusDeployed, row.StatusDesired)
+	assert.False(t, deploymentExists(t, next.DeploymentID))
+	stored, err := repositories.NewLLMProxyRepo(db.GetDB()).GetByID(proxy.Handle, f.sync.ouID)
+	require.NoError(t, err)
+	assert.Equal(t, prior.Description, stored.Description)
+}
+
+// A rollback whose old and new deployment are the same one has nothing to restore or delete.
+func TestScenarioBRollbackOfAnUnchangedDeploymentLeavesItLive(t *testing.T) {
+	f := newProxyFixture(t)
+	proxy := f.newProxy(t)
+	env := uuid.New()
+	gateway := f.mapGateway(t, env)
+	f.mapToAgent(t, proxy, env)
+	old, err := f.proxies.DeployForEnvironment(context.Background(), proxy, f.sync.ouID, env, gateway)
+	require.NoError(t, err)
+	proxies := repositories.NewLLMProxyRepo(db.GetDB())
+	prior, err := proxies.GetByID(proxy.Handle, f.sync.ouID)
+	require.NoError(t, err)
+	prior.Handle = proxy.Handle
+	svc := &agentConfigurationService{
+		llmProxyService:           NewLLMProxyService(proxies, repositories.NewLLMProviderRepo(db.GetDB()), make([]byte, 32)),
+		llmProxyDeploymentService: f.proxies,
+		logger:                    slog.New(slog.DiscardHandler),
+	}
+	before := len(f.hub.published)
+
+	svc.rollbackProxies(context.Background(), []rollbackResource{{
+		proxyHandle: proxy.Handle, gatewayID: gateway.String(), priorProxyConfig: prior,
+		restoreDeploymentID: old.DeploymentID, supersededDeploymentID: old.DeploymentID,
+	}}, f.sync.ouID)
+
+	assert.Empty(t, proxyEventsSince(f, before, proxy))
+	row := f.row(t, proxy, gateway)
+	assert.Equal(t, old.DeploymentID, *row.DeploymentID)
+	assert.Equal(t, models.DeploymentStatusDeployed, row.StatusDesired)
+	assert.True(t, deploymentExists(t, old.DeploymentID))
+}
+
+// When the old deployment cannot be restored, the new one stays: deleting it would leave the proxy with nothing.
+func TestScenarioBRollbackWhoseRestoreFailsKeepsTheNewDeployment(t *testing.T) {
+	f := newProxyFixture(t)
+	svc, proxy, prior, gateway, _, next := scenarioBRollback(t, f)
+	before := len(f.hub.published)
+
+	svc.rollbackProxies(context.Background(), []rollbackResource{{
+		proxyHandle: proxy.Handle, gatewayID: gateway.String(), priorProxyConfig: prior,
+		restoreDeploymentID: uuid.New(), supersededDeploymentID: next.DeploymentID,
+	}}, f.sync.ouID)
+
+	assert.Empty(t, proxyEventsSince(f, before, proxy))
+	row := f.row(t, proxy, gateway)
+	assert.Equal(t, next.DeploymentID, *row.DeploymentID)
+	assert.Equal(t, models.DeploymentStatusDeployed, row.StatusDesired)
+	assert.True(t, deploymentExists(t, next.DeploymentID))
+}
+
+// A restore that finds the old deployment already current counts as done, so the new deployment is still deleted.
+func TestScenarioBRollbackAfterTheOldDeploymentIsBackStillDeletesTheNewOne(t *testing.T) {
+	f := newProxyFixture(t)
+	svc, proxy, prior, gateway, old, next := scenarioBRollback(t, f)
+	_, err := f.proxies.RestoreLLMProxyDeployment(proxy.Handle, old.DeploymentID.String(), gateway.String(), f.sync.ouID)
+	require.NoError(t, err)
+	before := len(f.hub.published)
+
+	svc.rollbackProxies(context.Background(), []rollbackResource{{
+		proxyHandle: proxy.Handle, gatewayID: gateway.String(), priorProxyConfig: prior,
+		restoreDeploymentID: old.DeploymentID, supersededDeploymentID: next.DeploymentID,
+	}}, f.sync.ouID)
+
+	assert.Empty(t, proxyEventsSince(f, before, proxy))
+	row := f.row(t, proxy, gateway)
+	assert.Equal(t, old.DeploymentID, *row.DeploymentID)
+	assert.Equal(t, models.DeploymentStatusDeployed, row.StatusDesired)
+	assert.False(t, deploymentExists(t, next.DeploymentID))
+}
+
+// When the policy write of a Scenario-B update fails, processEnvProxyUpdate hands back the new deployment as
+// superseded, so the rollback restores the old one over it instead of undeploying the proxy.
+func TestScenarioBPolicyWriteFailureRollsBackWithoutUndeploying(t *testing.T) {
+	f := newProxyFixture(t)
+	proxy := f.newProxy(t)
+	env := uuid.New()
+	gateway := f.mapGateway(t, env)
+	f.mapToAgent(t, proxy, env)
+	old, err := f.proxies.DeployForEnvironment(context.Background(), proxy, f.sync.ouID, env, gateway)
+	require.NoError(t, err)
+
+	gormDB := db.GetDB()
+	mappings := repositories.NewEnvAgentModelMappingRepository(gormDB)
+	var mapping models.EnvAgentModelMapping
+	require.NoError(t, gormDB.Preload("LLMProxy").Where("llm_proxy_uuid = ?", proxy.UUID).First(&mapping).Error)
+	mapping.LLMProxy.Handle = proxy.Handle
+	refusePolicyWrites(t, mapping.ID)
+	svc := &agentConfigurationService{
+		db:                        gormDB,
+		envMappingRepo:            mappings,
+		llmProviderRepo:           repositories.NewLLMProviderRepo(gormDB),
+		gatewayRepo:               repositories.NewGatewayRepo(gormDB),
+		llmProxyService:           NewLLMProxyService(repositories.NewLLMProxyRepo(gormDB), repositories.NewLLMProviderRepo(gormDB), make([]byte, 32)),
+		llmProxyDeploymentService: f.proxies,
+		logger:                    slog.New(slog.DiscardHandler),
+	}
+	config := &models.AgentConfiguration{OUID: f.sync.ouID, AgentID: "a"}
+	request := models.EnvModelConfigRequest{ProviderName: f.provider.Configuration.Handle}
+
+	rollback, err := svc.processEnvProxyUpdate(context.Background(), config, nil, env, "dev", request, &mapping, f.sync.ouID)
+
+	require.ErrorContains(t, err, "failed to update policy configuration")
+	assert.Equal(t, uuid.Nil, rollback.deploymentID)
+	assert.Equal(t, old.DeploymentID, rollback.restoreDeploymentID)
+	assert.NotEqual(t, uuid.Nil, rollback.supersededDeploymentID)
+	assert.NotEqual(t, old.DeploymentID, rollback.supersededDeploymentID)
+
+	before := len(f.hub.published)
+	svc.rollbackProxies(context.Background(), []rollbackResource{rollback}, f.sync.ouID)
+
+	events := proxyEventsSince(f, before, proxy)
+	require.Len(t, events, 1)
+	assert.EqualValues(t, "llmproxy.deployed", events[0].EventType)
+	assert.Contains(t, events[0].EventData, old.DeploymentID.String())
+	row := f.row(t, proxy, gateway)
+	assert.Equal(t, old.DeploymentID, *row.DeploymentID)
+	assert.Equal(t, models.DeploymentStatusDeployed, row.StatusDesired)
+	assert.False(t, deploymentExists(t, rollback.supersededDeploymentID))
+}
+
+// refusePolicyWrites makes every update of one env_agent_model_mapping row fail, until the test ends.
+func refusePolicyWrites(t *testing.T, mappingID uint) {
+	t.Helper()
+	name := "refuse_policy_write_" + uuid.NewString()[:8]
+	gormDB := db.GetDB()
+	require.NoError(t, gormDB.Exec(fmt.Sprintf(
+		`CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'policy write refused'; END $$`,
+		name)).Error)
+	t.Cleanup(func() { assert.NoError(t, gormDB.Exec("DROP FUNCTION IF EXISTS "+name+"()").Error) })
+	require.NoError(t, gormDB.Exec(fmt.Sprintf(
+		`CREATE TRIGGER %s BEFORE UPDATE ON env_agent_model_mapping FOR EACH ROW WHEN (OLD.id = %d) EXECUTE FUNCTION %s()`,
+		name, mappingID, name)).Error)
+	t.Cleanup(func() {
+		assert.NoError(t, gormDB.Exec("DROP TRIGGER IF EXISTS "+name+" ON env_agent_model_mapping").Error)
+	})
 }
