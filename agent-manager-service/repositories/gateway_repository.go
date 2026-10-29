@@ -435,12 +435,13 @@ func (r *GatewayRepo) CountActiveTokens(gatewayId string) (int, error) {
 	return int(count), err
 }
 
-// HasGatewayDeployments checks if a gateway has any deployments
+// HasGatewayDeployments reports whether the gateway holds any artifact: a row that names a deployment and isn't
+// UNDEPLOYED. PENDING rows were never sent, and UNDEPLOYED rows are kept for good.
 func (r *GatewayRepo) HasGatewayDeployments(gatewayID, ouID string) (bool, error) {
 	var count int64
 	err := r.db.Model(&models.DeploymentStatusRecord{}).
-		Where("gateway_uuid = ? AND ou_id = ?",
-			gatewayID, ouID).
+		Where("gateway_uuid = ? AND ou_id = ? AND deployment_id IS NOT NULL AND status <> ?",
+			gatewayID, ouID, models.DeploymentStatusUndeployed).
 		Count(&count).Error
 	if err != nil {
 		return false, err

@@ -177,3 +177,43 @@ func TestArtifactListExisting(t *testing.T) {
 
 	assert.ElementsMatch(t, []models.ArtifactRef{provider.ArtifactRef, proxy.ArtifactRef}, got)
 }
+
+// A gateway holds an artifact while its row names a deployment and isn't UNDEPLOYED. Rows it never held, or no
+// longer holds, don't keep the gateway from being deleted.
+func TestHasGatewayDeploymentsCountsOnlyWhatTheGatewayHolds(t *testing.T) {
+	hasDeployments := func(p models.Placement) bool {
+		t.Helper()
+		has, err := NewGatewayRepo(db.GetDB()).HasGatewayDeployments(p.GatewayUUID.String(), p.OUID)
+		require.NoError(t, err)
+		return has
+	}
+
+	gateway := seedPlacement(t, models.KindLLMProvider)
+	insertPendingRow(t, gateway)
+	undeployed := seedArtifactOn(t, gateway, gateway.OUID, models.KindLLMProvider)
+	startDeploy(t, undeployed)
+	_, err := beginUndeploy(t, undeployed)
+	require.NoError(t, err)
+	applyAck(t, undeployed, undeployAck(undeployed.ArtifactUUID.String(), models.DeploymentAckStatusSuccess), nil)
+
+	assert.False(t, hasDeployments(gateway), "only PENDING and UNDEPLOYED rows")
+
+	for name, hold := range map[string]func(models.Placement){
+		"deploying": func(p models.Placement) { startDeploy(t, p) },
+		"undeploying": func(p models.Placement) {
+			startDeploy(t, p)
+			_, err := beginUndeploy(t, p)
+			require.NoError(t, err)
+		},
+		"failed": func(p models.Placement) {
+			deployment := startDeploy(t, p)
+			applyAck(t, p, deployAck(deployment.DeploymentID, models.DeploymentAckStatusFailed, "E"), nil)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := seedPlacement(t, models.KindLLMProvider)
+			hold(p)
+			assert.True(t, hasDeployments(p))
+		})
+	}
+}
