@@ -255,6 +255,9 @@ func (b *SQLBackend) PublishEvent(ctx context.Context, gatewayID string, event E
 // The gateway-state row lock is held until the caller commits, and every other publish to the gateway waits on it:
 // publish last in the transaction, and lock several gateways in gateway_id order.
 func (b *SQLBackend) PublishEventTx(ctx context.Context, tx *gorm.DB, gatewayID string, event Event) error {
+	if err := event.Err(); err != nil {
+		return err
+	}
 	var err error
 	if gatewayID, err = normalizeGatewayID(gatewayID); err != nil {
 		return err

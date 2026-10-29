@@ -18,10 +18,8 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -30,25 +28,11 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 )
 
-const (
-	// MaxEventPayloadSize is the maximum allowed event payload size (1MB)
-	MaxEventPayloadSize = 1024 * 1024
-)
-
 // GatewayEventsService handles broadcasting events to connected gateways.
 // It publishes events to the EventHub so that any service instance holding
 // the gateway's WebSocket connection will deliver the event.
 type GatewayEventsService struct {
 	hub eventhub.EventHub
-}
-
-// GatewayEventDTO represents a gateway event
-type GatewayEventDTO struct {
-	Type          string      `json:"type"`
-	Payload       interface{} `json:"payload"`
-	Timestamp     string      `json:"timestamp"`
-	CorrelationID string      `json:"correlationId"`
-	UserId        string      `json:"userId,omitempty"`
 }
 
 // NewGatewayEventsService creates a new gateway events service
@@ -88,48 +72,18 @@ func (s *GatewayEventsService) broadcastEventTx(ctx context.Context, tx *gorm.DB
 	})
 }
 
+// publish builds the event the one way gateway events are built (eventhub.NewGatewayEvent) and writes it.
 func (s *GatewayEventsService) publish(gatewayID string, eventType string, action string, entityID string, payload interface{}, write func(eventhub.Event) error) error {
-	correlationID := uuid.New().String()
-
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		slog.Error("Failed to serialize event", "gatewayID", gatewayID, "type", eventType, "error", err)
-		return fmt.Errorf("failed to serialize %s event: %w", eventType, err)
+	evt := eventhub.NewGatewayEvent(eventType, action, entityID, payload)
+	evt.GatewayID = gatewayID
+	if err := evt.Err(); err != nil {
+		return err
 	}
-
-	if len(payloadJSON) > MaxEventPayloadSize {
-		return fmt.Errorf("event payload exceeds maximum size: %d bytes (limit: %d)", len(payloadJSON), MaxEventPayloadSize)
-	}
-
-	eventDTO := GatewayEventDTO{
-		Type:          eventType,
-		Payload:       payload,
-		Timestamp:     time.Now().Format(time.RFC3339),
-		CorrelationID: correlationID,
-	}
-
-	eventJSON, err := json.Marshal(eventDTO)
-	if err != nil {
-		return fmt.Errorf("failed to marshal event: %w", err)
-	}
-
-	evt := eventhub.Event{
-		GatewayID:           gatewayID,
-		OriginatedTimestamp: time.Now(),
-		EventType:           eventhub.EventType(eventType),
-		Action:              action,
-		EntityID:            entityID,
-		EventData:           string(eventJSON),
-	}
-
 	if err := write(evt); err != nil {
-		slog.Error("Failed to publish event to EventHub",
-			"gatewayID", gatewayID, "type", eventType, "correlationID", correlationID, "error", err)
+		slog.Error("Failed to publish event to EventHub", "gatewayID", gatewayID, "type", eventType, "error", err)
 		return fmt.Errorf("failed to publish %s event: %w", eventType, err)
 	}
-
-	slog.Debug("Event published to EventHub",
-		"gatewayID", gatewayID, "type", eventType, "correlationID", correlationID)
+	slog.Debug("Event published to EventHub", "gatewayID", gatewayID, "type", eventType)
 	return nil
 }
 

@@ -48,6 +48,9 @@ type Event struct {
 	EventData string `json:"event_data"`
 	// Seq is the event's place in its gateway's sequence, assigned on publish.
 	Seq int64 `json:"seq"`
+
+	// err is why NewGatewayEvent couldn't build the event.
+	err error
 }
 
 // GatewayState tracks the version state of a gateway.
