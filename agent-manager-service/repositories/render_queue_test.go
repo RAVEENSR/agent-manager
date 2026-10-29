@@ -38,10 +38,9 @@ import (
 const testLease = 2 * time.Minute
 
 // queueEpoch is a moment no other test's row is due at: ClaimDueRenders claims across the whole table, and
-// integration packages share the database, so these tests make their rows due in 2990 and claim "then". A past
-// epoch would be due for every worker another package runs on the real clock (or the reconcile tests' 2000 clock).
+// integration packages share the database, so these tests make their rows due in 1990 and claim "then".
 func queueEpoch() time.Time {
-	return time.Date(2990, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(rand.IntN(1_000_000)) * time.Minute)
+	return time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(rand.IntN(1_000_000)) * time.Minute)
 }
 
 func renderQueue() DeploymentRepository { return NewDeploymentRepo(db.GetDB()) }

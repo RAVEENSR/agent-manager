@@ -118,7 +118,7 @@ func TestPlatformA2AAgentWaitsForItsEndpointThenGoesLive(t *testing.T) {
 		require.NoError(t, f.publisher.tx(context.Background(), func(tx *gorm.DB) error {
 			return f.publisher.Publish(context.Background(), tx, key, artifact)
 		}))
-		f.worker.RunOnce(context.Background())
+		require.NoError(t, f.worker.RunOnceFor(context.Background(), artifact.OUID, artifact.ArtifactUUID))
 	}
 
 	publish()
@@ -176,7 +176,7 @@ func TestAgentDeleteIsAtomicPerEnvironment(t *testing.T) {
 	require.NoError(t, f.publisher.tx(context.Background(), func(tx *gorm.DB) error {
 		return f.publisher.Publish(context.Background(), tx, key, artifact)
 	}))
-	f.worker.RunOnce(context.Background())
+	require.NoError(t, f.worker.RunOnceFor(context.Background(), artifact.OUID, artifact.ArtifactUUID))
 	require.Equal(t, models.DeploymentStatusDeploying, f.row(t, artifact).Status)
 	cards := repositories.NewA2AAgentCardRepository(db.GetDB())
 	require.NoError(t, cards.Enqueue(context.Background(), &models.A2AAgentCard{

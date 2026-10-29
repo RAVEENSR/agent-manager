@@ -144,6 +144,12 @@ func (w *Worker) RunOnce(ctx context.Context) {
 	}
 }
 
+// RunOnceFor renders the artifact's rows due now, as RunOnce does for the fleet. A test renders its own artifact
+// with it without claiming rows other tests sharing the database made due.
+func (w *Worker) RunOnceFor(ctx context.Context, ouID string, artifactUUID uuid.UUID) error {
+	return w.core.renderOwed(ctx, ouID, artifactUUID, nil)
+}
+
 // RequestPlaceEnv queues a placement pass over the environment, which a gateway was just mapped to, without waiting
 // for it. A full queue drops the request: the slow placement pass places the environment.
 func (w *Worker) RequestPlaceEnv(ouID string, env uuid.UUID) {
