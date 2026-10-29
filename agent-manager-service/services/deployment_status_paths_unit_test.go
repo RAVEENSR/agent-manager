@@ -371,6 +371,7 @@ func TestUndeployLLMProxy(t *testing.T) {
 func TestDeleteRefusesThePlacedOrHeldDeployment(t *testing.T) {
 	type rowShape struct {
 		status, desired models.DeploymentStatus
+		owed            bool
 		archived        bool
 	}
 	placed := map[string]rowShape{
@@ -379,6 +380,12 @@ func TestDeleteRefusesThePlacedOrHeldDeployment(t *testing.T) {
 		"failed deploy":   {status: models.DeploymentStatusFailed, desired: models.DeploymentStatusDeployed},
 		"undeploying":     {status: models.DeploymentStatusUndeploying, desired: models.DeploymentStatusUndeployed},
 		"failed undeploy": {status: models.DeploymentStatusFailed, desired: models.DeploymentStatusUndeployed},
+		"undeployed, heading for DEPLOYED": {
+			status: models.DeploymentStatusUndeployed, desired: models.DeploymentStatusDeployed,
+		},
+		"undeployed, a deploy owed": {
+			status: models.DeploymentStatusUndeployed, desired: models.DeploymentStatusUndeployed, owed: true,
+		},
 	}
 	notPlaced := map[string]rowShape{
 		"undeployed": {status: models.DeploymentStatusUndeployed, desired: models.DeploymentStatusUndeployed},
@@ -390,7 +397,12 @@ func TestDeleteRefusesThePlacedOrHeldDeployment(t *testing.T) {
 			f.deployment.Status = &archived
 			return
 		}
-		f.deployment.SetStatusRow(&models.DeploymentStatusRecord{Status: shape.status, StatusDesired: shape.desired})
+		row := &models.DeploymentStatusRecord{Status: shape.status, StatusDesired: shape.desired}
+		if shape.owed {
+			due := time.Now()
+			row.NextAttemptAt = &due
+		}
+		f.deployment.SetStatusRow(row)
 	}
 	deleteBoth := func(t *testing.T, shape rowShape) (providerErr, proxyErr error, deletes int) {
 		provider := &models.LLMProvider{UUID: uuid.New()}

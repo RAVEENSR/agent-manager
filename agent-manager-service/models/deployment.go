@@ -57,10 +57,15 @@ func (d *Deployment) SetStatusRow(row *DeploymentStatusRecord) {
 	d.RenderReason = &row.RenderReason
 }
 
-// Current reports whether a status row points at the deployment and it isn't UNDEPLOYED: the gateway is to serve
-// it, or may still hold it (an undeploy in flight or failed). Deleting it would cascade the row away.
+// Current reports whether a status row points at the deployment and the deployment is placed or held: the row
+// heads for DEPLOYED or has a deploy owed (placed), or it isn't UNDEPLOYED (the gateway may still hold it).
+// Deleting it would cascade the row, and any owed deploy, away.
 func (d *Deployment) Current() bool {
-	return d.Status != nil && *d.Status != DeploymentStatusArchived && *d.Status != DeploymentStatusUndeployed
+	if d.Status == nil || *d.Status == DeploymentStatusArchived {
+		return false
+	}
+	placed := (d.StatusDesired != nil && *d.StatusDesired == DeploymentStatusDeployed) || d.NextAttemptAt != nil
+	return placed || *d.Status != DeploymentStatusUndeployed
 }
 
 // UserStatus is what the user is shown for the deployment: ARCHIVED when no status row points at it, otherwise
