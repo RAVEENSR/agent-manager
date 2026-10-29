@@ -150,6 +150,10 @@ func (s *a2aCardReconcilerService) RunOnce(ctx context.Context) {
 func (s *a2aCardReconcilerService) fetchOne(ctx context.Context, row models.A2AAgentCard) {
 	attemptCtx, ctx, cancel := a2aAttemptContexts(ctx, s.attemptTimeout)
 	defer cancel()
+	if s.agentReplaced(attemptCtx, row) {
+		s.dropReplacedCard(ctx, row)
+		return
+	}
 	fetched, err := s.attemptFetch(attemptCtx, row)
 	if errors.Is(err, errA2ACardNotDeployed) {
 		s.dropUndeployedCard(ctx, row)
@@ -179,6 +183,38 @@ func (s *a2aCardReconcilerService) fetchOne(ctx context.Context, row models.A2AA
 func isUnstorableTextError(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && (pgErr.Code == "22P05" || pgErr.Code == "22021")
+}
+
+// agentReplaced reports a card whose agent was deleted, or replaced by a same-named one, since the card was queued:
+// the component's UUID no longer matches the one recorded on the card. A card with no recorded UUID, or a failed
+// lookup, is fetched as usual.
+func (s *a2aCardReconcilerService) agentReplaced(ctx context.Context, row models.A2AAgentCard) bool {
+	if row.AgentUUID == nil {
+		return false
+	}
+	current, err := s.ocClient.GetComponent(ctx, row.OUID, row.ProjectName, row.AgentName)
+	switch {
+	case errors.Is(err, utils.ErrNotFound):
+		return true
+	case err != nil:
+		return false
+	}
+	return current.UUID != "" && current.UUID != row.AgentUUID.String()
+}
+
+// dropReplacedCard removes the card of a replaced agent; a row re-queued meanwhile is kept.
+func (s *a2aCardReconcilerService) dropReplacedCard(ctx context.Context, row models.A2AAgentCard) {
+	err := s.cardRepo.DeleteIfUnchanged(ctx, row)
+	switch {
+	case errors.Is(err, repositories.ErrA2AAgentCardSuperseded):
+		s.logSuperseded(row)
+	case err != nil:
+		s.logger.Warn("Failed to drop the card row of a replaced A2A agent",
+			"agentName", row.AgentName, "environment", row.EnvironmentName, "error", err)
+	default:
+		s.logger.Info("A2A agent was deleted or replaced; dropped its card row",
+			"agentName", row.AgentName, "environment", row.EnvironmentName)
+	}
 }
 
 // dropUndeployedCard removes the row as undeploy would; a row re-queued meanwhile is kept.
