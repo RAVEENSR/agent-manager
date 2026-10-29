@@ -50,20 +50,8 @@ import (
 //			DeleteForArtifactFunc: func(ctx context.Context, artifactUUID uuid.UUID, orgUUID string) error {
 //				panic("mock out the DeleteForArtifact method")
 //			},
-//			DeleteStatusFunc: func(artifactUUID string, orgUUID string, gatewayID string) error {
-//				panic("mock out the DeleteStatus method")
-//			},
 //			FailStaleTransitionalFunc: func(ctx context.Context, olderThan time.Time) (int64, error) {
 //				panic("mock out the FailStaleTransitional method")
-//			},
-//			GetByArtifactAndGatewayFunc: func(artifactUUID string, gatewayUUID string, orgUUID string) (*models.Deployment, error) {
-//				panic("mock out the GetByArtifactAndGateway method")
-//			},
-//			GetCurrentByGatewayFunc: func(artifactUUID string, gatewayID string, orgUUID string) (*models.Deployment, error) {
-//				panic("mock out the GetCurrentByGateway method")
-//			},
-//			GetDeployedProvidersByGatewayFunc: func(gatewayUUID uuid.UUID, orgUUID string) ([]string, error) {
-//				panic("mock out the GetDeployedProvidersByGateway method")
 //			},
 //			GetDeploymentsWithStateFunc: func(artifactUUID string, orgUUID string, gatewayID *string, status *string, maxPerAPIGW int) ([]*models.Deployment, error) {
 //				panic("mock out the GetDeploymentsWithState method")
@@ -71,17 +59,8 @@ import (
 //			GetPullableFunc: func(ctx context.Context, ouID string, artifactUUID uuid.UUID, gatewayID string) (*models.Deployment, error) {
 //				panic("mock out the GetPullable method")
 //			},
-//			GetStatusFunc: func(artifactUUID string, orgUUID string, gatewayID string) (string, models.DeploymentStatus, *time.Time, error) {
-//				panic("mock out the GetStatus method")
-//			},
 //			GetStatusRecordFunc: func(ctx context.Context, placement models.Placement) (*models.DeploymentStatusRecord, error) {
 //				panic("mock out the GetStatusRecord method")
-//			},
-//			GetTrackedGatewaysByProviderFunc: func(artifactUUID uuid.UUID, orgUUID string) ([]string, error) {
-//				panic("mock out the GetTrackedGatewaysByProvider method")
-//			},
-//			GetTrackedGatewaysByProviderCtxFunc: func(ctx context.Context, artifactUUID uuid.UUID, orgUUID string) ([]string, error) {
-//				panic("mock out the GetTrackedGatewaysByProviderCtx method")
 //			},
 //			GetWithContentFunc: func(deploymentID string, artifactUUID string, orgUUID string) (*models.Deployment, error) {
 //				panic("mock out the GetWithContent method")
@@ -94,9 +73,6 @@ import (
 //			},
 //			InsertPendingFunc: func(ctx context.Context, tx *gorm.DB, placement models.Placement, reason string) (bool, error) {
 //				panic("mock out the InsertPending method")
-//			},
-//			IsProviderDeployedToGatewayFunc: func(artifactUUID uuid.UUID, gatewayUUID uuid.UUID, orgUUID string) (bool, error) {
-//				panic("mock out the IsProviderDeployedToGateway method")
 //			},
 //			ListContentForGatewayFunc: func(ctx context.Context, ouID string, gatewayID string, deploymentIDs []uuid.UUID) ([]models.GatewayDeploymentContent, error) {
 //				panic("mock out the ListContentForGateway method")
@@ -122,12 +98,6 @@ import (
 //			SentGatewaysFunc: func(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error) {
 //				panic("mock out the SentGateways method")
 //			},
-//			SetCurrentFunc: func(artifactUUID string, orgUUID string, gatewayID string, deploymentID string, status models.DeploymentStatus) (time.Time, error) {
-//				panic("mock out the SetCurrent method")
-//			},
-//			SetCurrentCtxFunc: func(ctx context.Context, artifactUUID string, orgUUID string, gatewayID string, deploymentID string, status models.DeploymentStatus) (time.Time, error) {
-//				panic("mock out the SetCurrentCtx method")
-//			},
 //			StartDeployFunc: func(ctx context.Context, tx *gorm.DB, placement models.Placement, deployment *models.Deployment) error {
 //				panic("mock out the StartDeploy method")
 //			},
@@ -136,9 +106,6 @@ import (
 //			},
 //			StatusRecordsFunc: func(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]models.DeploymentStatusRecord, error) {
 //				panic("mock out the StatusRecords method")
-//			},
-//			UpdateStatusByDeploymentIDFunc: func(deploymentID string, gatewayUUID string, status models.DeploymentStatus) (time.Time, error) {
-//				panic("mock out the UpdateStatusByDeploymentID method")
 //			},
 //			WithTxFunc: func(tx *gorm.DB) repositories.DeploymentRepository {
 //				panic("mock out the WithTx method")
@@ -180,20 +147,8 @@ type DeploymentRepositoryMock struct {
 	// DeleteForArtifactFunc mocks the DeleteForArtifact method.
 	DeleteForArtifactFunc func(ctx context.Context, artifactUUID uuid.UUID, orgUUID string) error
 
-	// DeleteStatusFunc mocks the DeleteStatus method.
-	DeleteStatusFunc func(artifactUUID string, orgUUID string, gatewayID string) error
-
 	// FailStaleTransitionalFunc mocks the FailStaleTransitional method.
 	FailStaleTransitionalFunc func(ctx context.Context, olderThan time.Time) (int64, error)
-
-	// GetByArtifactAndGatewayFunc mocks the GetByArtifactAndGateway method.
-	GetByArtifactAndGatewayFunc func(artifactUUID string, gatewayUUID string, orgUUID string) (*models.Deployment, error)
-
-	// GetCurrentByGatewayFunc mocks the GetCurrentByGateway method.
-	GetCurrentByGatewayFunc func(artifactUUID string, gatewayID string, orgUUID string) (*models.Deployment, error)
-
-	// GetDeployedProvidersByGatewayFunc mocks the GetDeployedProvidersByGateway method.
-	GetDeployedProvidersByGatewayFunc func(gatewayUUID uuid.UUID, orgUUID string) ([]string, error)
 
 	// GetDeploymentsWithStateFunc mocks the GetDeploymentsWithState method.
 	GetDeploymentsWithStateFunc func(artifactUUID string, orgUUID string, gatewayID *string, status *string, maxPerAPIGW int) ([]*models.Deployment, error)
@@ -201,17 +156,8 @@ type DeploymentRepositoryMock struct {
 	// GetPullableFunc mocks the GetPullable method.
 	GetPullableFunc func(ctx context.Context, ouID string, artifactUUID uuid.UUID, gatewayID string) (*models.Deployment, error)
 
-	// GetStatusFunc mocks the GetStatus method.
-	GetStatusFunc func(artifactUUID string, orgUUID string, gatewayID string) (string, models.DeploymentStatus, *time.Time, error)
-
 	// GetStatusRecordFunc mocks the GetStatusRecord method.
 	GetStatusRecordFunc func(ctx context.Context, placement models.Placement) (*models.DeploymentStatusRecord, error)
-
-	// GetTrackedGatewaysByProviderFunc mocks the GetTrackedGatewaysByProvider method.
-	GetTrackedGatewaysByProviderFunc func(artifactUUID uuid.UUID, orgUUID string) ([]string, error)
-
-	// GetTrackedGatewaysByProviderCtxFunc mocks the GetTrackedGatewaysByProviderCtx method.
-	GetTrackedGatewaysByProviderCtxFunc func(ctx context.Context, artifactUUID uuid.UUID, orgUUID string) ([]string, error)
 
 	// GetWithContentFunc mocks the GetWithContent method.
 	GetWithContentFunc func(deploymentID string, artifactUUID string, orgUUID string) (*models.Deployment, error)
@@ -224,9 +170,6 @@ type DeploymentRepositoryMock struct {
 
 	// InsertPendingFunc mocks the InsertPending method.
 	InsertPendingFunc func(ctx context.Context, tx *gorm.DB, placement models.Placement, reason string) (bool, error)
-
-	// IsProviderDeployedToGatewayFunc mocks the IsProviderDeployedToGateway method.
-	IsProviderDeployedToGatewayFunc func(artifactUUID uuid.UUID, gatewayUUID uuid.UUID, orgUUID string) (bool, error)
 
 	// ListContentForGatewayFunc mocks the ListContentForGateway method.
 	ListContentForGatewayFunc func(ctx context.Context, ouID string, gatewayID string, deploymentIDs []uuid.UUID) ([]models.GatewayDeploymentContent, error)
@@ -252,12 +195,6 @@ type DeploymentRepositoryMock struct {
 	// SentGatewaysFunc mocks the SentGateways method.
 	SentGatewaysFunc func(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]string, error)
 
-	// SetCurrentFunc mocks the SetCurrent method.
-	SetCurrentFunc func(artifactUUID string, orgUUID string, gatewayID string, deploymentID string, status models.DeploymentStatus) (time.Time, error)
-
-	// SetCurrentCtxFunc mocks the SetCurrentCtx method.
-	SetCurrentCtxFunc func(ctx context.Context, artifactUUID string, orgUUID string, gatewayID string, deploymentID string, status models.DeploymentStatus) (time.Time, error)
-
 	// StartDeployFunc mocks the StartDeploy method.
 	StartDeployFunc func(ctx context.Context, tx *gorm.DB, placement models.Placement, deployment *models.Deployment) error
 
@@ -266,9 +203,6 @@ type DeploymentRepositoryMock struct {
 
 	// StatusRecordsFunc mocks the StatusRecords method.
 	StatusRecordsFunc func(ctx context.Context, ouID string, artifactUUID uuid.UUID) ([]models.DeploymentStatusRecord, error)
-
-	// UpdateStatusByDeploymentIDFunc mocks the UpdateStatusByDeploymentID method.
-	UpdateStatusByDeploymentIDFunc func(deploymentID string, gatewayUUID string, status models.DeploymentStatus) (time.Time, error)
 
 	// WithTxFunc mocks the WithTx method.
 	WithTxFunc func(tx *gorm.DB) repositories.DeploymentRepository
@@ -375,46 +309,12 @@ type DeploymentRepositoryMock struct {
 			// OrgUUID is the orgUUID argument value.
 			OrgUUID string
 		}
-		// DeleteStatus holds details about calls to the DeleteStatus method.
-		DeleteStatus []struct {
-			// ArtifactUUID is the artifactUUID argument value.
-			ArtifactUUID string
-			// OrgUUID is the orgUUID argument value.
-			OrgUUID string
-			// GatewayID is the gatewayID argument value.
-			GatewayID string
-		}
 		// FailStaleTransitional holds details about calls to the FailStaleTransitional method.
 		FailStaleTransitional []struct {
 			// Ctx is the ctx argument value.
 			Ctx context.Context
 			// OlderThan is the olderThan argument value.
 			OlderThan time.Time
-		}
-		// GetByArtifactAndGateway holds details about calls to the GetByArtifactAndGateway method.
-		GetByArtifactAndGateway []struct {
-			// ArtifactUUID is the artifactUUID argument value.
-			ArtifactUUID string
-			// GatewayUUID is the gatewayUUID argument value.
-			GatewayUUID string
-			// OrgUUID is the orgUUID argument value.
-			OrgUUID string
-		}
-		// GetCurrentByGateway holds details about calls to the GetCurrentByGateway method.
-		GetCurrentByGateway []struct {
-			// ArtifactUUID is the artifactUUID argument value.
-			ArtifactUUID string
-			// GatewayID is the gatewayID argument value.
-			GatewayID string
-			// OrgUUID is the orgUUID argument value.
-			OrgUUID string
-		}
-		// GetDeployedProvidersByGateway holds details about calls to the GetDeployedProvidersByGateway method.
-		GetDeployedProvidersByGateway []struct {
-			// GatewayUUID is the gatewayUUID argument value.
-			GatewayUUID uuid.UUID
-			// OrgUUID is the orgUUID argument value.
-			OrgUUID string
 		}
 		// GetDeploymentsWithState holds details about calls to the GetDeploymentsWithState method.
 		GetDeploymentsWithState []struct {
@@ -440,37 +340,12 @@ type DeploymentRepositoryMock struct {
 			// GatewayID is the gatewayID argument value.
 			GatewayID string
 		}
-		// GetStatus holds details about calls to the GetStatus method.
-		GetStatus []struct {
-			// ArtifactUUID is the artifactUUID argument value.
-			ArtifactUUID string
-			// OrgUUID is the orgUUID argument value.
-			OrgUUID string
-			// GatewayID is the gatewayID argument value.
-			GatewayID string
-		}
 		// GetStatusRecord holds details about calls to the GetStatusRecord method.
 		GetStatusRecord []struct {
 			// Ctx is the ctx argument value.
 			Ctx context.Context
 			// Placement is the placement argument value.
 			Placement models.Placement
-		}
-		// GetTrackedGatewaysByProvider holds details about calls to the GetTrackedGatewaysByProvider method.
-		GetTrackedGatewaysByProvider []struct {
-			// ArtifactUUID is the artifactUUID argument value.
-			ArtifactUUID uuid.UUID
-			// OrgUUID is the orgUUID argument value.
-			OrgUUID string
-		}
-		// GetTrackedGatewaysByProviderCtx holds details about calls to the GetTrackedGatewaysByProviderCtx method.
-		GetTrackedGatewaysByProviderCtx []struct {
-			// Ctx is the ctx argument value.
-			Ctx context.Context
-			// ArtifactUUID is the artifactUUID argument value.
-			ArtifactUUID uuid.UUID
-			// OrgUUID is the orgUUID argument value.
-			OrgUUID string
 		}
 		// GetWithContent holds details about calls to the GetWithContent method.
 		GetWithContent []struct {
@@ -511,15 +386,6 @@ type DeploymentRepositoryMock struct {
 			Placement models.Placement
 			// Reason is the reason argument value.
 			Reason string
-		}
-		// IsProviderDeployedToGateway holds details about calls to the IsProviderDeployedToGateway method.
-		IsProviderDeployedToGateway []struct {
-			// ArtifactUUID is the artifactUUID argument value.
-			ArtifactUUID uuid.UUID
-			// GatewayUUID is the gatewayUUID argument value.
-			GatewayUUID uuid.UUID
-			// OrgUUID is the orgUUID argument value.
-			OrgUUID string
 		}
 		// ListContentForGateway holds details about calls to the ListContentForGateway method.
 		ListContentForGateway []struct {
@@ -605,34 +471,6 @@ type DeploymentRepositoryMock struct {
 			// ArtifactUUID is the artifactUUID argument value.
 			ArtifactUUID uuid.UUID
 		}
-		// SetCurrent holds details about calls to the SetCurrent method.
-		SetCurrent []struct {
-			// ArtifactUUID is the artifactUUID argument value.
-			ArtifactUUID string
-			// OrgUUID is the orgUUID argument value.
-			OrgUUID string
-			// GatewayID is the gatewayID argument value.
-			GatewayID string
-			// DeploymentID is the deploymentID argument value.
-			DeploymentID string
-			// Status is the status argument value.
-			Status models.DeploymentStatus
-		}
-		// SetCurrentCtx holds details about calls to the SetCurrentCtx method.
-		SetCurrentCtx []struct {
-			// Ctx is the ctx argument value.
-			Ctx context.Context
-			// ArtifactUUID is the artifactUUID argument value.
-			ArtifactUUID string
-			// OrgUUID is the orgUUID argument value.
-			OrgUUID string
-			// GatewayID is the gatewayID argument value.
-			GatewayID string
-			// DeploymentID is the deploymentID argument value.
-			DeploymentID string
-			// Status is the status argument value.
-			Status models.DeploymentStatus
-		}
 		// StartDeploy holds details about calls to the StartDeploy method.
 		StartDeploy []struct {
 			// Ctx is the ctx argument value.
@@ -664,62 +502,42 @@ type DeploymentRepositoryMock struct {
 			// ArtifactUUID is the artifactUUID argument value.
 			ArtifactUUID uuid.UUID
 		}
-		// UpdateStatusByDeploymentID holds details about calls to the UpdateStatusByDeploymentID method.
-		UpdateStatusByDeploymentID []struct {
-			// DeploymentID is the deploymentID argument value.
-			DeploymentID string
-			// GatewayUUID is the gatewayUUID argument value.
-			GatewayUUID string
-			// Status is the status argument value.
-			Status models.DeploymentStatus
-		}
 		// WithTx holds details about calls to the WithTx method.
 		WithTx []struct {
 			// Tx is the tx argument value.
 			Tx *gorm.DB
 		}
 	}
-	lockAbandonRender                   sync.RWMutex
-	lockApplyAck                        sync.RWMutex
-	lockBeginUndeploy                   sync.RWMutex
-	lockClaimDueRenders                 sync.RWMutex
-	lockClaimDueRendersOf               sync.RWMutex
-	lockCompleteRender                  sync.RWMutex
-	lockCreateWithLimitEnforcement      sync.RWMutex
-	lockDelete                          sync.RWMutex
-	lockDeleteEventGateways             sync.RWMutex
-	lockDeleteForArtifact               sync.RWMutex
-	lockDeleteStatus                    sync.RWMutex
-	lockFailStaleTransitional           sync.RWMutex
-	lockGetByArtifactAndGateway         sync.RWMutex
-	lockGetCurrentByGateway             sync.RWMutex
-	lockGetDeployedProvidersByGateway   sync.RWMutex
-	lockGetDeploymentsWithState         sync.RWMutex
-	lockGetPullable                     sync.RWMutex
-	lockGetStatus                       sync.RWMutex
-	lockGetStatusRecord                 sync.RWMutex
-	lockGetTrackedGatewaysByProvider    sync.RWMutex
-	lockGetTrackedGatewaysByProviderCtx sync.RWMutex
-	lockGetWithContent                  sync.RWMutex
-	lockGetWithState                    sync.RWMutex
-	lockGetWithStateCtx                 sync.RWMutex
-	lockInsertPending                   sync.RWMutex
-	lockIsProviderDeployedToGateway     sync.RWMutex
-	lockListContentForGateway           sync.RWMutex
-	lockListDeployedForDrift            sync.RWMutex
-	lockListForGatewaySync              sync.RWMutex
-	lockLiveGateways                    sync.RWMutex
-	lockPlacedGateways                  sync.RWMutex
-	lockQueueRender                     sync.RWMutex
-	lockRecordRenderOutcome             sync.RWMutex
-	lockSentGateways                    sync.RWMutex
-	lockSetCurrent                      sync.RWMutex
-	lockSetCurrentCtx                   sync.RWMutex
-	lockStartDeploy                     sync.RWMutex
-	lockStartRestore                    sync.RWMutex
-	lockStatusRecords                   sync.RWMutex
-	lockUpdateStatusByDeploymentID      sync.RWMutex
-	lockWithTx                          sync.RWMutex
+	lockAbandonRender              sync.RWMutex
+	lockApplyAck                   sync.RWMutex
+	lockBeginUndeploy              sync.RWMutex
+	lockClaimDueRenders            sync.RWMutex
+	lockClaimDueRendersOf          sync.RWMutex
+	lockCompleteRender             sync.RWMutex
+	lockCreateWithLimitEnforcement sync.RWMutex
+	lockDelete                     sync.RWMutex
+	lockDeleteEventGateways        sync.RWMutex
+	lockDeleteForArtifact          sync.RWMutex
+	lockFailStaleTransitional      sync.RWMutex
+	lockGetDeploymentsWithState    sync.RWMutex
+	lockGetPullable                sync.RWMutex
+	lockGetStatusRecord            sync.RWMutex
+	lockGetWithContent             sync.RWMutex
+	lockGetWithState               sync.RWMutex
+	lockGetWithStateCtx            sync.RWMutex
+	lockInsertPending              sync.RWMutex
+	lockListContentForGateway      sync.RWMutex
+	lockListDeployedForDrift       sync.RWMutex
+	lockListForGatewaySync         sync.RWMutex
+	lockLiveGateways               sync.RWMutex
+	lockPlacedGateways             sync.RWMutex
+	lockQueueRender                sync.RWMutex
+	lockRecordRenderOutcome        sync.RWMutex
+	lockSentGateways               sync.RWMutex
+	lockStartDeploy                sync.RWMutex
+	lockStartRestore               sync.RWMutex
+	lockStatusRecords              sync.RWMutex
+	lockWithTx                     sync.RWMutex
 }
 
 // AbandonRender calls AbandonRenderFunc.
@@ -1142,46 +960,6 @@ func (mock *DeploymentRepositoryMock) DeleteForArtifactCalls() []struct {
 	return calls
 }
 
-// DeleteStatus calls DeleteStatusFunc.
-func (mock *DeploymentRepositoryMock) DeleteStatus(artifactUUID string, orgUUID string, gatewayID string) error {
-	if mock.DeleteStatusFunc == nil {
-		panic("DeploymentRepositoryMock.DeleteStatusFunc: method is nil but DeploymentRepository.DeleteStatus was just called")
-	}
-	callInfo := struct {
-		ArtifactUUID string
-		OrgUUID      string
-		GatewayID    string
-	}{
-		ArtifactUUID: artifactUUID,
-		OrgUUID:      orgUUID,
-		GatewayID:    gatewayID,
-	}
-	mock.lockDeleteStatus.Lock()
-	mock.calls.DeleteStatus = append(mock.calls.DeleteStatus, callInfo)
-	mock.lockDeleteStatus.Unlock()
-	return mock.DeleteStatusFunc(artifactUUID, orgUUID, gatewayID)
-}
-
-// DeleteStatusCalls gets all the calls that were made to DeleteStatus.
-// Check the length with:
-//
-//	len(mockedDeploymentRepository.DeleteStatusCalls())
-func (mock *DeploymentRepositoryMock) DeleteStatusCalls() []struct {
-	ArtifactUUID string
-	OrgUUID      string
-	GatewayID    string
-} {
-	var calls []struct {
-		ArtifactUUID string
-		OrgUUID      string
-		GatewayID    string
-	}
-	mock.lockDeleteStatus.RLock()
-	calls = mock.calls.DeleteStatus
-	mock.lockDeleteStatus.RUnlock()
-	return calls
-}
-
 // FailStaleTransitional calls FailStaleTransitionalFunc.
 func (mock *DeploymentRepositoryMock) FailStaleTransitional(ctx context.Context, olderThan time.Time) (int64, error) {
 	if mock.FailStaleTransitionalFunc == nil {
@@ -1215,122 +993,6 @@ func (mock *DeploymentRepositoryMock) FailStaleTransitionalCalls() []struct {
 	mock.lockFailStaleTransitional.RLock()
 	calls = mock.calls.FailStaleTransitional
 	mock.lockFailStaleTransitional.RUnlock()
-	return calls
-}
-
-// GetByArtifactAndGateway calls GetByArtifactAndGatewayFunc.
-func (mock *DeploymentRepositoryMock) GetByArtifactAndGateway(artifactUUID string, gatewayUUID string, orgUUID string) (*models.Deployment, error) {
-	if mock.GetByArtifactAndGatewayFunc == nil {
-		panic("DeploymentRepositoryMock.GetByArtifactAndGatewayFunc: method is nil but DeploymentRepository.GetByArtifactAndGateway was just called")
-	}
-	callInfo := struct {
-		ArtifactUUID string
-		GatewayUUID  string
-		OrgUUID      string
-	}{
-		ArtifactUUID: artifactUUID,
-		GatewayUUID:  gatewayUUID,
-		OrgUUID:      orgUUID,
-	}
-	mock.lockGetByArtifactAndGateway.Lock()
-	mock.calls.GetByArtifactAndGateway = append(mock.calls.GetByArtifactAndGateway, callInfo)
-	mock.lockGetByArtifactAndGateway.Unlock()
-	return mock.GetByArtifactAndGatewayFunc(artifactUUID, gatewayUUID, orgUUID)
-}
-
-// GetByArtifactAndGatewayCalls gets all the calls that were made to GetByArtifactAndGateway.
-// Check the length with:
-//
-//	len(mockedDeploymentRepository.GetByArtifactAndGatewayCalls())
-func (mock *DeploymentRepositoryMock) GetByArtifactAndGatewayCalls() []struct {
-	ArtifactUUID string
-	GatewayUUID  string
-	OrgUUID      string
-} {
-	var calls []struct {
-		ArtifactUUID string
-		GatewayUUID  string
-		OrgUUID      string
-	}
-	mock.lockGetByArtifactAndGateway.RLock()
-	calls = mock.calls.GetByArtifactAndGateway
-	mock.lockGetByArtifactAndGateway.RUnlock()
-	return calls
-}
-
-// GetCurrentByGateway calls GetCurrentByGatewayFunc.
-func (mock *DeploymentRepositoryMock) GetCurrentByGateway(artifactUUID string, gatewayID string, orgUUID string) (*models.Deployment, error) {
-	if mock.GetCurrentByGatewayFunc == nil {
-		panic("DeploymentRepositoryMock.GetCurrentByGatewayFunc: method is nil but DeploymentRepository.GetCurrentByGateway was just called")
-	}
-	callInfo := struct {
-		ArtifactUUID string
-		GatewayID    string
-		OrgUUID      string
-	}{
-		ArtifactUUID: artifactUUID,
-		GatewayID:    gatewayID,
-		OrgUUID:      orgUUID,
-	}
-	mock.lockGetCurrentByGateway.Lock()
-	mock.calls.GetCurrentByGateway = append(mock.calls.GetCurrentByGateway, callInfo)
-	mock.lockGetCurrentByGateway.Unlock()
-	return mock.GetCurrentByGatewayFunc(artifactUUID, gatewayID, orgUUID)
-}
-
-// GetCurrentByGatewayCalls gets all the calls that were made to GetCurrentByGateway.
-// Check the length with:
-//
-//	len(mockedDeploymentRepository.GetCurrentByGatewayCalls())
-func (mock *DeploymentRepositoryMock) GetCurrentByGatewayCalls() []struct {
-	ArtifactUUID string
-	GatewayID    string
-	OrgUUID      string
-} {
-	var calls []struct {
-		ArtifactUUID string
-		GatewayID    string
-		OrgUUID      string
-	}
-	mock.lockGetCurrentByGateway.RLock()
-	calls = mock.calls.GetCurrentByGateway
-	mock.lockGetCurrentByGateway.RUnlock()
-	return calls
-}
-
-// GetDeployedProvidersByGateway calls GetDeployedProvidersByGatewayFunc.
-func (mock *DeploymentRepositoryMock) GetDeployedProvidersByGateway(gatewayUUID uuid.UUID, orgUUID string) ([]string, error) {
-	if mock.GetDeployedProvidersByGatewayFunc == nil {
-		panic("DeploymentRepositoryMock.GetDeployedProvidersByGatewayFunc: method is nil but DeploymentRepository.GetDeployedProvidersByGateway was just called")
-	}
-	callInfo := struct {
-		GatewayUUID uuid.UUID
-		OrgUUID     string
-	}{
-		GatewayUUID: gatewayUUID,
-		OrgUUID:     orgUUID,
-	}
-	mock.lockGetDeployedProvidersByGateway.Lock()
-	mock.calls.GetDeployedProvidersByGateway = append(mock.calls.GetDeployedProvidersByGateway, callInfo)
-	mock.lockGetDeployedProvidersByGateway.Unlock()
-	return mock.GetDeployedProvidersByGatewayFunc(gatewayUUID, orgUUID)
-}
-
-// GetDeployedProvidersByGatewayCalls gets all the calls that were made to GetDeployedProvidersByGateway.
-// Check the length with:
-//
-//	len(mockedDeploymentRepository.GetDeployedProvidersByGatewayCalls())
-func (mock *DeploymentRepositoryMock) GetDeployedProvidersByGatewayCalls() []struct {
-	GatewayUUID uuid.UUID
-	OrgUUID     string
-} {
-	var calls []struct {
-		GatewayUUID uuid.UUID
-		OrgUUID     string
-	}
-	mock.lockGetDeployedProvidersByGateway.RLock()
-	calls = mock.calls.GetDeployedProvidersByGateway
-	mock.lockGetDeployedProvidersByGateway.RUnlock()
 	return calls
 }
 
@@ -1426,46 +1088,6 @@ func (mock *DeploymentRepositoryMock) GetPullableCalls() []struct {
 	return calls
 }
 
-// GetStatus calls GetStatusFunc.
-func (mock *DeploymentRepositoryMock) GetStatus(artifactUUID string, orgUUID string, gatewayID string) (string, models.DeploymentStatus, *time.Time, error) {
-	if mock.GetStatusFunc == nil {
-		panic("DeploymentRepositoryMock.GetStatusFunc: method is nil but DeploymentRepository.GetStatus was just called")
-	}
-	callInfo := struct {
-		ArtifactUUID string
-		OrgUUID      string
-		GatewayID    string
-	}{
-		ArtifactUUID: artifactUUID,
-		OrgUUID:      orgUUID,
-		GatewayID:    gatewayID,
-	}
-	mock.lockGetStatus.Lock()
-	mock.calls.GetStatus = append(mock.calls.GetStatus, callInfo)
-	mock.lockGetStatus.Unlock()
-	return mock.GetStatusFunc(artifactUUID, orgUUID, gatewayID)
-}
-
-// GetStatusCalls gets all the calls that were made to GetStatus.
-// Check the length with:
-//
-//	len(mockedDeploymentRepository.GetStatusCalls())
-func (mock *DeploymentRepositoryMock) GetStatusCalls() []struct {
-	ArtifactUUID string
-	OrgUUID      string
-	GatewayID    string
-} {
-	var calls []struct {
-		ArtifactUUID string
-		OrgUUID      string
-		GatewayID    string
-	}
-	mock.lockGetStatus.RLock()
-	calls = mock.calls.GetStatus
-	mock.lockGetStatus.RUnlock()
-	return calls
-}
-
 // GetStatusRecord calls GetStatusRecordFunc.
 func (mock *DeploymentRepositoryMock) GetStatusRecord(ctx context.Context, placement models.Placement) (*models.DeploymentStatusRecord, error) {
 	if mock.GetStatusRecordFunc == nil {
@@ -1499,82 +1121,6 @@ func (mock *DeploymentRepositoryMock) GetStatusRecordCalls() []struct {
 	mock.lockGetStatusRecord.RLock()
 	calls = mock.calls.GetStatusRecord
 	mock.lockGetStatusRecord.RUnlock()
-	return calls
-}
-
-// GetTrackedGatewaysByProvider calls GetTrackedGatewaysByProviderFunc.
-func (mock *DeploymentRepositoryMock) GetTrackedGatewaysByProvider(artifactUUID uuid.UUID, orgUUID string) ([]string, error) {
-	if mock.GetTrackedGatewaysByProviderFunc == nil {
-		panic("DeploymentRepositoryMock.GetTrackedGatewaysByProviderFunc: method is nil but DeploymentRepository.GetTrackedGatewaysByProvider was just called")
-	}
-	callInfo := struct {
-		ArtifactUUID uuid.UUID
-		OrgUUID      string
-	}{
-		ArtifactUUID: artifactUUID,
-		OrgUUID:      orgUUID,
-	}
-	mock.lockGetTrackedGatewaysByProvider.Lock()
-	mock.calls.GetTrackedGatewaysByProvider = append(mock.calls.GetTrackedGatewaysByProvider, callInfo)
-	mock.lockGetTrackedGatewaysByProvider.Unlock()
-	return mock.GetTrackedGatewaysByProviderFunc(artifactUUID, orgUUID)
-}
-
-// GetTrackedGatewaysByProviderCalls gets all the calls that were made to GetTrackedGatewaysByProvider.
-// Check the length with:
-//
-//	len(mockedDeploymentRepository.GetTrackedGatewaysByProviderCalls())
-func (mock *DeploymentRepositoryMock) GetTrackedGatewaysByProviderCalls() []struct {
-	ArtifactUUID uuid.UUID
-	OrgUUID      string
-} {
-	var calls []struct {
-		ArtifactUUID uuid.UUID
-		OrgUUID      string
-	}
-	mock.lockGetTrackedGatewaysByProvider.RLock()
-	calls = mock.calls.GetTrackedGatewaysByProvider
-	mock.lockGetTrackedGatewaysByProvider.RUnlock()
-	return calls
-}
-
-// GetTrackedGatewaysByProviderCtx calls GetTrackedGatewaysByProviderCtxFunc.
-func (mock *DeploymentRepositoryMock) GetTrackedGatewaysByProviderCtx(ctx context.Context, artifactUUID uuid.UUID, orgUUID string) ([]string, error) {
-	if mock.GetTrackedGatewaysByProviderCtxFunc == nil {
-		panic("DeploymentRepositoryMock.GetTrackedGatewaysByProviderCtxFunc: method is nil but DeploymentRepository.GetTrackedGatewaysByProviderCtx was just called")
-	}
-	callInfo := struct {
-		Ctx          context.Context
-		ArtifactUUID uuid.UUID
-		OrgUUID      string
-	}{
-		Ctx:          ctx,
-		ArtifactUUID: artifactUUID,
-		OrgUUID:      orgUUID,
-	}
-	mock.lockGetTrackedGatewaysByProviderCtx.Lock()
-	mock.calls.GetTrackedGatewaysByProviderCtx = append(mock.calls.GetTrackedGatewaysByProviderCtx, callInfo)
-	mock.lockGetTrackedGatewaysByProviderCtx.Unlock()
-	return mock.GetTrackedGatewaysByProviderCtxFunc(ctx, artifactUUID, orgUUID)
-}
-
-// GetTrackedGatewaysByProviderCtxCalls gets all the calls that were made to GetTrackedGatewaysByProviderCtx.
-// Check the length with:
-//
-//	len(mockedDeploymentRepository.GetTrackedGatewaysByProviderCtxCalls())
-func (mock *DeploymentRepositoryMock) GetTrackedGatewaysByProviderCtxCalls() []struct {
-	Ctx          context.Context
-	ArtifactUUID uuid.UUID
-	OrgUUID      string
-} {
-	var calls []struct {
-		Ctx          context.Context
-		ArtifactUUID uuid.UUID
-		OrgUUID      string
-	}
-	mock.lockGetTrackedGatewaysByProviderCtx.RLock()
-	calls = mock.calls.GetTrackedGatewaysByProviderCtx
-	mock.lockGetTrackedGatewaysByProviderCtx.RUnlock()
 	return calls
 }
 
@@ -1743,46 +1289,6 @@ func (mock *DeploymentRepositoryMock) InsertPendingCalls() []struct {
 	mock.lockInsertPending.RLock()
 	calls = mock.calls.InsertPending
 	mock.lockInsertPending.RUnlock()
-	return calls
-}
-
-// IsProviderDeployedToGateway calls IsProviderDeployedToGatewayFunc.
-func (mock *DeploymentRepositoryMock) IsProviderDeployedToGateway(artifactUUID uuid.UUID, gatewayUUID uuid.UUID, orgUUID string) (bool, error) {
-	if mock.IsProviderDeployedToGatewayFunc == nil {
-		panic("DeploymentRepositoryMock.IsProviderDeployedToGatewayFunc: method is nil but DeploymentRepository.IsProviderDeployedToGateway was just called")
-	}
-	callInfo := struct {
-		ArtifactUUID uuid.UUID
-		GatewayUUID  uuid.UUID
-		OrgUUID      string
-	}{
-		ArtifactUUID: artifactUUID,
-		GatewayUUID:  gatewayUUID,
-		OrgUUID:      orgUUID,
-	}
-	mock.lockIsProviderDeployedToGateway.Lock()
-	mock.calls.IsProviderDeployedToGateway = append(mock.calls.IsProviderDeployedToGateway, callInfo)
-	mock.lockIsProviderDeployedToGateway.Unlock()
-	return mock.IsProviderDeployedToGatewayFunc(artifactUUID, gatewayUUID, orgUUID)
-}
-
-// IsProviderDeployedToGatewayCalls gets all the calls that were made to IsProviderDeployedToGateway.
-// Check the length with:
-//
-//	len(mockedDeploymentRepository.IsProviderDeployedToGatewayCalls())
-func (mock *DeploymentRepositoryMock) IsProviderDeployedToGatewayCalls() []struct {
-	ArtifactUUID uuid.UUID
-	GatewayUUID  uuid.UUID
-	OrgUUID      string
-} {
-	var calls []struct {
-		ArtifactUUID uuid.UUID
-		GatewayUUID  uuid.UUID
-		OrgUUID      string
-	}
-	mock.lockIsProviderDeployedToGateway.RLock()
-	calls = mock.calls.IsProviderDeployedToGateway
-	mock.lockIsProviderDeployedToGateway.RUnlock()
 	return calls
 }
 
@@ -2130,106 +1636,6 @@ func (mock *DeploymentRepositoryMock) SentGatewaysCalls() []struct {
 	return calls
 }
 
-// SetCurrent calls SetCurrentFunc.
-func (mock *DeploymentRepositoryMock) SetCurrent(artifactUUID string, orgUUID string, gatewayID string, deploymentID string, status models.DeploymentStatus) (time.Time, error) {
-	if mock.SetCurrentFunc == nil {
-		panic("DeploymentRepositoryMock.SetCurrentFunc: method is nil but DeploymentRepository.SetCurrent was just called")
-	}
-	callInfo := struct {
-		ArtifactUUID string
-		OrgUUID      string
-		GatewayID    string
-		DeploymentID string
-		Status       models.DeploymentStatus
-	}{
-		ArtifactUUID: artifactUUID,
-		OrgUUID:      orgUUID,
-		GatewayID:    gatewayID,
-		DeploymentID: deploymentID,
-		Status:       status,
-	}
-	mock.lockSetCurrent.Lock()
-	mock.calls.SetCurrent = append(mock.calls.SetCurrent, callInfo)
-	mock.lockSetCurrent.Unlock()
-	return mock.SetCurrentFunc(artifactUUID, orgUUID, gatewayID, deploymentID, status)
-}
-
-// SetCurrentCalls gets all the calls that were made to SetCurrent.
-// Check the length with:
-//
-//	len(mockedDeploymentRepository.SetCurrentCalls())
-func (mock *DeploymentRepositoryMock) SetCurrentCalls() []struct {
-	ArtifactUUID string
-	OrgUUID      string
-	GatewayID    string
-	DeploymentID string
-	Status       models.DeploymentStatus
-} {
-	var calls []struct {
-		ArtifactUUID string
-		OrgUUID      string
-		GatewayID    string
-		DeploymentID string
-		Status       models.DeploymentStatus
-	}
-	mock.lockSetCurrent.RLock()
-	calls = mock.calls.SetCurrent
-	mock.lockSetCurrent.RUnlock()
-	return calls
-}
-
-// SetCurrentCtx calls SetCurrentCtxFunc.
-func (mock *DeploymentRepositoryMock) SetCurrentCtx(ctx context.Context, artifactUUID string, orgUUID string, gatewayID string, deploymentID string, status models.DeploymentStatus) (time.Time, error) {
-	if mock.SetCurrentCtxFunc == nil {
-		panic("DeploymentRepositoryMock.SetCurrentCtxFunc: method is nil but DeploymentRepository.SetCurrentCtx was just called")
-	}
-	callInfo := struct {
-		Ctx          context.Context
-		ArtifactUUID string
-		OrgUUID      string
-		GatewayID    string
-		DeploymentID string
-		Status       models.DeploymentStatus
-	}{
-		Ctx:          ctx,
-		ArtifactUUID: artifactUUID,
-		OrgUUID:      orgUUID,
-		GatewayID:    gatewayID,
-		DeploymentID: deploymentID,
-		Status:       status,
-	}
-	mock.lockSetCurrentCtx.Lock()
-	mock.calls.SetCurrentCtx = append(mock.calls.SetCurrentCtx, callInfo)
-	mock.lockSetCurrentCtx.Unlock()
-	return mock.SetCurrentCtxFunc(ctx, artifactUUID, orgUUID, gatewayID, deploymentID, status)
-}
-
-// SetCurrentCtxCalls gets all the calls that were made to SetCurrentCtx.
-// Check the length with:
-//
-//	len(mockedDeploymentRepository.SetCurrentCtxCalls())
-func (mock *DeploymentRepositoryMock) SetCurrentCtxCalls() []struct {
-	Ctx          context.Context
-	ArtifactUUID string
-	OrgUUID      string
-	GatewayID    string
-	DeploymentID string
-	Status       models.DeploymentStatus
-} {
-	var calls []struct {
-		Ctx          context.Context
-		ArtifactUUID string
-		OrgUUID      string
-		GatewayID    string
-		DeploymentID string
-		Status       models.DeploymentStatus
-	}
-	mock.lockSetCurrentCtx.RLock()
-	calls = mock.calls.SetCurrentCtx
-	mock.lockSetCurrentCtx.RUnlock()
-	return calls
-}
-
 // StartDeploy calls StartDeployFunc.
 func (mock *DeploymentRepositoryMock) StartDeploy(ctx context.Context, tx *gorm.DB, placement models.Placement, deployment *models.Deployment) error {
 	if mock.StartDeployFunc == nil {
@@ -2355,46 +1761,6 @@ func (mock *DeploymentRepositoryMock) StatusRecordsCalls() []struct {
 	mock.lockStatusRecords.RLock()
 	calls = mock.calls.StatusRecords
 	mock.lockStatusRecords.RUnlock()
-	return calls
-}
-
-// UpdateStatusByDeploymentID calls UpdateStatusByDeploymentIDFunc.
-func (mock *DeploymentRepositoryMock) UpdateStatusByDeploymentID(deploymentID string, gatewayUUID string, status models.DeploymentStatus) (time.Time, error) {
-	if mock.UpdateStatusByDeploymentIDFunc == nil {
-		panic("DeploymentRepositoryMock.UpdateStatusByDeploymentIDFunc: method is nil but DeploymentRepository.UpdateStatusByDeploymentID was just called")
-	}
-	callInfo := struct {
-		DeploymentID string
-		GatewayUUID  string
-		Status       models.DeploymentStatus
-	}{
-		DeploymentID: deploymentID,
-		GatewayUUID:  gatewayUUID,
-		Status:       status,
-	}
-	mock.lockUpdateStatusByDeploymentID.Lock()
-	mock.calls.UpdateStatusByDeploymentID = append(mock.calls.UpdateStatusByDeploymentID, callInfo)
-	mock.lockUpdateStatusByDeploymentID.Unlock()
-	return mock.UpdateStatusByDeploymentIDFunc(deploymentID, gatewayUUID, status)
-}
-
-// UpdateStatusByDeploymentIDCalls gets all the calls that were made to UpdateStatusByDeploymentID.
-// Check the length with:
-//
-//	len(mockedDeploymentRepository.UpdateStatusByDeploymentIDCalls())
-func (mock *DeploymentRepositoryMock) UpdateStatusByDeploymentIDCalls() []struct {
-	DeploymentID string
-	GatewayUUID  string
-	Status       models.DeploymentStatus
-} {
-	var calls []struct {
-		DeploymentID string
-		GatewayUUID  string
-		Status       models.DeploymentStatus
-	}
-	mock.lockUpdateStatusByDeploymentID.RLock()
-	calls = mock.calls.UpdateStatusByDeploymentID
-	mock.lockUpdateStatusByDeploymentID.RUnlock()
 	return calls
 }
 

@@ -20,12 +20,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
@@ -46,24 +44,6 @@ type DeploymentRepository interface {
 	GetWithStateCtx(ctx context.Context, deploymentID, artifactUUID, orgUUID string) (*models.Deployment, error)
 	GetDeploymentsWithState(artifactUUID, orgUUID string, gatewayID *string, status *string, maxPerAPIGW int) ([]*models.Deployment, error)
 	Delete(deploymentID, artifactUUID, orgUUID string) error
-	GetCurrentByGateway(artifactUUID, gatewayID, orgUUID string) (*models.Deployment, error)
-
-	// Deployment status methods (mutable state tracking)
-	SetCurrent(artifactUUID, orgUUID, gatewayID, deploymentID string, status models.DeploymentStatus) (updatedAt time.Time, err error)
-	// SetCurrentCtx is SetCurrent with context propagation — see GetWithStateCtx.
-	SetCurrentCtx(ctx context.Context, artifactUUID, orgUUID, gatewayID, deploymentID string, status models.DeploymentStatus) (updatedAt time.Time, err error)
-	GetStatus(artifactUUID, orgUUID, gatewayID string) (deploymentID string, status models.DeploymentStatus, updatedAt *time.Time, err error)
-	DeleteStatus(artifactUUID, orgUUID, gatewayID string) error
-
-	// Deployment ack methods
-	UpdateStatusByDeploymentID(deploymentID, gatewayUUID string, status models.DeploymentStatus) (time.Time, error)
-
-	// Gateway mapping methods (derived from deployment status)
-	GetTrackedGatewaysByProvider(artifactUUID uuid.UUID, orgUUID string) ([]string, error)
-	GetTrackedGatewaysByProviderCtx(ctx context.Context, artifactUUID uuid.UUID, orgUUID string) ([]string, error)
-	GetDeployedProvidersByGateway(gatewayUUID uuid.UUID, orgUUID string) ([]string, error)
-	IsProviderDeployedToGateway(artifactUUID uuid.UUID, gatewayUUID uuid.UUID, orgUUID string) (bool, error)
-	GetByArtifactAndGateway(artifactUUID, gatewayUUID, orgUUID string) (*models.Deployment, error)
 
 	// Transition starters: StartDeploy, StartRestore and BeginUndeploy are the only writers that reset the
 	// render queue. tx is the caller's transaction; the gateway event goes last in it.
@@ -120,10 +100,6 @@ func NewDeploymentRepo(db *gorm.DB) DeploymentRepository {
 		db: db,
 	}
 }
-
-// legacyStatusColumns are what the settled-status writers overwrite: they record DEPLOYED or UNDEPLOYED as both
-// the status and the desired status.
-var legacyStatusColumns = []string{"deployment_id", "status", "status_desired", "performed_at", "updated_at"}
 
 // CreateWithLimitEnforcement records an immutable deployment, first pruning the oldest archived deployments of the
 // artifact on the gateway once it has hardLimit of them. It writes no status: StartDeploy points the status row at
@@ -217,124 +193,6 @@ func (r *DeploymentRepo) Delete(deploymentID, artifactUUID, orgUUID string) erro
 	}
 
 	return nil
-}
-
-// GetCurrentByGateway retrieves the currently DEPLOYED deployment for an artifact on a gateway
-func (r *DeploymentRepo) GetCurrentByGateway(artifactUUID, gatewayID, orgUUID string) (*models.Deployment, error) {
-	var deployment models.Deployment
-	result := r.db.Table("deployments d").
-		Select("d.deployment_id, d.name, d.artifact_uuid, d.ou_id, d.gateway_uuid, "+
-			"d.base_deployment_id, d.content, d.metadata, d.created_at, "+
-			"s.status, s.updated_at AS status_updated_at").
-		Joins("INNER JOIN deployment_status s ON d.deployment_id = s.deployment_id "+
-			"AND d.artifact_uuid = s.artifact_uuid "+
-			"AND d.ou_id = s.ou_id "+
-			"AND d.gateway_uuid = s.gateway_uuid").
-		Where("d.artifact_uuid = ? AND d.gateway_uuid = ? AND d.ou_id = ? AND s.status = ?",
-			artifactUUID, gatewayID, orgUUID, string(models.DeploymentStatusDeployed)).
-		Order("d.created_at DESC").
-		Limit(1).
-		Scan(&deployment)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	if result.RowsAffected == 0 {
-		//nolint:nilnil // A nil deployment with nil error means no active deployment; callers handle deployment == nil.
-		return nil, nil
-	}
-	return &deployment, nil
-}
-
-// SetCurrent inserts or updates the deployment status record
-func (r *DeploymentRepo) SetCurrent(artifactUUID, orgUUID, gatewayID, deploymentID string, status models.DeploymentStatus) (time.Time, error) {
-	return r.SetCurrentCtx(context.Background(), artifactUUID, orgUUID, gatewayID, deploymentID, status)
-}
-
-// SetCurrentCtx is SetCurrent with context propagation — see the interface doc comment.
-func (r *DeploymentRepo) SetCurrentCtx(ctx context.Context, artifactUUID, orgUUID, gatewayID, deploymentID string, status models.DeploymentStatus) (time.Time, error) {
-	updatedAt := time.Now()
-
-	artifactUUID_uuid, err := uuid.Parse(artifactUUID)
-	if err != nil {
-		return time.Time{}, err
-	}
-	gatewayUUID_uuid, err := uuid.Parse(gatewayID)
-	if err != nil {
-		return time.Time{}, err
-	}
-	deploymentUUID_uuid, err := uuid.Parse(deploymentID)
-	if err != nil {
-		return time.Time{}, err
-	}
-
-	deploymentStatus := &models.DeploymentStatusRecord{
-		ArtifactUUID:  artifactUUID_uuid,
-		OUID:          orgUUID,
-		GatewayUUID:   gatewayUUID_uuid,
-		DeploymentID:  &deploymentUUID_uuid,
-		Status:        status,
-		StatusDesired: status,
-		PerformedAt:   models.NewPerformedAt(updatedAt),
-		UpdatedAt:     updatedAt,
-	}
-
-	err = r.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "artifact_uuid"}, {Name: "ou_id"}, {Name: "gateway_uuid"}},
-		DoUpdates: clause.AssignmentColumns(legacyStatusColumns),
-	}).Create(deploymentStatus).Error
-
-	return updatedAt, err
-}
-
-// UpdateStatusByDeploymentID updates the status of a deployment_status record identified by deployment_id and gateway_uuid.
-// This is used to process deployment ack messages from the gateway.
-func (r *DeploymentRepo) UpdateStatusByDeploymentID(deploymentID, gatewayUUID string, status models.DeploymentStatus) (time.Time, error) {
-	updatedAt := time.Now()
-	result := r.db.Table("deployment_status").
-		Where("deployment_id = ? AND gateway_uuid = ?", deploymentID, gatewayUUID).
-		Updates(map[string]interface{}{
-			"status":         status,
-			"status_desired": status,
-			"updated_at":     updatedAt,
-		})
-	if result.Error != nil {
-		return time.Time{}, result.Error
-	}
-	if result.RowsAffected == 0 {
-		slog.Warn("UpdateStatusByDeploymentID: no matching deployment_status record found", "deploymentID", deploymentID)
-		return time.Time{}, fmt.Errorf("deployment_status not found for deploymentID %s", deploymentID)
-	}
-	return updatedAt, nil
-}
-
-// GetStatus retrieves the current deployment status for an artifact on a gateway
-func (r *DeploymentRepo) GetStatus(artifactUUID, orgUUID, gatewayID string) (string, models.DeploymentStatus, *time.Time, error) {
-	var result struct {
-		DeploymentID string
-		Status       string
-		UpdatedAt    time.Time
-	}
-
-	err := r.db.Table("deployment_status").
-		Select("deployment_id, status, updated_at").
-		Where("artifact_uuid = ? AND ou_id = ? AND gateway_uuid = ?",
-			artifactUUID, orgUUID, gatewayID).
-		Scan(&result).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return "", "", nil, err
-		}
-		return "", "", nil, err
-	}
-
-	return result.DeploymentID, models.DeploymentStatus(result.Status), &result.UpdatedAt, nil
-}
-
-// DeleteStatus deletes the status entry for an artifact on a gateway
-func (r *DeploymentRepo) DeleteStatus(artifactUUID, orgUUID, gatewayID string) error {
-	return r.db.Where("artifact_uuid = ? AND ou_id = ? AND gateway_uuid = ?",
-		artifactUUID, orgUUID, gatewayID).
-		Delete(&models.DeploymentStatusRecord{}).Error
 }
 
 // statusRowColumns are the status row's columns a Deployment derives its UserStatus from, joined as s.
@@ -446,78 +304,4 @@ func (r *DeploymentRepo) GetDeploymentsWithState(artifactUUID, orgUUID string, g
 	}
 
 	return deployments, err
-}
-
-// GetTrackedGatewaysByProvider returns all gateway UUIDs where this provider has a
-// deployment_status row, regardless of whether the current status is DEPLOYED or
-// UNDEPLOYED. Used by save-time redeploy flows that must reach every gateway the proxy
-// has ever been pushed to, including ones whose last deploy ack failed.
-func (r *DeploymentRepo) GetTrackedGatewaysByProvider(artifactUUID uuid.UUID, orgUUID string) ([]string, error) {
-	return r.GetTrackedGatewaysByProviderCtx(context.Background(), artifactUUID, orgUUID)
-}
-
-func (r *DeploymentRepo) GetTrackedGatewaysByProviderCtx(ctx context.Context, artifactUUID uuid.UUID, orgUUID string) ([]string, error) {
-	var gatewayUUIDs []string
-	err := r.db.WithContext(ctx).Table("deployment_status").
-		Where("artifact_uuid = ? AND ou_id = ?", artifactUUID, orgUUID).
-		Pluck("gateway_uuid", &gatewayUUIDs).Error
-	if err != nil {
-		return nil, err
-	}
-
-	return gatewayUUIDs, nil
-}
-
-// GetDeployedProvidersByGateway returns all provider UUIDs currently deployed to this gateway
-func (r *DeploymentRepo) GetDeployedProvidersByGateway(gatewayUUID uuid.UUID, orgUUID string) ([]string, error) {
-	var providerUUIDs []string
-	err := r.db.Table("deployment_status").
-		Where("gateway_uuid = ? AND ou_id = ? AND status = ?",
-			gatewayUUID, orgUUID, models.DeploymentStatusDeployed).
-		Pluck("artifact_uuid", &providerUUIDs).Error
-	if err != nil {
-		return nil, err
-	}
-
-	return providerUUIDs, nil
-}
-
-// IsProviderDeployedToGateway checks if a provider is currently deployed to a gateway
-func (r *DeploymentRepo) IsProviderDeployedToGateway(artifactUUID uuid.UUID, gatewayUUID uuid.UUID, orgUUID string) (bool, error) {
-	var count int64
-	err := r.db.Table("deployment_status").
-		Where("artifact_uuid = ? AND gateway_uuid = ? AND ou_id = ? AND status = ?",
-			artifactUUID, gatewayUUID, orgUUID, models.DeploymentStatusDeployed).
-		Count(&count).Error
-
-	return count > 0, err
-}
-
-// GetByArtifactAndGateway retrieves deployment by artifact and gateway
-func (r *DeploymentRepo) GetByArtifactAndGateway(artifactUUID, gatewayUUID, orgUUID string) (*models.Deployment, error) {
-	var deploymentID string
-	var status models.DeploymentStatus
-	var updatedAt *time.Time
-
-	// First get the deployment ID and status from deployment_status table
-	err := r.db.Table("deployment_status").
-		Select("deployment_id, status, updated_at").
-		Where("artifact_uuid = ? AND gateway_uuid = ? AND ou_id = ?",
-			artifactUUID, gatewayUUID, orgUUID).
-		Row().
-		Scan(&deploymentID, &status, &updatedAt)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, utils.ErrArtifactNotFound
-		}
-		return nil, fmt.Errorf("failed to query deployment status: %w", err)
-	}
-
-	// Return a minimal deployment object with status information
-	deployment := &models.Deployment{
-		Status:    &status,
-		UpdatedAt: updatedAt,
-	}
-
-	return deployment, nil
 }
