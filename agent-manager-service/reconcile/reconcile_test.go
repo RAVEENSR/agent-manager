@@ -312,6 +312,13 @@ func clockAt(core *Core) time.Time {
 	return now
 }
 
+// runOnceFor runs the worker's render pass over the placement's artifact only. The packages' integration tests share
+// one database, and a fleet-wide pass on this package's year-2000 clock would claim other packages' rows.
+func runOnceFor(t *testing.T, worker *Worker, p models.Placement) {
+	t.Helper()
+	require.NoError(t, worker.RunOnceFor(context.Background(), p.OUID, p.ArtifactUUID))
+}
+
 func advance(core *Core, by time.Duration) time.Time {
 	now := core.now().Add(by)
 	core.now = func() time.Time { return now }
@@ -532,7 +539,7 @@ func TestRestoreOverAWaitingRedeploy(t *testing.T) {
 	kind.setRender(nil)
 	clockAt(core)
 	advance(core, time.Hour)
-	worker.RunOnce(context.Background())
+	runOnceFor(t, worker, p)
 
 	row := statusRow(t, p)
 	assert.Equal(t, first, *row.DeploymentID)
@@ -580,7 +587,7 @@ func TestWorkerBacksOffAWaitingRow(t *testing.T) {
 
 	var delays []time.Duration
 	for range 8 {
-		worker.RunOnce(context.Background())
+		runOnceFor(t, worker, p)
 		row := statusRow(t, p)
 		require.NotNil(t, row.NextAttemptAt)
 		assert.Zero(t, row.AttemptCount)
@@ -608,7 +615,7 @@ func TestWorkerGivesUpAfterTheAttemptBudget(t *testing.T) {
 	dueAt(t, p, core.now())
 
 	for range 30 {
-		worker.RunOnce(context.Background())
+		runOnceFor(t, worker, p)
 		advance(core, 10*time.Minute)
 	}
 
@@ -627,18 +634,19 @@ func TestWorkerClaimsAnAbandonedRenderAfterTheLease(t *testing.T) {
 	deploy(t, core, p)
 	now := clockAt(core)
 	dueAt(t, p, now)
-	killed, err := repositories.NewDeploymentRepo(db.GetDB()).ClaimDueRenders(context.Background(), now, testLease, 100)
+	killed, err := repositories.NewDeploymentRepo(db.GetDB()).ClaimDueRendersOf(context.Background(), p.OUID, p.ArtifactUUID,
+		nil, now, testLease)
 	require.NoError(t, err)
 	require.Len(t, killed, 1, "a replica claims the row and dies before writing back")
 
-	worker.RunOnce(context.Background())
+	runOnceFor(t, worker, p)
 	assert.Zero(t, kind.renderCount(), "the row is leased")
 	row := statusRow(t, p)
 	assert.Equal(t, models.DeploymentStatusPending, row.Status)
 	assert.Nil(t, row.DeploymentID)
 
 	advance(core, testLease+time.Second)
-	worker.RunOnce(context.Background())
+	runOnceFor(t, worker, p)
 
 	assert.Equal(t, 1, kind.renderCount())
 	row = statusRow(t, p)
@@ -1017,7 +1025,7 @@ func TestUndeployCancelsADeployOwedOnAnUndeployedRow(t *testing.T) {
 
 	require.NoError(t, inTx(t, func(tx *gorm.DB) error { return core.Undeploy(context.Background(), tx, p) }))
 	clockAt(core)
-	worker.RunOnce(context.Background())
+	runOnceFor(t, worker, p)
 	claims, err := repositories.NewDeploymentRepo(db.GetDB()).ClaimDueRendersOf(context.Background(), p.OUID,
 		p.ArtifactUUID, nil, time.Now().Add(time.Hour), testLease)
 	require.NoError(t, err)
