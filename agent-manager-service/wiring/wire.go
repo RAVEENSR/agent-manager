@@ -84,6 +84,7 @@ var serviceProviderSet = wire.NewSet(
 	services.NewAgentThunderReconcilerService,
 	services.NewA2ACardFetcher,
 	services.NewA2ACardReconcilerService,
+	services.NewConfiguredDeploymentTimeoutSweeper,
 	services.NewA2AAgentCardService,
 	ProvideTxRunner,
 	services.NewA2APublisher,

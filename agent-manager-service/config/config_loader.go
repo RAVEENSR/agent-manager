@@ -310,6 +310,11 @@ func loadEnvs() {
 	if config.PlatformAdminOUID == "" {
 		slog.Warn("PLATFORM_ADMIN_OU_ID is not set; cross-organization platform routes will deny every request")
 	}
+	config.DeploymentTimeout = DeploymentTimeoutConfig{
+		SweepIntervalSeconds: int(r.readOptionalInt64("DEPLOYMENT_TIMEOUT_SWEEP_INTERVAL_SECONDS", 60)),
+		TimeoutSeconds:       int(r.readOptionalInt64("DEPLOYMENT_TIMEOUT_SECONDS", 300)),
+	}
+	validateDeploymentTimeoutConfig(config, r)
 	config.GatewayFailureThresholdSeconds = int(r.readOptionalInt64("GATEWAY_FAILURE_THRESHOLD_SECONDS", 300))
 	if config.GatewayFailureThresholdSeconds <= 0 {
 		r.errors = append(r.errors, fmt.Errorf(
@@ -433,6 +438,20 @@ func validateSecretManagerConfig(cfg *Config, r *configReader) {
 // (wiring) knows how to construct. Kept as an explicit allowlist so a typo fails config
 // load with a clear message instead of silently falling back to "memory" in an HA
 // deployment that meant to opt into "redis".
+func validateDeploymentTimeoutConfig(cfg *Config, r *configReader) {
+	for _, field := range []struct {
+		name  string
+		value int
+	}{
+		{"DEPLOYMENT_TIMEOUT_SWEEP_INTERVAL_SECONDS", cfg.DeploymentTimeout.SweepIntervalSeconds},
+		{"DEPLOYMENT_TIMEOUT_SECONDS", cfg.DeploymentTimeout.TimeoutSeconds},
+	} {
+		if field.value <= 0 {
+			r.errors = append(r.errors, fmt.Errorf("%s must be greater than 0, got %d", field.name, field.value))
+		}
+	}
+}
+
 var validGatewayManifestCacheBackends = map[string]bool{
 	"memory": true,
 	"redis":  true,

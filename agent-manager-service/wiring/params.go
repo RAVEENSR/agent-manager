@@ -80,6 +80,7 @@ type AppParams struct {
 	MonitorScheduler                 services.MonitorSchedulerService
 	AgentThunderReconciler           services.AgentThunderReconcilerService
 	A2ACardReconciler                services.A2ACardReconcilerService
+	DeploymentTimeoutSweeper         services.DeploymentTimeoutSweeper
 
 	// Services
 	LLMTemplateStore              *services.LLMTemplateStore

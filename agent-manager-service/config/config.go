@@ -149,6 +149,9 @@ type Config struct {
 	// move.
 	PlatformAdminOUID string
 
+	// DeploymentTimeout configures the sweeper that fails gateway deploys and undeploys the gateway never acked.
+	DeploymentTimeout DeploymentTimeoutConfig
+
 	// GatewayFailureThresholdSeconds is how long a gateway must have been
 	// disconnected (is_active false) before it counts as failed. Configurable
 	// rather than a constant because the SLO differs per deployment shape, and
@@ -213,6 +216,13 @@ type Config struct {
 	// Deployments that run evaluation jobs in a separate workflow-plane cluster
 	// (WSO2 Cloud) turn it on. EVAL_JOBS_USE_PUBLIC_GATEWAY_URL.
 	EvalJobsUsePublicGatewayURL bool
+}
+
+// DeploymentTimeoutConfig sets how often the timeout sweeper runs and how long a DEPLOYING or UNDEPLOYING row may
+// wait for the gateway's ack before it is FAILED with DEPLOYMENT_TIMEOUT.
+type DeploymentTimeoutConfig struct {
+	SweepIntervalSeconds int
+	TimeoutSeconds       int
 }
 
 // GatewayManifestCacheConfig selects and configures the backend for the
