@@ -57,80 +57,88 @@ func a2aIngressGateways() *repomocks.GatewayRepositoryMock {
 	}
 }
 
-// A deploy records that the agent is exposed in the environment, against its per-environment artifact.
-func TestExposeA2AAgentRecordsTheArtifactUUID(t *testing.T) {
-	var enqueued []models.PlatformAgentExposure
-	repo := &repomocks.PlatformAgentExposureRepositoryMock{
-		UpsertFunc: func(ctx context.Context, pub *models.PlatformAgentExposure) error {
-			enqueued = append(enqueued, *pub)
-			return nil
-		},
-	}
-	svc := a2aPublishingAgentService(repo, &repomocks.A2AProxyRepositoryMock{})
-
-	envUUID := uuid.New()
-	artifactUUID := uuid.New()
-	agentUUID := uuid.New()
-	svc.exposeA2AAgent(context.Background(), a2aPublicationKey{OUID: "org-1", ProjectName: "checkout", AgentName: "trip-planner", EnvironmentName: "dev", EnvironmentUUID: envUUID, AgentUUID: &agentUUID}, models.ArtifactRef{ArtifactUUID: artifactUUID})
-
-	require.Len(t, enqueued, 1)
-	assert.Equal(t, "trip-planner", enqueued[0].AgentName)
-	assert.Equal(t, "dev", enqueued[0].EnvironmentName)
-	assert.Equal(t, envUUID, enqueued[0].EnvironmentUUID)
-	assert.Equal(t, artifactUUID, enqueued[0].ArtifactUUID)
-	assert.Equal(t, &agentUUID, enqueued[0].AgentUUID)
+// recordingConfigs is an agent config repository that accepts upserts in the sentinel transaction only.
+func recordingConfigs(t *testing.T) (configs, txConfigs *repomocks.AgentConfigRepositoryMock) {
+	txConfigs = &repomocks.AgentConfigRepositoryMock{UpsertFunc: func(context.Context, *models.AgentConfig) error { return nil }}
+	configs = &repomocks.AgentConfigRepositoryMock{WithTxFunc: func(tx *gorm.DB) repositories.AgentConfigRepository {
+		assert.Same(t, txSentinel, tx)
+		return txConfigs
+	}}
+	return configs, txConfigs
 }
 
-// A failed write must not fail a deploy that has otherwise succeeded: the agent is running.
-func TestExposeA2AAgentSurvivesRepoFailure(t *testing.T) {
+// A deploy saves the environment's artifact, config and exposure in one transaction, the exposure against the
+// artifact.
+func TestRecordAgentEnvDeployExposesAPlatformA2AAgentInTheSaveTransaction(t *testing.T) {
 	repo := &repomocks.PlatformAgentExposureRepositoryMock{
-		UpsertFunc: func(ctx context.Context, pub *models.PlatformAgentExposure) error {
-			return assert.AnError
-		},
+		UpsertFunc: func(context.Context, *models.PlatformAgentExposure) error { return nil },
 	}
 	svc := a2aPublishingAgentService(repo, &repomocks.A2AProxyRepositoryMock{})
-	assert.NotPanics(t, func() {
-		svc.exposeA2AAgent(context.Background(), a2aPublicationKey{OUID: "org-1", ProjectName: "checkout", AgentName: "trip-planner", EnvironmentName: "dev", EnvironmentUUID: uuid.New()}, models.ArtifactRef{ArtifactUUID: uuid.New()})
+	configs, txConfigs := recordingConfigs(t)
+	svc.agentConfigRepo = configs
+	agent := &models.AgentResponse{UUID: uuid.NewString(), Type: models.AgentType{Type: "agent-api", SubType: "a2a-agent"}}
+	envUUID, artifact := uuid.New(), &models.Artifact{UUID: uuid.New()}
+	cfg := &models.AgentConfig{OUID: "org-1", ProjectName: "checkout", AgentName: "trip-planner", EnvironmentName: "dev"}
+
+	err := svc.recordAgentEnvDeploy(context.Background(), agent, cfg, envUUID.String(), func(tx *gorm.DB) (*models.Artifact, error) {
+		assert.Same(t, txSentinel, tx, "the artifact is ensured in the transaction")
+		return artifact, nil
 	})
+
+	require.NoError(t, err)
+	require.Len(t, txConfigs.UpsertCalls(), 1)
+	require.Len(t, repo.UpsertCalls(), 1)
+	exposure := repo.UpsertCalls()[0].Exposure
+	assert.Equal(t, "dev", exposure.EnvironmentName)
+	assert.Equal(t, envUUID, exposure.EnvironmentUUID)
+	assert.Equal(t, artifact.UUID, exposure.ArtifactUUID)
+	assert.Equal(t, agent.UUID, exposure.AgentUUID.String())
 }
 
-func TestRepublishA2AAgentExposesA2AAgents(t *testing.T) {
-	var enqueued []models.PlatformAgentExposure
+// The exposure is part of the deploy: when it can't be written, the request fails and a retry reconciles.
+func TestRecordAgentEnvDeployFailsWhenTheExposureCannotBeWritten(t *testing.T) {
 	repo := &repomocks.PlatformAgentExposureRepositoryMock{
-		UpsertFunc: func(ctx context.Context, pub *models.PlatformAgentExposure) error {
-			enqueued = append(enqueued, *pub)
-			return nil
-		},
+		UpsertFunc: func(context.Context, *models.PlatformAgentExposure) error { return assert.AnError },
 	}
 	svc := a2aPublishingAgentService(repo, &repomocks.A2AProxyRepositoryMock{})
-	agent := &models.AgentResponse{UUID: "6f1c2a7e-4c1b-4e0a-9a51-2b7f0e3d9c11", Type: models.AgentType{Type: "agent-api", SubType: "a2a-agent"}}
-	envUUID, artifactUUID := uuid.New(), uuid.New()
+	svc.agentConfigRepo, _ = recordingConfigs(t)
+	agent := &models.AgentResponse{Type: models.AgentType{Type: "agent-api", SubType: "a2a-agent"}}
+	cfg := &models.AgentConfig{OUID: "org-1", ProjectName: "checkout", AgentName: "trip-planner", EnvironmentName: "dev"}
 
-	require.NoError(t, svc.republishA2AAgent(context.Background(), agent, "org-1", "checkout", "trip-planner", "staging", envUUID.String(), artifactUUID))
+	err := svc.recordAgentEnvDeploy(context.Background(), agent, cfg, uuid.NewString(), func(*gorm.DB) (*models.Artifact, error) {
+		return &models.Artifact{UUID: uuid.New()}, nil
+	})
 
-	require.Len(t, enqueued, 1)
-	assert.Equal(t, "staging", enqueued[0].EnvironmentName)
-	assert.Equal(t, envUUID, enqueued[0].EnvironmentUUID)
-	assert.Equal(t, artifactUUID, enqueued[0].ArtifactUUID)
-	require.NotNil(t, enqueued[0].AgentUUID)
-	assert.Equal(t, agent.UUID, enqueued[0].AgentUUID.String())
+	assert.ErrorIs(t, err, assert.AnError)
 }
 
 // A REST agent's policies ride on its release binding, which the caller has
 // already updated; exposing it would publish an Agent resource for a non-agent.
-func TestRepublishA2AAgentIgnoresOtherAgents(t *testing.T) {
+func TestRecordAgentEnvDeployExposesNoOtherAgent(t *testing.T) {
 	repo := &repomocks.PlatformAgentExposureRepositoryMock{}
 	svc := a2aPublishingAgentService(repo, &repomocks.A2AProxyRepositoryMock{})
+	svc.agentConfigRepo = &repomocks.AgentConfigRepositoryMock{UpsertFunc: func(context.Context, *models.AgentConfig) error { return nil }}
 	agent := &models.AgentResponse{Type: models.AgentType{Type: "agent-api", SubType: "chat-api"}}
+	cfg := &models.AgentConfig{OUID: "org-1", ProjectName: "checkout", AgentName: "greeter", EnvironmentName: "dev"}
 
-	require.NoError(t, svc.republishA2AAgent(context.Background(), agent, "org-1", "checkout", "greeter", "dev", uuid.New().String(), uuid.New()))
+	err := svc.recordAgentEnvDeploy(context.Background(), agent, cfg, uuid.NewString(), func(*gorm.DB) (*models.Artifact, error) {
+		return &models.Artifact{UUID: uuid.New()}, nil
+	})
+
+	require.NoError(t, err)
 	assert.Empty(t, repo.UpsertCalls())
+	assert.Len(t, svc.agentConfigRepo.(*repomocks.AgentConfigRepositoryMock).UpsertCalls(), 1, "the config is still saved")
 }
 
-func TestRepublishA2AAgentRejectsUnparseableEnvironmentUUID(t *testing.T) {
+func TestRecordAgentEnvDeployRejectsAnUnparseableEnvironmentUUID(t *testing.T) {
 	svc := a2aPublishingAgentService(&repomocks.PlatformAgentExposureRepositoryMock{}, &repomocks.A2AProxyRepositoryMock{})
 	agent := &models.AgentResponse{Type: models.AgentType{Type: "agent-api", SubType: "a2a-agent"}}
-	err := svc.republishA2AAgent(context.Background(), agent, "org-1", "checkout", "trip-planner", "dev", "not-a-uuid", uuid.New())
+	cfg := &models.AgentConfig{OUID: "org-1", ProjectName: "checkout", AgentName: "trip-planner", EnvironmentName: "dev"}
+
+	err := svc.recordAgentEnvDeploy(context.Background(), agent, cfg, "not-a-uuid", func(*gorm.DB) (*models.Artifact, error) {
+		return &models.Artifact{UUID: uuid.New()}, nil
+	})
+
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not-a-uuid")
 }
@@ -199,30 +207,18 @@ func TestEnqueueCreatedA2AAgentSkipsAgentsWithNothingToPublish(t *testing.T) {
 	})
 }
 
-// An external agent's record is its proxy row, so a proxied one gets no exposure.
-func TestRepublishA2AAgentRecordsNoExposureForAnExternalAgent(t *testing.T) {
+// An external agent's record is its proxy row, proxied or not, so it gets no exposure.
+func TestRecordAgentEnvDeployRecordsNoExposureForAnExternalAgent(t *testing.T) {
 	pubs := &repomocks.PlatformAgentExposureRepositoryMock{} // UpsertFunc is nil: an exposure would panic
-	proxies := &repomocks.A2AProxyRepositoryMock{
-		GetByEnvUUIDFunc: func(context.Context, string, string, string, uuid.UUID) (*models.A2AProxy, error) {
-			return &models.A2AProxy{}, nil
-		},
-	}
-	svc := a2aPublishingAgentService(pubs, proxies)
+	svc := a2aPublishingAgentService(pubs, &repomocks.A2AProxyRepositoryMock{})
+	svc.agentConfigRepo = &repomocks.AgentConfigRepositoryMock{UpsertFunc: func(context.Context, *models.AgentConfig) error { return nil }}
+	cfg := &models.AgentConfig{OUID: "org-1", ProjectName: "checkout", AgentName: "weather", EnvironmentName: "dev"}
 
-	require.NoError(t, svc.republishA2AAgent(context.Background(), externalAgent(), "org-1", "checkout", "weather", "dev", uuid.New().String(), uuid.New()))
-	assert.Empty(t, pubs.UpsertCalls())
-}
+	err := svc.recordAgentEnvDeploy(context.Background(), externalAgent(), cfg, uuid.NewString(), func(*gorm.DB) (*models.Artifact, error) {
+		return &models.Artifact{UUID: uuid.New()}, nil
+	})
 
-func TestRepublishA2AAgentSkipsADirectExternalAgent(t *testing.T) {
-	pubs := &repomocks.PlatformAgentExposureRepositoryMock{} // UpsertFunc is nil: queueing would panic
-	proxies := &repomocks.A2AProxyRepositoryMock{
-		GetByEnvUUIDFunc: func(context.Context, string, string, string, uuid.UUID) (*models.A2AProxy, error) {
-			return nil, repositories.ErrA2AProxyNotFound
-		},
-	}
-	svc := a2aPublishingAgentService(pubs, proxies)
-
-	require.NoError(t, svc.republishA2AAgent(context.Background(), externalAgent(), "org-1", "checkout", "weather", "dev", uuid.New().String(), uuid.New()))
+	require.NoError(t, err)
 	assert.Empty(t, pubs.UpsertCalls())
 }
 

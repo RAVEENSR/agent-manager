@@ -106,15 +106,22 @@ func TestPromoteAgent_A2AInheritsSourceCardCORSAndRepublishes(t *testing.T) {
 	}
 	var upserted *models.AgentConfig
 	var events []string
+	txConfigs := &repomocks.AgentConfigRepositoryMock{
+		UpsertFunc: func(_ context.Context, cfg *models.AgentConfig) error {
+			assert.True(t, *promoted, "the config is saved once the promote has succeeded")
+			upserted = cfg
+			events = append(events, "upsert")
+			return nil
+		},
+	}
 	s.agentConfigRepo = &repomocks.AgentConfigRepositoryMock{
 		GetFunc: func(_ context.Context, _, _, _, envName string) (*models.AgentConfig, error) {
 			require.Equal(t, "dev", envName, "promote resolves settings from the source environment")
 			return sourceOverride, nil
 		},
-		UpsertFunc: func(_ context.Context, cfg *models.AgentConfig) error {
-			upserted = cfg
-			events = append(events, "upsert")
-			return nil
+		WithTxFunc: func(tx *gorm.DB) repositories.AgentConfigRepository {
+			assert.Same(t, txSentinel, tx, "the config is saved in the exposure's transaction")
+			return txConfigs
 		},
 	}
 	s.artifactRepo = &repomocks.ArtifactRepositoryMock{
@@ -128,7 +135,10 @@ func TestPromoteAgent_A2AInheritsSourceCardCORSAndRepublishes(t *testing.T) {
 			return nil
 		},
 	}
-	pubRepo.WithTxFunc = func(*gorm.DB) repositories.PlatformAgentExposureRepository { return pubRepo }
+	pubRepo.WithTxFunc = func(tx *gorm.DB) repositories.PlatformAgentExposureRepository {
+		assert.Same(t, txSentinel, tx)
+		return pubRepo
+	}
 	s.a2aPublisher = withA2ACore(NewA2APublisher(sentinelTx, pubRepo, &repomocks.A2AProxyRepositoryMock{}, nil, nil,
 		a2aRenderQueue(), a2aIngressGateways(), nil, testLogger(), nil, nil))
 
@@ -152,4 +162,46 @@ func TestPromoteAgent_A2AInheritsSourceCardCORSAndRepublishes(t *testing.T) {
 	assert.Equal(t, stagingUUID, enqueued[0].Exposure.EnvironmentUUID)
 	assert.Equal(t, artifactUUID, enqueued[0].Exposure.ArtifactUUID)
 	assert.Equal(t, []string{"upsert", "expose"}, events, "exposed only after the config it is built from is saved")
+}
+
+// The target's exposure is part of the promote: when it can't be written, the promote reports it and a retry
+// reconciles.
+func TestPromoteAgent_A2AFailsWhenTheExposureCannotBeWritten(t *testing.T) {
+	s, _ := promoteAgentTestFixture(t, []client.EnvVar{{Key: client.EnvVarAgentIDClientID, Value: "staging-client-id"}}, nil)
+	ocMock, ok := s.ocClient.(*clientmocks.OpenChoreoClientMock)
+	require.True(t, ok)
+	ocMock.GetComponentFunc = func(_ context.Context, _, _, name string) (*models.AgentResponse, error) {
+		return &models.AgentResponse{
+			UUID: "agent-uuid", Name: name, Provisioning: models.Provisioning{Type: string(utils.InternalAgent)},
+			Type: models.AgentType{Type: string(utils.AgentTypeAPI), SubType: string(utils.AgentSubTypeA2A)},
+		}, nil
+	}
+	ocMock.GetEnvironmentFunc = func(_ context.Context, _, envName string) (*models.EnvironmentResponse, error) {
+		return &models.EnvironmentResponse{Name: envName, UUID: uuid.NewString()}, nil
+	}
+	txConfigs := &repomocks.AgentConfigRepositoryMock{UpsertFunc: func(context.Context, *models.AgentConfig) error { return nil }}
+	s.agentConfigRepo = &repomocks.AgentConfigRepositoryMock{
+		GetFunc: func(context.Context, string, string, string, string) (*models.AgentConfig, error) {
+			return &models.AgentConfig{}, nil
+		},
+		WithTxFunc: func(*gorm.DB) repositories.AgentConfigRepository { return txConfigs },
+	}
+	s.artifactRepo = &repomocks.ArtifactRepositoryMock{
+		GetByHandleFunc: func(_, _ string) (*models.Artifact, error) {
+			return &models.Artifact{UUID: uuid.New(), Kind: models.KindAgent}, nil
+		},
+	}
+	pubRepo := &repomocks.PlatformAgentExposureRepositoryMock{
+		UpsertFunc: func(context.Context, *models.PlatformAgentExposure) error { return assert.AnError },
+	}
+	pubRepo.WithTxFunc = func(*gorm.DB) repositories.PlatformAgentExposureRepository { return pubRepo }
+	s.a2aPublisher = withA2ACore(NewA2APublisher(sentinelTx, pubRepo, &repomocks.A2AProxyRepositoryMock{}, nil, nil,
+		a2aRenderQueue(), a2aIngressGateways(), nil, testLogger(), nil, nil))
+
+	err := s.PromoteAgent(tierGrantedCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	assert.ErrorIs(t, err, assert.AnError)
 }
