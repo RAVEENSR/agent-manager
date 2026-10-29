@@ -93,6 +93,7 @@ type seed050 struct {
 
 	pendingNoCard, failedPlatform, external, artifactGone, dupOlder, dupNewer uuid.UUID
 	pendingNoCardArtifact, failedPlatformArtifact, dupArtifact                uuid.UUID
+	externalArtifact, published, publishedArtifact                            uuid.UUID
 	failedPlatformAgentUUID, externalAgentUUID                                uuid.UUID
 	failedPlatformCard, externalCard, orphanCard                              uuid.UUID
 }
@@ -123,6 +124,9 @@ func seedAt050(t *testing.T, g *gorm.DB) seed050 {
 		failedPlatformCard:      uuid.New(),
 		externalCard:            uuid.New(),
 		orphanCard:              uuid.New(),
+		externalArtifact:        uuid.New(),
+		published:               uuid.New(),
+		publishedArtifact:       uuid.New(),
 	}
 
 	exec(t, g, `INSERT INTO gateways (uuid, name, display_name, vhost, gateway_functionality_type, ou_id)
@@ -134,12 +138,12 @@ func seedAt050(t *testing.T, g *gorm.DB) seed050 {
 	}
 	artifact(s.deployedArtifact, "provider-a", "LlmProvider")
 	artifact(s.undeployedArtifact, "provider-b", "LlmProvider")
-	externalArtifact := uuid.New()
 	for id, handle := range map[uuid.UUID]string{
 		s.pendingNoCardArtifact:  "proj/pending/env",
 		s.failedPlatformArtifact: "proj/failed/env",
 		s.dupArtifact:            "proj/dup/env",
-		externalArtifact:         "proj/external/env",
+		s.externalArtifact:       "proj/external/env",
+		s.publishedArtifact:      "proj/published/env",
 	} {
 		artifact(id, handle, "Agent")
 	}
@@ -155,6 +159,13 @@ func seedAt050(t *testing.T, g *gorm.DB) seed050 {
 		VALUES (?, ?, ?, 'DEPLOYED', ?, ?), (?, ?, ?, 'UNDEPLOYED', ?, ?)`,
 		s.deployedArtifact, s.gateway, s.liveDeployment, s.statusUpdatedAt, seedOU,
 		s.undeployedArtifact, s.gateway, s.undeployedDeployment, s.statusUpdatedAt, seedOU)
+	// Agents already deployed whose publication then went pending or failed: a redeploy is owed.
+	for _, agentArtifact := range []uuid.UUID{s.failedPlatformArtifact, s.externalArtifact, s.publishedArtifact} {
+		agentDeployment := uuid.New()
+		deployment(agentDeployment, agentArtifact, "2026-09-04 00:00:00")
+		exec(t, g, `INSERT INTO deployment_status (artifact_uuid, gateway_uuid, deployment_id, status, updated_at, ou_id)
+			VALUES (?, ?, ?, 'DEPLOYED', ?, ?)`, agentArtifact, s.gateway, agentDeployment, s.statusUpdatedAt, seedOU)
+	}
 
 	exec(t, g, `INSERT INTO association_mappings (artifact_uuid, resource_uuid, association_type, ou_id)
 		VALUES (?, ?, 'gateway', ?)`, s.deployedArtifact, s.gateway, seedOU)
@@ -172,8 +183,10 @@ func seedAt050(t *testing.T, g *gorm.DB) seed050 {
 		"platform", "pending", "2026-10-01 00:00:00+00")
 	publication(s.failedPlatform, "failed", "dev", failedEnv, s.failedPlatformArtifact, &s.failedPlatformAgentUUID,
 		"platform", "failed", "2026-10-01 00:00:00+00")
-	publication(s.external, "external", "dev", externalEnv, externalArtifact, &s.externalAgentUUID,
+	publication(s.external, "external", "dev", externalEnv, s.externalArtifact, &s.externalAgentUUID,
 		"external", "pending", "2026-10-01 00:00:00+00")
+	publication(s.published, "published", "dev", uuid.New(), s.publishedArtifact, nil,
+		"platform", "published", "2026-10-01 00:00:00+00")
 	publication(s.artifactGone, "gone", "dev", uuid.New(), uuid.New(), nil,
 		"platform", "published", "2026-10-01 00:00:00+00")
 	// A same-agent pair left by an environment recreated under a new name; both point at one artifact.
@@ -255,6 +268,18 @@ func TestMigration051_DeploymentStatus(t *testing.T) {
 			assert.Zero(t, row.AttemptCount)
 			assert.Nil(t, row.NextAttemptAt)
 		}
+	})
+
+	t.Run("a deployed agent whose publication was pending or failed is due for a redeploy", func(t *testing.T) {
+		for _, artifactID := range []uuid.UUID{s.failedPlatformArtifact, s.externalArtifact} {
+			row := read(artifactID)
+			assert.Equal(t, "DEPLOYED", row.Status)
+			require.NotNil(t, row.NextAttemptAt)
+			assert.False(t, row.NextAttemptAt.After(time.Now()))
+			assert.Zero(t, row.AttemptCount)
+			assert.Empty(t, row.RenderReason)
+		}
+		assert.Nil(t, read(s.publishedArtifact).NextAttemptAt, "a published agent owes nothing")
 	})
 
 	t.Run("the archived deployment survives with no status row", func(t *testing.T) {
@@ -351,7 +376,7 @@ func TestMigration051_PlatformAgentExposures(t *testing.T) {
 	t.Run("platform rows are kept whatever their status, the rest are deleted", func(t *testing.T) {
 		var ids []uuid.UUID
 		require.NoError(t, g.Raw(`SELECT id FROM platform_agent_exposures`).Scan(&ids).Error)
-		assert.ElementsMatch(t, []uuid.UUID{s.pendingNoCard, s.failedPlatform, s.dupNewer}, ids)
+		assert.ElementsMatch(t, []uuid.UUID{s.pendingNoCard, s.failedPlatform, s.dupNewer, s.published}, ids)
 	})
 
 	t.Run("a2a_publications is renamed and its queue columns are gone", func(t *testing.T) {

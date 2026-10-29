@@ -27,7 +27,8 @@ import (
 //     meaning. status_desired defaults to DEPLOYED so an insert that doesn't name it still passes the CHECKs.
 //   - a2a_publications becomes platform_agent_exposures: the record that AMS exposes a platform-hosted agent in
 //     an environment. External agents are recorded by a2a_proxies, and publication state moves to
-//     deployment_status, so external rows, orphans and the queue columns go. Every platform row is kept.
+//     deployment_status, so external rows, orphans and the queue columns go. Every platform row is kept. A
+//     publication still pending or failed over a deployed agent leaves that agent's rows due for a redeploy.
 //   - association_mappings was never written, and organization_name has held an empty string since 029.
 //   - event hub events get a per-gateway sequence, numbered under the gateway-state row lock, for the poller's cursor.
 //
@@ -91,6 +92,13 @@ func platformAgentExposures() []string {
 			FROM a2a_publications p
 			WHERE p.ou_id = c.ou_id AND p.project_name = c.project_name
 				AND p.agent_name = c.agent_name AND p.environment_uuid = c.environment_uuid`,
+
+		// A pending or failed publication of an agent already deployed owes a redeploy: queue it on the agent's rows
+		// before its status goes, so the worker re-renders it.
+		`UPDATE deployment_status s SET next_attempt_at = NOW(), attempt_count = 0, render_reason = ''
+			FROM a2a_publications p
+			WHERE p.artifact_uuid = s.artifact_uuid AND p.ou_id = s.ou_id
+				AND p.status IN ('pending', 'failed') AND s.status_desired = 'DEPLOYED'`,
 
 		`DELETE FROM a2a_publications WHERE source = 'external'`,
 		`DELETE FROM a2a_publications p WHERE NOT EXISTS (SELECT 1 FROM artifacts a WHERE a.uuid = p.artifact_uuid)`,
