@@ -83,8 +83,6 @@ type DeploymentRepository interface {
 	ListForGatewaySync(ctx context.Context, ouID, gatewayID string) ([]models.GatewaySyncRow, error)
 	ListContentForGateway(ctx context.Context, ouID, gatewayID string, deploymentIDs []uuid.UUID) ([]models.GatewayDeploymentContent, error)
 
-	// DeleteForArtifact removes every deployment of the artifact; their deployment_status rows cascade.
-	DeleteForArtifact(ctx context.Context, artifactUUID uuid.UUID, orgUUID string) error
 	// WithTx returns the repository bound to tx.
 	WithTx(tx *gorm.DB) DeploymentRepository
 }
@@ -149,13 +147,6 @@ func (r *DeploymentRepo) CreateWithLimitEnforcement(deployment *models.Deploymen
 
 		return tx.Create(deployment).Error
 	})
-}
-
-// DeleteForArtifact removes every deployment of the artifact; their deployment_status rows cascade.
-func (r *DeploymentRepo) DeleteForArtifact(ctx context.Context, artifactUUID uuid.UUID, orgUUID string) error {
-	return r.db.WithContext(ctx).
-		Where("artifact_uuid = ? AND ou_id = ?", artifactUUID, orgUUID).
-		Delete(&models.Deployment{}).Error
 }
 
 // WithTx returns the repository bound to tx.

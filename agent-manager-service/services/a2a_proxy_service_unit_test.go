@@ -156,7 +156,6 @@ func (h *proxyHarness) acceptsWrites() {
 	h.txConfigs.CreateIfAbsentFunc = func(context.Context, *models.AgentConfig) error { return nil }
 	// txExposures.UpsertFunc is nil: an external agent's record is its proxy row, never an exposure.
 	h.txExposures.DeleteForAgentEnvFunc = func(context.Context, string, string, string, uuid.UUID) error { return nil }
-	h.txDeployments.DeleteForArtifactFunc = func(context.Context, uuid.UUID, string) error { return nil }
 	h.artifacts.CreateFunc = func(*gorm.DB, *models.Artifact) error { return nil }
 	h.artifacts.DeleteFunc = func(*gorm.DB, string) error { return nil }
 	h.txDeployments.PlacedGatewaysFunc = func(context.Context, string, uuid.UUID) ([]string, error) {

@@ -231,7 +231,7 @@ func (r *DeploymentRepo) RecordRenderOutcome(ctx context.Context, claim models.C
 }
 
 // AbandonRender undeploys a claimed row whose per-environment record is gone, as BeginUndeploy does, while the row
-// still holds the claim's token.
+// still holds the claim's token. BeginUndeploy documents how a row owed a deploy while UNDEPLOYED is handled.
 func (r *DeploymentRepo) AbandonRender(ctx context.Context, tx *gorm.DB, claim models.ClaimedRender) (bool, error) {
 	if err := r.lockClaim(ctx, tx, claim); err != nil {
 		return false, err

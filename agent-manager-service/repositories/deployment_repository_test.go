@@ -20,13 +20,11 @@ package repositories
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/db"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
@@ -64,29 +62,6 @@ func seedAgentDeployment(t *testing.T) (artifactUUID uuid.UUID, ouID string) {
 		gdb.Exec(`DELETE FROM gateways WHERE uuid = ?`, gatewayID)
 	})
 	return artifactUUID, ouID
-}
-
-// A mode switch keeps the artifact (and its API keys) but no deployment of it may be served.
-func TestDeploymentDeleteForArtifactInATransaction(t *testing.T) {
-	repo := NewDeploymentRepo(db.GetDB())
-	artifactUUID, ouID := seedAgentDeployment(t)
-	gateways, err := repo.LiveGateways(context.Background(), ouID, artifactUUID)
-	require.NoError(t, err)
-	require.Len(t, gateways, 1)
-
-	rolledBack := db.GetDB().Transaction(func(tx *gorm.DB) error {
-		require.NoError(t, repo.WithTx(tx).DeleteForArtifact(context.Background(), artifactUUID, ouID))
-		return errors.New("roll back")
-	})
-	require.Error(t, rolledBack)
-	gateways, err = repo.LiveGateways(context.Background(), ouID, artifactUUID)
-	require.NoError(t, err)
-	assert.Len(t, gateways, 1, "a rolled-back delete leaves the deployment")
-
-	require.NoError(t, repo.DeleteForArtifact(context.Background(), artifactUUID, ouID))
-	gateways, err = repo.LiveGateways(context.Background(), ouID, artifactUUID)
-	require.NoError(t, err)
-	assert.Empty(t, gateways, "deployment_status went with the deployments")
 }
 
 // CreateWithLimitEnforcement's status row must satisfy migration 051's CHECKs.
