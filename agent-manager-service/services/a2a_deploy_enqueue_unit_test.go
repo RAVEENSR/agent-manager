@@ -50,11 +50,13 @@ func a2aRenderQueue() *repomocks.DeploymentRepositoryMock {
 // a2aIngressGateways maps one ingress gateway to every environment.
 func a2aIngressGateways() *repomocks.GatewayRepositoryMock {
 	gateway := &models.Gateway{UUID: uuid.New(), GatewayFunctionalityType: models.GatewayRoleIngress}
-	return &repomocks.GatewayRepositoryMock{
+	gateways := &repomocks.GatewayRepositoryMock{
 		ListWithFiltersFunc: func(repositories.GatewayFilterOptions) ([]*models.Gateway, error) {
 			return []*models.Gateway{gateway}, nil
 		},
 	}
+	gateways.WithTxFunc = func(*gorm.DB) repositories.GatewayRepository { return gateways }
+	return gateways
 }
 
 // recordingConfigs is an agent config repository that accepts upserts in the sentinel transaction only.

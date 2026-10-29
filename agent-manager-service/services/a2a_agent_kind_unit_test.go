@@ -28,7 +28,9 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/clients/clientmocks"
+	"github.com/wso2/agent-manager/agent-manager-service/db"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/wso2/agent-manager/agent-manager-service/reconcile"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories/repomocks"
 )
@@ -143,4 +145,32 @@ func TestA2AAgentKindRendersTodaysYAMLForAnExternalAgent(t *testing.T) {
 	assert.Equal(t, goldenA2ACardURL, fetcher.calls[0].URL)
 	assert.Equal(t, &A2ACardFetchHeader{Name: "X-Origin-Key", Value: "origin-secret"}, fetcher.calls[0].Header,
 		"the origin card is fetched with the stored credential")
+}
+
+// A save's DeployRecord passes Targets a ctx carrying its transaction: the ingress gateway is read through it, not on
+// the pool (the pool mock answers no reads).
+func TestA2AAgentKindTargetsReadThroughTheSavesTransaction(t *testing.T) {
+	env := uuid.New()
+	ingress := &models.Gateway{UUID: uuid.New(), GatewayFunctionalityType: models.GatewayRoleIngress}
+	txGateways := &repomocks.GatewayRepositoryMock{
+		ListWithFiltersFunc: func(f repositories.GatewayFilterOptions) ([]*models.Gateway, error) {
+			require.NotNil(t, f.EnvironmentID)
+			assert.Equal(t, env.String(), *f.EnvironmentID)
+			return []*models.Gateway{ingress}, nil
+		},
+	}
+	pool := &repomocks.GatewayRepositoryMock{WithTxFunc: func(tx *gorm.DB) repositories.GatewayRepository {
+		assert.Same(t, txSentinel, tx)
+		return txGateways
+	}}
+	kind := NewA2AAgentKind(nil, nil, nil, nil, pool, nil, nil, nil, nil, nil, testLogger())
+
+	gateway, ok, err := kind.Targets(db.CtxWithTx(context.Background(), txSentinel), reconcile.Record{
+		ArtifactRef:     models.ArtifactRef{OUID: "ou-1", ArtifactUUID: uuid.New(), Kind: models.KindAgent},
+		EnvironmentUUID: env,
+	})
+
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, ingress.UUID, gateway)
 }

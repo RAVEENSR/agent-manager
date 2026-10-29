@@ -173,6 +173,14 @@ func placementReposIn(
 	return deployments.WithTx(tx), gateways.WithTx(tx)
 }
 
+// gatewaysIn is gateways bound to the transaction ctx carries, if any.
+func gatewaysIn(ctx context.Context, gateways repositories.GatewayRepository) repositories.GatewayRepository {
+	if tx := db.TxFrom(ctx); tx != nil {
+		return gateways.WithTx(tx)
+	}
+	return gateways
+}
+
 // validateEgressPlacement checks that the named gateway may host this artifact: it must
 // be egress-capable, and it must not share an environment with an existing deployment of
 // the same artifact (one gateway per (artifact, environment)).

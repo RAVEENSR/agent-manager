@@ -321,8 +321,8 @@ func (k *A2AAgentKind) UnplacedRecords(
 }
 
 // Targets is the environment's ingress gateway.
-func (k *A2AAgentKind) Targets(_ context.Context, record reconcile.Record) (uuid.UUID, bool, error) {
-	gateway, err := findIngressGateway(k.gatewayRepo, record.OUID, record.EnvironmentUUID)
+func (k *A2AAgentKind) Targets(ctx context.Context, record reconcile.Record) (uuid.UUID, bool, error) {
+	gateway, err := findIngressGateway(gatewaysIn(ctx, k.gatewayRepo), record.OUID, record.EnvironmentUUID)
 	if err != nil || gateway == nil {
 		return uuid.Nil, false, err
 	}

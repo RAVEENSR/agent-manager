@@ -95,6 +95,7 @@ func newPublisherMocks(t *testing.T) *publisherMocks {
 		hub:       &recordingEventHub{},
 	}
 	m.artifacts.WithTxFunc = func(*gorm.DB) repositories.ArtifactRepository { return m.artifacts }
+	m.gateways.WithTxFunc = func(*gorm.DB) repositories.GatewayRepository { return m.gateways }
 	m.exposures = &repomocks.PlatformAgentExposureRepositoryMock{
 		WithTxFunc: func(tx *gorm.DB) repositories.PlatformAgentExposureRepository {
 			assert.Same(t, txSentinel, tx)
