@@ -113,12 +113,12 @@ func resolveEgressGatewayForEnvironment(
 }
 
 // resolveEgressGatewayForArtifact anchors selection to the gateway the artifact is
-// already deployed to in this environment, falling through to environment-only selection
-// only when the artifact has no deployment there. That fallthrough is the sole place
+// already placed on in this environment, falling through to environment-only selection
+// only when the artifact isn't placed there. That fallthrough is the sole place
 // ambiguity can arise.
 //
-// deployedGatewayIDs is the artifact's DEPLOYED gateway_uuid set, supplied by the caller
-// (GetDeployedGatewaysByProvider / GetLLMProxyDeployments).
+// deployedGatewayIDs is the artifact's placed gateway_uuid set (rows heading for DEPLOYED,
+// in any status), supplied by the caller from PlacedGateways.
 //
 // The anchor's role is deliberately NOT re-validated: the role is immutable after
 // registration, so an artifact's existing gateway is always still egress-capable. Role is
