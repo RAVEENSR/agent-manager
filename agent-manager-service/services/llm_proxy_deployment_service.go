@@ -377,7 +377,7 @@ func (s *LLMProxyDeploymentService) RestoreLLMProxyDeployment(proxyID, deploymen
 			return err
 		}
 		return s.gatewayEventsService.BroadcastLLMProxyDeploymentEvent(ctx, tx, gatewayID,
-			proxyDeploymentEvent(proxy, placement, deploymentID, row.PerformedAt))
+			proxyDeploymentEvent(proxy, placement, deployment.DeploymentID.String(), row.PerformedAt))
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to restore deployment: %w", err)

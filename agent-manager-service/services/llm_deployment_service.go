@@ -391,7 +391,7 @@ func (s *LLMProviderDeploymentService) RestoreLLMProviderDeployment(providerID, 
 			return err
 		}
 		return s.gatewayEventsService.BroadcastLLMProviderDeploymentEvent(ctx, tx, gatewayID,
-			providerDeploymentEvent(placement, deploymentID, row.PerformedAt))
+			providerDeploymentEvent(placement, deployment.DeploymentID.String(), row.PerformedAt))
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to restore deployment: %w", err)

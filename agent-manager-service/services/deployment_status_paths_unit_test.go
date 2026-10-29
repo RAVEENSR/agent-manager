@@ -19,6 +19,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -207,6 +208,33 @@ func TestRestoreLLMProviderSendsTheUUID(t *testing.T) {
 	assert.Equal(t, provider.UUID.String(), payload["providerId"])
 	assert.Equal(t, f.deployment.DeploymentID.String(), payload["deploymentId"])
 	assertPerformedAt(t, f.row.PerformedAt, payload)
+}
+
+// The gateway stores the event's deploymentId and compares it with what GET /deployments lists, so a restore
+// addressed by a non-canonical id still sends the canonical one.
+func TestRestoreSendsTheCanonicalDeploymentID(t *testing.T) {
+	t.Run("LLM provider", func(t *testing.T) {
+		provider := &models.LLMProvider{UUID: uuid.New()}
+		f := newStatusPathFixture(t, provider.UUID)
+
+		_, err := f.providerService(provider).RestoreLLMProviderDeployment("provider-handle",
+			strings.ToUpper(f.deployment.DeploymentID.String()), f.gateway.UUID.String(), "ou-1")
+
+		require.NoError(t, err)
+		_, payload := f.payload(t)
+		assert.Equal(t, f.deployment.DeploymentID.String(), payload["deploymentId"])
+	})
+	t.Run("LLM proxy", func(t *testing.T) {
+		proxy := &models.LLMProxy{UUID: uuid.New()}
+		f := newStatusPathFixture(t, proxy.UUID)
+
+		_, err := f.proxyService(proxy).RestoreLLMProxyDeployment("proxy-handle",
+			strings.ToUpper(f.deployment.DeploymentID.String()), f.gateway.UUID.String(), "ou-1")
+
+		require.NoError(t, err)
+		_, payload := f.payload(t)
+		assert.Equal(t, f.deployment.DeploymentID.String(), payload["deploymentId"])
+	})
 }
 
 func TestDeployLLMProxyStartsDeployingAndSendsTheHandle(t *testing.T) {
