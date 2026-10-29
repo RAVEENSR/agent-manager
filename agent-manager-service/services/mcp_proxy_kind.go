@@ -142,7 +142,7 @@ func (k *MCPProxyKind) UnplacedRecords(
 ) ([]reconcile.Record, error) {
 	condition, args := reconcile.UnplacedCondition(reconcile.RecordColumns{
 		OUID: "a.ou_id", ArtifactUUID: "a.uuid", EnvironmentUUID: "b.environment_uuid",
-	}, ouID, env)
+	}, models.EgressGatewayRoles, ouID, env)
 	var rows []struct {
 		OUID            string    `gorm:"column:ou_id"`
 		ArtifactUUID    uuid.UUID `gorm:"column:artifact_uuid"`

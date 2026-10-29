@@ -31,16 +31,17 @@ type RecordColumns struct {
 
 // UnplacedCondition is the WHERE condition every UnplacedRecords shares: the record's artifact has no
 // deployment_status row at all (an UNDEPLOYED row counts, so a user's undeploy sticks), and its environment has a
-// gateway mapped that isn't deleted. Gateway delete is a soft delete that leaves its mappings in place. A
-// steady-state pass reads nothing, and a record in an environment with no gateway isn't re-read on every pass.
+// gateway mapped that isn't deleted and whose role is one of roles, the roles the kind can be placed on. Gateway
+// delete is a soft delete that leaves its mappings in place. A steady-state pass reads nothing, and a record in an
+// environment with no such gateway isn't re-read on every pass.
 // ouID "" means every org; env nil means every environment.
-func UnplacedCondition(cols RecordColumns, ouID string, env *uuid.UUID) (string, []any) {
+func UnplacedCondition(cols RecordColumns, roles []string, ouID string, env *uuid.UUID) (string, []any) {
 	condition := `NOT EXISTS (SELECT 1 FROM deployment_status ds
 			WHERE ds.artifact_uuid = ` + cols.ArtifactUUID + ` AND ds.ou_id = ` + cols.OUID + `)
 		AND EXISTS (SELECT 1 FROM gateway_environment_mappings gem
-			INNER JOIN gateways g ON g.uuid = gem.gateway_uuid AND g.deleted_at IS NULL
+			INNER JOIN gateways g ON g.uuid = gem.gateway_uuid AND g.deleted_at IS NULL AND g.gateway_functionality_type IN ?
 			WHERE gem.environment_uuid = ` + cols.EnvironmentUUID + `)`
-	var args []any
+	args := []any{roles}
 	if ouID != "" {
 		condition += " AND " + cols.OUID + " = ?"
 		args = append(args, ouID)

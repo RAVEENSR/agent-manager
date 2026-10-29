@@ -286,10 +286,10 @@ func (k *A2AAgentKind) UnplacedRecords(
 ) ([]reconcile.Record, error) {
 	exposed, exposedArgs := reconcile.UnplacedCondition(reconcile.RecordColumns{
 		OUID: "a.ou_id", ArtifactUUID: "a.uuid", EnvironmentUUID: "e.environment_uuid",
-	}, ouID, env)
+	}, models.IngressGatewayRoles, ouID, env)
 	proxied, proxiedArgs := reconcile.UnplacedCondition(reconcile.RecordColumns{
 		OUID: "a.ou_id", ArtifactUUID: "a.uuid", EnvironmentUUID: "p.environment_uuid",
-	}, ouID, env)
+	}, models.IngressGatewayRoles, ouID, env)
 	query := `SELECT * FROM (
 			SELECT a.ou_id, a.uuid AS artifact_uuid, a.handle, e.environment_uuid
 			FROM platform_agent_exposures e JOIN artifacts a ON a.uuid = e.artifact_uuid

@@ -137,10 +137,11 @@ func (k *fakeKind) Drifted(_ context.Context, p models.Placement) (string, bool,
 type fakeEnvKind struct {
 	*fakeKind
 	targets func(record Record) (uuid.UUID, bool, error)
+	roles   []string
 }
 
 func newFakeEnvKind(inline bool) *fakeEnvKind {
-	k := &fakeEnvKind{fakeKind: newFakeKind(fakeEnvKindName, inline)}
+	k := &fakeEnvKind{fakeKind: newFakeKind(fakeEnvKindName, inline), roles: models.EgressGatewayRoles}
 	// Render re-checks the record, as every environment-addressed kind must.
 	k.render = func(ctx context.Context, ref models.ArtifactRef) (Rendered, error) {
 		if !fakeRecordExistsIn(db.DB(ctx), ref.ArtifactUUID) {
@@ -153,7 +154,7 @@ func newFakeEnvKind(inline bool) *fakeEnvKind {
 
 func (k *fakeEnvKind) UnplacedRecords(ctx context.Context, ouID string, env *uuid.UUID, afterKey string, limit int) ([]Record, error) {
 	condition, args := UnplacedCondition(
-		RecordColumns{OUID: "r.ou_id", ArtifactUUID: "r.artifact_uuid", EnvironmentUUID: "r.environment_uuid"}, ouID, env)
+		RecordColumns{OUID: "r.ou_id", ArtifactUUID: "r.artifact_uuid", EnvironmentUUID: "r.environment_uuid"}, k.roles, ouID, env)
 	var rows []struct {
 		RecordKey        string     `gorm:"column:record_key"`
 		OUID             string     `gorm:"column:ou_id"`
@@ -232,13 +233,19 @@ func testOU() string { return "ou-" + uuid.NewString()[:8] }
 // seedGateway registers a gateway in ouID, mapped to envs.
 func seedGateway(t *testing.T, ouID string, envs ...uuid.UUID) uuid.UUID {
 	t.Helper()
+	return seedGatewayWithRole(t, ouID, models.GatewayRoleBoth, envs...)
+}
+
+// seedGatewayWithRole is seedGateway for a gateway of the given role.
+func seedGatewayWithRole(t *testing.T, ouID, role string, envs ...uuid.UUID) uuid.UUID {
+	t.Helper()
 	gdb := db.GetDB()
 	gatewayID := uuid.New()
 	name := "reconcile-gw-" + gatewayID.String()[:8]
 	require.NoError(t, gdb.Exec(
 		`INSERT INTO gateways (uuid, name, display_name, vhost, gateway_functionality_type, ou_id, is_active)
 		 VALUES (?, ?, ?, ?, ?, ?, TRUE)`,
-		gatewayID, name, name, "gw.example", models.GatewayRoleBoth, ouID).Error)
+		gatewayID, name, name, "gw.example", role, ouID).Error)
 	for _, env := range envs {
 		require.NoError(t, gdb.Create(&models.GatewayEnvironmentMapping{GatewayUUID: gatewayID, EnvironmentUUID: env}).Error)
 	}
@@ -873,6 +880,24 @@ func TestUnplacedRecordsExcludeSoftDeletedGateways(t *testing.T) {
 	records, err = kind.UnplacedRecords(context.Background(), ouID, &env, "", 10)
 	require.NoError(t, err)
 	assert.Empty(t, records, "the mapping stays after a soft delete, but the gateway doesn't count")
+}
+
+func TestUnplacedRecordsNeedAGatewayOfTheKindsRole(t *testing.T) {
+	kind := newFakeEnvKind(true)
+	ouID, env := testOU(), uuid.New()
+	ref := seedArtifact(t, ouID, fakeEnvKindName)
+	seedRecord(t, nil, ref, env)
+	seedGatewayWithRole(t, ouID, models.GatewayRoleIngress, env)
+
+	records, err := kind.UnplacedRecords(context.Background(), ouID, &env, "", 10)
+	require.NoError(t, err)
+	assert.Empty(t, records, "an ingress-only environment can't place an egress kind")
+
+	seedGatewayWithRole(t, ouID, models.GatewayRoleEgress, env)
+
+	records, err = kind.UnplacedRecords(context.Background(), ouID, &env, "", 10)
+	require.NoError(t, err)
+	assert.Len(t, records, 1)
 }
 
 func TestGatewayDeleteKeepsAUserUndeploy(t *testing.T) {

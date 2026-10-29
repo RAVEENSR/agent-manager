@@ -148,10 +148,10 @@ func (k *LLMProxyKind) UnplacedRecords(
 ) ([]reconcile.Record, error) {
 	agents, agentArgs := reconcile.UnplacedCondition(reconcile.RecordColumns{
 		OUID: "a.ou_id", ArtifactUUID: "a.uuid", EnvironmentUUID: "m.environment_uuid",
-	}, ouID, env)
+	}, models.EgressGatewayRoles, ouID, env)
 	monitors, monitorArgs := reconcile.UnplacedCondition(reconcile.RecordColumns{
 		OUID: "a.ou_id", ArtifactUUID: "a.uuid", EnvironmentUUID: monitorEnvironmentUUID,
-	}, ouID, env)
+	}, models.EgressGatewayRoles, ouID, env)
 	query := `SELECT * FROM (
 			SELECT a.ou_id, a.uuid AS artifact_uuid, a.handle, m.environment_uuid
 			FROM env_agent_model_mapping m JOIN artifacts a ON a.uuid = m.llm_proxy_uuid
