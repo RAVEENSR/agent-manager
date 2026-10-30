@@ -53,10 +53,11 @@ Their normal defaults remain unchanged.
 
 ## CI selection
 
-`remaining-samples-pr-checks.yaml` checks out the exact PR head, including forks
-and Dependabot. Any change under a covered sample selects that sample, including
-Python requirements, NuGet project files, Ballerina manifests/lockfiles, and
-Dockerfiles. Shared harness/workflow changes and manual dispatch select all five.
+Each sample has an independently named `<sample>-local-smoke.yaml` workflow.
+Each workflow checks out the exact PR head, including forks and Dependabot.
+Changes under that sample select its workflow, including Python requirements,
+NuGet project files, Ballerina manifests/lockfiles, and Dockerfiles. Shared harness
+changes select all five workflows; each workflow also supports manual dispatch.
 Dockerfile changes trigger local source builds/tests; this suite does not build
 container images. Ballerina changes are covered even though Dependabot does not
 support that ecosystem.
