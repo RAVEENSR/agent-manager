@@ -1,0 +1,89 @@
+name: IT Helpdesk Sample PR Checks
+
+on:
+  pull_request:
+    paths:
+      - 'samples/it-helpdesk-agent/**'
+      - 'test/sample-smoke/it_helpdesk/**'
+      - 'test/instrumentation-matrix/heavy/amp_client.py'
+      - 'test/instrumentation-matrix/harness/classify.py'
+      - '.github/workflows/it-helpdesk-sample-pr-checks.yaml'
+      - '.github/actions/amp-dev-stack/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: it-helpdesk-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SAMPLE_REPO: https://github.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}
+  SAMPLE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  local-smoke:
+    name: IT Helpdesk local smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ env.SAMPLE_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Validate smoke-test failure guards
+        run: |
+          python -m pip install requests
+          python -m unittest discover -s test/sample-smoke/it_helpdesk -p 'test_*.py' -v
+      - name: Install dependencies and run HTTP smoke
+        env:
+          PYTHON: python
+        run: bash samples/it-helpdesk-agent/scripts/smoke_test.sh --reports "$RUNNER_TEMP/it-helpdesk-local"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: it-helpdesk-local-smoke
+          path: ${{ runner.temp }}/it-helpdesk-local/
+
+  platform-smoke:
+    name: IT Helpdesk deploy and trace smoke
+    needs: local-smoke
+    runs-on:
+      - codebuild-wso2_agent-manager-${{ github.run_id }}-${{ github.run_attempt }}
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ env.SAMPLE_SHA }}
+          persist-credentials: false
+      - uses: ./.github/actions/amp-dev-stack
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: python -m pip install requests
+      - name: Build PR source, deploy, invoke, and find its trace
+        env:
+          # Bootstrap fixture credential for this job's ephemeral dev stack, not a repository secret.
+          IDP_CLIENT_SECRET: amp-api-client-secret
+        run: |
+          python test/sample-smoke/it_helpdesk/platform_smoke.py \
+            --repo "$SAMPLE_REPO" --sha "$SAMPLE_SHA" \
+            --reports "$RUNNER_TEMP/it-helpdesk-platform"
+      - name: Capture cluster state on failure
+        if: failure()
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/it-helpdesk-platform"
+          kubectl get pods -A -o wide > "$RUNNER_TEMP/it-helpdesk-platform/cluster-pods.txt" 2>&1 || true
+          kubectl get events -A --field-selector type=Warning > "$RUNNER_TEMP/it-helpdesk-platform/cluster-events.txt" 2>&1 || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: it-helpdesk-platform-smoke
+          path: ${{ runner.temp }}/it-helpdesk-platform/
