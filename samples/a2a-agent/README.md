@@ -339,3 +339,10 @@ asyncio.run(main())
 | `main.py` | Local runner (`python main.py`), and the deployed start command |
 | `requirements.txt` | `a2a-sdk[fastapi]`, `openai`, `uvicorn`, `python-dotenv` |
 | `.env.example` | Environment variable template for local runs |
+
+## Automated smoke tests
+
+Run `bash samples/a2a-agent/scripts/smoke_test.sh` from the repository root for
+secret-free discovery, JSON-RPC and HTTP+JSON checks using a local model stub.
+See [smoke test commands and CI coverage](../../test/sample-smoke/a2a/README.md)
+for the Agent Manager deployment and trace check.
