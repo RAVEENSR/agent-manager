@@ -57,6 +57,38 @@ class SmokeGuards(unittest.TestCase):
                 with self.assertRaises((RuntimeError, AssertionError)):
                     build_revision(client, "/builds", SHA)
 
+    def test_succeeded_must_reconcile_before_passing(self):
+        client = create_autospec(AmpClient, instance=True)
+        payloads = [{"builds": [{"buildName": "initial", "status": "Completed"}]},
+                    {"buildName": "pinned"},
+                    {"buildName": "pinned", "status": "Succeeded", "imageId": "image"},
+                    {"buildName": "pinned", "status": "Completed", "imageId": "image"}]
+        client._request.side_effect = [Mock(json=Mock(return_value=p)) for p in payloads]
+        with patch("platform_smoke.time.sleep"):
+            self.assertEqual(build_revision(client, "/builds", SHA)["status"], "Completed")
+        self.assertEqual(client._request.call_count, 4)
+
+    def test_stalled_reconciliation_identifies_initial_or_pinned_build(self):
+        for initial in (True, False):
+            with self.subTest(initial=initial):
+                client = create_autospec(AmpClient, instance=True)
+                detail = {"buildName": "initial" if initial else "pinned", "status": "Succeeded"}
+                def respond(method, path, **kwargs):
+                    if method == "POST":
+                        payload = {"buildName": "pinned"}
+                    elif path == "/builds":
+                        payload = {"builds": [detail if initial else {"status": "Completed"}]}
+                    else:
+                        payload = detail
+                    return Mock(json=Mock(return_value=payload))
+                client._request.side_effect = respond
+                clock = [0]
+                def advance(_):
+                    clock[0] += 301
+                with patch("platform_smoke.time.monotonic", side_effect=lambda: clock[0]), patch("platform_smoke.time.sleep", side_effect=advance):
+                    with self.assertRaisesRegex(TimeoutError, detail["buildName"] + " stayed Succeeded"):
+                        build_revision(client, "/builds", SHA)
+
 
 if __name__ == "__main__":
     unittest.main()

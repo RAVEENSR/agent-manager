@@ -26,8 +26,8 @@ python3.11 -m venv /tmp/hotel-platform-env
 /tmp/hotel-platform-env/bin/pip install requests
 export IDP_CLIENT_SECRET='<local-dev-bootstrap-credential>'
 /tmp/hotel-platform-env/bin/python test/sample-smoke/hotel_booking/platform_smoke.py \
-  --repo https://github.com/YasiruDEX/agent-manager \
-  --branch test/hotel-booking-smoke-tests --sha "$(git rev-parse HEAD)" \
+  --repo https://github.com/<your-fork>/agent-manager \
+  --branch <branch> --sha "$(git rev-parse HEAD)" \
   --reports /tmp/hotel-platform-reports
 ```
 
@@ -52,3 +52,10 @@ Run the build-selection and trace-correlation guards independently:
 /tmp/hotel-platform-env/bin/python -m unittest discover \
   -s test/sample-smoke/hotel_booking -p 'test_*.py' -v
 ```
+
+A build that remains `Succeeded` for five minutes fails with a reconciliation
+error: the image finished building, but the workload record was not updated.
+`Completed` is still required before proceeding. The platform job is intentionally
+heavy and retains its 100-minute overall limit. Both jobs passed on the standard
+Ubuntu runner in [run 41060857774](https://github.com/wso2/agent-manager/actions/runs/41060857774);
+this confirms the deployments API shape used by the test and capacity for that run.

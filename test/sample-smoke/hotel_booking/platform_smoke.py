@@ -56,14 +56,30 @@ def wait_until(description, poll, timeout=600):
 def build_revision(client, builds_path, sha):
     # Creation starts a branch build. Drain it before requesting the immutable
     # revision so an older build cannot deploy over the build under test.
+    reconciliation_started = {}
+    def check_reconciliation(build):
+        name = build.get("buildName", "initial")
+        if build.get("status") != "Succeeded":
+            reconciliation_started.pop(name, None)
+            return
+        now = time.monotonic()
+        since = reconciliation_started.setdefault(name, now)
+        if now - since >= 300:
+            raise TimeoutError(
+                f"Build {name} stayed Succeeded for 300 seconds: image build finished "
+                "but the deployment/workload record was not updated; inspect OpenChoreo reconciliation logs")
+
     def initial_finished():
         builds = client._request("GET", builds_path, expect=(200,)).json()["builds"]
+        for build in builds:
+            check_reconciliation(build)
         return builds and all(b.get("status") in ("Completed", "Failed") for b in builds)
     wait_until("initial branch build to finish", initial_finished, timeout=1200)
     build = client._request("POST", builds_path + "?commitId=" + sha, expect=(202,)).json()
     build_name = build["buildName"]
     def finished():
         detail = client._request("GET", builds_path + "/" + build_name, expect=(200,)).json()
+        check_reconciliation(detail)
         if detail.get("status") == "Failed":
             raise RuntimeError(f"Pinned build {build_name} failed for commit {sha}")
         if detail.get("status") == "Completed":
@@ -309,6 +325,10 @@ def run(args):
         diagnostics(name, reports)
         raise
     finally:
+        # A second cancellation must not interrupt resource deletion. The CLI
+        # exits after this block; SIGKILL from the runner remains unavoidable.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         if stub_local is not None:
             try:
                 (reports / "model-evidence.json").write_text(json.dumps(request(stub_local + "/evidence"), indent=2) + "\n")
