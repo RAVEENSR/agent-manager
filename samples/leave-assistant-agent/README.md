@@ -159,3 +159,11 @@ Expect back `{"response": "..."}`. See the note below on why the field names are
 - `approveLeaveRequest` and `rejectLeaveRequest` aren't gated behind any real authorization in this sample. Anyone in the chat can call them. That's deliberate: the point here is the Ballerina buildpack and the approval *logic*, not building a role-based access model. A production version would check the caller's role before allowing either.
 - The in-memory employee and leave-request stores reset on every restart. There's no database. That's deliberate too: the point of this sample is the Ballerina buildpack and the `ai:Agent` / `@ai:AgentTool` pattern, not persistence.
 - `ballerinax/amp` is imported for its side effect only (`import ballerinax/amp as _;`). It wires up AMP's OpenTelemetry auto-instrumentation with no code changes beyond the import.
+
+## Local PR smoke check
+
+```bash
+python3.11 test/sample-smoke/remaining/run.py leave-assistant-agent --reports /tmp/leave-assistant-agent-smoke
+```
+
+Run from the repository root. See [smoke-test prerequisites and coverage](../../test/sample-smoke/remaining/README.md).

@@ -95,3 +95,11 @@ Find me a hotel in Geneva for next week
 
 1. Click on the **"Observability"** tab on left navigation and select **Traces**
 2. View traces
+
+## Local PR smoke check
+
+```bash
+python3.11 test/sample-smoke/remaining/run.py customer-support-agent --reports /tmp/customer-support-agent-smoke
+```
+
+Run from the repository root. See [smoke-test prerequisites and coverage](../../test/sample-smoke/remaining/README.md).

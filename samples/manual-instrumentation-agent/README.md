@@ -177,3 +177,11 @@ Because the spans follow the contract, evaluators run against them too.
 | `app.py` | FastAPI entrypoint; calls `init_otel()`. |
 | `main.py` | Local runner (`python main.py`). |
 | `.env.example` | Environment variable template. |
+
+## Local PR smoke check
+
+```bash
+python3.11 test/sample-smoke/remaining/run.py manual-instrumentation-agent --reports /tmp/manual-instrumentation-agent-smoke
+```
+
+Run from the repository root. See [smoke-test prerequisites and coverage](../../test/sample-smoke/remaining/README.md).
