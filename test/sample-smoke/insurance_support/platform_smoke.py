@@ -228,6 +228,8 @@ def run(args):
             "MODEL_PROVIDER": "openai", "OPENAI_BASE_URL": model_url,
             "OPENAI_API_KEY": "smoke-only", "OPENAI_MODEL": "smoke-model", "USE_MCP": "false",
             "AMP_TRACE_CONTENT": "true",
+            # Buildpack images default PORT to 8080; match inputInterface below.
+            "PORT": "8000",
         }.items()]
         client._request("POST", base + "/agents", json={
             "name": name, "displayName": name,
