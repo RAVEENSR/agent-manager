@@ -30,12 +30,12 @@ Python 3.11+, plus .NET 10 for .NET or the distribution declared in
 CI installs Ballerina 2201.13.4 with a verified installer checksum.
 
 ```bash
-python3.11 test/sample-smoke/remaining/run.py crewai-agent --reports /tmp/crewai-smoke
-python3.11 test/sample-smoke/remaining/run.py customer-support-agent --reports /tmp/customer-smoke
-python3.11 test/sample-smoke/remaining/run.py dotnet-agent --reports /tmp/dotnet-smoke
-python3.11 test/sample-smoke/remaining/run.py leave-assistant-agent --reports /tmp/leave-smoke
-python3.11 test/sample-smoke/remaining/run.py manual-instrumentation-agent --reports /tmp/manual-smoke
-python3.11 -m unittest discover -s test/sample-smoke/remaining -p 'test_*.py' -v
+python3.11 test/sample-smoke/local/run.py crewai-agent --reports /tmp/crewai-smoke
+python3.11 test/sample-smoke/local/run.py customer-support-agent --reports /tmp/customer-smoke
+python3.11 test/sample-smoke/local/run.py dotnet-agent --reports /tmp/dotnet-smoke
+python3.11 test/sample-smoke/local/run.py leave-assistant-agent --reports /tmp/leave-smoke
+python3.11 test/sample-smoke/local/run.py manual-instrumentation-agent --reports /tmp/manual-smoke
+python3.11 -m unittest discover -s test/sample-smoke/local -p 'test_*.py' -v
 ```
 
 .NET and Leave Assistant use their sample's port 8000; run these sequentially

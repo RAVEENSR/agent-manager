@@ -3,7 +3,7 @@ on:
   pull_request:
     paths:
       - 'samples/dotnet-agent/**'
-      - 'test/sample-smoke/remaining/**'
+      - 'test/sample-smoke/local/**'
       - '.github/workflows/dotnet-agent-local-smoke.yaml'
   workflow_dispatch:
 permissions:
@@ -29,11 +29,11 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - name: Test model failure guards
-        run: python -m unittest discover -s test/sample-smoke/remaining -p 'test_*.py' -v
+        run: python -m unittest discover -s test/sample-smoke/local -p 'test_*.py' -v
       - name: Install or build, start, and test the sample
         env:
           SAMPLE: dotnet-agent
-        run: python test/sample-smoke/remaining/run.py "$SAMPLE" --reports "$RUNNER_TEMP/smoke-reports"
+        run: python test/sample-smoke/local/run.py "$SAMPLE" --reports "$RUNNER_TEMP/smoke-reports"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
