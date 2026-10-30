@@ -7,17 +7,23 @@ on:
       - "samples/hotel-booking-agent/**"
       - ".github/workflows/hotel-booking-sample-pr-checks.yaml"
 
+  workflow_dispatch:
+
 permissions:
   contents: read
 
 jobs:
   smoke-test:
     name: Smoke Test
-    runs-on:
-      - codebuild-wso2_agent-manager-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -25,4 +31,12 @@ jobs:
           python-version: "3.11"
 
       - name: Run smoke test
-        run: samples/hotel-booking-agent/scripts/smoke_test.sh
+        env:
+          PYTHON: python
+          REPORTS: ${{ runner.temp }}/hotel-booking-smoke
+        run: bash samples/hotel-booking-agent/scripts/smoke_test.sh
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: hotel-booking-smoke
+          path: ${{ runner.temp }}/hotel-booking-smoke/

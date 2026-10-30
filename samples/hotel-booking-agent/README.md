@@ -192,3 +192,25 @@ PYTHONPATH=services/hotel_api python -m unittest discover -s services/hotel_api/
 | `services/hotel_api/ingest.py` | Loads the policy PDFs and prepares the Pinecone index |
 | `services/hotel_api/resources/` | Mock hotel data and policy PDFs |
 | `scripts/smoke_test.sh` | Install-and-start check for both services |
+
+
+### Dependency PR smoke test
+
+Run from the repository root with Python 3.11:
+
+```bash
+PYTHON=python3.11 REPORTS=/tmp/hotel-smoke bash samples/hotel-booking-agent/scripts/smoke_test.sh
+```
+
+This installs both services' requirements in temporary environments, runs `pip check`,
+starts both applications, and checks endpoints and tools. A loopback OpenAI-compatible
+fixture drives `POST /chat` through the real LangGraph graph and hotel search tool.
+The fixture returns a final response only after receiving the Tokyo hotel fixture
+from the Hotel API. No paid model, Pinecone account, or API secrets are required.
+The existing policy-unavailable check remains covered.
+
+Override `HOTEL_PORT`, `AGENT_PORT`, and `MODEL_PORT` if the defaults 9091, 8000,
+and 8099 are occupied. Processes and temporary environments are cleaned up on exit;
+`REPORTS` retains service logs, and failures print their tails. The PR workflow
+checks out the PR head SHA and runs for every change under this sample, including
+its dependency files. The workflow can also be started manually.
