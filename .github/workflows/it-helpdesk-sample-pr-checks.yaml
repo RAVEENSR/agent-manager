@@ -54,8 +54,7 @@ jobs:
   platform-smoke:
     name: IT Helpdesk deploy and trace smoke
     needs: local-smoke
-    runs-on:
-      - codebuild-wso2_agent-manager-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 100
     steps:
       - uses: actions/checkout@v6
