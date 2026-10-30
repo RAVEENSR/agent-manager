@@ -25,12 +25,12 @@ def kubectl(*args, data=None):
     return subprocess.run(["kubectl", *args], input=data, text=True, capture_output=True, check=True, timeout=60).stdout
 
 
-def validate_source(build, workflow, sha, repo):
+def validate_source(build, workflow, sha, repo, branch):
     params = build["buildParameters"]
     # The REST API deliberately abbreviates commitId; WorkflowRun retains all 40 digits.
     revision = workflow["spec"]["workflow"]["parameters"]["repository"]
     if (params.get("commitId") != sha[:8] or params.get("repoUrl") != repo
-            or params.get("branch") != sha or params.get("appPath") != "/samples/it-helpdesk-agent"
+            or params.get("branch") != branch or params.get("appPath") != "/samples/it-helpdesk-agent"
             or revision.get("url") != repo or revision.get("revision", {}).get("commit") != sha):
         raise AssertionError("Build source does not match the requested repository and exact commit")
 
@@ -48,6 +48,27 @@ def wait_until(description, poll, timeout=600):
             return result
         time.sleep(5)
     raise TimeoutError(f"Timed out waiting for {description}")
+
+
+def build_revision(client, builds_path, sha):
+    # Creation starts a branch build. Drain it before requesting the immutable
+    # revision so an older build cannot deploy over the build under test.
+    def initial_finished():
+        builds = client._request("GET", builds_path, expect=(200,)).json()["builds"]
+        return builds and all(b.get("status") in ("Completed", "Failed") for b in builds)
+    wait_until("initial branch build to finish", initial_finished, timeout=1200)
+    build = client._request("POST", builds_path + "?commitId=" + sha, expect=(202,)).json()
+    build_name = build["buildName"]
+    def finished():
+        detail = client._request("GET", builds_path + "/" + build_name, expect=(200,)).json()
+        if detail.get("status") == "Failed":
+            raise RuntimeError(f"Pinned build {build_name} failed for commit {sha}")
+        if detail.get("status") == "Completed":
+            if not detail.get("imageId"):
+                raise AssertionError(f"Pinned build {build_name} completed without an imageId")
+            return detail
+        return None
+    return wait_until(f"pinned build {build_name}", finished, timeout=1200)
 
 
 def start_forward(namespace, target, port, log_path):
@@ -201,7 +222,7 @@ def run(args):
         }.items()]
         client._request("POST", base + "/agents", json={
             "name": name, "displayName": name,
-            "provisioning": {"type": "internal", "repository": {"url": args.repo, "branch": args.sha, "appPath": "/samples/it-helpdesk-agent"}},
+            "provisioning": {"type": "internal", "repository": {"url": args.repo, "branch": args.branch, "appPath": "/samples/it-helpdesk-agent"}},
             "agentType": {"type": "agent-api", "subType": "chat-api"},
             "build": {"type": "buildpack", "buildpack": {"language": "python", "languageVersion": "3.11", "runCommand": "python main.py"}},
             "configurations": {"enableAutoInstrumentation": True, "env": env},
@@ -209,22 +230,27 @@ def run(args):
         }, expect=(202,))
         phase = "source build"
         print(f"==> {phase}", flush=True)
-        deployed.image_id = client._wait_for_build(args.org, name)
-        builds = client._request("GET", base + f"/agents/{name}/builds", expect=(200,)).json()["builds"]
-        build = next(b for b in builds if b.get("imageId") == deployed.image_id)
-        detail = client._request("GET", base + f"/agents/{name}/builds/{build['buildName']}", expect=(200,)).json()
+        detail = build_revision(client, base + f"/agents/{name}/builds", args.sha)
+        deployed.image_id = detail["imageId"]
+        build = detail
         runs = json.loads(kubectl("get", "workflowruns.openchoreo.dev", "-A", "--field-selector", f"metadata.name={build['buildName']}", "-o", "json"))["items"]
         workflow = next(w for w in runs if w["metadata"]["name"] == build["buildName"])
         (reports / "build.json").write_text(json.dumps(detail, indent=2) + "\n")
         # Save just the source provenance, never identity env injected into the workflow.
         (reports / "source.json").write_text(json.dumps(workflow["spec"]["workflow"]["parameters"]["repository"], indent=2) + "\n")
-        validate_source(detail, workflow, args.sha, args.repo)
+        validate_source(detail, workflow, args.sha, args.repo, args.branch)
         phase = "deployment readiness"
         print(f"==> {phase}", flush=True)
-        deployed.endpoint_url = client._wait_for_active_endpoint(args.org, name)
-        deployments = client._request("GET", base + f"/agents/{name}/deployments", expect=(200,)).json()
-        if deployments[args.environment]["imageId"] != deployed.image_id:
-            raise AssertionError("Active deployment is not the image built from the PR SHA")
+        def pinned_deployment():
+            deployments = client._request("GET", base + f"/agents/{name}/deployments", expect=(200,)).json()
+            deployment = deployments.get(args.environment, {})
+            if deployment.get("imageId") == deployed.image_id and deployment.get("status") == "active":
+                endpoints = deployment.get("endpoints") or []
+                if not endpoints:
+                    raise AssertionError("Pinned deployment is active but exposes no endpoint")
+                return endpoints[0]["url"]
+            return None
+        deployed.endpoint_url = wait_until("active deployment of the pinned image", pinned_deployment)
         deployed.api_key = client._mint_api_key(args.org, name)
         headers = {"X-API-Key": deployed.api_key}
         # The default published schema exposes /chat only. Probe /health on
@@ -299,6 +325,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True)
     parser.add_argument("--sha", required=True)
+    parser.add_argument("--branch", required=True, help="PR head branch in --repo")
     parser.add_argument("--reports", type=Path, default=Path("/tmp/it-helpdesk-platform-reports"))
     parser.add_argument("--api", default=os.getenv("AMP_API_BASE_URL", "http://localhost:9000"))
     parser.add_argument("--observer", default=os.getenv("AM_OBSERVER_BASE_URL", "http://localhost:9098"))

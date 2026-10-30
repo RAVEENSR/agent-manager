@@ -39,6 +39,7 @@ python3.11 -m venv /tmp/helpdesk-test-env
 export IDP_CLIENT_SECRET='<local-dev-client-secret>'
 /tmp/helpdesk-test-env/bin/python test/sample-smoke/it_helpdesk/platform_smoke.py \
   --repo https://github.com/wso2/agent-manager \
+  --branch <PR-head-branch> \
   --sha <full-published-PR-head-SHA> \
   --reports /tmp/helpdesk-platform
 ```
@@ -53,9 +54,13 @@ The platform test creates a uniquely named model-stub namespace and Agent
 Manager project/agent. The stub runs as a Kubernetes service reachable by the
 agent pod, without a service-account token. A temporary NetworkPolicy permits
 only this test agent to reach this run's model pod on TCP 8099; sandbox defaults
-and other agents' policies remain intact. The policy is removed during cleanup. The agent is created with its full
-commit SHA as the source ref; Agent Manager resolves this to a commit-specific
-build. Before invocation the test verifies the repository and abbreviated SHA
+and other agents' policies remain intact. The policy is removed during cleanup.
+
+The agent is created with the PR head branch. After its automatic branch build
+finishes, the test requests a build with `POST .../builds?commitId=<PR SHA>`
+and polls that returned build name. Only this explicit commit build is tested;
+the initial branch build cannot satisfy the smoke check. Before invocation the
+test verifies the repository and abbreviated SHA
 in the build API, the full SHA in the OpenChoreo WorkflowRun, and that the active
 deployment uses that build's image. Missing provenance fails the check.
 

@@ -21,6 +21,7 @@ concurrency:
 
 env:
   SAMPLE_REPO: https://github.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}
+  SAMPLE_BRANCH: ${{ github.head_ref || github.ref_name }}
   SAMPLE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
@@ -81,7 +82,7 @@ jobs:
           IDP_CLIENT_SECRET: amp-api-client-secret
         run: |
           python test/sample-smoke/it_helpdesk/platform_smoke.py \
-            --repo "$SAMPLE_REPO" --sha "$SAMPLE_SHA" \
+            --repo "$SAMPLE_REPO" --branch "$SAMPLE_BRANCH" --sha "$SAMPLE_SHA" \
             --reports "$RUNNER_TEMP/it-helpdesk-platform"
       - name: Capture Docker, k3s, and cluster diagnostics on failure
         if: failure()
