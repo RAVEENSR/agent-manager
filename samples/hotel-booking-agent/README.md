@@ -214,3 +214,7 @@ and 8099 are occupied. Processes and temporary environments are cleaned up on ex
 `REPORTS` retains service logs, and failures print their tails. The PR workflow
 checks out the PR head SHA and runs for every change under this sample, including
 its dependency files. The workflow can also be started manually.
+
+The PR workflow also builds the platform, deploys the exact sample commit,
+invokes its gateway endpoint, and finds the request's model span in Observer.
+See [deployment and trace smoke commands](../../test/sample-smoke/hotel_booking/README.md).

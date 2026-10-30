@@ -72,11 +72,12 @@ def read(url, body=None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--serve', type=int)
+    parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--agent')
     parser.add_argument('--model')
     args = parser.parse_args()
     if args.serve:
-        HTTPServer(('127.0.0.1', args.serve), Handler).serve_forever()
+        HTTPServer((args.host, args.serve), Handler).serve_forever()
     else:
         marker = 'hotel-smoke-' + uuid.uuid4().hex
         result = read(args.agent + '/chat', {'message': 'Search hotels in Tokyo. ' + marker, 'session_id': marker})
