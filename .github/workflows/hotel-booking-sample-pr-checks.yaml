@@ -87,8 +87,8 @@ jobs:
           nodes=$(kubectl get nodes -o jsonpath='{.items[*].metadata.name}')
           test -n "$nodes"
           for node in $nodes; do
-            timeout 120s docker exec -i "$node" k3s ctr --namespace k8s.io images import - < "$archive"
-            timeout 30s docker exec "$node" k3s crictl inspecti "docker.io/library/$image" \
+            timeout 120s docker exec -i "$node" ctr --namespace k8s.io images import - < "$archive"
+            timeout 30s docker exec "$node" crictl inspecti "docker.io/library/$image" \
               > "$reports/observer-image-$node.json"
           done
           # This dev image exists only locally; never try a registry fallback.
