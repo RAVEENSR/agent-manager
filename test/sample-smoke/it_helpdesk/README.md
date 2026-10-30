@@ -91,6 +91,9 @@ capacity, required ports, and whether Docker-published ports are reachable from
 the runner. On failure it uploads bounded Docker/k3s logs, container state and
 network mappings, runner network information, and Kubernetes readiness/errors
 in the `it-helpdesk-platform-smoke` artifact, even if Kubernetes is unreachable.
+The artifact's `preflight/` directory also retains image-pull errors, container
+startup output, and probe state/logs captured before cleanup. Pull and startup
+failures are reported separately; a cached probe image requires no registry pull.
 
 The platform job is intentionally heavier than local smoke: it provisions a
 cluster and builds the platform before testing one agent.

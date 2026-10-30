@@ -69,12 +69,47 @@ echo "::endgroup::"
 # ---------------------------------------------------------------------------
 
 echo "::group::Docker published-port reachability"
-docker rm -f amp-portprobe >/dev/null 2>&1 || true
-if ! docker run -d --rm --name amp-portprobe \
+PROBE_REPORT_DIR="${PROBE_REPORT_DIR:-$(mktemp -d)}"
+mkdir -p "$PROBE_REPORT_DIR" || die "Cannot create probe report directory: $PROBE_REPORT_DIR"
+log "Probe diagnostics: $PROBE_REPORT_DIR"
+probe_attempted=0
+cleanup_probe() {
+  local status="$1"
+  if [ "$probe_attempted" -eq 1 ]; then
+    # Do not dump full inspect output, which includes environment values.
+    timeout 15s docker inspect --format \
+      'State={{json .State}} Ports={{json .NetworkSettings.Ports}} Networks={{json .NetworkSettings.Networks}}' \
+      amp-portprobe > "$PROBE_REPORT_DIR/container-state.txt" 2>&1 || true
+    timeout 15s docker logs --timestamps --tail=100 amp-portprobe \
+      > "$PROBE_REPORT_DIR/container.log" 2>&1 || true
+    if [ "$status" -ne 0 ]; then
+      cat "$PROBE_REPORT_DIR/container-state.txt" "$PROBE_REPORT_DIR/container.log"
+    fi
+  fi
+  timeout 15s docker rm -f amp-portprobe > "$PROBE_REPORT_DIR/cleanup.log" 2>&1 || true
+}
+trap 'cleanup_probe "$?"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+timeout 15s docker rm -f amp-portprobe >/dev/null 2>&1 || true
+# Preserve cached-image behavior while separating pull failures from startup.
+if ! docker image inspect "$PROBE_IMAGE" >/dev/null 2>&1; then
+  if ! timeout 60s docker pull "$PROBE_IMAGE" > "$PROBE_REPORT_DIR/image-pull.log" 2>&1; then
+    cat "$PROBE_REPORT_DIR/image-pull.log"
+    die "Could not pull probe image $PROBE_IMAGE; see $PROBE_REPORT_DIR/image-pull.log"
+  fi
+else
+  echo "Using cached image $PROBE_IMAGE" > "$PROBE_REPORT_DIR/image-pull.log"
+fi
+
+# Keep stopped containers until the EXIT trap saves their state and logs.
+probe_attempted=1
+if ! timeout 20s docker run -d --name amp-portprobe \
       -p "127.0.0.1:${PROBE_PORT}:80" "${PROBE_IMAGE}" \
-      httpd -f -p 80 -h /etc >/dev/null 2>&1; then
-  docker rm -f amp-portprobe >/dev/null 2>&1 || true
-  die "Could not start the port probe container from ${PROBE_IMAGE}. Either the daemon cannot pull images, or host port ${PROBE_PORT} is already bound."
+      httpd -f -p 80 -h /etc > "$PROBE_REPORT_DIR/container-start.log" 2>&1; then
+  cat "$PROBE_REPORT_DIR/container-start.log"
+  die "Could not start port probe; see $PROBE_REPORT_DIR/container-start.log"
 fi
 
 reachable=0
@@ -85,7 +120,6 @@ for _ in $(seq 1 15); do
   fi
   sleep 1
 done
-docker rm -f amp-portprobe >/dev/null 2>&1 || true
 
 if [ "${reachable}" -eq 1 ]; then
   ok "Container ports published by this daemon are reachable on the runner's loopback"
