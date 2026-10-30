@@ -209,7 +209,12 @@ npm ci
 npm run build
 ```
 
-This workflow covers the sample locally; it does not yet deploy through Agent
-Manager or verify collected platform traces. Existing platform/nightly tests
-are unchanged. Dockerfile changes trigger these checks, but container-image
-builds are not part of this local test.
+The workflow also runs an Agent Manager deploy → endpoint → trace smoke check
+following the local checks. It builds Agent Manager from the PR checkout using
+`amp-dev-stack`, then builds the sample with the explicit PR commit revision,
+deploys it, invokes `/chat`, and requires a matching model span in Observer.
+The local checks exercise both Bedrock Converse and OpenAI streaming stubs.
+Existing platform/nightly tests are unchanged. Dockerfile changes trigger these
+checks; platform deployment uses buildpacks, not the ECS Dockerfile.
+
+See [platform smoke commands and coverage](../../test/sample-smoke/insurance_support/README.md).

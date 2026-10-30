@@ -18,3 +18,4 @@ export PYTHON_DOTENV_DISABLED=1
 "$python" "$sample/tests/test_bedrock_gateway.py"
 "$python" "$sample/tests/test_mcp.py" -v
 "$python" "$sample/tests/smoke_http.py"
+"$python" "$sample/../../test/sample-smoke/insurance_support/local_smoke.py"
