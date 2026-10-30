@@ -9,7 +9,6 @@ on:
       - 'test/instrumentation-matrix/harness/classify.py'
       - '.github/workflows/it-helpdesk-sample-pr-checks.yaml'
       - '.github/actions/amp-dev-stack/**'
-      - '.github/actions/preflight-k3d/**'
   workflow_dispatch:
 
 permissions:
@@ -42,7 +41,6 @@ jobs:
         run: |
           python -m pip install requests
           python -m unittest discover -s test/sample-smoke/it_helpdesk -p 'test_*.py' -v
-          python -m unittest discover -s .github/actions/preflight-k3d -p 'test_*.py' -v
       - name: Install dependencies and run HTTP smoke
         env:
           PYTHON: python
@@ -64,13 +62,6 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ env.SAMPLE_SHA }}
           persist-credentials: false
-      - name: Check runner capacity and Docker networking
-        uses: ./.github/actions/preflight-k3d
-        env:
-          PROBE_REPORT_DIR: ${{ runner.temp }}/it-helpdesk-platform/preflight
-        with:
-          # Keep in sync with deployments/k3d-local-config.yaml.
-          required-ports: '6550 8080 8443 19080 19443 10081 10082 11080 11085 11081 11082'
       - uses: ./.github/actions/amp-dev-stack
       - uses: actions/setup-python@v6
         with:

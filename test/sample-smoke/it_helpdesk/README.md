@@ -91,14 +91,9 @@ Checkout and remote builds use the PR **head SHA**, including
 Dependabot PRs. The deployment job uses the existing `amp-dev-stack` action to
 create a fresh platform from the checkout and uses its bootstrap test credential;
 it requires no Actions secrets. Existing nightly/platform suites are unchanged.
-Before stack setup, the platform job runs `preflight-k3d` to check runner
-capacity, required ports, and whether Docker-published ports are reachable from
-the runner. On failure it uploads bounded Docker/k3s logs, container state and
-network mappings, runner network information, and Kubernetes readiness/errors
-in the `it-helpdesk-platform-smoke` artifact, even if Kubernetes is unreachable.
-The artifact's `preflight/` directory also retains image-pull errors, container
-startup output, and probe state/logs captured before cleanup. Pull and startup
-failures are reported separately; a cached probe image requires no registry pull.
+The platform job starts stack setup directly. On failure, it retains Docker,
+k3s, and Kubernetes diagnostics in the platform smoke artifact, including when
+the Kubernetes API is unavailable.
 
 The platform job is intentionally heavier than local smoke: it provisions a
 cluster and builds the platform before testing one agent.
