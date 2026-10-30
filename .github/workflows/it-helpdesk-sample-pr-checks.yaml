@@ -9,6 +9,7 @@ on:
       - 'test/instrumentation-matrix/harness/classify.py'
       - '.github/workflows/it-helpdesk-sample-pr-checks.yaml'
       - '.github/actions/amp-dev-stack/**'
+      - '.github/actions/preflight-k3d/**'
   workflow_dispatch:
 
 permissions:
@@ -62,6 +63,11 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ env.SAMPLE_SHA }}
           persist-credentials: false
+      - name: Check runner capacity and Docker networking
+        uses: ./.github/actions/preflight-k3d
+        with:
+          # Keep in sync with deployments/k3d-local-config.yaml.
+          required-ports: '6550 8080 8443 19080 19443 10081 10082 11080 11085 11081 11082'
       - uses: ./.github/actions/amp-dev-stack
       - uses: actions/setup-python@v6
         with:
@@ -75,13 +81,48 @@ jobs:
           python test/sample-smoke/it_helpdesk/platform_smoke.py \
             --repo "$SAMPLE_REPO" --sha "$SAMPLE_SHA" \
             --reports "$RUNNER_TEMP/it-helpdesk-platform"
-      - name: Capture cluster state on failure
+      - name: Capture Docker, k3s, and cluster diagnostics on failure
         if: failure()
         shell: bash
         run: |
-          mkdir -p "$RUNNER_TEMP/it-helpdesk-platform"
-          kubectl get pods -A -o wide > "$RUNNER_TEMP/it-helpdesk-platform/cluster-pods.txt" 2>&1 || true
-          kubectl get events -A --field-selector type=Warning > "$RUNNER_TEMP/it-helpdesk-platform/cluster-events.txt" 2>&1 || true
+          # Every command is bounded and best-effort: keep collecting evidence
+          # even when Docker or the Kubernetes API is unavailable.
+          reports="$RUNNER_TEMP/it-helpdesk-platform"
+          mkdir -p "$reports"
+          timeout 15s docker info --format \
+            'Name={{.Name}} Version={{.ServerVersion}} Driver={{.Driver}} CPUs={{.NCPU}} Memory={{.MemTotal}}' \
+            > "$reports/docker-info.txt" 2>&1 || true
+          timeout 15s docker ps -a --format \
+            'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' \
+            > "$reports/docker-containers.txt" 2>&1 || true
+          ip address > "$reports/runner-addresses.txt" 2>&1 || true
+          ip route > "$reports/runner-routes.txt" 2>&1 || true
+
+          # Inspect only state/network fields; full inspect output includes env
+          # values. The server container's logs contain the k3s startup logs.
+          timeout 15s docker ps -a --filter name=k3d-openchoreo-local-setup \
+            --format '{{.Names}}' > "$reports/k3d-containers.txt" \
+            2> "$reports/k3d-discovery-errors.txt" || true
+          while IFS= read -r container; do
+            [ -n "$container" ] || continue
+            timeout 15s docker inspect --format \
+              'State={{json .State}} Ports={{json .NetworkSettings.Ports}} Networks={{json .NetworkSettings.Networks}}' \
+              "$container" > "$reports/$container-state.txt" 2>&1 || true
+            timeout 20s docker logs --timestamps --tail=300 "$container" \
+              > "$reports/$container.log" 2>&1 || true
+          done < "$reports/k3d-containers.txt"
+
+          timeout 15s kubectl config view --minify \
+            -o jsonpath='{.clusters[0].cluster.server}' \
+            > "$reports/kubernetes-api-server.txt" 2>&1 || true
+          timeout 15s kubectl --request-timeout=10s get --raw=/readyz \
+            > "$reports/kubernetes-readyz.txt" 2>&1 || true
+          timeout 20s kubectl --request-timeout=10s get nodes -o wide \
+            > "$reports/cluster-nodes.txt" 2>&1 || true
+          timeout 20s kubectl --request-timeout=10s get pods -A -o wide \
+            > "$reports/cluster-pods.txt" 2>&1 || true
+          timeout 20s kubectl --request-timeout=10s get events -A --field-selector type=Warning \
+            > "$reports/cluster-events.txt" 2>&1 || true
       - uses: actions/upload-artifact@v7
         if: always()
         with:
