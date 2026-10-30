@@ -151,11 +151,3 @@ run against them too.
 | `dotnet-agent.csproj` | Pinned package references. |
 | `Dockerfile` | Container build, with the optional zero-code overlay documented. |
 | `.env.example` | Environment variable template. |
-
-## Local PR smoke check
-
-```bash
-python3.11 test/sample-smoke/remaining/run.py dotnet-agent --reports /tmp/dotnet-agent-smoke
-```
-
-Run from the repository root. See [smoke-test prerequisites and coverage](../../test/sample-smoke/remaining/README.md).
