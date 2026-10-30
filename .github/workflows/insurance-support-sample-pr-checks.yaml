@@ -1,0 +1,44 @@
+name: Insurance Support Sample PR Checks
+on:
+  pull_request:
+    paths:
+      - 'samples/insurance-support-agent/**'
+      - '.github/workflows/insurance-support-sample-pr-checks.yaml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: insurance-smoke-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  smoke:
+    name: Insurance Support local smoke and web build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install dependencies and run offline integration and HTTP smoke tests
+        env:
+          PYTHON: python
+          SMOKE_REPORTS: ${{ runner.temp }}/insurance-smoke
+        run: bash samples/insurance-support-agent/scripts/smoke_test.sh
+      - name: Install locked web dependencies and build
+        working-directory: samples/insurance-support-agent/web
+        run: |
+          npm ci
+          npm run build
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: insurance-support-smoke
+          path: ${{ runner.temp }}/insurance-smoke/

@@ -175,3 +175,41 @@ Two details matter if you adapt this sample:
 Disabling auto instrumentation removes the OpenTelemetry SDK from the image
 entirely, so the agent would then need to install and configure its own
 exporter.
+
+## Dependency PR smoke checks
+
+The `Insurance Support Sample PR Checks` workflow checks out the exact PR head
+(including fork and Dependabot PRs). Changes anywhere under this sample trigger
+Python dependency installation, `pip check`, the existing offline Bedrock and
+MCP integration tests, an HTTP smoke test, and `npm ci` plus the web production
+build. The HTTP test starts the real `agent/main.py`, checks `/health`, and calls
+`/chat`. A local Bedrock Converse stub requests `list_policies` and verifies its
+actual fixture output before returning the final response. No paid model,
+AWS account, or CI secret is required.
+
+Run the Python checks locally with Python 3.11+:
+
+```bash
+SMOKE_REPORTS=/tmp/insurance-smoke \
+  bash samples/insurance-support-agent/scripts/smoke_test.sh
+```
+
+Set `PYTHON` to choose another Python executable. The runner installs both agent
+and MCP requirements into a temporary virtual environment and removes it on exit.
+Reports retain installation/test output, agent logs, the response, and model
+call evidence. The HTTP runner stops its agent process group and model server
+on success, failure, or termination. An app startup failure prints the agent log.
+
+Run the web build with a Node version supported by `web/package.json` (CI uses
+Node 24):
+
+```bash
+cd samples/insurance-support-agent/web
+npm ci
+npm run build
+```
+
+This workflow covers the sample locally; it does not yet deploy through Agent
+Manager or verify collected platform traces. Existing platform/nightly tests
+are unchanged. Dockerfile changes trigger these checks, but container-image
+builds are not part of this local test.
