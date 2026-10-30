@@ -65,3 +65,9 @@ The A2A harness is self-contained and reuses the existing platform API client.
 
 These reject failed/protocol-error tasks, missing/wrong artifacts, stale or partial
 model evidence, wrong sample paths and wrong build commits. 
+
+Project cleanup requires the DELETE API to acknowledge removal and then waits
+for the exact project CR to disappear from Kubernetes. The current project GET
+endpoint incorrectly returns 500 for a deleted project; the test does not treat
+that error as success. A terminating CR, failed DELETE or failed Kubernetes query
+still fails cleanup. Agent deletion continues to require API confirmation.

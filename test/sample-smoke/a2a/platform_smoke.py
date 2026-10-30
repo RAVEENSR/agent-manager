@@ -153,6 +153,15 @@ def poll_trace(client, deployed, observer, marker, started, reports):
     return wait_until("this invocation's model span in Observer", poll, timeout=180)
 
 
+def project_deleted(name):
+    # Project GET currently maps OpenChoreo's missing-project response to 500.
+    # After DELETE is acknowledged, require actual CR removal instead of
+    # treating that 500 (or a deletionTimestamp) as successful cleanup.
+    result = json.loads(kubectl("get", "projects.openchoreo.dev", "-A",
+                                "--field-selector", f"metadata.name={name}", "-o", "json"))
+    return not result["items"]
+
+
 def diagnostics(namespace, reports):
     commands = {
         "pods.txt": ("get", "pods", "-A", "-o", "wide"),
@@ -297,7 +306,10 @@ def run(args, sample):
                         response = client._request("DELETE", path, expect=(200, 202, 204, 404, 409))
                         return response.status_code != 409
                     wait_until(f"cleanup of {path}", delete, timeout=120)
-                    wait_until(f"deletion of {path}", lambda: client._request("GET", path, expect=(200, 404)).status_code == 404, timeout=120)
+                    if path == base:
+                        wait_until(f"project CR deletion of {name}", lambda: project_deleted(name), timeout=120)
+                    else:
+                        wait_until(f"deletion of {path}", lambda: client._request("GET", path, expect=(200, 404)).status_code == 404, timeout=120)
                 except Exception as exc:
                     cleanup_errors.append(f"{path}: {exc}")
         for process, log in reversed(forwards):
