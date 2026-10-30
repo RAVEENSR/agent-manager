@@ -21,8 +21,8 @@ from heavy.amp_client import AmpClient, DeployedAgent, IdpCredentials
 from harness.classify import classify_span
 
 
-def kubectl(*args, data=None):
-    return subprocess.run(["kubectl", *args], input=data, text=True, capture_output=True, check=True, timeout=60).stdout
+def kubectl(*args, data=None, timeout=60):
+    return subprocess.run(["kubectl", *args], input=data, text=True, capture_output=True, check=True, timeout=timeout).stdout
 
 
 def validate_source(build, workflow, sha, repo, branch):
@@ -107,7 +107,7 @@ def install_stub(namespace):
             "selector": labels, "ports": [{"port": 8099, "targetPort": 8099}]}},
     ]
     kubectl("apply", "-f", "-", data=json.dumps({"apiVersion": "v1", "kind": "List", "items": resources}))
-    kubectl("-n", namespace, "rollout", "status", "deployment/model", "--timeout=120s")
+    kubectl("-n", namespace, "rollout", "status", "deployment/model", "--timeout=120s", timeout=150)
     return f"http://model.{namespace}.svc.cluster.local:8099/v1"
 
 
