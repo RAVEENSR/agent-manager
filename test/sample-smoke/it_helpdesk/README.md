@@ -104,3 +104,9 @@ Run regression guards independently:
 /tmp/helpdesk-test-env/bin/python -m unittest discover \
   -s test/sample-smoke/it_helpdesk -p 'test_*.py' -v
 ```
+
+The platform job imports the PR-built `amp-observer:0.0.0-dev` image directly
+into every k3d node and verifies it through CRI. It disables registry pulls for
+that local image, waits for the Observer rollout, restarts platform forwards,
+and checks the Observer HTTP health endpoint before testing the sample. Image
+identity and CRI inspection reports are retained in the platform artifact.

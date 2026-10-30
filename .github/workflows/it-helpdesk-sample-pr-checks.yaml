@@ -63,6 +63,35 @@ jobs:
           ref: ${{ env.SAMPLE_SHA }}
           persist-credentials: false
       - uses: ./.github/actions/amp-dev-stack
+      - name: Load and wait for the PR Observer image
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -euo pipefail
+          reports="$RUNNER_TEMP/it-helpdesk-platform"
+          mkdir -p "$reports"
+          image=amp-observer:0.0.0-dev
+          archive="$RUNNER_TEMP/it-helpdesk-observer.tar"
+          trap 'rm -f "$archive"' EXIT
+          # The stack builds this image from the PR checkout. Import directly
+          # and verify via CRI rather than relying on k3d's import exit status.
+          docker image inspect "$image" --format '{{.Id}}' > "$reports/observer-image.txt"
+          docker save "$image" -o "$archive"
+          nodes=$(kubectl get nodes -o jsonpath='{.items[*].metadata.name}')
+          test -n "$nodes"
+          for node in $nodes; do
+            timeout 120s docker exec -i "$node" k3s ctr --namespace k8s.io images import - < "$archive"
+            timeout 30s docker exec "$node" k3s crictl inspecti "docker.io/library/$image" \
+              > "$reports/observer-image-$node.json"
+          done
+          # This dev image exists only locally; never try a registry fallback.
+          kubectl -n openchoreo-observability-plane patch deployment amp-observer --type=strategic \
+            -p '{"spec":{"template":{"spec":{"containers":[{"name":"observer","imagePullPolicy":"Never"}]}}}}'
+          kubectl -n openchoreo-observability-plane rollout status deployment/amp-observer --timeout=180s
+          # The earlier forward may have exited while its pod was unavailable.
+          (cd deployments/setup && PORT_FORWARD_ADDRESS=0.0.0.0 ./port-forward.sh --platform --background)
+          curl --fail --silent --show-error --retry 30 --retry-connrefused \
+            --retry-delay 2 --retry-max-time 90 --max-time 5 http://localhost:9098/health
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
