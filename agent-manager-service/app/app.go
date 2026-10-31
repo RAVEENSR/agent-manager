@@ -303,7 +303,19 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer shutdownCancel()
 
-		// Stop scheduler first
+		// Drain both servers before stopping anything an in-flight request
+		// calls into: the reconcile worker its nudges and placement requests
+		// reach, the EventHub its publishes land in, the audit recorder.
+		// Gateway WebSockets are hijacked connections, which Shutdown neither
+		// waits for nor closes; the WebSocket manager closes them below.
+		if err := mainServer.Shutdown(shutdownCtx); err != nil {
+			slog.Error("Main server forced shutdown after timeout", "error", err)
+		}
+
+		if err := internalServer.Shutdown(shutdownCtx); err != nil {
+			slog.Error("Internal server forced shutdown after timeout", "error", err)
+		}
+
 		schedulerCancel()
 		if err := dependencies.MonitorScheduler.Stop(); err != nil {
 			slog.Error("error stopping monitor scheduler", "error", err)
@@ -351,27 +363,20 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 			slog.Warn("WebSocket manager shutdown timed out")
 		}
 
-		// Close EventHub after WebSocket manager so in-flight events are not dropped
+		// Close EventHub after the servers drain, so in-flight requests'
+		// publishes land, and after the WebSocket manager, so in-flight events
+		// are not dropped.
 		if dependencies.EventHub != nil {
 			if err := dependencies.EventHub.Close(); err != nil {
 				slog.Error("error closing EventHub", "error", err)
 			}
 		}
 
-		// Shutdown both servers using the same context
-		if err := mainServer.Shutdown(shutdownCtx); err != nil {
-			slog.Error("Main server forced shutdown after timeout", "error", err)
-		}
-
-		if err := internalServer.Shutdown(shutdownCtx); err != nil {
-			slog.Error("Internal server forced shutdown after timeout", "error", err)
-		}
-
-		// Flush the audit buffer last. Both servers have stopped, so no further
-		// events can be produced and every in-flight request has finished
-		// recording. Draining any earlier would discard the audit records of the
-		// requests still being served — note this is deliberately not where
-		// EventHub.Close sits, which runs before the servers stop.
+		// Flush the audit buffer last. The servers have drained and the
+		// background workers have stopped, so no further events can be
+		// produced and every in-flight request has finished recording.
+		// Draining any earlier would discard the audit records of the requests
+		// still being served.
 		if dependencies.AuditRecorder != nil {
 			if err := dependencies.AuditRecorder.Close(shutdownCtx); err != nil {
 				slog.Error("error flushing audit recorder; some events may be lost", "error", err)

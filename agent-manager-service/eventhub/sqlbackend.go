@@ -251,6 +251,7 @@ func (b *SQLBackend) PublishEvent(ctx context.Context, gatewayID string, event E
 }
 
 // PublishEventTx writes the event in the caller's transaction, so it is delivered only if that transaction commits.
+// It isn't tied to the hub's lifetime: it runs in the caller's transaction, governed by the caller's ctx.
 //
 // The gateway-state row lock is held until the caller commits, and every other publish to the gateway waits on it:
 // publish last in the transaction, and lock several gateways in gateway_id order.
