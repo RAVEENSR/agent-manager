@@ -264,6 +264,56 @@ func TestBeginUndeploy(t *testing.T) {
 		assert.True(t, sendEvent)
 		assert.Equal(t, models.DeploymentStatusUndeploying, statusRow(t, p).Status)
 	})
+	failUndeploy := func(t *testing.T, p models.Placement) {
+		t.Helper()
+		startDeploy(t, p)
+		_, err := beginUndeploy(t, p)
+		require.NoError(t, err)
+		applyAck(t, p, undeployAck(p.ArtifactUUID.String(), models.DeploymentAckStatusFailed), nil)
+		row := statusRow(t, p)
+		require.Equal(t, models.DeploymentStatusFailed, row.Status)
+		require.Equal(t, models.DeploymentStatusUndeployed, row.StatusDesired)
+	}
+	t.Run("a failed undeploy can be retried", func(t *testing.T) {
+		p := seedPlacement(t, models.KindLLMProxy)
+		failUndeploy(t, p)
+
+		sendEvent, err := beginUndeploy(t, p)
+		require.NoError(t, err)
+		assert.True(t, sendEvent)
+		row := statusRow(t, p)
+		assert.Equal(t, models.DeploymentStatusUndeploying, row.Status)
+		assert.Equal(t, models.DeploymentStatusUndeployed, row.StatusDesired)
+		assertQueueClear(t, row)
+	})
+	t.Run("a timed-out undeploy can be retried", func(t *testing.T) {
+		p := seedPlacement(t, models.KindLLMProxy)
+		startDeploy(t, p)
+		_, err := beginUndeploy(t, p)
+		require.NoError(t, err)
+		backdate(t, p, 10*time.Minute)
+		_, err = NewDeploymentRepo(db.GetDB()).FailStaleTransitional(context.Background(), time.Now().Add(-5*time.Minute))
+		require.NoError(t, err)
+
+		sendEvent, err := beginUndeploy(t, p)
+		require.NoError(t, err)
+		assert.True(t, sendEvent)
+		assert.Equal(t, models.DeploymentStatusUndeploying, statusRow(t, p).Status)
+	})
+	t.Run("a failed undeploy with a redeploy owed is retried and loses its queue", func(t *testing.T) {
+		p := seedPlacement(t, models.KindLLMProxy)
+		failUndeploy(t, p)
+		_, err := NewDeploymentRepo(db.GetDB()).QueueRender(context.Background(), nil, p.OUID, p.ArtifactUUID, nil,
+			"redeploy", QueueScopeAny)
+		require.NoError(t, err)
+
+		sendEvent, err := beginUndeploy(t, p)
+		require.NoError(t, err)
+		assert.True(t, sendEvent)
+		row := statusRow(t, p)
+		assert.Equal(t, models.DeploymentStatusUndeploying, row.Status)
+		assertQueueClear(t, row)
+	})
 	t.Run("an undeploy already under way is not active", func(t *testing.T) {
 		p := seedPlacement(t, models.KindLLMProxy)
 		startDeploy(t, p)

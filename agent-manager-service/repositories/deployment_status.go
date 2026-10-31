@@ -125,9 +125,9 @@ func finishedUndeploy() (string, models.DeploymentStatus) {
 }
 
 // BeginUndeploy starts an undeploy transition. A row never sent to the gateway (PENDING) is undeployed at once and
-// needs no event; any other row heading for DEPLOYED goes UNDEPLOYING and the caller sends the undeploy event. A row
-// already heading for UNDEPLOYED with a deploy owed only loses its queue, with no event: the undeploy supersedes the
-// owed deploy.
+// needs no event; any other row heading for DEPLOYED goes UNDEPLOYING and the caller sends the undeploy event. A failed
+// undeploy (FAILED and heading for UNDEPLOYED) is re-sent the same way. A row already heading for UNDEPLOYED with a
+// deploy owed only loses its queue, with no event: the undeploy supersedes the owed deploy.
 func (r *DeploymentRepo) BeginUndeploy(ctx context.Context, tx *gorm.DB, p models.Placement) (bool, error) {
 	var statuses []models.DeploymentStatus
 	err := r.on(ctx, tx).Raw(`
@@ -135,11 +135,13 @@ func (r *DeploymentRepo) BeginUndeploy(ctx context.Context, tx *gorm.DB, p model
 			status = CASE WHEN status = ? THEN ? ELSE ? END,
 			status_desired = ?, status_reason = '', performed_at = ?,
 			next_attempt_at = NULL, attempt_count = 0, render_reason = '', updated_at = NOW()
-		WHERE artifact_uuid = ? AND ou_id = ? AND gateway_uuid = ? AND status_desired = ?
+		WHERE artifact_uuid = ? AND ou_id = ? AND gateway_uuid = ?
+		  AND (status_desired = ? OR (status_desired = ? AND status = ?))
 		RETURNING status`,
 		models.DeploymentStatusPending, models.DeploymentStatusUndeployed, models.DeploymentStatusUndeploying,
 		models.DeploymentStatusUndeployed, models.NewPerformedAt(time.Now()),
-		p.ArtifactUUID, p.OUID, p.GatewayUUID, models.DeploymentStatusDeployed).
+		p.ArtifactUUID, p.OUID, p.GatewayUUID,
+		models.DeploymentStatusDeployed, models.DeploymentStatusUndeployed, models.DeploymentStatusFailed).
 		Scan(&statuses).Error
 	if err != nil {
 		return false, fmt.Errorf("failed to begin undeploy: %w", err)
