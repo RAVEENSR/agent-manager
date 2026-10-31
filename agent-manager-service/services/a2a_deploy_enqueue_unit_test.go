@@ -210,6 +210,16 @@ func TestEnqueueCreatedA2AAgentSkipsAgentsWithNothingToPublish(t *testing.T) {
 	})
 }
 
+// A service without an A2A publisher has no exposure queue to write to, so create
+// must return rather than read the agent or publish.
+func TestEnqueueCreatedA2AAgentWithoutPublisher(t *testing.T) {
+	svc := &agentManagerService{logger: testLogger()}
+
+	assert.NotPanics(t, func() {
+		svc.enqueueCreatedA2AAgent(context.Background(), "a2a-agent", "org-1", "checkout", "trip-planner", "dev", uuid.NewString(), &models.Artifact{UUID: uuid.New()})
+	})
+}
+
 // An external agent's record is its proxy row, proxied or not, so it gets no exposure.
 func TestRecordAgentEnvDeployRecordsNoExposureForAnExternalAgent(t *testing.T) {
 	pubs := &repomocks.PlatformAgentExposureRepositoryMock{} // UpsertFunc is nil: an exposure would panic

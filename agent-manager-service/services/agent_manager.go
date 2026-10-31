@@ -6664,6 +6664,9 @@ func (s *agentManagerService) enqueueCreatedA2AAgent(
 	subType, ouID, projectName, agentName, environmentName, environmentUUID string,
 	artifact *models.Artifact,
 ) {
+	if s.a2aPublisher == nil {
+		return
+	}
 	if !utils.IsA2AAgentSubType(subType) || artifact == nil {
 		return
 	}
