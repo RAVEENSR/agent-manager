@@ -2793,7 +2793,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "409":
-          description: The gateway still serves the environment's agents or proxies; undeploy them from this gateway first
+          description: The gateway still serves this environment's agents or proxies; undeploy them from this gateway, or remove the LLM configuration from the agents and monitors in this environment, first
           content:
             application/json:
               schema:
