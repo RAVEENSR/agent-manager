@@ -319,8 +319,8 @@ func (r *CatalogRepo) ListLLMProviders(filters *models.CatalogListFilters) ([]mo
 	return entries, total, nil
 }
 
-// populateDeploymentsInBatch fetches deployment data for all providers in a single query: every gateway a provider
-// is placed on or owed a deploy to, with the status a user is shown (UserStatusOf).
+// populateDeploymentsInBatch fetches deployment data for all providers in a single query: the live deployments
+// (ds.status = DEPLOYED), with the status a user is shown (UserStatusOf).
 func (r *CatalogRepo) populateDeploymentsInBatch(entries []models.CatalogLLMProviderEntry, orgUUID string) error {
 	// Extract all provider UUIDs
 	providerUUIDs := make([]string, len(entries))

@@ -222,9 +222,10 @@ func (s *LLMProxyDeploymentService) Redeploy(
 	return s.CurrentDeployment(ctx, proxy, ouID, gateway)
 }
 
-// RedeployEverywhere queues a re-render on every gateway the proxy is placed on and renders them inline; a gateway
-// whose render fails keeps what it was last sent and is retried by the worker, reported as a
-// reconcile.RenderFailedError.
+// RedeployEverywhere queues a re-render on every gateway the proxy is placed on and renders them inline. Failures
+// are returned joined: a render failure is a reconcile.RenderFailedError, a DB write-back failure a plain error. A
+// gateway that fails keeps what it was last sent and stays owed, and the worker retries it unless the render
+// failed permanently.
 func (s *LLMProxyDeploymentService) RedeployEverywhere(ctx context.Context, proxy *models.LLMProxy, ouID, reason string) error {
 	return s.core.MarkStale(ctx, models.KindLLMProxy, ouID, proxy.UUID, nil, reason)
 }

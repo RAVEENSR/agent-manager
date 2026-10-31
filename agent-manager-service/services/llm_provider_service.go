@@ -1381,7 +1381,7 @@ func (s *LLMProviderService) syncProxyAuthHeader(
 		if errors.Is(err, reconcile.ErrQueueFailed) {
 			return false, fmt.Errorf("proxy %s saved but its redeploy was not queued: %w", proxy.Handle, err)
 		}
-		return false, fmt.Errorf("proxy %s saved but gateway update failed (retried in the background): %w", proxy.Handle, err)
+		return false, fmt.Errorf("proxy %s saved but gateway update failed (the failure is recorded on each affected gateway): %w", proxy.Handle, err)
 	}
 	return true, nil
 }

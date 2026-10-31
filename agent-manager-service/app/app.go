@@ -304,8 +304,8 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 		defer shutdownCancel()
 
 		// Drain both servers before stopping anything an in-flight request
-		// calls into: the reconcile worker its nudges and placement requests
-		// reach, the EventHub its publishes land in, the audit recorder.
+		// calls into: the reconcile worker (nudges, placement requests), the
+		// EventHub, the audit recorder.
 		// Gateway WebSockets are hijacked connections, which Shutdown neither
 		// waits for nor closes; the WebSocket manager closes them below.
 		if err := mainServer.Shutdown(shutdownCtx); err != nil {
@@ -363,9 +363,10 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 			slog.Warn("WebSocket manager shutdown timed out")
 		}
 
-		// Close EventHub after the servers drain, so in-flight requests'
-		// publishes land, and after the WebSocket manager, so in-flight events
-		// are not dropped.
+		// Close EventHub after the servers drain, so events published by
+		// draining requests are still polled and delivered and the gateway
+		// registration prepared statement stays open, and after the WebSocket
+		// manager, so in-flight events are not dropped.
 		if dependencies.EventHub != nil {
 			if err := dependencies.EventHub.Close(); err != nil {
 				slog.Error("error closing EventHub", "error", err)

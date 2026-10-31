@@ -63,6 +63,7 @@ type proxySyncFixture struct {
 	proxyRepo    *repomocks.LLMProxyRepositoryMock
 	deployRepo   *repomocks.DeploymentRepositoryMock
 	revokedKeys  []string
+	writtenBack  []uuid.UUID
 	savedConfigs []models.LLMProxyConfig
 	svc          *LLMProviderService
 	proxySvc     *LLMProxyService
@@ -143,6 +144,7 @@ func (f *proxySyncFixture) placeOnGateways(gateways []uuid.UUID, writeBack func(
 		now := time.Now()
 		deployment.DeploymentID = uuid.New()
 		deployment.UpdatedAt = &now
+		f.writtenBack = append(f.writtenBack, claim.GatewayUUID)
 		return nil
 	}
 }
@@ -169,6 +171,9 @@ func TestSyncProxyAuthHeaderKeepsHeadersWhenALaterGatewayFails(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "saved")
+	assert.Contains(t, err.Error(), "recorded on each affected gateway")
+	assert.NotErrorIs(t, err, reconcile.ErrQueueFailed)
+	assert.Equal(t, []uuid.UUID{first}, f.writtenBack, "the first gateway's write-back committed")
 	require.Len(t, f.savedConfigs, 1, "the saved headers are never rolled back")
 	saved := f.savedConfigs[0]
 	assert.Equal(t, newProxyIngressSecurity(f.provider), saved.Security)
