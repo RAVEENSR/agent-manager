@@ -177,8 +177,7 @@ func (c *llmDeploymentController) UndeployLLMProviderDeployment(w http.ResponseW
 			return
 		case errors.Is(err, utils.ErrDeploymentNotActive):
 			log.Warn("UndeployLLMProviderDeployment: deployment not active", "ouID", ouID, "providerID", providerID, "deploymentID", deploymentID)
-			utils.WriteErrorResponse(w, http.StatusConflict, "No active deployment found for this LLM provider on the gateway. "+
-				"If an earlier undeploy failed, redeploy or restore the deployment, then undeploy it again")
+			utils.WriteErrorResponse(w, http.StatusConflict, "No active deployment found for this LLM provider on the gateway")
 			return
 		case errors.Is(err, utils.ErrGatewayIDMismatch):
 			log.Error("UndeployLLMProviderDeployment: gateway ID mismatch", "ouID", ouID, "providerID", providerID, "deploymentID", deploymentID, "gatewayID", gatewayID)

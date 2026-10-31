@@ -7000,8 +7000,8 @@ paths:
       summary: Undeploy an LLM provider deployment
       description: >-
         Undeploy the provider's current deployment on a gateway, whether it is DEPLOYING, DEPLOYED or failed to
-        deploy. The deployment goes UNDEPLOYING until the gateway acknowledges it. A failed undeploy can't be
-        retried: redeploy or restore the deployment, then undeploy it again.
+        deploy. The deployment goes UNDEPLOYING until the gateway acknowledges it. A failed undeploy can be
+        retried by undeploying again.
       operationId: undeployLLMProviderDeployment
       parameters:
         - name: deploymentId
@@ -7047,8 +7047,8 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "409":
           description: >-
-            The deployment isn't the gateway's current deployment, or it is already being undeployed. After a failed
-            undeploy, redeploy or restore it, then undeploy it again.
+            The deployment isn't the gateway's current deployment, or it is already undeployed or being
+            undeployed.
           content:
             application/json:
               schema:
@@ -7596,8 +7596,8 @@ paths:
       summary: Undeploy an LLM proxy deployment
       description: >-
         Undeploy the proxy's current deployment on a gateway, whether it is DEPLOYING, DEPLOYED or failed to
-        deploy. The deployment goes UNDEPLOYING until the gateway acknowledges it. A failed undeploy can't be
-        retried: redeploy or restore the deployment, then undeploy it again.
+        deploy. The deployment goes UNDEPLOYING until the gateway acknowledges it. A failed undeploy can be
+        retried by undeploying again.
       operationId: undeployLLMProxyDeployment
       parameters:
         - name: deploymentId
@@ -7643,8 +7643,8 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "409":
           description: >-
-            The deployment isn't the gateway's current deployment, or it is already being undeployed. After a failed
-            undeploy, redeploy or restore it, then undeploy it again.
+            The deployment isn't the gateway's current deployment, or it is already undeployed or being
+            undeployed.
           content:
             application/json:
               schema:

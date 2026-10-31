@@ -177,8 +177,7 @@ func (c *llmProxyDeploymentController) UndeployLLMProxyDeployment(w http.Respons
 			return
 		case errors.Is(err, utils.ErrDeploymentNotActive):
 			log.Warn("UndeployLLMProxyDeployment: deployment not active", "ouID", ouID, "proxyID", proxyID, "deploymentID", deploymentID)
-			utils.WriteErrorResponse(w, http.StatusConflict, "No active deployment found for this LLM proxy on the gateway. "+
-				"If an earlier undeploy failed, redeploy or restore the deployment, then undeploy it again")
+			utils.WriteErrorResponse(w, http.StatusConflict, "No active deployment found for this LLM proxy on the gateway")
 			return
 		case errors.Is(err, utils.ErrGatewayIDMismatch):
 			log.Error("UndeployLLMProxyDeployment: gateway ID mismatch", "ouID", ouID, "proxyID", proxyID, "deploymentID", deploymentID, "gatewayID", gatewayID)
