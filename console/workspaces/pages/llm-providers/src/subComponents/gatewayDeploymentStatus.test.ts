@@ -20,6 +20,7 @@ import { describe, it, expect } from "vitest";
 import type { LLMDeploymentResponse } from "@agent-management-platform/types";
 import {
   currentGatewayStatuses,
+  pendingStatusChip,
   requestedGatewayStatuses,
 } from "./gatewayDeploymentStatus";
 
@@ -79,5 +80,23 @@ describe("requestedGatewayStatuses", () => {
     );
     expect(statuses.get("gw-1")?.status).toBe("FAILED");
     expect(statuses.get("gw-2")).toEqual({ status: "DEPLOYING" });
+  });
+});
+
+describe("pendingStatusChip", () => {
+  it("reads a failed undeploy as Undeploy failed and a failed deploy as Failed", () => {
+    expect(
+      pendingStatusChip({ status: "FAILED", statusDesired: "UNDEPLOYED" })?.label,
+    ).toBe("Undeploy failed");
+    expect(
+      pendingStatusChip({ status: "FAILED", statusDesired: "DEPLOYED" })?.label,
+    ).toBe("Failed");
+  });
+
+  it("carries statusDesired through currentGatewayStatuses", () => {
+    const statuses = currentGatewayStatuses([
+      makeDeployment({ status: "FAILED", statusDesired: "UNDEPLOYED" }),
+    ]);
+    expect(statuses.get("gw-1")?.statusDesired).toBe("UNDEPLOYED");
   });
 });

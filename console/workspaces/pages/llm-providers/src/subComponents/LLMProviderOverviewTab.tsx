@@ -66,7 +66,7 @@ import {
 } from "@agent-management-platform/types";
 import { parseOpenApiSpec } from "../utils/openapiResources";
 import {
-  PENDING_STATUS_CHIPS,
+  pendingStatusChip,
   requestedGatewayStatuses,
 } from "./gatewayDeploymentStatus";
 
@@ -213,7 +213,7 @@ export function LLMProviderOverviewTab({
         return;
       }
       const status = gatewayStatuses?.get(g.uuid);
-      const pending = status && PENDING_STATUS_CHIPS[status.status];
+      const pending = status && pendingStatusChip(status);
       environments.forEach((env) => {
         const name = env.displayName || env.name;
         environmentChips.set(name, {

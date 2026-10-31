@@ -31,6 +31,16 @@ export const PENDING_STATUS_CHIPS: Partial<
   FAILED: { label: "Failed", color: "warning" },
 };
 
+/** The chip for a gateway that isn't serving yet; a failed undeploy reads "Undeploy failed". */
+export function pendingStatusChip(
+  status: GatewayDeploymentStatus,
+): { label: string; color: "info" | "warning" } | undefined {
+  if (status.status === "FAILED" && status.statusDesired === "UNDEPLOYED") {
+    return { label: "Undeploy failed", color: "warning" };
+  }
+  return PENDING_STATUS_CHIPS[status.status];
+}
+
 /**
  * The status of the deployment each gateway currently serves, keyed by gateway
  * UUID. A gateway keeps its earlier deployments as ARCHIVED entries, so the
@@ -41,9 +51,9 @@ export function currentGatewayStatuses(
   deployments: LLMDeploymentResponse[] | undefined,
 ): Map<string, GatewayDeploymentStatus> {
   const statuses = new Map<string, GatewayDeploymentStatus>();
-  deployments?.forEach(({ gatewayId, status, statusReason }) => {
+  deployments?.forEach(({ gatewayId, status, statusReason, statusDesired }) => {
     if (!gatewayId || status === "ARCHIVED") return;
-    statuses.set(gatewayId, { status, statusReason });
+    statuses.set(gatewayId, { status, statusReason, statusDesired });
   });
   return statuses;
 }

@@ -355,6 +355,22 @@ describe("EnvironmentGatewaySelectorView", () => {
     expect(getCheckbox("Alpha")).not.toBeChecked();
   });
 
+  it("shows a locked gateway whose undeploy failed as Undeploy failed", () => {
+    renderWithTheme(
+      <ControlledSelector
+        environments={[makeEnvironment("env-a", "Alpha")]}
+        gateways={[makeGateway("gw-1", "env-a")]}
+        initialValue={["gw-1"]}
+        lockedGatewayIds={["gw-1"]}
+        gatewayStatuses={
+          new Map([["gw-1", { status: "FAILED", statusDesired: "UNDEPLOYED" }]])
+        }
+      />,
+    );
+    expect(screen.getByText("Undeploy failed")).toBeInTheDocument();
+    expect(screen.queryByText("Failed")).not.toBeInTheDocument();
+  });
+
   it("shows Deploying for a selected gateway whose deploy is in progress", () => {
     renderWithTheme(
       <ControlledSelector

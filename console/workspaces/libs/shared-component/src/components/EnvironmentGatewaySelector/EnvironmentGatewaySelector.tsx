@@ -105,6 +105,13 @@ const STATUS_CHIPS: Partial<Record<LLMDeploymentStatus, StatusChip>> = {
   FAILED: { label: "Failed", color: "warning" },
 };
 
+function statusChipFor(status: GatewayDeploymentStatus): StatusChip | undefined {
+  if (status.status === "FAILED" && status.statusDesired === "UNDEPLOYED") {
+    return { label: "Undeploy failed", color: "warning" };
+  }
+  return STATUS_CHIPS[status.status];
+}
+
 interface EnvironmentRow {
   envId: string;
   label: string;
@@ -189,7 +196,7 @@ export const EnvironmentGatewaySelectorView: React.FC<
           resolvedGateway ??
           (candidates.length === 1 ? candidates[0] : undefined);
         const status = statusGateway && gatewayStatuses?.get(statusGateway.uuid);
-        const chip = status && STATUS_CHIPS[status.status];
+        const chip = status && statusChipFor(status);
         return [
           {
             envId: env.id,

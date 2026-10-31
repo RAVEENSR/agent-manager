@@ -490,6 +490,7 @@ export interface LLMDeploymentResponse {
 export type GatewayDeploymentStatus = {
   status: LLMDeploymentStatus;
   statusReason?: string;
+  statusDesired?: "DEPLOYED" | "UNDEPLOYED";
 };
 
 export type LLMDeploymentListResponse = LLMDeploymentResponse[];
