@@ -18803,7 +18803,9 @@ components:
           $ref: "#/components/schemas/RateLimitingSummary"
         deployments:
           type: array
-          description: List of deployments for this provider
+          description: >-
+            The provider's live deployments, one per gateway currently serving it. Gateways it is only owed a
+            deploy to are not listed.
           items:
             $ref: "#/components/schemas/DeploymentSummary"
         createdAt:
@@ -18989,8 +18991,8 @@ components:
         status:
           type: string
           description: >-
-            The status a user is shown for the provider on the gateway. A deploy is DEPLOYING until the gateway
-            acknowledges it.
+            The status a user is shown for the provider on the gateway. In the catalog, which lists live deployments
+            only, DEPLOYING means the provider is live and a redeploy is queued.
           enum:
             - DEPLOYING
             - DEPLOYED

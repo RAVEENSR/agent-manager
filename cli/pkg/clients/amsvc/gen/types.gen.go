@@ -2180,7 +2180,7 @@ type CatalogLLMProviderEntry struct {
 	// CreatedBy User who created the provider
 	CreatedBy *string `json:"createdBy,omitempty"`
 
-	// Deployments List of deployments for this provider
+	// Deployments The provider's live deployments, one per gateway currently serving it. Gateways it is only owed a deploy to are not listed.
 	Deployments *[]DeploymentSummary `json:"deployments,omitempty"`
 
 	// Description Provider description
@@ -2959,14 +2959,14 @@ type DeploymentSummary struct {
 	// GatewayName Gateway name/identifier
 	GatewayName string `json:"gatewayName"`
 
-	// Status The status a user is shown for the provider on the gateway. A deploy is DEPLOYING until the gateway acknowledges it.
+	// Status The status a user is shown for the provider on the gateway. In the catalog, which lists live deployments only, DEPLOYING means the provider is live and a redeploy is queued.
 	Status DeploymentSummaryStatus `json:"status"`
 
 	// Vhost Gateway virtual host
 	Vhost *string `json:"vhost,omitempty"`
 }
 
-// DeploymentSummaryStatus The status a user is shown for the provider on the gateway. A deploy is DEPLOYING until the gateway acknowledges it.
+// DeploymentSummaryStatus The status a user is shown for the provider on the gateway. In the catalog, which lists live deployments only, DEPLOYING means the provider is live and a redeploy is queued.
 type DeploymentSummaryStatus string
 
 // DockerBuild defines model for DockerBuild.
