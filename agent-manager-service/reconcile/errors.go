@@ -33,6 +33,9 @@ var ErrRecordGone = Permanent(errors.New("the artifact's per-environment record 
 // ErrNotPlaced is a status asked for an artifact with no row on the gateway.
 var ErrNotPlaced = errors.New("artifact is not placed on the gateway")
 
+// ErrQueueFailed is MarkStale failing to queue the redeploys: nothing is owed, so no gateway will be re-rendered.
+var ErrQueueFailed = errors.New("failed to queue renders")
+
 type inputNotReady struct{ reason string }
 
 func (e *inputNotReady) Error() string        { return e.reason }

@@ -222,14 +222,10 @@ func (s *LLMProxyDeploymentService) Redeploy(
 	return s.CurrentDeployment(ctx, proxy, ouID, gateway)
 }
 
-// RedeployEverywhere re-renders the proxy on every gateway it is placed on because an input outside it changed.
-// An invalid configuration is returned before anything is written; a per-gateway render that fails after the
-// redeploys are queued is a reconcile.RenderFailedError.
+// RedeployEverywhere queues a re-render on every gateway the proxy is placed on and renders them inline; a gateway
+// whose render fails keeps what it was last sent and is retried by the worker, reported as a
+// reconcile.RenderFailedError.
 func (s *LLMProxyDeploymentService) RedeployEverywhere(ctx context.Context, proxy *models.LLMProxy, ouID, reason string) error {
-	ref := proxyPlacement(proxy, proxy.Handle, ouID, uuid.Nil).ArtifactRef
-	if _, err := s.kind.Render(ctx, ref); err != nil {
-		return err
-	}
 	return s.core.MarkStale(ctx, models.KindLLMProxy, ouID, proxy.UUID, nil, reason)
 }
 

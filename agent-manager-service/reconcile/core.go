@@ -338,15 +338,18 @@ func (c *Core) PrepareDelete(ctx context.Context, tx *gorm.DB, ref models.Artifa
 // MarkStale marks a redeploy owed on the artifact's placed rows, on gateways or, when empty, on all of them, because
 // an input outside the artifact changed. A kind that renders inline is rendered now, each row in its own
 // transaction; any other kind is left to the worker. A failed inline render is returned as a RenderFailedError,
-// unless it waits for an input: its row stays queued with the outcome recorded.
+// unless it waits for an input: its row stays queued with the outcome recorded. Failing to queue is ErrQueueFailed.
 func (c *Core) MarkStale(ctx context.Context, kind, ouID string, artifactUUID uuid.UUID, gateways []uuid.UUID, reason string) error {
 	k, err := c.kindOf(kind)
 	if err != nil {
 		return err
 	}
 	queued, err := c.repo.QueueRender(ctx, nil, ouID, artifactUUID, gateways, reason, repositories.QueueScopePlaced)
-	if err != nil || queued == 0 {
-		return err
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrQueueFailed, err)
+	}
+	if queued == 0 {
+		return nil
 	}
 	if !k.RendersInline() {
 		c.nudge()

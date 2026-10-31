@@ -1315,22 +1315,21 @@ func (s *LLMProviderService) syncProxyAuthHeader(
 	ingress := newProxyIngressSecurity(provider)
 	ingressStale := proxyIngressStale(proxy, ingress)
 	upstreamAction := proxyUpstreamAuthAction(proxy, upstreamHeader)
-	priorPending := proxy.Configuration.AuthRolloutPendingGateways
 	if !ingressStale && upstreamAction == upstreamAuthUnchanged {
 		return false, nil
 	}
 
-	// Store moves first, since a redeploy regenerates gateway config from it; prior
-	// values are kept so a failed redeploy can roll back. The whole security block is
-	// swapped, not its fields — a proxy changing requirement may have no api-key block.
+	// Store moves first, since a redeploy regenerates gateway config from it. The prior
+	// ingress block is kept only to undo the in-memory change if building the upstream
+	// credential fails. The whole security block is swapped, not its fields — a proxy
+	// changing requirement may have no api-key block.
 	var priorSecurity *models.SecurityConfig
-	var priorUpstreamAuth *models.UpstreamAuth
 	if ingressStale {
 		priorSecurity = proxy.Configuration.Security
 		proxy.Configuration.Security = ingress
 	}
-	// A key minted below has no owner until the proxy row referencing it is stored, so
-	// every path that abandons this sync has to hand it back.
+	// A key minted below has no owner until the proxy row referencing it is stored, so a
+	// failed save has to hand it back. Once saved it stays: gateways render with it.
 	mintedKeyName := ""
 	revokeMintedKey := func() {
 		if mintedKeyName == "" || s.apiKeyService == nil {
@@ -1339,14 +1338,10 @@ func (s *LLMProviderService) syncProxyAuthHeader(
 		if err := s.apiKeyService.RevokeAPIKey(ctx, ouID, provider.UUID.String(), mintedKeyName); err != nil {
 			slog.Error("syncProxyAuthHeader: failed to revoke orphaned upstream key",
 				"proxyHandle", proxy.Handle, "keyName", mintedKeyName, "error", err)
-			return
 		}
-		mintedKeyName = ""
 	}
 
-	upstreamChanged := upstreamAction != upstreamAuthUnchanged
-	if upstreamChanged {
-		priorUpstreamAuth = proxy.Configuration.UpstreamAuth
+	if upstreamAction != upstreamAuthUnchanged {
 		if upstreamAction == upstreamAuthClear {
 			// The provider asks for no credential, so the proxy must stop sending one.
 			// The key itself is left minted: revoking it belongs with the proxy's own
@@ -1370,47 +1365,23 @@ func (s *LLMProviderService) syncProxyAuthHeader(
 		}
 	}
 
+	// Pending gateways were the old per-gateway rollout's bookkeeping; the render queue holds that now.
+	if len(proxy.Configuration.AuthRolloutPendingGateways) > 0 {
+		proxy.Configuration.AuthRolloutPendingGateways = []string{}
+	}
 	if _, err := proxyService.Update(proxy.Handle, ouID, proxy); err != nil {
 		revokeMintedKey()
 		return false, fmt.Errorf("failed to update proxy %s: %w", proxy.Handle, err)
 	}
 
-	restoreStoredHeaders := func() {
-		if ingressStale {
-			proxy.Configuration.Security = priorSecurity
-		}
-		if upstreamChanged {
-			proxy.Configuration.UpstreamAuth = priorUpstreamAuth
-		}
-		proxy.Configuration.AuthRolloutPendingGateways = priorPending
-		if _, err := proxyService.Update(proxy.Handle, ouID, proxy); err != nil {
-			slog.Error("syncProxyAuthHeader: failed to restore headers after a failed redeploy",
-				"proxyHandle", proxy.Handle, "error", err)
-			// The row may still reference the minted key, so leave it alone.
-			return
-		}
-		revokeMintedKey()
-	}
-
-	// Every gateway the proxy is placed on re-renders from the stored config. A config that doesn't render is
-	// rejected before any gateway is touched, so the stored headers are restored. A later per-gateway failure keeps
-	// them: other gateways may already serve them, and the reconcile worker retries that gateway from the store.
+	// The stored headers are the source of truth once saved: every gateway the proxy is placed on re-renders from
+	// them, and a gateway that fails keeps its previous config and is retried by the worker, so nothing is rolled
+	// back. Only a failure to queue leaves no redeploy owed.
 	if err := proxyDeploymentService.RedeployEverywhere(ctx, proxy, ouID, "the provider's API key settings changed"); err != nil {
-		var renderFailed *reconcile.RenderFailedError
-		if errors.As(err, &renderFailed) {
-			return false, fmt.Errorf("proxy %s saved but gateway update failed (retried in the background): %w", proxy.Handle, err)
+		if errors.Is(err, reconcile.ErrQueueFailed) {
+			return false, fmt.Errorf("proxy %s saved but its redeploy was not queued: %w", proxy.Handle, err)
 		}
-		restoreStoredHeaders()
-		return false, fmt.Errorf("failed to redeploy proxy %s: %w", proxy.Handle, err)
-	}
-
-	// Pending gateways were the old per-gateway rollout's bookkeeping; the render queue holds that now.
-	if len(priorPending) > 0 {
-		proxy.Configuration.AuthRolloutPendingGateways = []string{}
-		if _, err := proxyService.Update(proxy.Handle, ouID, proxy); err != nil {
-			slog.Error("syncProxyAuthHeader: failed to clear the rollout's pending gateways",
-				"proxyHandle", proxy.Handle, "error", err)
-		}
+		return false, fmt.Errorf("proxy %s saved but gateway update failed (retried in the background): %w", proxy.Handle, err)
 	}
 	return true, nil
 }
