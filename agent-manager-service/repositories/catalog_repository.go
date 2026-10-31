@@ -361,7 +361,7 @@ func (r *CatalogRepo) populateDeploymentsInBatch(entries []models.CatalogLLMProv
 		`).
 		Joins("JOIN gateways g ON ds.gateway_uuid = g.uuid AND g.deleted_at IS NULL").
 		Joins("LEFT JOIN gateway_environment_mappings gem ON ds.gateway_uuid = gem.gateway_uuid").
-		Where("ds.artifact_uuid IN ? AND ds.ou_id = ? AND (ds.status_desired = ? OR ds.next_attempt_at IS NOT NULL)",
+		Where("ds.artifact_uuid IN ? AND ds.ou_id = ? AND ds.status = ?",
 			providerUUIDs, orgUUID, models.DeploymentStatusDeployed)
 
 	if err := query.Scan(&deploymentRows).Error; err != nil {

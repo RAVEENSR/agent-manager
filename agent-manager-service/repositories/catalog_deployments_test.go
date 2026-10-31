@@ -19,6 +19,7 @@
 package repositories
 
 import (
+	"context"
 	"testing"
 
 	"github.com/google/uuid"
@@ -69,17 +70,15 @@ func listCatalogProviders(t *testing.T, ouID string, env *uuid.UUID) []models.Ca
 	return entries
 }
 
-// A deploy the gateway hasn't acked shows DEPLOYING, and the environment filter, which lists providers live in the
-// environment, doesn't list it until the ack.
-func TestCatalogShowsAFreshDeployAsDeploying(t *testing.T) {
+// A deploy the gateway hasn't acked isn't listed, in the environment-filtered list or the unfiltered one, until the
+// ack makes it live.
+func TestCatalogListsADeployOnceItIsLive(t *testing.T) {
 	p, env := seedCatalogProvider(t)
 	deployment := startDeploy(t, p)
 
 	entries := listCatalogProviders(t, p.OUID, nil)
 	require.Len(t, entries, 1)
-	require.Len(t, entries[0].Deployments, 1)
-	assert.Equal(t, models.DeploymentStatusDeploying, entries[0].Deployments[0].Status)
-	assert.Equal(t, p.GatewayUUID, entries[0].Deployments[0].GatewayID)
+	assert.Empty(t, entries[0].Deployments)
 	assert.Empty(t, listCatalogProviders(t, p.OUID, &env), "not live in the environment yet")
 
 	applyAck(t, p, deployAck(deployment.DeploymentID, models.DeploymentAckStatusSuccess, ""), nil)
@@ -87,18 +86,32 @@ func TestCatalogShowsAFreshDeployAsDeploying(t *testing.T) {
 	entries = listCatalogProviders(t, p.OUID, nil)
 	require.Len(t, entries[0].Deployments, 1)
 	assert.Equal(t, models.DeploymentStatusDeployed, entries[0].Deployments[0].Status)
+	assert.Equal(t, p.GatewayUUID, entries[0].Deployments[0].GatewayID)
 	assert.Len(t, listCatalogProviders(t, p.OUID, &env), 1)
 }
 
-// A failed deploy is shown FAILED; an undeployed provider isn't listed as deployed anywhere.
-func TestCatalogShowsFailedAndOmitsUndeployed(t *testing.T) {
+// A live deployment with a redeploy queued is still listed, and shows DEPLOYING because the redeploy is owed.
+func TestCatalogKeepsALiveDeploymentWhileARedeployIsQueued(t *testing.T) {
+	p, _ := seedCatalogProvider(t)
+	deployment := startDeploy(t, p)
+	applyAck(t, p, deployAck(deployment.DeploymentID, models.DeploymentAckStatusSuccess, ""), nil)
+	_, err := NewDeploymentRepo(db.GetDB()).QueueRender(context.Background(), nil, p.OUID, p.ArtifactUUID, nil,
+		"inputs changed", QueueScopePlaced)
+	require.NoError(t, err)
+
+	entries := listCatalogProviders(t, p.OUID, nil)
+	require.Len(t, entries[0].Deployments, 1)
+	assert.Equal(t, models.DeploymentStatusDeploying, entries[0].Deployments[0].Status)
+}
+
+// A failed deploy and an undeployed provider aren't listed anywhere.
+func TestCatalogOmitsFailedAndUndeployed(t *testing.T) {
 	p, _ := seedCatalogProvider(t)
 	deployment := startDeploy(t, p)
 	applyAck(t, p, deployAck(deployment.DeploymentID, models.DeploymentAckStatusFailed, "E"), nil)
 
 	entries := listCatalogProviders(t, p.OUID, nil)
-	require.Len(t, entries[0].Deployments, 1)
-	assert.Equal(t, models.DeploymentStatusFailed, entries[0].Deployments[0].Status)
+	assert.Empty(t, entries[0].Deployments)
 
 	_, err := beginUndeploy(t, p)
 	require.NoError(t, err)
