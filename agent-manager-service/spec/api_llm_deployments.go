@@ -1722,7 +1722,7 @@ func (r ApiUndeployLLMProviderDeploymentRequest) Execute() (*UndeployLLMProvider
 /*
 UndeployLLMProviderDeployment Undeploy an LLM provider deployment
 
-Undeploy the provider's current deployment on a gateway, whether it is DEPLOYING, DEPLOYED or failed to deploy. The deployment goes UNDEPLOYING until the gateway acknowledges it. A failed undeploy can't be retried: redeploy or restore the deployment, then undeploy it again.
+Undeploy the provider's current deployment on a gateway, whether it is DEPLOYING, DEPLOYED or failed to deploy. The deployment goes UNDEPLOYING until the gateway acknowledges it. A failed undeploy can be retried by undeploying again.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name/handle
@@ -1907,7 +1907,7 @@ func (r ApiUndeployLLMProxyDeploymentRequest) Execute() (*UndeployLLMProxyDeploy
 /*
 UndeployLLMProxyDeployment Undeploy an LLM proxy deployment
 
-Undeploy the proxy's current deployment on a gateway, whether it is DEPLOYING, DEPLOYED or failed to deploy. The deployment goes UNDEPLOYING until the gateway acknowledges it. A failed undeploy can't be retried: redeploy or restore the deployment, then undeploy it again.
+Undeploy the proxy's current deployment on a gateway, whether it is DEPLOYING, DEPLOYED or failed to deploy. The deployment goes UNDEPLOYING until the gateway acknowledges it. A failed undeploy can be retried by undeploying again.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name/handle
