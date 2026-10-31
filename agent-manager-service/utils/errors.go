@@ -246,7 +246,7 @@ var (
 	ErrDeploymentAlreadyDeployed = errors.New("deployment already deployed")
 	ErrGatewayIDMismatch         = errors.New("gateway ID mismatch")
 	ErrDeploymentBaseNotCurrent  = errors.New(`base must be omitted or "current"; ` +
-		"redeploy an earlier deployment with POST .../deployments/{deploymentId}/restore")
+		"redeploy an earlier deployment with POST .../deployments/restore?deploymentId=<id>&gatewayId=<gatewayId>")
 	ErrDeploymentGatewayIDRequired = errors.New("deployment gateway ID required")
 	ErrInvalidDeploymentStatus     = errors.New("invalid deployment status")
 	ErrArtifactNotFound            = errors.New("artifact not found")
