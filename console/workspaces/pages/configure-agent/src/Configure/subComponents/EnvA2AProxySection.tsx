@@ -78,6 +78,22 @@ function ProxyDetail({ proxy }: { proxy: A2AProxyResponse }) {
   );
 }
 
+type ProxyProblem = { severity: "error" | "warning"; message: string };
+
+/** What to flag: a failed deploy, or a deployed proxy whose latest update was given up on. */
+function proxyProblemOf(proxy?: A2AProxyResponse): ProxyProblem | null {
+  if (proxy?.status === "FAILED") {
+    return { severity: "error", message: proxy.statusReason || "The gateway deploy failed." };
+  }
+  if (proxy?.status === "DEPLOYED" && proxy.statusReason) {
+    return {
+      severity: "warning",
+      message: `serving the previous configuration — last update failed: ${proxy.statusReason}`,
+    };
+  }
+  return null;
+}
+
 function GatewayUrl({ url }: { url: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -118,6 +134,7 @@ export function EnvA2AProxySection({
   const { mutate: republish, isPending: isRepublishing } = useRefreshA2AProxy();
   const { addConfirmation } = useConfirmationDialog();
   const proxied = !!proxy;
+  const proxyProblem = proxyProblemOf(proxy);
   const savedHeader = proxy?.upstreamAuthHeader ?? "";
 
   // Re-seed when the saved routing changes, not on every status poll, so typing is not overwritten.
@@ -179,15 +196,15 @@ export function EnvA2AProxySection({
         )}
       </Box>
       {proxy && <ProxyDetail proxy={proxy} />}
-      {proxy?.status === "FAILED" && (
+      {proxyProblem && (
         <Alert
-          severity="error"
+          severity={proxyProblem.severity}
           sx={{ mb: 1 }}
           action={
             <Button size="small" color="inherit" disabled={isRepublishing} onClick={() => republish(params)}>Retry</Button>
           }
         >
-          {proxy.statusReason || "The gateway deploy failed."}
+          {proxyProblem.message}
         </Alert>
       )}
       <A2AProxyFields

@@ -144,6 +144,20 @@ describe("EnvA2AProxySection", () => {
     expect(republish).toHaveBeenCalledWith(params);
   });
 
+  it("warns that a DEPLOYED proxy serves the previous configuration when its update failed", () => {
+    render(<EnvA2AProxySection params={params} cardUrl={cardUrl} proxy={{ ...stored, statusReason: "card fetch failed" }} />);
+    expect(screen.getByText(gatewayUrl)).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "serving the previous configuration — last update failed: card fetch failed");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(republish).toHaveBeenCalledWith(params);
+  });
+
+  it("shows no warning for a healthy DEPLOYED proxy", () => {
+    render(<EnvA2AProxySection params={params} cardUrl={cardUrl} proxy={stored} />);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("opens the gateway security settings only while proxied", async () => {
     const { rerender } = render(<EnvA2AProxySection params={params} cardUrl={cardUrl} />);
     expect(screen.queryByRole("button", { name: /security settings/i })).not.toBeInTheDocument();
