@@ -77,8 +77,14 @@ func (c unmapCase) unmap(t *testing.T, env uuid.UUID) error {
 
 func (c unmapCase) setRow(t *testing.T, status, desired models.DeploymentStatus) {
 	t.Helper()
-	require.NoError(t, db.GetDB().Exec(`UPDATE deployment_status SET status = ?, status_desired = ?
+	require.NoError(t, db.GetDB().Exec(`UPDATE deployment_status SET status = ?, status_desired = ?, next_attempt_at = NULL
 		WHERE artifact_uuid = ? AND gateway_uuid = ?`, status, desired, c.artifact.ArtifactUUID, c.gateway).Error)
+}
+
+func (c unmapCase) queueRedeploy(t *testing.T) {
+	t.Helper()
+	require.NoError(t, db.GetDB().Exec(`UPDATE deployment_status SET next_attempt_at = NOW()
+		WHERE artifact_uuid = ? AND gateway_uuid = ?`, c.artifact.ArtifactUUID, c.gateway).Error)
 }
 
 func (c unmapCase) mapTo(t *testing.T, env uuid.UUID) {
@@ -118,6 +124,13 @@ func TestUnmappingAGatewayThatServesTheEnvironment(t *testing.T) {
 				require.ErrorIs(t, c.unmap(t, c.env), utils.ErrGatewayServesEnvironment, "a %s row blocks", status)
 				assert.True(t, c.mapped(t, c.env), "the mapping stays after a refused unmap")
 			}
+
+			c.setRow(t, models.DeploymentStatusUndeployed, models.DeploymentStatusUndeployed)
+			c.queueRedeploy(t)
+			require.ErrorIs(t, c.unmap(t, c.env), utils.ErrGatewayServesEnvironment, "a redeploy owed on an undeployed row blocks")
+			c.setRow(t, models.DeploymentStatusFailed, models.DeploymentStatusUndeployed)
+			c.queueRedeploy(t)
+			require.ErrorIs(t, c.unmap(t, c.env), utils.ErrGatewayServesEnvironment, "a redeploy owed on a failed undeploy blocks")
 
 			other := uuid.New()
 			c.mapTo(t, other)

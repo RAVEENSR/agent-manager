@@ -54,10 +54,11 @@ func UnplacedCondition(cols RecordColumns, roles []string, ouID string, env *uui
 }
 
 // PlacedCondition is the WHERE condition every PlacedOn shares: the record is in env, and its artifact has a row on
-// gateway that is to be deployed, whatever its status. A row the user undeployed doesn't count.
+// gateway that is to be deployed or has a deploy owed, whatever its status. A row the user undeployed, with nothing
+// owed, doesn't count.
 func PlacedCondition(cols RecordColumns, env, gateway uuid.UUID) (string, []any) {
 	condition := cols.EnvironmentUUID + ` = ? AND EXISTS (SELECT 1 FROM deployment_status ds
 			WHERE ds.artifact_uuid = ` + cols.ArtifactUUID + ` AND ds.ou_id = ` + cols.OUID + `
-			AND ds.gateway_uuid = ? AND ds.status_desired = ?)`
+			AND ds.gateway_uuid = ? AND (ds.status_desired = ? OR ds.next_attempt_at IS NOT NULL))`
 	return condition, []any{env, gateway, models.DeploymentStatusDeployed}
 }
